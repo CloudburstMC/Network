@@ -8,6 +8,8 @@
     <artifactId>network-parent</artifactId>
     <packaging>pom</packaging>
     <version>1.0.0-SNAPSHOT</version>
+    <inceptionYear>2018</inceptionYear>
+    <url>https://github.com/NukkitX/Network</url>
 
     <modules>
         <module>common</module>
@@ -25,6 +27,35 @@
         <netty.version>4.1.24.Final</netty.version>
         <log4j.version>2.11.0</log4j.version>
     </properties>
+
+    <issueManagement>
+        <system>GitHub</system>
+        <url>https://github.com/NukkitX/Network/issues</url>
+    </issueManagement>
+
+    <ciManagement>
+        <system>Jenkins</system>
+        <url>https://ci.nukkitx.com/job/Network/</url>
+    </ciManagement>
+
+    <scm>
+        <connection>scm:git:https://github.com/NukkitX/Network.git</connection>
+        <developerConnection>scm:git:git@github.com:NukkitX/Network.git</developerConnection>
+        <url>https://github.com/NukkitX/Network</url>
+    </scm>
+
+    <distributionManagement>
+        <repository>
+            <id>releases</id>
+            <name>nukkitx-releases</name>
+            <url>https://repo.nukkitx.com/release</url>
+        </repository>
+        <snapshotRepository>
+            <id>snapshots</id>
+            <name>nukkitx-snapshots</name>
+            <url>https://repo.nukkitx.com/snapshot</url>
+        </snapshotRepository>
+    </distributionManagement>
 
     <dependencies>
         <dependency>
