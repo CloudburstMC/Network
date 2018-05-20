@@ -58,7 +58,7 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
     public void registerPacket(PacketFactory<RakNetPacket> factory, int id) {
         if (factories.length > id && factories[id] == null) {
             factories[id] = factory;
-            idMapping.put(factory.newInstance().getClass(), (byte) id);
+            idMapping.put(factory.getPacketClass(), (byte) id);
         } else {
             throw new IllegalArgumentException("Invalid packet ID");
         }
