@@ -1,6 +1,5 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.raknet.packet.OpenConnectionRequest1Packet;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
@@ -9,13 +8,12 @@ import java.util.StringJoiner;
 
 public interface RakNetEventListener {
 
-    Action onConnectionRequest(InetSocketAddress address, OpenConnectionRequest1Packet packet);
+    Action onConnectionRequest(InetSocketAddress address);
 
     Advertisement onQuery(InetSocketAddress address);
 
     enum Action {
         CONTINUE,
-        INCOMPATIBLE_VERSION,
         NO_INCOMING_CONNECTIONS,
         BANNED,
     }

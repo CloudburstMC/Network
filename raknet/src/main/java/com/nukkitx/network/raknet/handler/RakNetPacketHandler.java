@@ -2,6 +2,7 @@ package com.nukkitx.network.raknet.handler;
 
 import com.nukkitx.network.NetworkSession;
 import com.nukkitx.network.raknet.RakNetServer;
+import com.nukkitx.network.raknet.RakNetUtil;
 import com.nukkitx.network.raknet.enveloped.DirectAddressedRakNetPacket;
 import com.nukkitx.network.raknet.packet.*;
 import com.nukkitx.network.raknet.session.RakNetSession;
@@ -38,12 +39,14 @@ public class RakNetPacketHandler extends SimpleChannelInboundHandler<DirectAddre
                 if (packet.content() instanceof OpenConnectionRequest1Packet) {
                     OpenConnectionRequest1Packet request = (OpenConnectionRequest1Packet) packet.content();
 
-                    switch (server.getRakNetEventListener().onConnectionRequest(packet.sender(), request)) {
-                        case INCOMPATIBLE_VERSION:
-                            IncompatibleProtocolVersion badVersion = new IncompatibleProtocolVersion();
-                            badVersion.setServerId(server.getId());
-                            ctx.writeAndFlush(new DirectAddressedRakNetPacket(badVersion, packet.sender(), packet.recipient()), ctx.voidPromise());
-                            return;
+                    if (RakNetUtil.RAKNET_PROTOCOL_VERSION != request.getProtocolVersion()) {
+                        IncompatibleProtocolVersion badVersion = new IncompatibleProtocolVersion();
+                        badVersion.setServerId(server.getId());
+                        ctx.writeAndFlush(new DirectAddressedRakNetPacket(badVersion, packet.sender(), packet.recipient()), ctx.voidPromise());
+                        return;
+                    }
+
+                    switch (server.getRakNetEventListener().onConnectionRequest(packet.sender())) {
                         case NO_INCOMING_CONNECTIONS:
                             NoFreeIncomingConnectionsPacket serverFull = new NoFreeIncomingConnectionsPacket();
                             serverFull.setServerId(server.getId());
