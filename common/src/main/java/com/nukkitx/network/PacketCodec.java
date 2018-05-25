@@ -9,6 +9,4 @@ public interface PacketCodec<T extends NetworkPacket> {
     ByteBuf tryEncode(T packet);
 
     byte getId(T packet);
-
-    void registerPacket(PacketFactory<T> packet, int id);
 }

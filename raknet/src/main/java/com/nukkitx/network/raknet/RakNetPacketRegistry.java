@@ -46,7 +46,7 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
         factories = (PacketFactory<RakNetPacket>[]) new PacketFactory[256];
     }
 
-    public RakNetPacketRegistry(TIntObjectMap<PacketFactory<CustomRakNetPacket<T>>> packets) {
+    RakNetPacketRegistry(TIntObjectMap<PacketFactory<CustomRakNetPacket<T>>> packets) {
         factories = Arrays.copyOf(DEFAULT.factories, DEFAULT.factories.length);
         idMapping.putAll(DEFAULT.idMapping);
         packets.forEachEntry((i, factory) -> {
@@ -55,7 +55,7 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
         });
     }
 
-    public void registerPacket(PacketFactory<RakNetPacket> factory, int id) {
+    private void registerPacket(PacketFactory<RakNetPacket> factory, int id) {
         if (factories.length > id && factories[id] == null) {
             factories[id] = factory;
             idMapping.put(factory.getPacketClass(), (byte) id);
