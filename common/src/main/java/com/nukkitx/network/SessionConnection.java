@@ -1,18 +1,16 @@
 package com.nukkitx.network;
 
-import io.netty.buffer.ByteBuf;
-
 import javax.annotation.Nonnull;
 import java.net.InetSocketAddress;
 import java.util.Optional;
 
-public interface SessionConnection {
+public interface SessionConnection<T extends NetworkPacket> {
 
     Optional<InetSocketAddress> getRemoteAddress();
 
     void close();
 
-    void sendPacket(@Nonnull ByteBuf data);
+    void sendPacket(@Nonnull T packet);
 
     boolean isClosed();
 

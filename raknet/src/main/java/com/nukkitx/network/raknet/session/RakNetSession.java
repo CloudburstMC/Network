@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Log4j2
-public class RakNetSession implements SessionConnection {
+public class RakNetSession implements SessionConnection<RakNetPacket> {
     private static final int MAX_SPLIT_COUNT = 32;
     private final InetSocketAddress remoteAddress;
     private final short mtu;
@@ -201,8 +201,8 @@ public class RakNetSession implements SessionConnection {
     }
 
     @Override
-    public void sendPacket(@Nonnull ByteBuf data) {
-        internalSendRakNetPackage(data);
+    public void sendPacket(@Nonnull RakNetPacket packet) {
+        internalSendRakNetPackage(server.getPacketRegistry().tryEncode(packet));
     }
 
     void checkForClosed() {

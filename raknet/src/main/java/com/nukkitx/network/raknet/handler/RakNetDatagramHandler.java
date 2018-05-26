@@ -24,7 +24,7 @@ import java.util.Arrays;
 import java.util.Optional;
 
 @Log4j2
-public class RakNetDatagramHandler<T extends NetworkSession> extends SimpleChannelInboundHandler<AddressedRakNetDatagram> {
+public class RakNetDatagramHandler<T extends NetworkSession<RakNetPacket>> extends SimpleChannelInboundHandler<AddressedRakNetDatagram> {
     private static final InetSocketAddress LOOPBACK = new InetSocketAddress(InetAddress.getLoopbackAddress(), 19132);
     private static final InetSocketAddress JUNK_ADDRESS;
 
@@ -124,7 +124,7 @@ public class RakNetDatagramHandler<T extends NetworkSession> extends SimpleChann
         log.debug("Packet not handled: {}", packet);
     }
 
-    private void encodeAndSend(SessionConnection connection, RakNetPacket packet) {
-        connection.sendPacket(server.getPacketRegistry().tryEncode(packet));
+    private void encodeAndSend(SessionConnection<RakNetPacket> connection, RakNetPacket packet) {
+        connection.sendPacket(packet);
     }
 }

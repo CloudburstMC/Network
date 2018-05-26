@@ -36,7 +36,7 @@ public class RakNetServer<T extends NetworkSession> {
         return maximumPlayers.get();
     }
 
-    public void createSession(SessionConnection connection) {
+    public void createSession(SessionConnection<RakNetPacket> connection) {
         T session = factory.createSession(connection);
         sessionManager.add(connection.getRemoteAddress().orElseThrow(() -> new IllegalStateException("Connection has no remote address")), session);
     }
