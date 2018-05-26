@@ -69,7 +69,7 @@ public class RakNetServer<T extends NetworkSession> {
         return rakNetNetworkListener.getAddress();
     }
 
-    public static class Builder<T extends NetworkSession> {
+    public static class Builder<T extends NetworkSession<RakNetPacket>> {
         private final TIntObjectMap<PacketFactory<CustomRakNetPacket<T>>> packets = new TIntObjectHashMap<>();
         private InetSocketAddress address;
         private long serverId = 0;
