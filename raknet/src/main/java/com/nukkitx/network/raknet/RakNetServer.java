@@ -12,13 +12,13 @@ public class RakNetServer<T extends NetworkSession> {
     private final AtomicInteger maximumPlayers = new AtomicInteger(20);
     private final long serverId;
     private final RakNetPacketRegistry rakNetPacketRegistry;
-    private final SessionFactory<T> factory;
+    private final SessionFactory<T, RakNetPacket> factory;
     private final SessionManager<T> sessionManager;
     private final RakNetEventListener rakNetEventListener;
     private final RakNetNetworkListener<T> rakNetNetworkListener;
 
     private RakNetServer(long serverId, InetSocketAddress address, SessionManager<T> sessionManager,
-                         SessionFactory<T> factory, RakNetPacketRegistry registry,
+                         SessionFactory<T, RakNetPacket> factory, RakNetPacketRegistry registry,
                          RakNetEventListener rakNetEventListener, int maxThreads) {
         this.serverId = serverId;
         this.sessionManager = sessionManager;
@@ -28,8 +28,8 @@ public class RakNetServer<T extends NetworkSession> {
         this.rakNetNetworkListener = new RakNetNetworkListener<>(this, address, maxThreads);
     }
 
-    public static <T extends NetworkSession<RakNetPacket>> Builder builder() {
-        return new Builder<T>();
+    public static <T extends NetworkSession<RakNetPacket>> Builder<T> builder() {
+        return new Builder<>();
     }
 
     public int getMaximumPlayers() {
@@ -73,7 +73,7 @@ public class RakNetServer<T extends NetworkSession> {
         private final TIntObjectMap<PacketFactory<CustomRakNetPacket<T>>> packets = new TIntObjectHashMap<>();
         private InetSocketAddress address;
         private long serverId = 0;
-        private SessionFactory<T> sessionFactory;
+        private SessionFactory<T, RakNetPacket> sessionFactory;
         private SessionManager<T> sessionManager;
         private RakNetEventListener eventListener;
         private int maximumThreads = 1;
@@ -96,7 +96,7 @@ public class RakNetServer<T extends NetworkSession> {
             return this;
         }
 
-        public Builder<T> sessionFactory(SessionFactory<T> sessionFactory) {
+        public Builder<T> sessionFactory(SessionFactory<T, RakNetPacket> sessionFactory) {
             this.sessionFactory = Preconditions.checkNotNull(sessionFactory, "sessionFactory");
             return this;
         }
