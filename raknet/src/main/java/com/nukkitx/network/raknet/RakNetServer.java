@@ -28,8 +28,8 @@ public class RakNetServer<T extends NetworkSession> {
         this.rakNetNetworkListener = new RakNetNetworkListener<>(this, address, maxThreads);
     }
 
-    public static Builder builder() {
-        return new Builder();
+    public static <T extends NetworkSession<RakNetPacket>> Builder builder() {
+        return new Builder<T>();
     }
 
     public int getMaximumPlayers() {
