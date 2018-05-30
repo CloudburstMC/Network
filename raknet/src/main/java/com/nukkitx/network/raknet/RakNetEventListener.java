@@ -1,7 +1,7 @@
 package com.nukkitx.network.raknet;
 
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import lombok.NonNull;
+import lombok.Value;
 
 import java.net.InetSocketAddress;
 import java.util.StringJoiner;
@@ -18,16 +18,20 @@ public interface RakNetEventListener {
         BANNED,
     }
 
-    @RequiredArgsConstructor
-    @Getter
+    @Value
     class Advertisement {
+        @NonNull
         private final String game;
+        @NonNull
         private final String motd;
         private final int protocolVersion;
+        @NonNull
         private final String version;
         private final int playerCount;
         private final int maximumPlayerCount;
+        @NonNull
         private final String subMotd;
+        @NonNull
         private final String gamemode;
 
         public String getAdvertisment(RakNetServer server) {
