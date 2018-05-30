@@ -8,5 +8,5 @@ public interface PacketCodec<T extends NetworkPacket> {
 
     ByteBuf tryEncode(T packet);
 
-    byte getId(T packet);
+    int getId(T packet);
 }

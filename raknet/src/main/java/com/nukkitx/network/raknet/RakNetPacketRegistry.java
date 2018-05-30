@@ -84,7 +84,7 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
         return byteBuf;
     }
 
-    public byte getId(RakNetPacket packet) {
+    public int getId(RakNetPacket packet) {
         Class<? extends RakNetPacket> clazz = packet.getClass();
         byte id = idMapping.get(clazz);
         if (id == -1) {
