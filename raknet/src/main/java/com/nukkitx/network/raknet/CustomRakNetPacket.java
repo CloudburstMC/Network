@@ -4,5 +4,5 @@ import com.nukkitx.network.NetworkSession;
 
 public interface CustomRakNetPacket<T extends NetworkSession> extends RakNetPacket {
 
-    void handle(T session);
+    void handle(T session) throws Exception;
 }
