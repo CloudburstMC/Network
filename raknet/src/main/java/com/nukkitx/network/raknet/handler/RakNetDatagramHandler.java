@@ -92,6 +92,7 @@ public class RakNetDatagramHandler<T extends NetworkSession<RakNetPacket>> exten
 
         if (packet instanceof CustomRakNetPacket) {
             ((CustomRakNetPacket<T>) packet).handle(session);
+            return;
         }
 
         if (packet instanceof ConnectedPingPacket) {
