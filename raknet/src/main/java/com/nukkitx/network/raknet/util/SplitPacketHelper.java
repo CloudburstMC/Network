@@ -19,7 +19,7 @@ public class SplitPacketHelper {
     }
 
     public Optional<ByteBuf> add(EncapsulatedRakNetPacket packet) {
-        Preconditions.checkNotNull(packet, "acket");
+        Preconditions.checkNotNull(packet, "packet");
         Preconditions.checkArgument(packet.isSplit(), "packet is not split");
         Preconditions.checkState(!released, "packet has been released");
         Preconditions.checkElementIndex(packet.getPartIndex(), packets.length);

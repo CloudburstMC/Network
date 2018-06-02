@@ -30,10 +30,10 @@ public class EncapsulatedRakNetPacket implements ReferenceCounted {
         int by = session.getMtu() - MAX_ENCAPSULATED_HEADER_SIZE - MAX_MESSAGE_HEADER_SIZE;
         if (buffer.readableBytes() > by) {
             // Packet requires splitting
-            ByteBuf from = buffer.slice();
             int split = ((buffer.readableBytes() - 1) / by) + 1;
+            buffer.retain(split - 1); // All derived ByteBufs share the same reference counter.
             for (int i = 0; i < split; i++) {
-                bufs.add(from.readSlice(Math.min(by, from.readableBytes())));
+                bufs.add(buffer.readSlice(Math.min(by, buffer.readableBytes())));
             }
         } else {
             // No splitting required.

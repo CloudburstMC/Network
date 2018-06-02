@@ -3,7 +3,6 @@ package com.nukkitx.network.raknet.datagram;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.ReferenceCounted;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -31,7 +30,7 @@ public class RakNetDatagram extends AbstractReferenceCounted {
     }
 
     @Override
-    public ReferenceCounted touch(Object hint) {
+    public RakNetDatagram touch(Object hint) {
         for (EncapsulatedRakNetPacket packet : packets) {
             packet.touch(hint);
         }
