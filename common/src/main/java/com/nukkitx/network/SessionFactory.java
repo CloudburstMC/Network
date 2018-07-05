@@ -1,6 +1,7 @@
 package com.nukkitx.network;
 
-public interface SessionFactory<T extends NetworkSession, U extends NetworkPacket> {
+@FunctionalInterface
+public interface SessionFactory<T extends NetworkSession, U extends SessionConnection<?>> {
 
-    T createSession(SessionConnection<U> connection);
+    T createSession(U connection);
 }

@@ -1,5 +1,6 @@
 package com.nukkitx.network.rcon;
 
+import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.NetworkListener;
 import com.nukkitx.network.rcon.codec.RconCodec;
 import com.nukkitx.network.rcon.handler.RconHandler;
@@ -8,13 +9,7 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
-import io.netty.channel.epoll.*;
-import io.netty.channel.kqueue.KQueue;
-import io.netty.channel.kqueue.KQueueEventLoopGroup;
-import io.netty.channel.kqueue.KQueueServerSocketChannel;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 import lombok.Getter;
@@ -23,7 +18,6 @@ import java.net.InetSocketAddress;
 import java.nio.ByteOrder;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 public class RconNetworkListener extends ChannelInitializer<SocketChannel> implements NetworkListener {
@@ -43,18 +37,7 @@ public class RconNetworkListener extends ChannelInitializer<SocketChannel> imple
 
         bootstrap = new ServerBootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT).handler(this);
 
-        ThreadFactory factory = NetworkThreadFactory.builder().daemon(true).format("RCON Listener").build();
-        if (Epoll.isAvailable()) {
-            bootstrap.channel(EpollServerSocketChannel.class)
-                    .group(new EpollEventLoopGroup(0, factory))
-                    .option(EpollChannelOption.EPOLL_MODE, EpollMode.EDGE_TRIGGERED);
-        } else if (KQueue.isAvailable()) {
-            bootstrap.channel(KQueueServerSocketChannel.class)
-                    .group(new KQueueEventLoopGroup(0, factory));
-        } else {
-            bootstrap.channel(NioServerSocketChannel.class)
-                    .group(new NioEventLoopGroup(0, factory));
-        }
+        BootstrapUtils.setupServerBootstrap(bootstrap);
     }
 
     @Override

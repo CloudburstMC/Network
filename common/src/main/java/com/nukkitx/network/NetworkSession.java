@@ -3,7 +3,7 @@ package com.nukkitx.network;
 import java.net.InetSocketAddress;
 import java.util.Optional;
 
-public interface NetworkSession<T extends NetworkPacket> {
+public interface NetworkSession<T extends SessionConnection<?>> {
 
     void disconnect();
 
@@ -11,7 +11,7 @@ public interface NetworkSession<T extends NetworkPacket> {
         return getConnection().getRemoteAddress();
     }
 
-    SessionConnection<T> getConnection();
+    T getConnection();
 
     void onTick();
 

@@ -69,6 +69,10 @@ public class ByteBitSet implements BitSet {
         return bitset;
     }
 
+    public void set(byte bitset) {
+        this.bitset = bitset;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == this) return true;
