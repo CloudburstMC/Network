@@ -7,7 +7,7 @@
     <groupId>com.nukkitx.network</groupId>
     <artifactId>network-parent</artifactId>
     <packaging>pom</packaging>
-    <version>1.0.13-SNAPSHOT</version>
+    <version>1.1.0-SNAPSHOT</version>
     <inceptionYear>2018</inceptionYear>
     <url>https://github.com/NukkitX/Network</url>
 
@@ -16,6 +16,7 @@
         <module>query</module>
         <module>raknet</module>
         <module>rcon</module>
+        <module>synapse</module>
     </modules>
 
     <properties>
