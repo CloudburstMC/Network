@@ -2,6 +2,7 @@ package com.nukkitx.network.rcon;
 
 import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.NetworkListener;
+import com.nukkitx.network.handler.ExceptionHandler;
 import com.nukkitx.network.rcon.codec.RconCodec;
 import com.nukkitx.network.rcon.handler.RconHandler;
 import com.nukkitx.network.util.NetworkThreadFactory;
@@ -72,5 +73,6 @@ public class RconNetworkListener extends ChannelInitializer<SocketChannel> imple
         channel.pipeline().addLast("rconDecoder", new RconCodec());
         channel.pipeline().addLast("rconHandler", new RconHandler(eventListener, password));
         channel.pipeline().addLast("lengthPrepender", new LengthFieldPrepender(ByteOrder.LITTLE_ENDIAN, 4, 0, false));
+        channel.pipeline().addLast("exceptionHandler", new ExceptionHandler());
     }
 }

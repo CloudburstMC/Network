@@ -5,12 +5,10 @@ import com.nukkitx.network.rcon.RconMessage;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import lombok.extern.log4j.Log4j2;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
-@Log4j2
 public class RconHandler extends SimpleChannelInboundHandler<RconMessage> {
     private final RconEventListener eventListener;
     private final byte[] password;
@@ -44,11 +42,5 @@ public class RconHandler extends SimpleChannelInboundHandler<RconMessage> {
             String output = eventListener.onMessage(rconMessage.getBody());
             channel.writeAndFlush(new RconMessage(rconMessage.getId(), RconMessage.RESPONSE_VALUE, output), ctx.voidPromise());
         }
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        log.error("An error occurred whilst handling an RCON packet for {}, \n{}", ctx.channel().remoteAddress(), cause);
-        ctx.close();
     }
 }
