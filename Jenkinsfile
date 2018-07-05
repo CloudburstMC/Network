@@ -5,7 +5,7 @@ pipeline {
         jdk 'Java 8'
     }
     options {
-        buildDiscarder(logRotator(artifactNumToKeepStr: '2'))
+        buildDiscarder(logRotator(artifactNumToKeepStr: '1'))
     }
     stages {
         stage ('Build') {
@@ -37,7 +37,7 @@ pipeline {
                 branch "master"
             }
             steps {
-                sh 'mvn deploy -DskipTests'
+                sh 'mvn javadoc:jar source:jar deploy -DskipTests'
             }
         }
     }
