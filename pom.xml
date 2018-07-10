@@ -16,7 +16,6 @@
         <module>query</module>
         <module>raknet</module>
         <module>rcon</module>
-        <module>synapse</module>
     </modules>
 
     <properties>
