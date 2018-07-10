@@ -13,7 +13,6 @@ import com.nukkitx.network.raknet.session.RakNetSession;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelPipeline;
-import lombok.extern.log4j.Log4j2;
 
 import javax.annotation.Nonnull;
 import java.net.InetSocketAddress;
@@ -22,7 +21,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ForkJoinPool;
 
-@Log4j2
 public class RakNetClient<T extends NetworkSession<RakNetSession>> extends RakNet<T> implements NetworkClient<T, RakNetSession> {
     private final ConcurrentMap<InetSocketAddress, RakNetConnectingSession<T>> connectingSessions = new ConcurrentHashMap<>();
 
@@ -48,7 +46,6 @@ public class RakNetClient<T extends NetworkSession<RakNetSession>> extends RakNe
         ForkJoinPool.commonPool().execute(() -> {
             try {
                 ChannelFuture channelFuture = getBootstrap().connect(remoteAddress).awaitUninterruptibly();
-                log.info("Connected");
                 InetSocketAddress localAddress = (InetSocketAddress) channelFuture.channel().localAddress();
                 RakNetConnectingSession<T> session = new RakNetConnectingSession<>(localAddress, remoteAddress, channelFuture.channel(),
                         this, future, RakNetUtil.MAXIMUM_MTU_SIZE);
@@ -58,7 +55,6 @@ public class RakNetClient<T extends NetworkSession<RakNetSession>> extends RakNe
                 connectionRequest.setMtu(session.getMtu());
                 connectionRequest.setProtocolVersion(RakNetUtil.RAKNET_PROTOCOL_VERSION);
                 session.getChannel().writeAndFlush(new DirectAddressedRakNetPacket(connectionRequest, remoteAddress));
-                log.info("Sent OpenConnectionRequest1Packet");
             } catch (Exception e) {
                 future.completeExceptionally(e);
             }
