@@ -9,7 +9,12 @@ public abstract class RakNetPacketHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof DirectAddressedRakNetPacket) {
-            messageReceived(ctx, (DirectAddressedRakNetPacket) msg);
+            DirectAddressedRakNetPacket packet = (DirectAddressedRakNetPacket) msg;
+            try {
+                messageReceived(ctx, packet);
+            } finally {
+                packet.release();
+            }
         }
     }
 

@@ -14,6 +14,4 @@ public interface NetworkSession<T extends SessionConnection<?>> {
     T getConnection();
 
     void onTick();
-
-    void touch();
 }
