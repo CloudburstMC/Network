@@ -1,5 +1,6 @@
 package com.nukkitx.network.raknet.session;
 
+import com.nukkitx.network.NetworkSession;
 import com.nukkitx.network.SessionConnection;
 import com.nukkitx.network.raknet.RakNet;
 import com.nukkitx.network.raknet.RakNetPacket;
@@ -8,6 +9,8 @@ import com.nukkitx.network.raknet.datagram.RakNetDatagram;
 import com.nukkitx.network.raknet.datagram.SentDatagram;
 import com.nukkitx.network.raknet.enveloped.AddressedRakNetDatagram;
 import com.nukkitx.network.raknet.enveloped.DirectAddressedRakNetPacket;
+import com.nukkitx.network.raknet.handler.IRakNetPacketHandler;
+import com.nukkitx.network.raknet.handler.RakNetDatagramHandler;
 import com.nukkitx.network.raknet.util.IntRange;
 import com.nukkitx.network.raknet.util.SplitPacketHelper;
 import com.nukkitx.network.util.Preconditions;
@@ -16,14 +19,18 @@ import gnu.trove.map.TShortObjectMap;
 import gnu.trove.map.hash.TShortObjectHashMap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
+import lombok.Value;
 
 import javax.annotation.Nonnull;
 import java.net.InetSocketAddress;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -42,6 +49,8 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
     private final RakNet rakNet;
     private boolean closed = false;
     private boolean useOrdering = false;
+    private final AtomicInteger readPacketNumber = new AtomicInteger();
+    private final Queue<QueuedRakNetPacket> queuedReceivedPackets = new PriorityBlockingQueue<>();
 
     public RakNetSession(InetSocketAddress remoteAddress, short mtu, Channel channel, RakNet rakNet) {
         this.remoteAddress = remoteAddress;
@@ -68,6 +77,10 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
 
     public AtomicInteger getOrderSequenceGenerator() {
         return orderSequenceGenerator;
+    }
+
+    public void queueReceivedPacket(int orderedNumber, RakNetPacket packet) {
+        queuedReceivedPackets.add(new QueuedRakNetPacket(orderedNumber, packet));
     }
 
     public Optional<ByteBuf> addSplitPacket(EncapsulatedRakNetPacket packet) {
@@ -162,6 +175,30 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
 
         resendStalePackets();
         cleanSplitPackets();
+        handleOrderedPackets();
+    }
+
+    private void handleOrderedPackets() {
+        NetworkSession<RakNetSession> session = rakNet.getSessionManager().get(remoteAddress);
+
+        QueuedRakNetPacket packet;
+        while ((packet = queuedReceivedPackets.peek()) != null) {
+            if (packet.getOrdered() != readPacketNumber.get()) {
+                break;
+            }
+
+            // We got the expected packet
+            queuedReceivedPackets.remove();
+            readPacketNumber.incrementAndGet();
+
+            // TODO: this is really ugly, you need to refactor this
+            IRakNetPacketHandler handler = (IRakNetPacketHandler) rakNet.getChannel().pipeline().get("raknetDatagramHandler");
+            try {
+                handler.onPacket(packet.getPacket(), session);
+            } catch (Exception e) {
+                rakNet.getChannel().pipeline().fireExceptionCaught(e);
+            }
+        }
     }
 
     private void cleanSplitPackets() {
@@ -241,5 +278,16 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
 
     public void setUseOrdering(boolean useOrdering) {
         this.useOrdering = useOrdering;
+    }
+
+    @Value
+    private class QueuedRakNetPacket implements Comparable<QueuedRakNetPacket> {
+        private final int ordered;
+        private final RakNetPacket packet;
+
+        @Override
+        public int compareTo(QueuedRakNetPacket o) {
+            return Integer.compare(ordered, o.ordered);
+        }
     }
 }

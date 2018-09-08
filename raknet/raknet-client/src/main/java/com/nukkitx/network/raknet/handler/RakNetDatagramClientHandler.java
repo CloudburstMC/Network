@@ -15,7 +15,7 @@ public class RakNetDatagramClientHandler<T extends NetworkSession<RakNetSession>
     }
 
     @Override
-    protected void onPacket(RakNetPacket packet, T session) throws Exception {
+    public void onPacket(RakNetPacket packet, T session) throws Exception {
         if (packet instanceof CustomRakNetPacket) {
             ((CustomRakNetPacket<T>) packet).handle(session);
             return;

@@ -6,6 +6,7 @@ import com.nukkitx.network.raknet.RakNet;
 import com.nukkitx.network.raknet.RakNetPacket;
 import com.nukkitx.network.raknet.RakNetPacketRegistry;
 import com.nukkitx.network.raknet.datagram.EncapsulatedRakNetPacket;
+import com.nukkitx.network.raknet.datagram.RakNetReliability;
 import com.nukkitx.network.raknet.enveloped.AddressedRakNetDatagram;
 import com.nukkitx.network.raknet.enveloped.DirectAddressedRakNetPacket;
 import com.nukkitx.network.raknet.packet.AckPacket;
@@ -18,7 +19,7 @@ import lombok.Cleanup;
 
 import java.util.Optional;
 
-public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSession>> extends ChannelInboundHandlerAdapter {
+public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSession>> extends ChannelInboundHandlerAdapter implements IRakNetPacketHandler<T> {
     private final RakNetPacketRegistry<T> packetRegistry;
     private final SessionManager<T> sessionManager;
 
@@ -75,5 +76,12 @@ public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSessi
         }
     }
 
-    protected abstract void onPacket(RakNetPacket packet, T session) throws Exception;
+    private void tryHandle(T session, EncapsulatedRakNetPacket original, RakNetPacket packet) throws Exception {
+        RakNetSession rakNetSession = session.getConnection();
+        if (original.getReliability().isOrdered()) {
+            rakNetSession.queueReceivedPacket(original.getOrderingIndex(), packet);
+        } else {
+            onPacket(packet, session);
+        }
+    }
 }
