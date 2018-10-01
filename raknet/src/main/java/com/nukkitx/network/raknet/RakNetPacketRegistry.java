@@ -19,6 +19,7 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
     static {
         DEFAULT.registerPacket(ConnectedPingPacket::new, 0x00);
         DEFAULT.registerPacket(UnconnectedPingPacket::new, 0x01);
+        DEFAULT.registerPacket(UnconnectedPingOpenConnectionsPacket::new, 0x02);
         DEFAULT.registerPacket(ConnectedPongPacket::new, 0x03);
         DEFAULT.registerPacket(OpenConnectionRequest1Packet::new, 0x05);
         DEFAULT.registerPacket(OpenConnectionReply1Packet::new, 0x06);
