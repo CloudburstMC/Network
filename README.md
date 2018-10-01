@@ -24,25 +24,19 @@ Network listeners and components used within NukkitX.
         <dependency>
             <groupId>com.nukkitx.network</groupId>
             <artifactId>query</artifactId>
-            <version>1.1.0-SNAPSHOT</version>
+            <version>1.2.1-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.nukkitx.network</groupId>
-            <artifactId>raknet-client</artifactId>
-            <version>1.1.0-SNAPSHOT</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.nukkitx.network</groupId>
-            <artifactId>raknet-server</artifactId>
-            <version>1.1.0-SNAPSHOT</version>
+            <artifactId>raknet</artifactId>
+            <version>1.2.1-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.nukkitx.network</groupId>
             <artifactId>rcon</artifactId>
-            <version>1.1.0-SNAPSHOT</version>
+            <version>1.2.1-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
     </dependencies>
