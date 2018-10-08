@@ -12,10 +12,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelPipeline;
 
 import java.net.InetSocketAddress;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNet<T> implements NetworkListener {
-    private final AtomicInteger maximumPlayers = new AtomicInteger(20);
     private final InetSocketAddress address;
     private final int maxThreads;
     private final RakNetServerEventListener eventListener;
@@ -33,17 +31,10 @@ public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNe
         return new Builder<>();
     }
 
-    public int getMaximumPlayers() {
-        return maximumPlayers.get();
-    }
-
     public void createSession(RakNetSession connection) {
         T session = getSessionFactory().createSession(connection);
-        getSessionManager().add(connection.getRemoteAddress().orElseThrow(() -> new IllegalStateException("Connection has no remote address")), session);
-    }
-
-    public void setMaximumPlayer(int maximumPlayers) {
-        this.maximumPlayers.set(maximumPlayers);
+        getSessionManager().add(connection.getRemoteAddress()
+                .orElseThrow(() -> new IllegalStateException("Connection has no remote address")), session);
     }
 
     public RakNetServerEventListener getEventListener() {
@@ -84,9 +75,9 @@ public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNe
 
     @Override
     protected void initPipeline(ChannelPipeline pipeline) throws Exception {
-        pipeline.addLast("datagramRakNetPacketCodec", new DatagramRakNetPacketCodec(getPacketRegistry()))
-                .addLast("raknetPacketHandler", new RakNetPacketServerHandler(this))
-                .addLast("datagramRakNetDatagramCodec", new DatagramRakNetDatagramCodec(this))
+        pipeline.addLast("raknetPacketCodec", new DatagramRakNetPacketCodec(getPacketRegistry()))
+                .addLast("raknetPacketHandler", new RakNetPacketServerHandler<>(this))
+                .addLast("raknetDatagramCodec", new DatagramRakNetDatagramCodec(this))
                 .addLast("raknetDatagramHandler", new RakNetDatagramServerHandler<>(this))
                 .addLast("exceptionHandler", new ExceptionHandler());
     }
@@ -104,7 +95,6 @@ public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNe
 
         public Builder<T> address(String host, int port) {
             Preconditions.checkNotNull(host, "host");
-            Preconditions.checkArgument(port >= 0 && port <= 65535, "Invalid port");
             this.address = new InetSocketAddress(host, port);
             return this;
         }

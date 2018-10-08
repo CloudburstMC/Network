@@ -11,7 +11,7 @@ import java.net.InetSocketAddress;
 @Data
 public class OpenConnectionRequest2Packet implements RakNetPacket {
     private InetSocketAddress serverAddress;
-    private short mtuSize;
+    private int mtuSize;
     private long clientId;
 
     @Override
@@ -26,7 +26,7 @@ public class OpenConnectionRequest2Packet implements RakNetPacket {
     public void decode(ByteBuf buffer) {
         RakNetUtil.verifyUnconnectedMagic(buffer);
         serverAddress = NetworkUtils.readAddress(buffer);
-        mtuSize = buffer.readShort();
+        mtuSize = buffer.readUnsignedShort();
         clientId = buffer.readLong();
     }
 }

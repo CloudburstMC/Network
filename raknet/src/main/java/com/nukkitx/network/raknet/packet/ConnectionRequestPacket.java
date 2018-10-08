@@ -6,20 +6,20 @@ import lombok.Data;
 
 @Data
 public class ConnectionRequestPacket implements RakNetPacket {
-    private long clientGuid;
+    private long clientId;
     private long timestamp;
     private boolean serverSecurity;
 
     @Override
     public void encode(ByteBuf buffer) {
-        buffer.writeLong(clientGuid);
+        buffer.writeLong(clientId);
         buffer.writeLong(timestamp);
         buffer.writeBoolean(serverSecurity);
     }
 
     @Override
     public void decode(ByteBuf buffer) {
-        clientGuid = buffer.readLong();
+        clientId = buffer.readLong();
         timestamp = buffer.readLong();
         serverSecurity = buffer.readBoolean();
     }

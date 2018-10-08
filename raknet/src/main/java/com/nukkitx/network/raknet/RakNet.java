@@ -40,6 +40,7 @@ public abstract class RakNet<T extends NetworkSession<RakNetSession>> extends Ch
         return bootstrap;
     }
 
+    @Override
     protected final void initChannel(DatagramChannel channel) throws Exception {
         this.channel = channel;
 

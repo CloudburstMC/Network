@@ -6,6 +6,8 @@ import com.nukkitx.network.raknet.RakNet;
 import com.nukkitx.network.raknet.RakNetPacket;
 import com.nukkitx.network.raknet.packet.*;
 import com.nukkitx.network.raknet.session.RakNetSession;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -13,6 +15,7 @@ import java.net.UnknownHostException;
 import java.util.Arrays;
 
 public class RakNetDatagramServerHandler<T extends NetworkSession<RakNetSession>> extends RakNetDatagramHandler<T> {
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetDatagramServerHandler.class);
     private static final InetSocketAddress LOOPBACK = new InetSocketAddress(InetAddress.getLoopbackAddress(), 19132);
     private static final InetSocketAddress JUNK_ADDRESS;
 
@@ -32,18 +35,13 @@ public class RakNetDatagramServerHandler<T extends NetworkSession<RakNetSession>
     protected void onPacket(RakNetPacket packet, T session) throws Exception {
         if (packet instanceof CustomRakNetPacket) {
             ((CustomRakNetPacket<T>) packet).handle(session);
-            return;
-        }
-
-        if (packet instanceof ConnectedPingPacket) {
+        } else if (packet instanceof ConnectedPingPacket) {
             ConnectedPingPacket request = (ConnectedPingPacket) packet;
             ConnectedPongPacket response = new ConnectedPongPacket();
             response.setPingTime(request.getPingTime());
             response.setPongTime(System.currentTimeMillis());
             session.getConnection().sendPacket(response);
-            return;
-        }
-        if (packet instanceof ConnectionRequestPacket) {
+        } else if (packet instanceof ConnectionRequestPacket) {
             ConnectionRequestPacket request = (ConnectionRequestPacket) packet;
             ConnectionRequestAcceptedPacket response = new ConnectionRequestAcceptedPacket();
             response.setIncomingTimestamp(request.getTimestamp());
@@ -55,13 +53,10 @@ public class RakNetDatagramServerHandler<T extends NetworkSession<RakNetSession>
             response.setSystemAddresses(addresses);
             response.setSystemIndex((short) 0);
             session.getConnection().sendPacket(response);
-            return;
-        }
-        if (packet instanceof DisconnectNotificationPacket) {
+        } else if (packet instanceof DisconnectNotificationPacket) {
             session.disconnect();
-            return;
+        } else {
+            log.trace("Packet not handled {}", packet);
         }
-
-        throw new IllegalStateException("Packet not handled " + packet);
     }
 }

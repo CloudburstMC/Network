@@ -12,7 +12,7 @@ import java.net.InetSocketAddress;
 public class OpenConnectionReply2Packet implements RakNetPacket {
     private long serverId;
     private InetSocketAddress clientAddress;
-    private short mtuSize;
+    private int mtuSize;
     private boolean serverSecurity;
 
     @Override
@@ -21,7 +21,7 @@ public class OpenConnectionReply2Packet implements RakNetPacket {
         buffer.writeLong(serverId);
         NetworkUtils.writeAddress(buffer, clientAddress);
         buffer.writeShort(mtuSize);
-        buffer.writeByte((serverSecurity ? 1 : 0));
+        buffer.writeBoolean(serverSecurity);
     }
 
     @Override
@@ -29,7 +29,7 @@ public class OpenConnectionReply2Packet implements RakNetPacket {
         RakNetUtil.verifyUnconnectedMagic(buffer);
         serverId = buffer.readLong();
         clientAddress = NetworkUtils.readAddress(buffer);
-        mtuSize = buffer.readShort();
-        serverSecurity = (buffer.readByte() != 0);
+        mtuSize = buffer.readUnsignedShort();
+        serverSecurity = buffer.readBoolean();
     }
 }

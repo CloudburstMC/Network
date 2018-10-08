@@ -10,13 +10,14 @@ import java.util.StringJoiner;
 public interface RakNetServerEventListener {
 
     @Nonnull
-    Action onConnectionRequest(InetSocketAddress address);
+    Action onConnectionRequest(InetSocketAddress address, int protocolVersion);
 
     @Nonnull
     Advertisement onQuery(InetSocketAddress address);
 
     enum Action {
         CONTINUE,
+        INCOMPATIBLE_PROTOCOL_VERISON,
         NO_INCOMING_CONNECTIONS,
         BANNED,
     }

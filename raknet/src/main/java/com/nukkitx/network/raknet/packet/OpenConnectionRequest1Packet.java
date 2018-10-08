@@ -7,8 +7,8 @@ import lombok.Data;
 
 @Data
 public class OpenConnectionRequest1Packet implements RakNetPacket {
-    private byte protocolVersion;
-    private short mtu;
+    private short protocolVersion;
+    private int mtu;
 
     @Override
     public void encode(ByteBuf buffer) {
@@ -20,8 +20,8 @@ public class OpenConnectionRequest1Packet implements RakNetPacket {
     @Override
     public void decode(ByteBuf buffer) {
         RakNetUtil.verifyUnconnectedMagic(buffer);
-        protocolVersion = buffer.readByte();
-        mtu = (short) (buffer.readableBytes() + 18);
+        protocolVersion = buffer.readUnsignedByte();
+        mtu = (buffer.readableBytes() + 18);
         buffer.skipBytes(buffer.readableBytes());
     }
 }

@@ -36,7 +36,7 @@ public class RakNetPacketClientHandler<T extends NetworkSession<RakNetSession>> 
                 if (rakNetPacket instanceof OpenConnectionReply2Packet) {
                     OpenConnectionReply2Packet reply2 = (OpenConnectionReply2Packet) rakNetPacket;
                     ConnectionRequestPacket request = new ConnectionRequestPacket();
-                    request.setClientGuid(0);// TODO
+                    request.setClientId(0);// TODO
                     request.setServerSecurity(reply2.isServerSecurity());
                     request.setTimestamp(System.currentTimeMillis());
                     ctx.writeAndFlush(new DirectAddressedRakNetPacket(request, packet.sender(), packet.recipient()), ctx.voidPromise());

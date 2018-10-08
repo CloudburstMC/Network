@@ -59,7 +59,7 @@ public class RakNetDatagram extends AbstractReferenceCounted {
         return Collections.unmodifiableList(packets);
     }
 
-    public boolean tryAddPacket(EncapsulatedRakNetPacket packet, short mtu) {
+    public boolean tryAddPacket(EncapsulatedRakNetPacket packet, int mtu) {
         int packetLn = packet.totalLength();
         if (packetLn >= mtu - 4) {
             return false; // Packet is too large

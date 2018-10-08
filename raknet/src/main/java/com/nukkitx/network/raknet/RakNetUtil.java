@@ -41,4 +41,8 @@ public class RakNetUtil {
     public static void writeUnconnectedMagic(ByteBuf buffer) {
         buffer.writeBytes(RAKNET_UNCONNECTED_MAGIC);
     }
+
+    public static int clamp(int value, int low, int high) {
+        return value < low ? low : value > high ? high : value;
+    }
 }

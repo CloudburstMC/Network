@@ -14,7 +14,7 @@ import static com.nukkitx.network.raknet.RakNetUtil.MAX_MESSAGE_HEADER_SIZE;
 @Data
 public class EncapsulatedRakNetPacket implements ReferenceCounted {
     private RakNetReliability reliability;
-    private int reliabilityNumber = -1;
+    private int reliabilityNumber;
     private int sequenceIndex;
     private int orderingIndex;
     private byte orderingChannel;
@@ -67,18 +67,15 @@ public class EncapsulatedRakNetPacket implements ReferenceCounted {
         buf.writeByte((byte) ((flags << 5) | (split ? 0b00010000 : 0x00))); // flags
         buf.writeShort(buffer.readableBytes() * 8); // size
 
-        if (reliability == RakNetReliability.RELIABLE || reliability == RakNetReliability.RELIABLE_ORDERED ||
-                reliability == RakNetReliability.RELIABLE_SEQUENCED || reliability == RakNetReliability.RELIABLE_WITH_ACK_RECEIPT ||
-                reliability == RakNetReliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT) {
+        if (reliability.isReliable()) {
             buf.writeMediumLE(reliabilityNumber);
         }
 
-        if (reliability == RakNetReliability.UNRELIABLE_SEQUENCED || reliability == RakNetReliability.RELIABLE_SEQUENCED) {
+        if (reliability.isSequenced()) {
             buf.writeMediumLE(sequenceIndex);
         }
 
-        if (reliability == RakNetReliability.UNRELIABLE_SEQUENCED || reliability == RakNetReliability.RELIABLE_SEQUENCED ||
-                reliability == RakNetReliability.RELIABLE_ORDERED || reliability == RakNetReliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT) {
+        if (reliability.isOrdered() || reliability.isSequenced()) {
             buf.writeMediumLE(orderingIndex);
             buf.writeByte(orderingChannel);
         }
@@ -106,7 +103,7 @@ public class EncapsulatedRakNetPacket implements ReferenceCounted {
             sequenceIndex = buf.readUnsignedMediumLE();
         }
 
-        if (reliability.isOrdered()) {
+        if (reliability.isOrdered() || reliability.isSequenced()) {
             orderingIndex = buf.readUnsignedMediumLE();
             orderingChannel = buf.readByte();
         }

@@ -6,7 +6,7 @@ import io.netty.buffer.ByteBuf;
 import lombok.Data;
 
 @Data
-public class IncompatibleProtocolVersion implements RakNetPacket {
+public class IncompatibleProtocolVersionPacket implements RakNetPacket {
     private byte rakNetVersion;
     private long serverId;
 

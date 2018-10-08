@@ -11,7 +11,7 @@ Network listeners and components used within NukkitX.
 ```xml
     <repositories>
         <repository>
-            <clientId>nukkitx-repo-snapshot</clientId>
+            <id>nukkitx-repo-snapshot</id>
             <url>https://repo.nukkitx.com/snapshot/</url>
         </repository>
     </repositories>

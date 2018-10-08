@@ -24,6 +24,6 @@ public class OpenConnectionReply1Packet implements RakNetPacket {
         RakNetUtil.verifyUnconnectedMagic(buffer);
         serverId = buffer.readLong();
         serverSecurity = (buffer.readByte() != 0);
-        mtuSize = buffer.readShort();
+        mtuSize = buffer.readUnsignedShort();
     }
 }

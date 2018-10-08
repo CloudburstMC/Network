@@ -11,12 +11,12 @@ import io.netty.channel.ChannelHandlerContext;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
-public class RakNetPacketServerHandler extends RakNetPacketHandler {
-    private final RakNetServer server;
+public class RakNetPacketServerHandler<T extends NetworkSession<RakNetSession>> extends RakNetPacketHandler {
+    private final RakNetServer<T> server;
 
     @Override
     protected void messageReceived(ChannelHandlerContext ctx, DirectAddressedRakNetPacket packet) throws Exception {
-        NetworkSession session = server.getSessionManager().get(packet.sender());
+        T session = server.getSessionManager().get(packet.sender());
 
         // Sessionless packets
         if (session == null) {
@@ -27,20 +27,17 @@ public class RakNetPacketServerHandler extends RakNetPacketHandler {
                 response.setServerId(server.getId());
                 response.setAdvertisement(server.getEventListener().onQuery(packet.sender()).getAdvertisment(server));
                 ctx.writeAndFlush(new DirectAddressedRakNetPacket(response, packet.sender(), packet.recipient()), ctx.voidPromise());
-                return;
-            }
-            if (packet.content() instanceof OpenConnectionRequest1Packet) {
+            } else if (packet.content() instanceof OpenConnectionRequest1Packet) {
                 OpenConnectionRequest1Packet request = (OpenConnectionRequest1Packet) packet.content();
-                if (RakNetUtil.RAKNET_PROTOCOL_VERSION != request.getProtocolVersion()) {
-                    IncompatibleProtocolVersion badVersion = new IncompatibleProtocolVersion();
-                    badVersion.setServerId(server.getId());
-                    ctx.writeAndFlush(new DirectAddressedRakNetPacket(badVersion, packet.sender(), packet.recipient()), ctx.voidPromise());
-                    return;
-                }
-
                 RakNetPacket toSend;
 
-                switch (server.getEventListener().onConnectionRequest(packet.sender())) {
+                switch (server.getEventListener().onConnectionRequest(packet.sender(), request.getProtocolVersion())) {
+                    case INCOMPATIBLE_PROTOCOL_VERISON:
+                        IncompatibleProtocolVersionPacket incompatibleProtocolVersion = new IncompatibleProtocolVersionPacket();
+                        incompatibleProtocolVersion.setServerId(server.getId());
+                        incompatibleProtocolVersion.setRakNetVersion(RakNetUtil.RAKNET_PROTOCOL_VERSION);
+                        toSend = incompatibleProtocolVersion;
+                        break;
                     case NO_INCOMING_CONNECTIONS:
                         NoFreeIncomingConnectionsPacket serverFull = new NoFreeIncomingConnectionsPacket();
                         serverFull.setServerId(server.getId());
@@ -53,33 +50,28 @@ public class RakNetPacketServerHandler extends RakNetPacketHandler {
                         break;
                     default:
                         OpenConnectionReply1Packet response = new OpenConnectionReply1Packet();
-                        response.setMtuSize((request.getMtu() > RakNetUtil.MAXIMUM_MTU_SIZE ? RakNetUtil.MAXIMUM_MTU_SIZE : request.getMtu()));
+                        response.setMtuSize(RakNetUtil.clamp(request.getMtu(), RakNetUtil.MINIMUM_MTU_SIZE, RakNetUtil.MAXIMUM_MTU_SIZE));
                         response.setServerSecurity(false);
                         response.setServerId(server.getId());
                         toSend = response;
                 }
                 ctx.writeAndFlush(new DirectAddressedRakNetPacket(toSend, packet.sender(), packet.recipient()), ctx.voidPromise());
-            }
-            if (packet.content() instanceof OpenConnectionRequest2Packet) {
+            } else if (packet.content() instanceof OpenConnectionRequest2Packet) {
                 OpenConnectionRequest2Packet request = (OpenConnectionRequest2Packet) packet.content();
                 OpenConnectionReply2Packet response = new OpenConnectionReply2Packet();
-                response.setMtuSize(request.getMtuSize());
+                int mtu = RakNetUtil.clamp(request.getMtuSize(), RakNetUtil.MINIMUM_MTU_SIZE, RakNetUtil.MAXIMUM_MTU_SIZE);
+                response.setMtuSize(mtu);
                 response.setServerSecurity(false);
                 response.setClientAddress(packet.sender());
                 response.setServerId(server.getId());
-                server.createSession(new RakNetSession(packet.sender(), request.getMtuSize(), ctx.channel(), server));
                 ctx.writeAndFlush(new DirectAddressedRakNetPacket(response, packet.sender(), packet.recipient()), ctx.voidPromise());
+                server.createSession(new RakNetSession(packet.sender(), mtu, ctx.channel(), server));
             }
         } else {
             if (packet.content() instanceof AckPacket) {
-                if (session.getConnection() instanceof RakNetSession) {
-                    ((RakNetSession) session.getConnection()).onAck(((AckPacket) packet.content()).getIds());
-                }
-            }
-            if (packet.content() instanceof NakPacket) {
-                if (session.getConnection() instanceof RakNetSession) {
-                    ((RakNetSession) session.getConnection()).onNak(((NakPacket) packet.content()).getIds());
-                }
+                session.getConnection().onAck(((AckPacket) packet.content()).getIds());
+            } else if (packet.content() instanceof NakPacket) {
+                session.getConnection().onNak(((NakPacket) packet.content()).getIds());
             }
         }
     }

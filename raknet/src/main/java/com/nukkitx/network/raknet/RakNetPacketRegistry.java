@@ -31,7 +31,7 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
         DEFAULT.registerPacket(NoFreeIncomingConnectionsPacket::new, 0x14);
         DEFAULT.registerPacket(DisconnectNotificationPacket::new, 0x15);
         DEFAULT.registerPacket(ConnectionBannedPacket::new, 0x17);
-        DEFAULT.registerPacket(IncompatibleProtocolVersion::new, 0x19);
+        DEFAULT.registerPacket(IncompatibleProtocolVersionPacket::new, 0x19);
         DEFAULT.registerPacket(IpRecentlyConnectedPacket::new, 0x1a);
         DEFAULT.registerPacket(UnconnectedPongPacket::new, 0x1c);
         DEFAULT.registerPacket(NakPacket::new, 0xa0);

@@ -16,6 +16,8 @@ import gnu.trove.map.TShortObjectMap;
 import gnu.trove.map.hash.TShortObjectHashMap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import lombok.RequiredArgsConstructor;
 
 import javax.annotation.Nonnull;
@@ -28,10 +30,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class RakNetSession implements SessionConnection<RakNetPacket> {
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSession.class);
     private static final int TIMEOUT_MS = 10000;
     private static final int MAX_SPLIT_COUNT = 32;
     private final InetSocketAddress remoteAddress;
-    private final short mtu;
+    private final int mtu;
     private final AtomicLong lastTouched = new AtomicLong(System.currentTimeMillis());
     private final TShortObjectMap<SplitPacketHelper> splitPackets = new TShortObjectHashMap<>();
     private final AtomicInteger datagramSequenceGenerator = new AtomicInteger();
@@ -45,7 +48,7 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
     private boolean closed = false;
     private boolean useOrdering = false;
 
-    public RakNetSession(InetSocketAddress remoteAddress, short mtu, Channel channel, RakNet rakNet) {
+    public RakNetSession(InetSocketAddress remoteAddress, int mtu, Channel channel, RakNet rakNet) {
         this.remoteAddress = remoteAddress;
         this.mtu = mtu;
         this.channel = channel;
@@ -56,7 +59,7 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
         return Optional.of(remoteAddress);
     }
 
-    public short getMtu() {
+    public int getMtu() {
         return mtu;
     }
 
@@ -120,6 +123,7 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
             for (int i = range.getStart(); i <= range.getEnd(); i++) {
                 SentDatagram datagram = datagramAcks.get(i);
                 if (datagram != null) {
+                    log.trace("Resending datagram {} after NAK", datagram.getDatagram().getDatagramSequenceNumber());
                     datagram.refreshForResend();
                     channel.write(new AddressedRakNetDatagram(datagram.getDatagram(), remoteAddress), channel.voidPromise());
                 }
@@ -167,13 +171,16 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
                 break;
             }
 
-            if (packets == null) {
-                packets = new ArrayList<>();
-            }
-
             // We got the expected packet
             orderedReceivedQueue.remove();
             orderPacketReceived.incrementAndGet();
+
+            if (packets == null) {
+                if (orderedReceivedQueue.isEmpty()) {
+                    return Collections.singletonList(packet);
+                }
+                packets = new ArrayList<>();
+            }
 
             packets.add(queuedPacket.packet);
         }
@@ -211,6 +218,7 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
     private void resendStalePackets() {
         for (SentDatagram datagram : datagramAcks.values()) {
             if (datagram.isStale()) {
+                log.trace("Resending stale datagram {}", datagram.getDatagram().getDatagramSequenceNumber());
                 datagram.refreshForResend();
                 channel.write(new AddressedRakNetDatagram(datagram.getDatagram(), remoteAddress), channel.voidPromise());
             }

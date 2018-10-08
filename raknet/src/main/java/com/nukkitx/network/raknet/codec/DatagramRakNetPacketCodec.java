@@ -43,9 +43,8 @@ public class DatagramRakNetPacketCodec extends MessageToMessageCodec<DatagramPac
 
         buf.markReaderIndex();
 
-        int id = buf.readUnsignedByte();
+        int id = buf.getUnsignedByte(0);
         if (id < USER_ID_START) { // User data
-            buf.resetReaderIndex();
 
             // We can decode a packet immediately.
             RakNetPacket rakNetPacket = registry.tryDecode(buf);
@@ -54,7 +53,6 @@ public class DatagramRakNetPacketCodec extends MessageToMessageCodec<DatagramPac
             }
         } else {
             // We can decode some datagrams directly.
-            buf.resetReaderIndex();
             RakNetDatagramFlags flags = new RakNetDatagramFlags(buf.readByte());
             if (flags.isValid()) {
                 if (flags.isAck()) {
@@ -68,12 +66,10 @@ public class DatagramRakNetPacketCodec extends MessageToMessageCodec<DatagramPac
                     nakPacket.decode(buf);
                     list.add(new DirectAddressedRakNetPacket(nakPacket, packet.recipient(), packet.sender()));
                 } else {
-                    buf.readerIndex(0);
                     list.add(packet.retain()); // needs further processing
                 }
-            } else {
-                buf.readerIndex(0); // not interested
             }
         }
+        buf.resetReaderIndex();
     }
 }

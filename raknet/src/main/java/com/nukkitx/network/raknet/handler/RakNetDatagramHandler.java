@@ -29,10 +29,9 @@ public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSessi
 
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+    public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof AddressedRakNetDatagram) {
-            AddressedRakNetDatagram datagram = (AddressedRakNetDatagram) msg;
-
+            @Cleanup("release") AddressedRakNetDatagram datagram = (AddressedRakNetDatagram) msg;
             T session = sessionManager.get(datagram.sender());
 
             if (session == null) {
@@ -72,6 +71,8 @@ public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSessi
                     }
                 }
             }
+        } else {
+            ctx.fireChannelRead(msg);
         }
     }
 

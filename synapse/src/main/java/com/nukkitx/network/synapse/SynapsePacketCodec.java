@@ -72,9 +72,9 @@ public class SynapsePacketCodec implements PacketCodec<SynapsePacket> {
         private int protocolVersion = 0;
 
         public Builder registerPacket(PacketFactory<? extends SynapsePacket> packet, @Nonnegative int id) {
-            Preconditions.checkArgument(id >= 0, "clientId cannot be negative");
+            Preconditions.checkArgument(id >= 0, "id cannot be negative");
             if (packets.containsKey(id)) {
-                throw new IllegalArgumentException("Packet clientId already registered");
+                throw new IllegalArgumentException("Packet id already registered");
             }
             Class<? extends SynapsePacket> packetClass = packet.getPacketClass();
             if (ids.containsKey(packetClass)) {
