@@ -23,7 +23,11 @@ public class SynapseSession implements NetworkSession<SynapseSession>, SessionCo
 
     @Override
     public void disconnect() {
-        checkForClosed();
+        close();
+    }
+
+    @Override
+    public void onTimeout() {
         close();
     }
 
@@ -39,6 +43,7 @@ public class SynapseSession implements NetworkSession<SynapseSession>, SessionCo
 
     @Override
     public void close() {
+        checkForClosed();
         closed = true;
 
         channel.close();

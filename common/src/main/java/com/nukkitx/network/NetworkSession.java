@@ -7,11 +7,11 @@ public interface NetworkSession<T extends SessionConnection<?>> {
 
     void disconnect();
 
+    void onTimeout();
+
     default Optional<InetSocketAddress> getRemoteAddress() {
         return getConnection().getRemoteAddress();
     }
 
     T getConnection();
-
-    void onTick();
 }

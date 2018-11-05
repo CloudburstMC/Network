@@ -29,7 +29,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class RakNetSession implements SessionConnection<RakNetPacket> {
+public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSession.class);
     private static final int TIMEOUT_MS = 10000;
     private static final int MAX_SPLIT_COUNT = 32;
@@ -152,9 +152,9 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
         channel.flush();
     }
 
-    public void sendDirectPackage(RakNetPacket netPackage) {
+    public void sendDirectPacket(RakNetPacket packet) {
         checkForClosed();
-        channel.writeAndFlush(new DirectAddressedRakNetPacket(netPackage, remoteAddress), channel.voidPromise());
+        channel.writeAndFlush(new DirectAddressedRakNetPacket(packet, remoteAddress), channel.voidPromise());
     }
 
     public List<RakNetPacket> onOrderedReceived(int orderNumber, RakNetPacket packet) {
@@ -195,10 +195,14 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
 
         if (isTimedOut()) {
             close();
+            rakNet.getSessionManager().get(remoteAddress).onTimeout();
         }
 
         resendStalePackets();
         cleanSplitPackets();
+    }
+
+    public void onPingTick() {
     }
 
     private void cleanSplitPackets() {
@@ -229,6 +233,7 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
     public void close() {
         checkForClosed();
         closed = true;
+        log.trace("RakNet Session {} closed", remoteAddress);
 
         // Perform resource clean up.
         synchronized (splitPackets) {
@@ -257,7 +262,7 @@ public class RakNetSession implements SessionConnection<RakNetPacket> {
         return System.currentTimeMillis() - lastTouched.get() >= TIMEOUT_MS;
     }
 
-    void checkForClosed() {
+    private void checkForClosed() {
         Preconditions.checkState(!closed, "Session already closed");
     }
 

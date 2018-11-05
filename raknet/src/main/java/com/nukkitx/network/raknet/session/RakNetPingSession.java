@@ -17,7 +17,9 @@ public class RakNetPingSession {
     private final long ping;
 
     public void onPong(UnconnectedPongPacket packet) {
-        RakNetPong pong = new RakNetPong(packet.getAdvertisement(), packet.getTimestamp() - ping, packet.getServerId());
-        pongFuture.complete(pong);
+        if (!pongFuture.isDone()) {
+            RakNetPong pong = new RakNetPong(packet.getAdvertisement(), packet.getTimestamp() - ping, packet.getServerId());
+            pongFuture.complete(pong);
+        }
     }
 }
