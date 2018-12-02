@@ -40,8 +40,7 @@ public class RakNetDatagramFlags {
     @Override
     public String toString() {
         return "RakNetDatagramFlags{" +
-                "flags=" + flags +
-                ", valid=" + isValid() +
+                "valid=" + isValid() +
                 ", ack=" + isAck() +
                 ", nak=" + isNak() +
                 ", packetPair=" + isPacketPair() +

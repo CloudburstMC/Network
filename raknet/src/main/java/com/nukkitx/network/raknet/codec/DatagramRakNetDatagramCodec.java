@@ -29,7 +29,7 @@ public class DatagramRakNetDatagramCodec extends MessageToMessageCodec<DatagramP
     @Override
     protected void decode(ChannelHandlerContext ctx, DatagramPacket packet, List<Object> list) throws Exception {
         // Requires a session
-        NetworkSession session = rakNet.getSessionManager().get(packet.sender());
+        NetworkSession session = rakNet.getSession(packet);
 
         if (session == null) {
             return;

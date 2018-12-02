@@ -7,12 +7,15 @@ import gnu.trove.map.TIntObjectMap;
 import gnu.trove.map.hash.TIntObjectHashMap;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.channel.AddressedEnvelope;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.DatagramChannel;
 import lombok.Getter;
 
+import java.lang.management.ManagementFactory;
+import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -24,6 +27,7 @@ public abstract class RakNet<T extends NetworkSession<RakNetSession>> extends Ch
     private final SessionFactory<T, RakNetSession> sessionFactory;
     private final Bootstrap bootstrap;
     private final long id;
+    private final long timestamp = ManagementFactory.getRuntimeMXBean().getStartTime();
     private final Executor executor;
     private final ScheduledExecutorService scheduler;
     private DatagramChannel channel;
@@ -64,6 +68,13 @@ public abstract class RakNet<T extends NetworkSession<RakNetSession>> extends Ch
             executor.execute(() -> session.getConnection().onTick());
         }
     }
+
+
+    public long getTimestamp() {
+        return System.currentTimeMillis() - timestamp;
+    }
+
+    public abstract T getSession(AddressedEnvelope<?, InetSocketAddress> packet);
 
     protected abstract static class Builder<T extends NetworkSession<RakNetSession>> {
         final TIntObjectMap<PacketFactory<CustomRakNetPacket<T>>> packets = new TIntObjectHashMap<>();

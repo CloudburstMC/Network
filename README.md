@@ -2,7 +2,7 @@
 
 ### Introduction
 
-Network listeners and components used within NukkitX.
+Network components used within NukkitX.
 
 ### Maven
 

@@ -6,7 +6,7 @@ import io.netty.channel.Channel;
 import java.net.InetSocketAddress;
 
 public class ServerRakNetSession extends RakNetSession {
-    public ServerRakNetSession(InetSocketAddress remoteAddress, int mtu, Channel channel, RakNet rakNet) {
-        super(remoteAddress, mtu, channel, rakNet);
+    public ServerRakNetSession(InetSocketAddress remoteAddress, InetSocketAddress localAddress, int mtu, Channel channel, RakNet rakNet, long remoteId) {
+        super(remoteAddress, localAddress, mtu, channel, rakNet, remoteId);
     }
 }

@@ -16,8 +16,8 @@ import java.util.Arrays;
 
 public class RakNetDatagramServerHandler<T extends NetworkSession<RakNetSession>> extends RakNetDatagramHandler<T> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetDatagramServerHandler.class);
-    private static final InetSocketAddress LOOPBACK = new InetSocketAddress(InetAddress.getLoopbackAddress(), 19132);
-    private static final InetSocketAddress JUNK_ADDRESS;
+    public static final InetSocketAddress LOOPBACK = new InetSocketAddress(InetAddress.getLoopbackAddress(), 19132);
+    public static final InetSocketAddress JUNK_ADDRESS;
 
     static {
         try {
@@ -56,7 +56,7 @@ public class RakNetDatagramServerHandler<T extends NetworkSession<RakNetSession>
         } else if (packet instanceof DisconnectNotificationPacket) {
             session.disconnect();
         } else {
-            log.trace("Packet not handled {}", packet);
+            log.debug("Packet not handled {} by {}", packet, session.getRemoteAddress().orElse(null));
         }
     }
 }

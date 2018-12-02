@@ -8,6 +8,7 @@ import com.nukkitx.network.raknet.handler.RakNetDatagramServerHandler;
 import com.nukkitx.network.raknet.handler.RakNetPacketServerHandler;
 import com.nukkitx.network.raknet.session.RakNetSession;
 import com.nukkitx.network.util.Preconditions;
+import io.netty.channel.AddressedEnvelope;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
@@ -85,6 +86,11 @@ public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNe
                 .addLast("raknetDatagramCodec", new DatagramRakNetDatagramCodec(this))
                 .addLast("raknetDatagramHandler", new RakNetDatagramServerHandler<>(this))
                 .addLast("exceptionHandler", new ExceptionHandler());
+    }
+
+    @Override
+    public T getSession(AddressedEnvelope<?, InetSocketAddress> packet) {
+        return getSessionManager().get(packet.sender());
     }
 
     public static class Builder<T extends NetworkSession<RakNetSession>> extends RakNet.Builder<T> {

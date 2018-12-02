@@ -10,22 +10,20 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.codec.MessageToMessageCodec;
+import lombok.RequiredArgsConstructor;
 
 import java.util.List;
 
+@RequiredArgsConstructor
 public class DatagramRakNetPacketCodec extends MessageToMessageCodec<DatagramPacket, DirectAddressedRakNetPacket> {
     private static final int USER_ID_START = 0x80;
-    private final RakNetPacketRegistry registry;
-
-    public DatagramRakNetPacketCodec(RakNetPacketRegistry registry) {
-        this.registry = registry;
-    }
+    private final RakNetPacketRegistry packetRegistry;
 
     @Override
     protected void encode(ChannelHandlerContext ctx, DirectAddressedRakNetPacket packet, List<Object> list) throws Exception {
         // Certain RakNet packets do not require special encapsulation. This encoder tries to handle them.
         try {
-            ByteBuf buf = registry.tryEncode(packet.content());
+            ByteBuf buf = packetRegistry.tryEncode(packet.content());
             list.add(new DatagramPacket(buf, packet.recipient(), packet.sender()));
         } finally {
             packet.release();
@@ -47,7 +45,7 @@ public class DatagramRakNetPacketCodec extends MessageToMessageCodec<DatagramPac
         if (id < USER_ID_START) { // User data
 
             // We can decode a packet immediately.
-            RakNetPacket rakNetPacket = registry.tryDecode(buf);
+            RakNetPacket rakNetPacket = packetRegistry.tryDecode(buf);
             if (rakNetPacket != null) {
                 list.add(new DirectAddressedRakNetPacket(rakNetPacket, packet.recipient(), packet.sender()));
             }
@@ -69,7 +67,7 @@ public class DatagramRakNetPacketCodec extends MessageToMessageCodec<DatagramPac
                     list.add(packet.retain()); // needs further processing
                 }
             }
+            buf.resetReaderIndex();
         }
-        buf.resetReaderIndex();
     }
 }

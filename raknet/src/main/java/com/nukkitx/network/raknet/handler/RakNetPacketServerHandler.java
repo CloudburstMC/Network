@@ -66,7 +66,7 @@ public class RakNetPacketServerHandler<T extends NetworkSession<RakNetSession>> 
                 response.setClientAddress(packet.sender());
                 response.setServerId(server.getId());
                 ctx.writeAndFlush(new DirectAddressedRakNetPacket(response, packet.sender(), packet.recipient()), ctx.voidPromise());
-                server.createSession(new ServerRakNetSession(packet.sender(), mtu, ctx.channel(), server));
+                server.createSession(new ServerRakNetSession(packet.sender(), packet.recipient(), mtu, ctx.channel(), server, request.getClientId()));
             }
         } else {
             if (packet.content() instanceof AckPacket) {

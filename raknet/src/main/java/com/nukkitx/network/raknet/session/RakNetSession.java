@@ -18,6 +18,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
 import javax.annotation.Nonnull;
@@ -31,9 +32,11 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSession.class);
-    private static final int TIMEOUT_MS = 10000;
+    private static final int TIMEOUT_MS = 30000;
     private static final int MAX_SPLIT_COUNT = 32;
     private final InetSocketAddress remoteAddress;
+    @Getter
+    private final InetSocketAddress localAddress;
     private final int mtu;
     private final AtomicLong lastTouched = new AtomicLong(System.currentTimeMillis());
     private final TShortObjectMap<SplitPacketHelper> splitPackets = new TShortObjectHashMap<>();
@@ -45,14 +48,18 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     private final Queue<QueuedRakNetPacket> orderedReceivedQueue = new PriorityBlockingQueue<>();
     private final Channel channel;
     private final RakNet rakNet;
+    @Getter
+    private final long remoteId;
     private boolean closed = false;
     private boolean useOrdering = false;
 
-    public RakNetSession(InetSocketAddress remoteAddress, int mtu, Channel channel, RakNet rakNet) {
+    public RakNetSession(InetSocketAddress remoteAddress, InetSocketAddress localAddress, int mtu, Channel channel, RakNet rakNet, long remoteId) {
         this.remoteAddress = remoteAddress;
+        this.localAddress = localAddress;
         this.mtu = mtu;
         this.channel = channel;
         this.rakNet = rakNet;
+        this.remoteId = remoteId;
     }
 
     public Optional<InetSocketAddress> getRemoteAddress() {
@@ -123,7 +130,7 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
             for (int i = range.getStart(); i <= range.getEnd(); i++) {
                 SentDatagram datagram = datagramAcks.get(i);
                 if (datagram != null) {
-                    log.trace("Resending datagram {} after NAK", datagram.getDatagram().getDatagramSequenceNumber());
+                    log.trace("Resending datagram {} after NAK to {}", datagram.getDatagram().getDatagramSequenceNumber(), remoteAddress);
                     datagram.refreshForResend();
                     channel.write(new AddressedRakNetDatagram(datagram.getDatagram(), remoteAddress), channel.voidPromise());
                 }
@@ -145,9 +152,9 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
             datagrams.add(datagram.retain()); // retain in case we need to resend it
         }
 
-        for (RakNetDatagram netDatagram : datagrams) {
-            channel.write(new AddressedRakNetDatagram(netDatagram, remoteAddress), channel.voidPromise());
-            datagramAcks.put(netDatagram.getDatagramSequenceNumber(), new SentDatagram(netDatagram));
+        for (RakNetDatagram datagram : datagrams) {
+            channel.write(new AddressedRakNetDatagram(datagram, remoteAddress), channel.voidPromise());
+            datagramAcks.put(datagram.getDatagramSequenceNumber(), new SentDatagram(datagram));
         }
         channel.flush();
     }
@@ -222,7 +229,7 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     private void resendStalePackets() {
         for (SentDatagram datagram : datagramAcks.values()) {
             if (datagram.isStale()) {
-                log.trace("Resending stale datagram {}", datagram.getDatagram().getDatagramSequenceNumber());
+                log.trace("Resending stale datagram {} to {}", datagram.getDatagram().getDatagramSequenceNumber(), remoteAddress);
                 datagram.refreshForResend();
                 channel.write(new AddressedRakNetDatagram(datagram.getDatagram(), remoteAddress), channel.voidPromise());
             }
@@ -233,7 +240,7 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     public void close() {
         checkForClosed();
         closed = true;
-        log.trace("RakNet Session {} closed", remoteAddress);
+        log.trace("RakNet Session ({} --> {}) closed", localAddress, remoteAddress);
 
         // Perform resource clean up.
         synchronized (splitPackets) {
@@ -256,6 +263,10 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     public void touch() {
         checkForClosed();
         lastTouched.set(System.currentTimeMillis());
+    }
+
+    public boolean isStale() {
+        return System.currentTimeMillis() - lastTouched.get() >= 5000;
     }
 
     public boolean isTimedOut() {
@@ -292,7 +303,7 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
         private final RakNetPacket packet;
 
         @Override
-        public int compareTo(QueuedRakNetPacket o) {
+        public int compareTo(@Nonnull QueuedRakNetPacket o) {
             return Integer.compare(order, o.order);
         }
     }

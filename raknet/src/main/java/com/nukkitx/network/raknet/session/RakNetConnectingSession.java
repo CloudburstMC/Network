@@ -5,24 +5,31 @@ import com.nukkitx.network.raknet.RakNetClient;
 import com.nukkitx.network.raknet.RakNetUtil;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.channel.Channel;
-import lombok.Data;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 
-@Data
+@Getter
 public class RakNetConnectingSession<T extends NetworkSession<RakNetSession>> {
     private final InetSocketAddress localAddress;
     private final InetSocketAddress remoteAddress;
+    @Getter(AccessLevel.NONE)
     private final CompletableFuture<T> connectedFuture;
     private final Channel channel;
     private final RakNetClient<T> rakNet;
-    private short mtu = RakNetUtil.MAXIMUM_MTU_SIZE;
-    private ConnectionState state;
+    @Setter
+    private int mtu = RakNetUtil.MAXIMUM_MTU_SIZE;
+    @Setter
+    private long remoteId;
+    private ConnectionState state = null;
+    private T session;
     private boolean closed = false;
 
-    public RakNetConnectingSession(InetSocketAddress localAddress, InetSocketAddress remoteAddress, Channel channel, RakNetClient<T> rakNet, CompletableFuture<T> connectedFuture, short mtu) {
+    public RakNetConnectingSession(InetSocketAddress localAddress, InetSocketAddress remoteAddress, Channel channel, RakNetClient<T> rakNet, CompletableFuture<T> connectedFuture) {
         this.localAddress = localAddress;
         this.remoteAddress = remoteAddress;
         this.channel = channel;
@@ -30,28 +37,40 @@ public class RakNetConnectingSession<T extends NetworkSession<RakNetSession>> {
         this.connectedFuture = connectedFuture;
     }
 
-    public void setConnectionState(ConnectionState state) {
-        if (this.state != null && this.state != state) {
-            if (state == ConnectionState.CONNECTED) {
-                RakNetSession connection = new ClientRakNetSession(remoteAddress, mtu, channel, rakNet);
-                T session = rakNet.getSessionFactory().createSession(connection);
-                rakNet.getSessionManager().add((InetSocketAddress) channel.localAddress(), session);
-                connectedFuture.complete(session);
-            } else {
-                String errorMessage;
-                if (state == ConnectionState.BANNED) {
-                    errorMessage = "Banned from connecting";
-                } else if (state == ConnectionState.NO_FREE_INCOMING_CONNECTIONS) {
-                    errorMessage = "No connection available. Please try again later";
-                } else {
-                    errorMessage = "Unable to connect to the server";
-                }
-                connectedFuture.completeExceptionally(new ConnectException(errorMessage));
-            }
-        }
+    public RakNetSession createSession(ConnectionState state) {
+        checkForClosed();
+        Preconditions.checkState(this.state == null, "State has already been set");
+        this.state = ConnectionState.SESSION_CREATED;
+        RakNetSession connection = new ClientRakNetSession(remoteAddress, localAddress, mtu, channel, rakNet, remoteId);
+        session = rakNet.getSessionFactory().createSession(connection);
+        rakNet.getSessionManager().add(localAddress, session);
+        return connection;
     }
 
-    public void close() {
+    public void complete() {
+        checkForClosed();
+        Preconditions.checkState(this.state == ConnectionState.SESSION_CREATED, "Incorrect state to complete");
+        this.state = ConnectionState.CONNECTED;
+        connectedFuture.complete(session);
+        close();
+    }
+
+    public void completeExceptionally(ConnectionState state) {
+        checkForClosed();
+        Preconditions.checkState(this.state == null, "State has already been set");
+        String errorMessage;
+        if (state == ConnectionState.BANNED) {
+            errorMessage = "Banned from connecting";
+        } else if (state == ConnectionState.NO_FREE_INCOMING_CONNECTIONS) {
+            errorMessage = "No connection available. Please try again later";
+        } else {
+            errorMessage = "Unable to connect to the server";
+        }
+        connectedFuture.completeExceptionally(new ConnectException(errorMessage));
+        close();
+    }
+
+    private void close() {
         checkForClosed();
         rakNet.removeConnectingSession(this);
         closed = true;
@@ -70,6 +89,7 @@ public class RakNetConnectingSession<T extends NetworkSession<RakNetSession>> {
     }
 
     public enum ConnectionState {
+        SESSION_CREATED,
         CONNECTED,
         BANNED,
         NO_FREE_INCOMING_CONNECTIONS,

@@ -1,10 +1,8 @@
 package com.nukkitx.network.raknet.handler;
 
 import com.nukkitx.network.NetworkSession;
-import com.nukkitx.network.SessionManager;
 import com.nukkitx.network.raknet.RakNet;
 import com.nukkitx.network.raknet.RakNetPacket;
-import com.nukkitx.network.raknet.RakNetPacketRegistry;
 import com.nukkitx.network.raknet.datagram.EncapsulatedRakNetPacket;
 import com.nukkitx.network.raknet.enveloped.AddressedRakNetDatagram;
 import com.nukkitx.network.raknet.enveloped.DirectAddressedRakNetPacket;
@@ -19,20 +17,17 @@ import lombok.Cleanup;
 import java.util.Optional;
 
 public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSession>> extends ChannelInboundHandlerAdapter {
-    private final RakNetPacketRegistry<T> packetRegistry;
-    private final SessionManager<T> sessionManager;
+    private final RakNet<T> rakNet;
 
     public RakNetDatagramHandler(RakNet<T> rakNet) {
-        this.packetRegistry = rakNet.getPacketRegistry();
-        this.sessionManager = rakNet.getSessionManager();
+        this.rakNet = rakNet;
     }
-
 
     @Override
     public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof AddressedRakNetDatagram) {
             @Cleanup("release") AddressedRakNetDatagram datagram = (AddressedRakNetDatagram) msg;
-            T session = sessionManager.get(datagram.sender());
+            T session = rakNet.getSession(datagram);
 
             if (session == null) {
                 return;
@@ -61,12 +56,12 @@ public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSessi
                         Optional<ByteBuf> possiblyReassembled = rakNetSession.addSplitPacket(packet);
                         if (possiblyReassembled.isPresent()) {
                             @Cleanup("release") ByteBuf reassembled = possiblyReassembled.get();
-                            RakNetPacket rakNetPacket = packetRegistry.tryDecode(reassembled);
+                            RakNetPacket rakNetPacket = rakNet.getPacketRegistry().tryDecode(reassembled);
                             tryHandle(session, packet, rakNetPacket);
                         }
                     } else {
                         // Try to decode the full packet.
-                        RakNetPacket rakNetPacket = packetRegistry.tryDecode(packet.getBuffer());
+                        RakNetPacket rakNetPacket = rakNet.getPacketRegistry().tryDecode(packet.getBuffer());
                         tryHandle(session, packet, rakNetPacket);
                     }
                 }
