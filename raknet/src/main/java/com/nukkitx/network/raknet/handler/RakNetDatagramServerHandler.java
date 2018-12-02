@@ -53,6 +53,8 @@ public class RakNetDatagramServerHandler<T extends NetworkSession<RakNetSession>
             response.setSystemAddresses(addresses);
             response.setSystemIndex((short) 0);
             session.getConnection().sendPacket(response);
+        } else if (packet instanceof NewIncomingConnectionPacket) {
+            // Ignore
         } else if (packet instanceof DisconnectNotificationPacket) {
             session.disconnect();
         } else {
