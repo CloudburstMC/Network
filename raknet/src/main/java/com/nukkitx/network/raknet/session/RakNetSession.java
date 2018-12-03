@@ -165,6 +165,10 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     }
 
     public List<RakNetPacket> onOrderedReceived(int orderNumber, RakNetPacket packet) {
+        if (orderNumber < orderPacketReceived.get()) {
+            // This packet has already been received.
+            return Collections.emptyList();
+        }
         orderedReceivedQueue.add(new QueuedRakNetPacket(orderNumber, packet));
 
         List<RakNetPacket> packets = null;

@@ -5,6 +5,7 @@ import com.nukkitx.network.raknet.RakNet;
 import com.nukkitx.network.raknet.datagram.RakNetDatagram;
 import com.nukkitx.network.raknet.datagram.RakNetDatagramFlags;
 import com.nukkitx.network.raknet.enveloped.AddressedRakNetDatagram;
+import com.nukkitx.network.raknet.session.RakNetSession;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
@@ -29,7 +30,7 @@ public class DatagramRakNetDatagramCodec extends MessageToMessageCodec<DatagramP
     @Override
     protected void decode(ChannelHandlerContext ctx, DatagramPacket packet, List<Object> list) throws Exception {
         // Requires a session
-        NetworkSession session = rakNet.getSession(packet);
+        NetworkSession<RakNetSession> session = rakNet.getSession(packet);
 
         if (session == null) {
             return;
