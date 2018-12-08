@@ -71,7 +71,7 @@ public class SynapseClient extends Synapse {
     }
 
     public void close() {
-        getSessionManager().all().forEach(NetworkSession::disconnect);
+        getSessionManager().all().forEach(NetworkSession::close);
     }
 
     @Override

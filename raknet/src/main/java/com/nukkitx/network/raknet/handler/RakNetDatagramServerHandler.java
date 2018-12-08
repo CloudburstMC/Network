@@ -56,7 +56,8 @@ public class RakNetDatagramServerHandler<T extends NetworkSession<RakNetSession>
         } else if (packet instanceof NewIncomingConnectionPacket) {
             // Ignore
         } else if (packet instanceof DisconnectNotificationPacket) {
-            session.disconnect();
+            session.getConnection().close();
+            getRakNet().getSessionManager().remove(session);
         } else {
             log.debug("Packet not handled {} by {}", packet, session.getRemoteAddress().orElse(null));
         }

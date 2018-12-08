@@ -124,7 +124,7 @@ public class RakNetClient<T extends NetworkSession<RakNetSession>> extends RakNe
 
     @Override
     public void close() {
-        getSessionManager().all().forEach(NetworkSession::disconnect);
+        getSessionManager().all().forEach(NetworkSession::close);
         if (getChannel() != null) {
             getChannel().close().awaitUninterruptibly();
         }

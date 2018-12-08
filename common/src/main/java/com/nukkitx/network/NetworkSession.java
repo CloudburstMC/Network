@@ -6,7 +6,7 @@ import java.util.Optional;
 
 public interface NetworkSession<T extends SessionConnection<?>> {
 
-    void disconnect();
+    void close();
 
     void onTimeout();
 

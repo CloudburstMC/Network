@@ -23,4 +23,9 @@ public class ClientRakNetSession extends RakNetSession {
             sendPacket(connectedPing);
         }
     }
+
+    @Override
+    protected void onClose() {
+        getRakNet().getSessionManager().get(getLocalAddress()).close();
+    }
 }

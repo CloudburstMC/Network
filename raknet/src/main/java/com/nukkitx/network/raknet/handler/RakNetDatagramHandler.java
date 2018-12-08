@@ -12,10 +12,13 @@ import com.nukkitx.network.raknet.util.IntRange;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import lombok.AccessLevel;
 import lombok.Cleanup;
+import lombok.Getter;
 
 import java.util.Optional;
 
+@Getter(AccessLevel.PROTECTED)
 public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSession>> extends ChannelInboundHandlerAdapter {
     private final RakNet<T> rakNet;
 

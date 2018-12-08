@@ -199,6 +199,7 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
         return packets;
     }
 
+    @Override
     public void onTick() {
         if (closed) {
             return;
@@ -211,9 +212,6 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
 
         resendStalePackets();
         cleanSplitPackets();
-    }
-
-    public void onPingTick() {
     }
 
     private void cleanSplitPackets() {
@@ -241,8 +239,10 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
         channel.flush();
     }
 
+    @Override
     public void close() {
         checkForClosed();
+        onClose();
         closed = true;
         log.trace("RakNet Session ({} --> {}) closed", localAddress, remoteAddress);
 
@@ -258,6 +258,8 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
         datagramAcks.values().forEach(SentDatagram::tryRelease);
         datagramAcks.clear();
     }
+
+    protected abstract void onClose();
 
     @Override
     public void sendPacket(@Nonnull RakNetPacket packet) {

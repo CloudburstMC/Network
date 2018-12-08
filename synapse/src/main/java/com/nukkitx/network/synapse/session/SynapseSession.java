@@ -22,11 +22,6 @@ public class SynapseSession implements NetworkSession<SynapseSession>, SessionCo
     private SynapsePacketHandler handler = null;
 
     @Override
-    public void disconnect() {
-        close();
-    }
-
-    @Override
     public void onTimeout() {
         close();
     }

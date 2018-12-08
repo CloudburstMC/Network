@@ -6,16 +6,14 @@ import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
-public class DisconnectNotificationPacket implements RakNetPacket {
-    public static final DisconnectNotificationPacket INSTANCE = new DisconnectNotificationPacket();
+public class AlreadyConnectedPacket implements RakNetPacket {
+    public static final AlreadyConnectedPacket INSTANCE = new AlreadyConnectedPacket();
 
     @Override
     public void encode(ByteBuf buffer) {
-        // No payload
     }
 
     @Override
     public void decode(ByteBuf buffer) {
-        // No payload
     }
 }

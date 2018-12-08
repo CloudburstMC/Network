@@ -9,12 +9,15 @@ import gnu.trove.map.TObjectByteMap;
 import gnu.trove.map.hash.TObjectByteHashMap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.util.Arrays;
 
 @SuppressWarnings("unchecked")
 public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCodec<RakNetPacket> {
     private static final RakNetPacketRegistry DEFAULT = new RakNetPacketRegistry();
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetPacketRegistry.class);
 
     static {
         DEFAULT.registerPacket(ConnectedPingPacket::new, 0x00);
@@ -27,9 +30,10 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
         DEFAULT.registerPacket(OpenConnectionReply2Packet::new, 0x08);
         DEFAULT.registerPacket(ConnectionRequestPacket::new, 0x09);
         DEFAULT.registerPacket(ConnectionRequestAcceptedPacket::new, 0x10);
+        DEFAULT.registerPacket(() -> AlreadyConnectedPacket.INSTANCE, 0x12);
         DEFAULT.registerPacket(NewIncomingConnectionPacket::new, 0x13);
         DEFAULT.registerPacket(NoFreeIncomingConnectionsPacket::new, 0x14);
-        DEFAULT.registerPacket(DisconnectNotificationPacket::new, 0x15);
+        DEFAULT.registerPacket(() -> DisconnectNotificationPacket.INSTANCE, 0x15);
         DEFAULT.registerPacket(ConnectionBannedPacket::new, 0x17);
         DEFAULT.registerPacket(IncompatibleProtocolVersionPacket::new, 0x19);
         DEFAULT.registerPacket(IpRecentlyConnectedPacket::new, 0x1a);
@@ -66,7 +70,12 @@ public class RakNetPacketRegistry<T extends NetworkSession> implements PacketCod
     @Override
     public RakNetPacket tryDecode(ByteBuf byteBuf) {
         short id = byteBuf.readUnsignedByte();
-        RakNetPacket packet = factories[id].newInstance();
+        RakNetPacket packet;
+        try {
+            packet = factories[id].newInstance();
+        } catch (NullPointerException | ArrayIndexOutOfBoundsException e) {
+            throw new IllegalArgumentException("Invalid RakNet packet id " + id + " received", e);
+        }
         packet.decode(byteBuf);
 
         if (byteBuf.isReadable()) {
