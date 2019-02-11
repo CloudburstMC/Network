@@ -2,6 +2,7 @@ package com.nukkitx.network.raknet.session;
 
 import com.nukkitx.network.raknet.RakNetClient;
 import com.nukkitx.network.raknet.packet.ConnectedPingPacket;
+import com.nukkitx.network.raknet.packet.DisconnectNotificationPacket;
 import io.netty.channel.Channel;
 import lombok.Getter;
 
@@ -26,6 +27,6 @@ public class ClientRakNetSession extends RakNetSession {
 
     @Override
     protected void onClose() {
-        getRakNet().getSessionManager().get(getLocalAddress()).close();
+        sendPacket(DisconnectNotificationPacket.INSTANCE);
     }
 }
