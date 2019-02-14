@@ -14,7 +14,6 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.DatagramChannel;
 import lombok.Getter;
 
-import java.lang.management.ManagementFactory;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
@@ -27,7 +26,7 @@ public abstract class RakNet<T extends NetworkSession<RakNetSession>> extends Ch
     private final SessionFactory<T, RakNetSession> sessionFactory;
     private final Bootstrap bootstrap;
     private final long id;
-    private final long timestamp = ManagementFactory.getRuntimeMXBean().getStartTime();
+    private final long timestamp = System.currentTimeMillis();
     private final Executor executor;
     private final ScheduledExecutorService scheduler;
     private DatagramChannel channel;
