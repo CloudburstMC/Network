@@ -8,7 +8,7 @@ public interface SessionConnection<T extends NetworkPacket> {
 
     Optional<InetSocketAddress> getRemoteAddress();
 
-    void close();
+    void disconnect();
 
     void sendPacket(@Nonnull T packet);
 

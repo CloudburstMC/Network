@@ -42,7 +42,7 @@ public class RakNetPacketClientHandler<T extends NetworkSession<RakNetSession>> 
                 request.setTimestamp(rakNetClient.getTimestamp());
                 connectingSession.setRemoteId(reply2.getServerId());
                 // Create session
-                connectingSession.createSession(RakNetConnectingSession.ConnectionState.CONNECTED).sendPacket(request);
+                connectingSession.createSession().sendPacket(request);
             } else if (rakNetPacket instanceof NoFreeIncomingConnectionsPacket) {
                 connectingSession.completeExceptionally(RakNetConnectingSession.ConnectionState.NO_FREE_INCOMING_CONNECTIONS);
             } else if (rakNetPacket instanceof ConnectionBannedPacket) {

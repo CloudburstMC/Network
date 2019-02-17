@@ -2,14 +2,18 @@ package com.nukkitx.network.raknet.session;
 
 import com.nukkitx.network.SessionConnection;
 import com.nukkitx.network.raknet.RakNet;
+import com.nukkitx.network.raknet.RakNetClient;
 import com.nukkitx.network.raknet.RakNetPacket;
 import com.nukkitx.network.raknet.datagram.EncapsulatedRakNetPacket;
 import com.nukkitx.network.raknet.datagram.RakNetDatagram;
 import com.nukkitx.network.raknet.datagram.SentDatagram;
 import com.nukkitx.network.raknet.enveloped.AddressedRakNetDatagram;
 import com.nukkitx.network.raknet.enveloped.DirectAddressedRakNetPacket;
+import com.nukkitx.network.raknet.packet.ConnectedPingPacket;
+import com.nukkitx.network.raknet.packet.DisconnectNotificationPacket;
 import com.nukkitx.network.raknet.util.IntRange;
 import com.nukkitx.network.raknet.util.SplitPacketHelper;
+import com.nukkitx.network.util.DisconnectReason;
 import com.nukkitx.network.util.Preconditions;
 import gnu.trove.iterator.TShortObjectIterator;
 import gnu.trove.map.TShortObjectMap;
@@ -30,7 +34,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
+public final class RakNetSession implements SessionConnection<RakNetPacket> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSession.class);
     private static final int TIMEOUT_MS = 30000;
     private static final int MAX_SPLIT_COUNT = 32;
@@ -206,8 +210,13 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
         }
 
         if (isTimedOut()) {
-            close();
-            rakNet.getSessionManager().get(remoteAddress).onTimeout();
+            close(DisconnectReason.TIMEOUT);
+        }
+
+        if (isStale()) {
+            ConnectedPingPacket connectedPing = new ConnectedPingPacket();
+            connectedPing.setPingTime(getRakNet().getTimestamp());
+            sendPacket(connectedPing);
         }
 
         resendStalePackets();
@@ -240,9 +249,16 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
     }
 
     @Override
-    public void close() {
+    public void disconnect() {
+        if (isClosed()) {
+            return;
+        }
+        sendPacket(DisconnectNotificationPacket.INSTANCE);
+        close(rakNet instanceof RakNetClient ? DisconnectReason.CLIENT_DISCONNECT : DisconnectReason.SERVER_DISCONNECT);
+    }
+
+    public void close(DisconnectReason reason) {
         checkForClosed();
-        onClose();
         closed = true;
         log.trace("RakNet Session ({} --> {}) closed", localAddress, remoteAddress);
 
@@ -257,9 +273,8 @@ public abstract class RakNetSession implements SessionConnection<RakNetPacket> {
 
         datagramAcks.values().forEach(SentDatagram::tryRelease);
         datagramAcks.clear();
+        rakNet.getSessionManager().get(remoteAddress).onDisconnect(reason);
     }
-
-    protected abstract void onClose();
 
     @Override
     public void sendPacket(@Nonnull RakNetPacket packet) {

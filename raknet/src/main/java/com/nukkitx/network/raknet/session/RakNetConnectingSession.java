@@ -37,11 +37,11 @@ public class RakNetConnectingSession<T extends NetworkSession<RakNetSession>> {
         this.connectedFuture = connectedFuture;
     }
 
-    public RakNetSession createSession(ConnectionState state) {
+    public RakNetSession createSession() {
         checkForClosed();
         Preconditions.checkState(this.state == null, "State has already been set");
         this.state = ConnectionState.SESSION_CREATED;
-        RakNetSession connection = new ClientRakNetSession(remoteAddress, localAddress, mtu, channel, rakNet, remoteId);
+        RakNetSession connection = new RakNetSession(remoteAddress, localAddress, mtu, channel, rakNet, remoteId);
         session = rakNet.getSessionFactory().createSession(connection);
         rakNet.getSessionManager().add(localAddress, session);
         return connection;

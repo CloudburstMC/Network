@@ -7,7 +7,6 @@ import com.nukkitx.network.raknet.RakNetUtil;
 import com.nukkitx.network.raknet.enveloped.DirectAddressedRakNetPacket;
 import com.nukkitx.network.raknet.packet.*;
 import com.nukkitx.network.raknet.session.RakNetSession;
-import com.nukkitx.network.raknet.session.ServerRakNetSession;
 import io.netty.channel.ChannelHandlerContext;
 import lombok.RequiredArgsConstructor;
 
@@ -66,7 +65,7 @@ public class RakNetPacketServerHandler<T extends NetworkSession<RakNetSession>> 
                 response.setClientAddress(packet.sender());
                 response.setServerId(server.getId());
                 ctx.writeAndFlush(new DirectAddressedRakNetPacket(response, packet.sender(), packet.recipient()), ctx.voidPromise());
-                server.createSession(new ServerRakNetSession(packet.sender(), packet.recipient(), mtu, ctx.channel(), server, request.getClientId()));
+                server.createSession(new RakNetSession(packet.sender(), packet.recipient(), mtu, ctx.channel(), server, request.getClientId()));
             }
         } else {
             if (packet.content() instanceof AckPacket) {

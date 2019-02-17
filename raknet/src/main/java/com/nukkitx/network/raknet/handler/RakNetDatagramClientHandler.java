@@ -7,6 +7,7 @@ import com.nukkitx.network.raknet.RakNetPacket;
 import com.nukkitx.network.raknet.packet.*;
 import com.nukkitx.network.raknet.session.RakNetConnectingSession;
 import com.nukkitx.network.raknet.session.RakNetSession;
+import com.nukkitx.network.util.DisconnectReason;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -56,7 +57,7 @@ public class RakNetDatagramClientHandler<T extends NetworkSession<RakNetSession>
             session.getConnection().sendPacket(newIncomingConnection);
             connectingSession.complete();
         } else if (packet instanceof DisconnectNotificationPacket) {
-            session.getConnection().close();
+            session.getConnection().close(DisconnectReason.SERVER_DISCONNECT);
             getRakNet().getSessionManager().remove(session);
         } else {
             log.debug("Packet not handled for {}: {}", session, packet);
