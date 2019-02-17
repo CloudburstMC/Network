@@ -33,8 +33,9 @@ public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNe
         this.maxThreads = maxThreads;
     }
 
-    public static <T extends NetworkSession<RakNetSession>> Builder<T> builder() {
-        return new Builder<>();
+    @SuppressWarnings("unchecked")
+    public static <T extends Builder<U>, U extends NetworkSession<RakNetSession>> T builder() {
+        return (T) new Builder<U>();
     }
 
     public void createSession(RakNetSession connection) {

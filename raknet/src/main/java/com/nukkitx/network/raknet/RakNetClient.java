@@ -34,8 +34,9 @@ public class RakNetClient<T extends NetworkSession<RakNetSession>> extends RakNe
         super(sessionManager, packetRegistry, sessionFactory, id, channelOptions, scheduler, executor);
     }
 
-    public static <T extends NetworkSession<RakNetSession>> Builder<T> builder() {
-        return new Builder<>();
+    @SuppressWarnings("unchecked")
+    public static <T extends Builder<U>, U extends NetworkSession<RakNetSession>> T builder() {
+        return (T) new Builder<U>();
     }
 
     @Override
