@@ -36,8 +36,8 @@ public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSessi
                 return;
             }
 
-            // Make sure a RakNet session is not null
-            if (session.getConnection() == null) {
+            // Make sure connection has not been closed
+            if (session.getConnection().isClosed()) {
                 return;
             }
 
