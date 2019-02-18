@@ -1,5 +1,6 @@
 package com.nukkitx.network.raknet.session;
 
+import com.nukkitx.network.NetworkSession;
 import com.nukkitx.network.SessionConnection;
 import com.nukkitx.network.raknet.RakNet;
 import com.nukkitx.network.raknet.RakNetClient;
@@ -273,7 +274,10 @@ public final class RakNetSession implements SessionConnection<RakNetPacket> {
 
         datagramAcks.values().forEach(SentDatagram::tryRelease);
         datagramAcks.clear();
-        rakNet.getSessionManager().get(remoteAddress).onDisconnect(reason);
+        NetworkSession session = rakNet.getSessionFromSession(this);
+        //noinspection unchecked
+        rakNet.getSessionManager().remove(session);
+        session.onDisconnect(reason);
     }
 
     @Override

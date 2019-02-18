@@ -30,7 +30,7 @@ public abstract class RakNetDatagramHandler<T extends NetworkSession<RakNetSessi
     public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof AddressedRakNetDatagram) {
             @Cleanup("release") AddressedRakNetDatagram datagram = (AddressedRakNetDatagram) msg;
-            T session = rakNet.getSession(datagram);
+            T session = rakNet.getSessionFromPacket(datagram);
 
             if (session == null) {
                 return;

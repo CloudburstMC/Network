@@ -73,7 +73,9 @@ public abstract class RakNet<T extends NetworkSession<RakNetSession>> extends Ch
         return System.currentTimeMillis() - timestamp;
     }
 
-    public abstract T getSession(AddressedEnvelope<?, InetSocketAddress> packet);
+    public abstract T getSessionFromPacket(AddressedEnvelope<?, InetSocketAddress> packet);
+
+    public abstract T getSessionFromSession(RakNetSession session);
 
     protected abstract static class Builder<T extends NetworkSession<RakNetSession>> {
         final TIntObjectMap<PacketFactory<CustomRakNetPacket<T>>> packets = new TIntObjectHashMap<>();

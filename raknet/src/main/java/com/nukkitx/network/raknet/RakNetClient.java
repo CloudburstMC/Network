@@ -146,8 +146,13 @@ public class RakNetClient<T extends NetworkSession<RakNetSession>> extends RakNe
     }
 
     @Override
-    public T getSession(AddressedEnvelope<?, InetSocketAddress> packet) {
+    public T getSessionFromPacket(AddressedEnvelope<?, InetSocketAddress> packet) {
         return getSessionManager().get(packet.recipient());
+    }
+
+    @Override
+    public T getSessionFromSession(RakNetSession session) {
+        return getSessionManager().get(session.getLocalAddress());
     }
 
     public static class Builder<T extends NetworkSession<RakNetSession>> extends RakNet.Builder<T> {

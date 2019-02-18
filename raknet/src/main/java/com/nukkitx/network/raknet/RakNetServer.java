@@ -90,8 +90,13 @@ public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNe
     }
 
     @Override
-    public T getSession(AddressedEnvelope<?, InetSocketAddress> packet) {
+    public T getSessionFromPacket(AddressedEnvelope<?, InetSocketAddress> packet) {
         return getSessionManager().get(packet.sender());
+    }
+
+    @Override
+    public T getSessionFromSession(RakNetSession session) {
+        return getSessionManager().get(session.getRemoteAddress().orElseThrow(() -> new IllegalArgumentException("No address")));
     }
 
     public static class Builder<T extends NetworkSession<RakNetSession>> extends RakNet.Builder<T> {
