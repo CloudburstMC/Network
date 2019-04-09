@@ -4,6 +4,7 @@ import com.nukkitx.network.NetworkSession;
 import com.nukkitx.network.raknet.CustomRakNetPacket;
 import com.nukkitx.network.raknet.RakNetClient;
 import com.nukkitx.network.raknet.RakNetPacket;
+import com.nukkitx.network.raknet.RakNetUtil;
 import com.nukkitx.network.raknet.packet.*;
 import com.nukkitx.network.raknet.session.RakNetConnectingSession;
 import com.nukkitx.network.raknet.session.RakNetSession;
@@ -13,9 +14,6 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.Arrays;
-
-import static com.nukkitx.network.raknet.handler.RakNetDatagramServerHandler.JUNK_ADDRESS;
-import static com.nukkitx.network.raknet.handler.RakNetDatagramServerHandler.LOOPBACK;
 
 public class RakNetDatagramClientHandler<T extends NetworkSession<RakNetSession>> extends RakNetDatagramHandler<T> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetDatagramClientHandler.class);
@@ -47,12 +45,12 @@ public class RakNetDatagramClientHandler<T extends NetworkSession<RakNetSession>
             }
 
             NewIncomingConnectionPacket newIncomingConnection = new NewIncomingConnectionPacket();
-            newIncomingConnection.setClientAddress(connectingSession.getLocalAddress());
+            newIncomingConnection.setServerAddress(connectingSession.getRemoteAddress());
             newIncomingConnection.setClientTimestamp(rakNetClient.getTimestamp());
             newIncomingConnection.setServerTimestamp(connectionRequestAccepted.getSystemTimestamp());
             InetSocketAddress[] systemAddresses = new InetSocketAddress[20];
-            Arrays.fill(systemAddresses, JUNK_ADDRESS);
-            systemAddresses[0] = LOOPBACK;
+            Arrays.fill(systemAddresses, RakNetUtil.JUNK_ADDRESS);
+            systemAddresses[0] = RakNetUtil.LOOPBACK;
             newIncomingConnection.setSystemAddresses(systemAddresses);
             session.getConnection().sendPacket(newIncomingConnection);
             connectingSession.complete();

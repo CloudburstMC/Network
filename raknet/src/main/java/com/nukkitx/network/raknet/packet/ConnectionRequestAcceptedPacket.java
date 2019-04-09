@@ -2,6 +2,7 @@ package com.nukkitx.network.raknet.packet;
 
 import com.nukkitx.network.NetworkUtils;
 import com.nukkitx.network.raknet.RakNetPacket;
+import com.nukkitx.network.raknet.RakNetUtil;
 import io.netty.buffer.ByteBuf;
 import lombok.Data;
 
@@ -32,7 +33,11 @@ public class ConnectionRequestAcceptedPacket implements RakNetPacket {
         systemIndex = buffer.readShort();
         systemAddresses = new InetSocketAddress[20];
         for (int i = 0; i < 20; i++) {
-            systemAddresses[i] = NetworkUtils.readAddress(buffer);
+            if (buffer.readableBytes() > 16) {
+                systemAddresses[i] = NetworkUtils.readAddress(buffer);
+            } else {
+                systemAddresses[i] = RakNetUtil.JUNK_ADDRESS;
+            }
         }
         incomingTimestamp = buffer.readLong();
         systemTimestamp = buffer.readLong();
