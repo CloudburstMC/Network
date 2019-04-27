@@ -1,175 +1,245 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.*;
-import com.nukkitx.network.handler.ExceptionHandler;
-import com.nukkitx.network.raknet.codec.DatagramRakNetDatagramCodec;
-import com.nukkitx.network.raknet.codec.DatagramRakNetPacketCodec;
-import com.nukkitx.network.raknet.handler.RakNetDatagramServerHandler;
-import com.nukkitx.network.raknet.handler.RakNetPacketServerHandler;
-import com.nukkitx.network.raknet.session.RakNetSession;
-import com.nukkitx.network.util.Preconditions;
-import io.netty.channel.AddressedEnvelope;
+import com.nukkitx.network.BootstrapUtils;
+import com.nukkitx.network.util.DisconnectReason;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.ChannelPipeline;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.socket.DatagramPacket;
+import lombok.Cleanup;
 
+import javax.annotation.Nonnegative;
+import javax.annotation.ParametersAreNonnullByDefault;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.util.Map;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.*;
 
-public class RakNetServer<T extends NetworkSession<RakNetSession>> extends RakNet<T> implements NetworkListener {
-    private final InetSocketAddress address;
+@SuppressWarnings("ResultOfMethodCallIgnored")
+@ParametersAreNonnullByDefault
+public class RakNetServer extends RakNet {
+    final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
+    final ConcurrentMap<Long, RakNetServerSession> sessionsByGuid = new ConcurrentHashMap<>();
+    private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
+    private final Set<InetAddress> blockAddresses = new HashSet<>();
+    private final ArrayList<Channel> channels = new ArrayList<>();
+    private RakNetServerListener listener = null;
     private final int maxThreads;
-    private final RakNetServerEventListener eventListener;
+    private int maxConnections = 1024;
 
-    private RakNetServer(SessionManager<T> sessionManager, RakNetPacketRegistry<T> registry,
-                         SessionFactory<T, RakNetSession> factory, InetSocketAddress address, long id,
-                         RakNetServerEventListener eventListener, int maxThreads,
-                         Map<ChannelOption, Object> channelOptions, ScheduledExecutorService scheduler, Executor executor) {
-        super(sessionManager, registry, factory, id, channelOptions, scheduler, executor);
-        this.address = address;
-        this.eventListener = eventListener;
+    public RakNetServer(InetSocketAddress bindAddress) {
+        this(bindAddress, 1);
+    }
+
+    public RakNetServer(InetSocketAddress bindAddress, int maxThreads) {
+        this(bindAddress, maxThreads, Executors.newSingleThreadScheduledExecutor());
+    }
+
+    public RakNetServer(InetSocketAddress bindAddress, int maxThreads, ScheduledExecutorService scheduler) {
+        this(bindAddress, maxThreads, scheduler, scheduler);
+    }
+
+    public RakNetServer(InetSocketAddress bindAddress, int maxThreads, Executor executor, ScheduledExecutorService scheduler) {
+        super(bindAddress, scheduler, executor);
         this.maxThreads = maxThreads;
     }
 
-    @SuppressWarnings("unchecked")
-    public static <T extends Builder<U>, U extends NetworkSession<RakNetSession>> T builder() {
-        return (T) new Builder<U>();
-    }
+    public CompletableFuture<Void> bindInternal() {
+        int threads = BootstrapUtils.isReusePortAvailable() ? this.maxThreads : 1;
 
-    public void createSession(RakNetSession connection) {
-        T session = getSessionFactory().createSession(connection);
-        getSessionManager().add(connection.getRemoteAddress()
-                .orElseThrow(() -> new IllegalStateException("Connection has no remote address")), session);
-    }
-
-    public RakNetServerEventListener getEventListener() {
-        return eventListener;
-    }
-
-    @Override
-    public boolean bind() {
-        Preconditions.checkState(getChannel() == null, "RakNet server already bound");
-        int threads = BootstrapUtils.isReusePortAvailable() ? maxThreads : 1;
-
-        boolean success = false;
+        ChannelFuture[] channelFutures = new ChannelFuture[threads];
 
         for (int i = 0; i < threads; i++) {
-            try {
-                ChannelFuture future = getBootstrap().bind(address).await();
-                if (future.isSuccess()) {
-                    success = true;
-                }
-            } catch (InterruptedException e) {
-                // Ignore
-            }
+            channelFutures[i] = this.bootstrap.handler(datagramHandler).bind(this.bindAddress);
         }
-        return success;
+
+        return BootstrapUtils.allOf(channelFutures);
+    }
+
+    public boolean block(InetAddress address) {
+        Objects.requireNonNull(address, "address");
+        return this.blockAddresses.add(address);
+    }
+
+    public boolean unblock(InetAddress address) {
+        Objects.requireNonNull(address, "address");
+        return this.blockAddresses.remove(address);
+    }
+
+    public int getSessionCount() {
+        return this.sessionsByAddress.size();
+    }
+
+    @Nonnegative
+    public int getMaxConnections() {
+        return maxConnections;
+    }
+
+    public void setMaxConnections(@Nonnegative int maxConnections) {
+        this.maxConnections = maxConnections;
     }
 
     @Override
     public void close() {
-        if (getChannel() != null) {
-            getChannel().close().awaitUninterruptibly();
+        super.close();
+        for (RakNetServerSession session : this.sessionsByAddress.values()) {
+            session.disconnect(DisconnectReason.SHUTTING_DOWN);
+        }
+        for (Channel channel : this.channels) {
+            channel.close().syncUninterruptibly();
         }
     }
 
     @Override
-    public InetSocketAddress getAddress() {
-        return address;
+    protected void onTick() {
+        for (RakNetServerSession session : this.sessionsByAddress.values()) {
+            this.executor.execute(session::onTick);
+        }
     }
 
-    @Override
-    protected void initPipeline(ChannelPipeline pipeline) throws Exception {
-        pipeline.addLast("raknetPacketCodec", new DatagramRakNetPacketCodec(getPacketRegistry()))
-                .addLast("raknetPacketHandler", new RakNetPacketServerHandler<>(this))
-                .addLast("raknetDatagramCodec", new DatagramRakNetDatagramCodec(this))
-                .addLast("raknetDatagramHandler", new RakNetDatagramServerHandler<>(this))
-                .addLast("exceptionHandler", new ExceptionHandler());
+    private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet) {
+        // We want to do as many checks as possible before creating a session so memory is not wasted.
+        ByteBuf buffer = packet.content();
+        if (!RakNetUtils.verifyUnconnectedMagic(buffer)) {
+            return;
+        }
+        int protocolVersion = buffer.readUnsignedByte();
+        int mtu = RakNetUtils.clamp(buffer.readableBytes() + 18, RakNetConstants.MINIMUM_MTU_SIZE,
+                RakNetConstants.MAXIMUM_MTU_SIZE);
+
+        RakNetServerSession session = this.sessionsByAddress.get(packet.sender());
+
+        if (session != null) {
+            this.sendAlreadyConnected(ctx, packet.sender());
+        } else if (this.protocolVersion >= 0 && this.protocolVersion != protocolVersion) {
+            this.sendIncompatibleProtocolVersion(ctx, packet.sender());
+        } else if (this.maxConnections <= getSessionCount()) {
+            this.sendNoFreeIncomingConnections(ctx, packet.sender());
+        } else if (this.listener != null && !this.listener.onConnectionRequest(packet.sender())) {
+            this.sendConnectionBanned(ctx, packet.sender());
+        } else {
+            // Passed all checks. Now create the session and send the first reply.
+            session = new RakNetServerSession(packet.sender(), ctx.channel(), this, mtu);
+            if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
+                session.sendOpenConnectionReply1();
+                if (listener != null) {
+                    listener.onSessionCreation(packet.sender(), session);
+                }
+            }
+        }
     }
 
-    @Override
-    public T getSessionFromPacket(AddressedEnvelope<?, InetSocketAddress> packet) {
-        return getSessionManager().get(packet.sender());
+    private void onUnconnectedPing(ChannelHandlerContext ctx, DatagramPacket packet) {
+        long pingTime = packet.content().readLong();
+
+        byte[] userData = null;
+
+        if (this.listener != null) {
+            userData = this.listener.onQuery(packet.sender());
+        }
+        if (userData == null) {
+            userData = new byte[0];
+        }
+
+        int packetLength = 35 + userData.length;
+
+        ByteBuf buffer = ctx.alloc().directBuffer(packetLength, packetLength);
+
+        buffer.writeByte(RakNetConstants.ID_UNCONNECTED_PONG);
+        buffer.writeLong(pingTime);
+        buffer.writeLong(this.guid);
+        RakNetUtils.writeUnconnectedMagic(buffer);
+        buffer.writeShort(userData.length);
+        buffer.writeBytes(userData);
+
+        RakNet.send(ctx, packet.sender(), buffer);
     }
 
-    @Override
-    public T getSessionFromSession(RakNetSession session) {
-        return getSessionManager().get(session.getRemoteAddress().orElseThrow(() -> new IllegalArgumentException("No address")));
+    /*
+    Packet Dispatchers
+     */
+
+    private void sendAlreadyConnected(ChannelHandlerContext ctx, InetSocketAddress recipient) {
+        ByteBuf buffer = ctx.alloc().directBuffer(25, 25);
+        buffer.writeByte(RakNetConstants.ID_ALREADY_CONNECTED);
+        RakNetUtils.writeUnconnectedMagic(buffer);
+        buffer.writeLong(this.guid);
+
+        RakNet.send(ctx, recipient, buffer);
     }
 
-    public static class Builder<T extends NetworkSession<RakNetSession>> extends RakNet.Builder<T> {
-        private SessionManager<T> sessionManager;
-        private InetSocketAddress address;
-        private RakNetServerEventListener eventListener;
-        private int maximumThreads = 1;
+    private void sendConnectionBanned(ChannelHandlerContext ctx, InetSocketAddress recipient) {
+        ByteBuf buffer = ctx.alloc().directBuffer(25, 25);
+        buffer.writeByte(RakNetConstants.ID_CONNECTION_BANNED);
+        RakNetUtils.writeUnconnectedMagic(buffer);
+        buffer.writeLong(this.guid);
 
-        public Builder<T> address(InetSocketAddress address) {
-            Preconditions.checkNotNull(address, "address");
-            this.address = address;
-            return this;
+        RakNet.send(ctx, recipient, buffer);
+    }
+
+    private void sendIncompatibleProtocolVersion(ChannelHandlerContext ctx, InetSocketAddress recipient) {
+        ByteBuf buffer = ctx.alloc().directBuffer(26, 26);
+        buffer.writeByte(RakNetConstants.ID_INCOMPATIBLE_PROTOCOL_VERSION);
+        buffer.writeByte(this.protocolVersion);
+        RakNetUtils.writeUnconnectedMagic(buffer);
+        buffer.writeLong(this.guid);
+
+        RakNet.send(ctx, recipient, buffer);
+    }
+
+    private void sendNoFreeIncomingConnections(ChannelHandlerContext ctx, InetSocketAddress recipient) {
+        ByteBuf buffer = ctx.alloc().directBuffer(25, 25);
+        buffer.writeByte(RakNetConstants.ID_NO_FREE_INCOMING_CONNECTIONS);
+        RakNetUtils.writeUnconnectedMagic(buffer);
+        buffer.writeLong(this.guid);
+
+        RakNet.send(ctx, recipient, buffer);
+    }
+
+    private class ServerDatagramHandler extends ChannelInboundHandlerAdapter {
+
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            if (!(msg instanceof DatagramPacket)) {
+                return;
+            }
+
+            @Cleanup("release") DatagramPacket packet = (DatagramPacket) msg;
+
+            if (blockAddresses.contains(packet.sender().getAddress())) {
+                // Ignore these addresses altogether.
+                return;
+            }
+
+            ByteBuf content = packet.content();
+            byte packetId = content.readByte();
+
+            // These packets don't require a session
+            switch (packetId) {
+                case RakNetConstants.ID_UNCONNECTED_PING:
+                    RakNetServer.this.onUnconnectedPing(ctx, packet);
+                    return;
+                case RakNetConstants.ID_OPEN_CONNECTION_REQUEST_1:
+                    RakNetServer.this.onOpenConnectionRequest1(ctx, packet);
+                    return;
+            }
+            content.readerIndex(0);
+
+            RakNetServerSession session = RakNetServer.this.sessionsByAddress.get(packet.sender());
+
+            if (session != null) {
+                session.onDatagram(packet);
+            }
         }
 
-        public Builder<T> address(String host, int port) {
-            Preconditions.checkNotNull(host, "host");
-            this.address = new InetSocketAddress(host, port);
-            return this;
-        }
-
-        public Builder<T> sessionFactory(SessionFactory<T, RakNetSession> sessionFactory) {
-            setSessionFactory(sessionFactory);
-            return this;
-        }
-
-        public Builder<T> sessionManager(SessionManager<T> sessionManager) {
-            this.sessionManager = Preconditions.checkNotNull(sessionManager, "sessionManager");
-            return this;
-        }
-
-        public Builder<T> packet(PacketFactory<CustomRakNetPacket<T>> factory, int id) {
-            addPacket(factory, id);
-            return this;
-        }
-
-        public Builder<T> id(long id) {
-            setId(id);
-            return this;
-        }
-
-        public Builder<T> eventListener(RakNetServerEventListener eventListener) {
-            this.eventListener = Preconditions.checkNotNull(eventListener, "listener");
-            return this;
-        }
-
-        public Builder<T> maximumThreads(int maximumThreads) {
-            Preconditions.checkArgument(maximumThreads > 0, "Maximum threads must be larger than zero");
-            this.maximumThreads = maximumThreads;
-            return this;
-        }
-
-        public <O> Builder<T> channelOption(ChannelOption<O> option, O value) {
-            addChannelOption(option, value);
-            return this;
-        }
-
-        public Builder<T> scheduler(ScheduledExecutorService scheduler) {
-            setScheduler(scheduler);
-            return this;
-        }
-
-        public Builder<T> executor(Executor executor) {
-            setExecutor(executor);
-            return this;
-        }
-
-        public RakNetServer<T> build() {
-            Preconditions.checkNotNull(address, "address");
-            Preconditions.checkNotNull(eventListener, "eventListener");
-            Preconditions.checkNotNull(sessionManager, "sessionManager");
-            RakNetPacketRegistry<T> registry = checkCommonComponents();
-            return new RakNetServer<>(sessionManager, registry, sessionFactory, address, id, eventListener,
-                    maximumThreads, channelOptions, scheduler, executor);
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) {
+            RakNetServer.this.channels.add(ctx.channel());
         }
     }
 }

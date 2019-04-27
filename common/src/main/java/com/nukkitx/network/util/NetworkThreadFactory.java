@@ -2,6 +2,7 @@ package com.nukkitx.network.util;
 
 import lombok.Builder;
 
+import javax.annotation.Nonnull;
 import java.util.Locale;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -23,7 +24,7 @@ public class NetworkThreadFactory implements ThreadFactory {
     }
 
     @Override
-    public Thread newThread(Runnable runnable) {
+    public Thread newThread(@Nonnull Runnable runnable) {
         Thread thread = backingFactory.newThread(runnable);
 
         if (format != null) {

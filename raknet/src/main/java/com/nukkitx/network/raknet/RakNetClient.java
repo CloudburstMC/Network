@@ -1,200 +1,162 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.*;
-import com.nukkitx.network.handler.ExceptionHandler;
-import com.nukkitx.network.raknet.codec.DatagramRakNetDatagramCodec;
-import com.nukkitx.network.raknet.codec.DatagramRakNetPacketCodec;
-import com.nukkitx.network.raknet.enveloped.DirectAddressedRakNetPacket;
-import com.nukkitx.network.raknet.handler.RakNetDatagramClientHandler;
-import com.nukkitx.network.raknet.handler.RakNetPacketClientHandler;
-import com.nukkitx.network.raknet.packet.OpenConnectionRequest1Packet;
-import com.nukkitx.network.raknet.packet.UnconnectedPingPacket;
-import com.nukkitx.network.raknet.session.RakNetConnectingSession;
-import com.nukkitx.network.raknet.session.RakNetPingSession;
-import com.nukkitx.network.raknet.session.RakNetSession;
-import com.nukkitx.network.util.Preconditions;
-import io.netty.channel.AddressedEnvelope;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.ChannelPipeline;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.socket.DatagramPacket;
+import lombok.Cleanup;
+import lombok.RequiredArgsConstructor;
 
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
+import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
-import java.util.Map;
+import java.util.Iterator;
 import java.util.concurrent.*;
 
-public class RakNetClient<T extends NetworkSession<RakNetSession>> extends RakNet<T> implements NetworkClient<T, RakNetSession> {
-    private final ConcurrentMap<InetSocketAddress, RakNetConnectingSession<T>> connectingSessions = new ConcurrentHashMap<>();
-    private final ConcurrentMap<InetSocketAddress, RakNetPingSession> pingSessions = new ConcurrentHashMap<>();
+@ParametersAreNonnullByDefault
+public class RakNetClient extends RakNet {
+    private final ClientDatagramHandler handler = new ClientDatagramHandler();
+    private final ConcurrentMap<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
+    private RakNetSession session;
+    private Channel channel;
 
-    private RakNetClient(SessionManager<T> sessionManager, RakNetPacketRegistry<T> packetRegistry,
-                         SessionFactory<T, RakNetSession> sessionFactory, long id,
-                         Map<ChannelOption, Object> channelOptions, ScheduledExecutorService scheduler, Executor executor) {
-        super(sessionManager, packetRegistry, sessionFactory, id, channelOptions, scheduler, executor);
+    public RakNetClient(InetSocketAddress bindAddress) {
+        this(bindAddress, Executors.newSingleThreadScheduledExecutor());
     }
 
-    @SuppressWarnings("unchecked")
-    public static <T extends Builder<U>, U extends NetworkSession<RakNetSession>> T builder() {
-        return (T) new Builder<U>();
+    public RakNetClient(InetSocketAddress bindAddress, ScheduledExecutorService scheduler) {
+        this(bindAddress, scheduler, scheduler);
     }
 
-    @Override
-    protected void initPipeline(ChannelPipeline pipeline) throws Exception {
-        pipeline.addLast("datagramRakNetPacketCodec", new DatagramRakNetPacketCodec(getPacketRegistry()))
-                .addLast("raknetPacketHandler", new RakNetPacketClientHandler<>(this))
-                .addLast("datagramRakNetDatagramCodec", new DatagramRakNetDatagramCodec(this))
-                .addLast("raknetDatagramHandler", new RakNetDatagramClientHandler<>(this))
-                .addLast("exceptionHandler", new ExceptionHandler());
+    public RakNetClient(InetSocketAddress bindAddress, ScheduledExecutorService scheduler, Executor executor) {
+        super(bindAddress, scheduler, executor);
     }
 
     @Override
-    public CompletableFuture<T> connect(@Nonnull InetSocketAddress remoteAddress) {
-        return connect(remoteAddress, null);
-    }
+    protected CompletableFuture<Void> bindInternal() {
+        ChannelFuture channelFuture = this.bootstrap.handler(this.handler).bind(this.bindAddress);
 
-    @Override
-    public CompletableFuture<T> connect(@Nonnull InetSocketAddress remoteAddress, @Nullable InetSocketAddress localAddress) {
-        Preconditions.checkNotNull(remoteAddress, "remoteAddress");
-
-        final CompletableFuture<T> future = new CompletableFuture<>();
-
-        ForkJoinPool.commonPool().execute(() -> {
-            try {
-                ChannelFuture channelFuture;
-                if (localAddress != null) {
-                    channelFuture = getBootstrap().connect(remoteAddress, localAddress);
-                } else {
-                    channelFuture = getBootstrap().connect(remoteAddress);
-                }
-                if (!channelFuture.awaitUninterruptibly().isSuccess()) {
-                    future.completeExceptionally(channelFuture.cause());
-                    return;
-                }
-                InetSocketAddress localInetAddress = (InetSocketAddress) channelFuture.channel().localAddress();
-                RakNetConnectingSession<T> session = new RakNetConnectingSession<>(localInetAddress, remoteAddress, channelFuture.channel(),
-                        this, future);
-                connectingSessions.put(localInetAddress, session);
-
-                OpenConnectionRequest1Packet connectionRequest = new OpenConnectionRequest1Packet();
-                connectionRequest.setMtu(session.getMtu() - 28);
-                connectionRequest.setProtocolVersion(RakNetUtil.RAKNET_PROTOCOL_VERSION);
-                session.getChannel().writeAndFlush(new DirectAddressedRakNetPacket(connectionRequest, remoteAddress));
-            } catch (Exception e) {
-                future.completeExceptionally(e);
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        channelFuture.addListener(future1 -> {
+            if (future1.cause() != null) {
+                future.completeExceptionally(future1.cause());
             }
+            future.complete(null);
         });
         return future;
     }
 
-    public CompletableFuture<RakNetPong> ping(@Nonnull InetSocketAddress remoteAddress) {
-        return ping(remoteAddress, null);
+    public RakNetSession connect(InetSocketAddress address) {
+        if (!this.isRunning()) {
+            throw new IllegalStateException("RakNet has not been started");
+        }
+        if (session != null) {
+            throw new IllegalStateException("Session has already been created");
+        }
+
+        this.session = new RakNetClientSession(address, this.channel, this, RakNetConstants.MAXIMUM_MTU_SIZE);
+        return this.session;
     }
 
-    public CompletableFuture<RakNetPong> ping(@Nonnull InetSocketAddress remoteAddress, @Nullable InetSocketAddress localAddress) {
-        Preconditions.checkNotNull(remoteAddress, "remoteAddress");
+    public CompletableFuture<RakNetPong> ping(InetSocketAddress address, long timeout, TimeUnit unit) {
+        if (!this.isRunning()) {
+            throw new IllegalStateException("RakNet has not been started");
+        }
 
-        final CompletableFuture<RakNetPong> future = new CompletableFuture<>();
+        if (session != null && session.address.equals(address)) {
+            throw new IllegalArgumentException("Cannot ping connected address");
+        }
+        if (pings.containsKey(address)) {
+            return pings.get(address).future;
+        }
 
-        ForkJoinPool.commonPool().execute(() -> {
-            try {
-                ChannelFuture channelFuture;
-                InetSocketAddress localInetAddress;
-                if (localAddress != null) {
-                    channelFuture = getBootstrap().connect(remoteAddress, localAddress).awaitUninterruptibly();
-                    localInetAddress = localAddress;
-                } else {
-                    channelFuture = getBootstrap().connect(remoteAddress).awaitUninterruptibly();
-                    localInetAddress = (InetSocketAddress) channelFuture.channel().localAddress();
-                }
-                RakNetPingSession session = new RakNetPingSession(localInetAddress, remoteAddress, channelFuture.channel(),
-                        future, System.currentTimeMillis());
-                pingSessions.put(localInetAddress, session);
+        CompletableFuture<RakNetPong> pongFuture = new CompletableFuture<>();
 
-                UnconnectedPingPacket unconnectedPing = new UnconnectedPingPacket();
-                unconnectedPing.setTimestamp(session.getPing());
-                unconnectedPing.setClientId(getId());
-                session.getChannel().writeAndFlush(new DirectAddressedRakNetPacket(unconnectedPing, remoteAddress));
-            } catch (Exception e) {
-                future.completeExceptionally(e);
+        PingEntry entry = new PingEntry(pongFuture, System.currentTimeMillis() + unit.toMillis(timeout));
+        pings.put(address, entry);
+        this.sendUnconnectedPing(address);
+
+        return pongFuture;
+    }
+
+    @Override
+    protected void onTick() {
+        if (session != null) {
+            this.executor.execute(session::onTick);
+        }
+        long currentTime = System.currentTimeMillis();
+        Iterator<PingEntry> iterator = this.pings.values().iterator();
+        while (iterator.hasNext()) {
+            PingEntry entry = iterator.next();
+            if (currentTime >= entry.timeout) {
+                entry.future.completeExceptionally(new TimeoutException());
+                iterator.remove();
             }
-        });
-
-        return future;
-    }
-
-    @Override
-    public void close() {
-        getSessionManager().all().forEach(NetworkSession::close);
-        if (getChannel() != null) {
-            getChannel().close().awaitUninterruptibly();
         }
     }
 
-    public RakNetConnectingSession<T> getConnectingSession(InetSocketAddress localAddress) {
-        Preconditions.checkNotNull(localAddress, "localAddress");
-        return connectingSessions.get(localAddress);
+    private void onUnconnectedPong(DatagramPacket packet) {
+        PingEntry entry = this.pings.get(packet.sender());
+        if (entry == null) {
+            return;
+        }
+
+        ByteBuf content = packet.content();
+        long pingTime = content.readLong();
+        long guid = content.readLong();
+        if (!RakNetUtils.verifyUnconnectedMagic(content)) {
+            return;
+        }
+
+        byte[] userData = null;
+        if (content.isReadable()) {
+            userData = new byte[content.readableBytes()];
+            content.readBytes(userData);
+        }
+
+        entry.future.complete(new RakNetPong(pingTime, System.currentTimeMillis(), guid, userData));
     }
 
-    public void removeConnectingSession(RakNetConnectingSession<T> session) {
-        Preconditions.checkNotNull(session, "session");
-        connectingSessions.values().remove(session);
+    private void sendUnconnectedPing(InetSocketAddress recipient) {
+        ByteBuf buffer = this.channel.alloc().directBuffer(9, 9);
+        buffer.writeByte(RakNetConstants.ID_UNCONNECTED_PING);
+        buffer.writeLong(System.currentTimeMillis());
+        RakNetUtils.writeUnconnectedMagic(buffer);
+        buffer.writeLong(this.guid);
+
+        this.channel.writeAndFlush(new DatagramPacket(buffer, recipient));
     }
 
-    public RakNetPingSession getPingSession(InetSocketAddress localAddress) {
-        return pingSessions.get(localAddress);
+    @RequiredArgsConstructor
+    private static class PingEntry {
+        private final CompletableFuture<RakNetPong> future;
+        private final long timeout;
     }
 
-    @Override
-    public T getSessionFromPacket(AddressedEnvelope<?, InetSocketAddress> packet) {
-        return getSessionManager().get(packet.recipient());
-    }
+    private class ClientDatagramHandler extends ChannelInboundHandlerAdapter {
 
-    @Override
-    public T getSessionFromSession(RakNetSession session) {
-        return getSessionManager().get(session.getLocalAddress());
-    }
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            if (!(msg instanceof DatagramPacket)) {
+                return;
+            }
 
-    public static class Builder<T extends NetworkSession<RakNetSession>> extends RakNet.Builder<T> {
-        public Builder<T> sessionFactory(SessionFactory<T, RakNetSession> sessionFactory) {
-            setSessionFactory(sessionFactory);
-            return this;
-        }
+            @Cleanup("release") DatagramPacket packet = (DatagramPacket) msg;
+            ByteBuf content = packet.content();
+            int packetId = content.readUnsignedByte();
 
-        public Builder<T> sessionManager(SessionManager<T> sessionManager) {
-            setSessionManager(sessionManager);
-            return this;
-        }
-
-        public Builder<T> packet(PacketFactory<CustomRakNetPacket<T>> factory, int id) {
-            addPacket(factory, id);
-            return this;
-        }
-
-        public Builder<T> id(long id) {
-            setId(id);
-            return this;
-        }
-
-        public <O> Builder<T> channelOption(ChannelOption<O> option, O value) {
-            addChannelOption(option, value);
-            return this;
-        }
-
-        public Builder<T> scheduler(ScheduledExecutorService scheduler) {
-            setScheduler(scheduler);
-            return this;
-        }
-
-        public Builder<T> executor(Executor executor) {
-            setExecutor(executor);
-            return this;
+            if (packetId == RakNetConstants.ID_UNCONNECTED_PONG) {
+                RakNetClient.this.onUnconnectedPong(packet);
+            } else if (session != null) {
+                content.readerIndex(0);
+                session.onDatagram(packet);
+            }
         }
 
         @Override
-        public RakNetClient<T> build() {
-            RakNetPacketRegistry<T> registry = checkCommonComponents();
-            return new RakNetClient<>(sessionManager, registry, sessionFactory, id, channelOptions, scheduler, executor);
+        public void channelActive(ChannelHandlerContext ctx) {
+            RakNetClient.this.channel = ctx.channel();
         }
     }
 }

@@ -1,4 +1,4 @@
-package com.nukkitx.network.raknet.datagram;
+package com.nukkitx.network.raknet;
 
 import lombok.Getter;
 
@@ -13,15 +13,39 @@ public enum RakNetReliability {
     RELIABLE_WITH_ACK_RECEIPT(true, false, false, true),
     RELIABLE_ORDERED_WITH_ACK_RECEIPT(true, true, false, true);
 
-    private final boolean reliable;
-    private final boolean ordered;
-    private final boolean sequenced;
-    private final boolean withAckReceipt;
+    private static final RakNetReliability[] VALUES = values();
+
+    final boolean reliable;
+    final boolean ordered;
+    final boolean sequenced;
+    final boolean withAckReceipt;
+    final int size;
 
     RakNetReliability(boolean reliable, boolean ordered, boolean sequenced, boolean withAckReceipt) {
         this.reliable = reliable;
         this.ordered = ordered;
         this.sequenced = sequenced;
         this.withAckReceipt = withAckReceipt;
+
+        int size = 0;
+        if (this.reliable) {
+            size += 3;
+        }
+
+        if (this.sequenced) {
+            size += 3;
+        }
+
+        if (this.ordered) {
+            size += 4;
+        }
+        this.size = size;
+    }
+
+    public static RakNetReliability fromId(int id) {
+        if (id < 0 || id > 7) {
+            return null;
+        }
+        return VALUES[id];
     }
 }

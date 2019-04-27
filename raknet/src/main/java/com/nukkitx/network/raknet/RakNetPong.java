@@ -1,10 +1,13 @@
 package com.nukkitx.network.raknet;
 
-import lombok.Value;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 
-@Value
+@Getter
+@RequiredArgsConstructor
 public class RakNetPong {
-    private final String advertisement;
-    private final long delay;
-    private final long serverId;
+    private final long pingTime;
+    private final long pongTime;
+    private final long guid;
+    private final byte[] userData;
 }
