@@ -101,7 +101,7 @@ public abstract class RakNetSession {
     }
 
     public ByteBuf allocateBuffer(int capacity) {
-        return this.channel.alloc().directBuffer(capacity, capacity);
+        return this.channel.alloc().directBuffer(capacity);
     }
 
     @Nullable

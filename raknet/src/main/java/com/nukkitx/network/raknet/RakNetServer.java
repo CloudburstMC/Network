@@ -49,7 +49,8 @@ public class RakNetServer extends RakNet {
         this.maxThreads = maxThreads;
     }
 
-    public CompletableFuture<Void> bindInternal() {
+    @Override
+    protected CompletableFuture<Void> bindInternal() {
         int threads = BootstrapUtils.isReusePortAvailable() ? this.maxThreads : 1;
 
         ChannelFuture[] channelFutures = new ChannelFuture[threads];
