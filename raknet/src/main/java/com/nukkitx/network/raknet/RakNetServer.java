@@ -14,7 +14,6 @@ import javax.annotation.Nonnegative;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
@@ -27,7 +26,7 @@ public class RakNetServer extends RakNet {
     final ConcurrentMap<Long, RakNetServerSession> sessionsByGuid = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
     private final Set<InetAddress> blockAddresses = new HashSet<>();
-    private final ArrayList<Channel> channels = new ArrayList<>();
+    private final Set<Channel> channels = new HashSet<>();
     private RakNetServerListener listener = null;
     private final int maxThreads;
     private int maxConnections = 1024;
@@ -239,8 +238,10 @@ public class RakNetServer extends RakNet {
         }
 
         @Override
-        public void channelActive(ChannelHandlerContext ctx) {
-            RakNetServer.this.channels.add(ctx.channel());
+        public void handlerAdded(ChannelHandlerContext ctx) {
+            if (ctx.channel().isRegistered()) {
+                RakNetServer.this.channels.add(ctx.channel());
+            }
         }
     }
 }

@@ -111,7 +111,7 @@ public class RakNetClient extends RakNet {
 
         byte[] userData = null;
         if (content.isReadable()) {
-            userData = new byte[content.readableBytes()];
+            userData = new byte[content.readUnsignedShort()];
             content.readBytes(userData);
         }
 
@@ -155,8 +155,10 @@ public class RakNetClient extends RakNet {
         }
 
         @Override
-        public void channelActive(ChannelHandlerContext ctx) {
-            RakNetClient.this.channel = ctx.channel();
+        public void handlerAdded(ChannelHandlerContext ctx) {
+            if (ctx.channel().isRegistered()) {
+                RakNetClient.this.channel = ctx.channel();
+            }
         }
     }
 }
