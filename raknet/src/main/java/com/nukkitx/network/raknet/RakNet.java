@@ -17,13 +17,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @ParametersAreNonnullByDefault
 public abstract class RakNet implements AutoCloseable {
-    protected final long guid = ThreadLocalRandom.current().nextLong();
+    final long guid = ThreadLocalRandom.current().nextLong();
     final Bootstrap bootstrap;
     final Executor executor;
     final InetSocketAddress bindAddress;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ScheduledFuture<?> tickFuture;
-    protected int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
+    int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
 
     RakNet(InetSocketAddress bindAddress, ScheduledExecutorService scheduler, Executor executor) {
         this.bindAddress = bindAddress;
@@ -77,5 +77,9 @@ public abstract class RakNet implements AutoCloseable {
 
     public void setProtocolVersion(@Nonnegative int protocolVersion) {
         this.protocolVersion = protocolVersion;
+    }
+
+    public InetSocketAddress getBindAddress() {
+        return bindAddress;
     }
 }
