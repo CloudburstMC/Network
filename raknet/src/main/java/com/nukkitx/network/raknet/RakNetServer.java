@@ -3,10 +3,7 @@ package com.nukkitx.network.raknet;
 import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.util.DisconnectReason;
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
 import lombok.Cleanup;
 
@@ -22,7 +19,7 @@ import java.util.concurrent.*;
 @SuppressWarnings("ResultOfMethodCallIgnored")
 @ParametersAreNonnullByDefault
 public class RakNetServer extends RakNet {
-    final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
+    private final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
     final ConcurrentMap<Long, RakNetServerSession> sessionsByGuid = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
     private final Set<InetAddress> blockAddresses = new HashSet<>();
@@ -43,7 +40,7 @@ public class RakNetServer extends RakNet {
         this(bindAddress, maxThreads, scheduler, scheduler);
     }
 
-    public RakNetServer(InetSocketAddress bindAddress, int maxThreads, Executor executor, ScheduledExecutorService scheduler) {
+    public RakNetServer(InetSocketAddress bindAddress, int maxThreads, ScheduledExecutorService scheduler, Executor executor) {
         super(bindAddress, scheduler, executor);
         this.maxThreads = maxThreads;
     }
@@ -201,6 +198,7 @@ public class RakNetServer extends RakNet {
         RakNet.send(ctx, recipient, buffer);
     }
 
+    @ChannelHandler.Sharable
     private class ServerDatagramHandler extends ChannelInboundHandlerAdapter {
 
         @Override
