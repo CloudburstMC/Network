@@ -286,7 +286,7 @@ public abstract class RakNetSession {
 
     protected void tick() {
         if (this.isTimedOut()) {
-            this.close(DisconnectReason.TIMEOUT);
+            this.close(DisconnectReason.TIMED_OUT);
         }
 
         if (this.isStale() && this.state.ordinal() >= RakNetState.INITIALIZED.ordinal()) {

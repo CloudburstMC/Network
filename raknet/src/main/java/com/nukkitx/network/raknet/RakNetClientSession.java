@@ -54,7 +54,7 @@ public class RakNetClientSession extends RakNetSession {
         super.onTick();
         if (this.getState() == RakNetState.UNCONNECTED) {
             if (this.connectionAttempts >= RakNetConstants.MAXIMUM_CONNECTION_ATTEMPTS) {
-                this.close(DisconnectReason.TIMEOUT);
+                this.close(DisconnectReason.TIMED_OUT);
             } else {
                 long currentTime = System.currentTimeMillis();
                 if (this.nextConnectionAttempt < currentTime) {
