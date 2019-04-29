@@ -81,6 +81,14 @@ public class RakNetServer extends RakNet {
         this.maxConnections = maxConnections;
     }
 
+    public RakNetServerListener getListener() {
+        return listener;
+    }
+
+    public void setListener(RakNetServerListener listener) {
+        this.listener = listener;
+    }
+
     @Override
     public void close() {
         super.close();
