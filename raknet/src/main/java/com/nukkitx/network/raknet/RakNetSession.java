@@ -346,7 +346,7 @@ public abstract class RakNetSession {
             // Session is not ready for RakNet datagrams.
             return;
         }
-        int maxLength = this.mtu - RakNetConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE - RakNetConstants.MAXIMUM_UDP_HEADER_SIZE;
+        int maxLength = (this.mtu - RakNetConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE) - RakNetConstants.MAXIMUM_UDP_HEADER_SIZE;
 
         ByteBuf[] bufs;
         int splitId = 0;
@@ -381,16 +381,12 @@ public abstract class RakNetSession {
 
         // Set meta
         int orderingIndex = 0;
-        int sequencingIndex = 0;
-        int reliabilityIndex = 0;
+        /*int sequencingIndex = 0;
         if (reliability.isSequenced()) {
             sequencingIndex = this.sequenceWriteIndex.getAndIncrement(orderingChannel);
-        }
+        } todo: sequencing */
         if (reliability.isOrdered()) {
             orderingIndex = this.orderWriteIndex.getAndIncrement(orderingChannel);
-        }
-        if (reliability.isReliable()) {
-            reliabilityIndex = reliabilityWriteIndexUpdater.getAndIncrement(this);
         }
 
         // Now create the packets.
@@ -399,8 +395,10 @@ public abstract class RakNetSession {
             packet.setBuffer(bufs[i]);
             packet.setOrderingChannel((short) orderingChannel);
             packet.setOrderingIndex(orderingIndex);
-            packet.setSequenceIndex(sequencingIndex);
-            packet.setReliabilityIndex(reliabilityIndex);
+            //packet.setSequenceIndex(sequencingIndex);
+            if (reliability.isReliable()) {
+                packet.setReliabilityIndex(reliabilityWriteIndexUpdater.getAndIncrement(this));
+            }
             packet.setReliability(reliability);
 
             if (parts > 1) {
