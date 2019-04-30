@@ -54,7 +54,6 @@ public class RakNetServerSession extends RakNetSession {
 
         sendOpenConnectionReply2();
         this.setState(RakNetState.INITIALIZED);
-        log.trace("Initialized");
     }
 
     private void onConnectionRequest(ByteBuf buffer) {

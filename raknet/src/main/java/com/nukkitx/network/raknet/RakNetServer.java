@@ -111,7 +111,6 @@ public class RakNetServer extends RakNet {
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet) {
         // We want to do as many checks as possible before creating a session so memory is not wasted.
-        log.debug("Connection request");
         ByteBuf buffer = packet.content();
         if (!RakNetUtils.verifyUnconnectedMagic(buffer)) {
             return;
