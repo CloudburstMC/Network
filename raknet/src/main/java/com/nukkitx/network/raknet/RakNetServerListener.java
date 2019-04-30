@@ -27,8 +27,7 @@ public interface RakNetServerListener {
      * RakNet connection sequence. To find out when the session has finished connecting, use
      * {@link RakNetSessionListener}
      *
-     * @param address address of session created
      * @param session session created
      */
-    void onSessionCreation(InetSocketAddress address, RakNetServerSession session);
+    void onSessionCreation(RakNetServerSession session);
 }

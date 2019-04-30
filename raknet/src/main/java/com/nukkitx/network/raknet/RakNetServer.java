@@ -135,7 +135,7 @@ public class RakNetServer extends RakNet {
             if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
                 session.sendOpenConnectionReply1();
                 if (listener != null) {
-                    listener.onSessionCreation(packet.sender(), session);
+                    listener.onSessionCreation(session);
                 }
             }
         }
