@@ -161,25 +161,33 @@ public class RakNetClientSession extends RakNetSession {
 
     private void sendConnectionRequest() {
         ByteBuf buffer = this.allocateBuffer(18);
-        buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST);
-        buffer.writeLong(this.rakNet.guid);
-        buffer.writeLong(System.currentTimeMillis());
-        buffer.writeBoolean(false);
+        try {
+            buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST);
+            buffer.writeLong(this.rakNet.guid);
+            buffer.writeLong(System.currentTimeMillis());
+            buffer.writeBoolean(false);
 
-        this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
+            this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
+        } finally {
+            buffer.release();
+        }
     }
 
     private void sendNewIncomingConnection(long pingTime) {
         boolean ipv6 = this.isIpv6Session();
         ByteBuf buffer = this.allocateBuffer(ipv6 ? 294 : 94);
-        buffer.writeByte(RakNetConstants.ID_NEW_INCOMING_CONNECTION);
-        NetworkUtils.writeAddress(buffer, address);
-        for (InetSocketAddress address : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
+        try {
+            buffer.writeByte(RakNetConstants.ID_NEW_INCOMING_CONNECTION);
             NetworkUtils.writeAddress(buffer, address);
-        }
-        buffer.writeLong(pingTime);
-        buffer.writeLong(System.currentTimeMillis());
+            for (InetSocketAddress address : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
+                NetworkUtils.writeAddress(buffer, address);
+            }
+            buffer.writeLong(pingTime);
+            buffer.writeLong(System.currentTimeMillis());
 
-        this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
+            this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
+        } finally {
+            buffer.release();
+        }
     }
 }

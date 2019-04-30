@@ -17,7 +17,7 @@ public class RakNetServerSession extends RakNetSession {
 
     @Override
     protected void onPacket(ByteBuf buffer) {
-        byte packetId = buffer.readByte();
+        short packetId = buffer.readUnsignedByte();
 
         switch (packetId) {
             case RakNetConstants.ID_OPEN_CONNECTION_REQUEST_2:
@@ -27,17 +27,19 @@ public class RakNetServerSession extends RakNetSession {
                 this.onConnectionRequest(buffer);
                 break;
             case RakNetConstants.ID_NEW_INCOMING_CONNECTION:
-                this.onNewIncomingConnection(buffer);
+                this.onNewIncomingConnection();
                 break;
         }
     }
 
     private void onOpenConnectionRequest2(ByteBuf buffer) {
         if (this.getState() != RakNetState.INITIALIZING) {
+            log.debug("Incorrect state");
             return;
         }
 
         if (!RakNetUtils.verifyUnconnectedMagic(buffer)) {
+            log.debug("Invalid magic");
             return;
         }
 
@@ -52,6 +54,7 @@ public class RakNetServerSession extends RakNetSession {
 
         sendOpenConnectionReply2();
         this.setState(RakNetState.INITIALIZED);
+        log.trace("Initialized");
     }
 
     private void onConnectionRequest(ByteBuf buffer) {
@@ -70,7 +73,7 @@ public class RakNetServerSession extends RakNetSession {
         this.sendConnectionRequestAccepted(time);
     }
 
-    private void onNewIncomingConnection(ByteBuf buffer) {
+    private void onNewIncomingConnection() {
         if (this.getState() != RakNetState.CONNECTING) {
             return;
         }
@@ -103,7 +106,7 @@ public class RakNetServerSession extends RakNetSession {
         this.sendDirect(buffer);
     }
 
-    private void sendConnectionFailure(byte id) {
+    private void sendConnectionFailure(short id) {
         ByteBuf buffer = this.allocateBuffer(21);
         buffer.writeByte(id);
         RakNetUtils.writeUnconnectedMagic(buffer);
@@ -122,16 +125,20 @@ public class RakNetServerSession extends RakNetSession {
             buffer = this.allocateBuffer(94);
         }
 
-        buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED);
-        NetworkUtils.writeAddress(buffer, this.address);
+        try {
+            buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED);
+            NetworkUtils.writeAddress(buffer, this.address);
 
-        for (InetSocketAddress socketAddress : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
-            NetworkUtils.writeAddress(buffer, socketAddress);
+            for (InetSocketAddress socketAddress : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
+                NetworkUtils.writeAddress(buffer, socketAddress);
+            }
+
+            buffer.writeLong(time);
+            buffer.writeLong(System.currentTimeMillis());
+
+            this.send(buffer);
+        } finally {
+            buffer.release();
         }
-
-        buffer.writeLong(time);
-        buffer.writeLong(System.currentTimeMillis());
-
-        this.send(buffer);
     }
 }

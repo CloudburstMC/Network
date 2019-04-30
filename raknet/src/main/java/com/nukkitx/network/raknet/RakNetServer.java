@@ -5,7 +5,8 @@ import com.nukkitx.network.util.DisconnectReason;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
-import lombok.Cleanup;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import javax.annotation.Nonnegative;
 import javax.annotation.ParametersAreNonnullByDefault;
@@ -19,6 +20,7 @@ import java.util.concurrent.*;
 @SuppressWarnings("ResultOfMethodCallIgnored")
 @ParametersAreNonnullByDefault
 public class RakNetServer extends RakNet {
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetServer.class);
     private final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
     final ConcurrentMap<Long, RakNetServerSession> sessionsByGuid = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
@@ -109,6 +111,7 @@ public class RakNetServer extends RakNet {
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet) {
         // We want to do as many checks as possible before creating a session so memory is not wasted.
+        log.debug("Connection request");
         ByteBuf buffer = packet.content();
         if (!RakNetUtils.verifyUnconnectedMagic(buffer)) {
             return;
@@ -215,31 +218,35 @@ public class RakNetServer extends RakNet {
                 return;
             }
 
-            @Cleanup("release") DatagramPacket packet = (DatagramPacket) msg;
+            final DatagramPacket packet = (DatagramPacket) msg;
 
-            if (blockAddresses.contains(packet.sender().getAddress())) {
-                // Ignore these addresses altogether.
-                return;
-            }
-
-            ByteBuf content = packet.content();
-            byte packetId = content.readByte();
-
-            // These packets don't require a session
-            switch (packetId) {
-                case RakNetConstants.ID_UNCONNECTED_PING:
-                    RakNetServer.this.onUnconnectedPing(ctx, packet);
+            try {
+                if (blockAddresses.contains(packet.sender().getAddress())) {
+                    // Ignore these addresses altogether.
                     return;
-                case RakNetConstants.ID_OPEN_CONNECTION_REQUEST_1:
-                    RakNetServer.this.onOpenConnectionRequest1(ctx, packet);
-                    return;
-            }
-            content.readerIndex(0);
+                }
 
-            RakNetServerSession session = RakNetServer.this.sessionsByAddress.get(packet.sender());
+                ByteBuf content = packet.content();
+                byte packetId = content.readByte();
 
-            if (session != null) {
-                session.onDatagram(packet);
+                // These packets don't require a session
+                switch (packetId) {
+                    case RakNetConstants.ID_UNCONNECTED_PING:
+                        RakNetServer.this.onUnconnectedPing(ctx, packet);
+                        return;
+                    case RakNetConstants.ID_OPEN_CONNECTION_REQUEST_1:
+                        RakNetServer.this.onOpenConnectionRequest1(ctx, packet);
+                        return;
+                }
+                content.readerIndex(0);
+
+                RakNetServerSession session = RakNetServer.this.sessionsByAddress.get(packet.sender());
+
+                if (session != null) {
+                    session.onDatagram(packet);
+                }
+            } finally {
+                packet.release();
             }
         }
 
@@ -248,6 +255,11 @@ public class RakNetServer extends RakNet {
             if (ctx.channel().isRegistered()) {
                 RakNetServer.this.channels.add(ctx.channel());
             }
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            log.error("An exception occurred in RakNet", cause);
         }
     }
 }

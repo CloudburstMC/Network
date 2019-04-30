@@ -10,13 +10,13 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import lombok.Getter;
 import lombok.Setter;
 
 import javax.annotation.Nonnegative;
-import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
@@ -27,7 +27,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 @ParametersAreNonnullByDefault
 public abstract class RakNetSession {
-    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSession.class);
+    static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSession.class);
     private static final AtomicIntegerFieldUpdater<RakNetSession> splitIndexUpdater =
             AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "splitIndex");
     private static final AtomicIntegerFieldUpdater<RakNetSession> datagramReadIndexUpdater =
@@ -43,7 +43,7 @@ public abstract class RakNetSession {
     int mtu;
     long guid;
     private volatile RakNetState state = RakNetState.INITIALIZING;
-    private volatile long lastTouched;
+    private volatile long lastTouched = System.currentTimeMillis();
     @Getter
     @Setter
     private RakNetSessionListener listener = null;
@@ -104,8 +104,7 @@ public abstract class RakNetSession {
         return this.channel.alloc().directBuffer(capacity);
     }
 
-    @Nullable
-    public EncapsulatedPacket getReassembledPacket(EncapsulatedPacket splitPacket) {
+    private EncapsulatedPacket getReassembledPacket(EncapsulatedPacket splitPacket) {
         this.checkForClosed();
 
         SplitPacketHelper helper = this.splitPackets.get(splitPacket.getPartId());
@@ -113,14 +112,12 @@ public abstract class RakNetSession {
             this.splitPackets.set(splitPacket.getPartId(), helper = new SplitPacketHelper(splitPacket.getPartCount()));
         }
 
-        // Retain the packet so it can be reassembled later.
-        splitPacket.retain();
-
         // Try reassembling the packet.
         EncapsulatedPacket result = helper.add(splitPacket, this);
         if (result != null) {
             // Packet reassembled. Remove the helper
             this.splitPackets.remove(splitPacket.getPartId());
+            helper.release();
         }
 
         return result;
@@ -161,7 +158,7 @@ public abstract class RakNetSession {
     }
 
     private void onPacketInternal(ByteBuf buffer) {
-        int packetId = buffer.readUnsignedByte();
+        short packetId = buffer.readUnsignedByte();
         switch (packetId) {
             case RakNetConstants.ID_CONNECTED_PING:
                 this.onConnectedPing(buffer);
@@ -178,10 +175,13 @@ public abstract class RakNetSession {
                     // Forward to user
                     if (this.listener != null) {
                         this.listener.onUserPacket(buffer);
+                    } else {
+                        log.debug("Unhandled RakNet user packet");
                     }
                 } else {
                     this.onPacket(buffer);
                 }
+                break;
         }
     }
 
@@ -204,8 +204,7 @@ public abstract class RakNetSession {
 
         this.sendAck(new IntRange[]{new IntRange(datagram.sequenceIndex, datagram.sequenceIndex)});
 
-        for (EncapsulatedPacket encapsulated : datagram.packets) {
-
+        for (final EncapsulatedPacket encapsulated : datagram.packets) {
             if (encapsulated.reliability.isReliable()) {
                 reliabilityReadLock.lock();
                 try {
@@ -241,14 +240,21 @@ public abstract class RakNetSession {
 
 
             if (encapsulated.split) {
-                encapsulated = this.getReassembledPacket(encapsulated);
-
-                if (encapsulated == null) {
-                    // Not reassembled
-                    continue;
+                final EncapsulatedPacket reassembled = this.getReassembledPacket(encapsulated);
+                try {
+                    if (reassembled == null) {
+                        // Not reassembled
+                        continue;
+                    }
+                    this.onPacketInternal(reassembled.buffer);
+                } finally {
+                    if (reassembled != null) {
+                        reassembled.release();
+                    }
                 }
+            } else {
+                this.onPacketInternal(encapsulated.buffer);
             }
-            this.onPacket(encapsulated.buffer);
         }
     }
 
@@ -310,12 +316,15 @@ public abstract class RakNetSession {
         this.checkForClosed();
         this.closed = true;
         this.state = RakNetState.UNCONNECTED;
-        log.trace("RakNet Session ({} => {}) closed", this.rakNet.bindAddress, this.address);
+        log.trace("RakNet Session ({} => {}) closed: {}", this.rakNet.bindAddress, this.address, reason);
 
         // Perform resource clean up.
-        this.splitPackets.forEach(SplitPacketHelper::release);
-
-        this.sentDatagrams.forEach(RakNetDatagram::release);
+        if (this.splitPackets != null) {
+            this.splitPackets.forEach(ReferenceCountUtil::release);
+        }
+        if (this.sentDatagrams != null) {
+            this.sentDatagrams.forEach(ReferenceCountUtil::release);
+        }
 
         if (this.listener != null) {
             this.listener.onDisconnect(reason);
@@ -332,9 +341,6 @@ public abstract class RakNetSession {
 
     public void send(ByteBuf buf, RakNetReliability reliability, @Nonnegative int orderingChannel) {
         int readerIndex = buf.readerIndex();
-        if (buf.readUnsignedByte() < RakNetConstants.ID_USER_PACKET_ENUM) {
-            throw new IllegalArgumentException("Packet is using an internal ID");
-        }
         buf.readerIndex(readerIndex);
         if (state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
             // Session is not ready for RakNet datagrams.
@@ -491,21 +497,29 @@ public abstract class RakNetSession {
 
     private void sendConnectedPing(long pingTime) {
         ByteBuf buffer = this.allocateBuffer(9);
-        buffer.writeByte(RakNetConstants.ID_CONNECTED_PING);
-        buffer.writeLong(pingTime);
+        try {
+            buffer.writeByte(RakNetConstants.ID_CONNECTED_PING);
+            buffer.writeLong(pingTime);
 
-        this.send(buffer);
+            this.send(buffer);
+        } finally {
+            buffer.release();
+        }
 
         this.currentPingTime = pingTime;
     }
 
     private void sendConnectedPong(long pingTime) {
         ByteBuf buffer = this.allocateBuffer(17);
-        buffer.writeByte(RakNetConstants.ID_CONNECTED_PONG);
-        buffer.writeLong(pingTime);
-        buffer.writeLong(System.currentTimeMillis());
+        try {
+            buffer.writeByte(RakNetConstants.ID_CONNECTED_PONG);
+            buffer.writeLong(pingTime);
+            buffer.writeLong(System.currentTimeMillis());
 
-        this.send(buffer);
+            this.send(buffer);
+        } finally {
+            buffer.release();
+        }
     }
 
     private void sendDisconnectionNotification() {

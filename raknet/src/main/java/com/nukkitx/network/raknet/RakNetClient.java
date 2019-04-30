@@ -6,7 +6,6 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
-import lombok.Cleanup;
 import lombok.RequiredArgsConstructor;
 
 import javax.annotation.ParametersAreNonnullByDefault;
@@ -142,15 +141,19 @@ public class RakNetClient extends RakNet {
                 return;
             }
 
-            @Cleanup("release") DatagramPacket packet = (DatagramPacket) msg;
-            ByteBuf content = packet.content();
-            int packetId = content.readUnsignedByte();
+            DatagramPacket packet = (DatagramPacket) msg;
+            try {
+                ByteBuf content = packet.content();
+                int packetId = content.readUnsignedByte();
 
-            if (packetId == RakNetConstants.ID_UNCONNECTED_PONG) {
-                RakNetClient.this.onUnconnectedPong(packet);
-            } else if (session != null) {
-                content.readerIndex(0);
-                session.onDatagram(packet);
+                if (packetId == RakNetConstants.ID_UNCONNECTED_PONG) {
+                    RakNetClient.this.onUnconnectedPong(packet);
+                } else if (session != null) {
+                    content.readerIndex(0);
+                    session.onDatagram(packet);
+                }
+            } finally {
+                packet.release();
             }
         }
 

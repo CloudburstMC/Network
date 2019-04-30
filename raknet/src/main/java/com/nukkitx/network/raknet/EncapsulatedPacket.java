@@ -71,7 +71,7 @@ public class EncapsulatedPacket implements ReferenceCounted {
         }
 
         // Slice the buffer to use less memory
-        buffer = buf.readRetainedSlice(size);
+        buffer = buf.readSlice(size);
     }
 
     public int getSize() {

@@ -52,29 +52,29 @@ public class RakNetConstants {
     /*
         Packet IDs
      */
-    public static final byte ID_UNCONNECTED_PING = (byte) 0x01;
-    public static final byte ID_UNCONNECTED_PING_OPEN_CONNECTIONS = (byte) 0x02;
-    public static final byte ID_CONNECTED_PONG = (byte) 0x03;
-    public static final byte ID_DETECT_LOST_CONNECTION = (byte) 0x04;
-    public static final byte ID_OPEN_CONNECTION_REQUEST_1 = (byte) 0x05;
-    public static final byte ID_OPEN_CONNECTION_REPLY_1 = (byte) 0x06;
-    public static final byte ID_OPEN_CONNECTION_REQUEST_2 = (byte) 0x07;
-    public static final byte ID_OPEN_CONNECTION_REPLY_2 = (byte) 0x08;
-    public static final byte ID_CONNECTION_REQUEST = (byte) 0x09;
-    public static final byte ID_CONNECTION_REQUEST_ACCEPTED = (byte) 0x10;
-    public static final byte ID_CONNECTION_REQUEST_FAILED = (byte) 0x11;
-    public static final byte ID_ALREADY_CONNECTED = (byte) 0x12;
-    public static final byte ID_NEW_INCOMING_CONNECTION = (byte) 0x13;
-    public static final byte ID_NO_FREE_INCOMING_CONNECTIONS = (byte) 0x14;
-    public static final byte ID_DISCONNECTION_NOTIFICATION = (byte) 0x15;
-    public static final byte ID_CONNECTION_LOST = (byte) 0x16;
-    public static final byte ID_CONNECTION_BANNED = (byte) 0x17;
-    public static final byte ID_INCOMPATIBLE_PROTOCOL_VERSION = (byte) 0x19;
-    public static final byte ID_IP_RECENTLY_CONNECTED = (byte) 0x1a;
-    public static final byte ID_TIMESTAMP = (byte) 0x1b;
-    public static final byte ID_UNCONNECTED_PONG = (byte) 0x1c;
-    public static final byte ID_ADVERTISE_SYSTEM = (byte) 0x1d;
-    public static final byte ID_USER_PACKET_ENUM = (byte) 0x80;
+    public static final short ID_UNCONNECTED_PING = 0x01;
+    public static final short ID_UNCONNECTED_PING_OPEN_CONNECTIONS = 0x02;
+    public static final short ID_CONNECTED_PONG = 0x03;
+    public static final short ID_DETECT_LOST_CONNECTION = 0x04;
+    public static final short ID_OPEN_CONNECTION_REQUEST_1 = 0x05;
+    public static final short ID_OPEN_CONNECTION_REPLY_1 = 0x06;
+    public static final short ID_OPEN_CONNECTION_REQUEST_2 = 0x07;
+    public static final short ID_OPEN_CONNECTION_REPLY_2 = 0x08;
+    public static final short ID_CONNECTION_REQUEST = 0x09;
+    public static final short ID_CONNECTION_REQUEST_ACCEPTED = 0x10;
+    public static final short ID_CONNECTION_REQUEST_FAILED = 0x11;
+    public static final short ID_ALREADY_CONNECTED = 0x12;
+    public static final short ID_NEW_INCOMING_CONNECTION = 0x13;
+    public static final short ID_NO_FREE_INCOMING_CONNECTIONS = 0x14;
+    public static final short ID_DISCONNECTION_NOTIFICATION = 0x15;
+    public static final short ID_CONNECTION_LOST = 0x16;
+    public static final short ID_CONNECTION_BANNED = 0x17;
+    public static final short ID_INCOMPATIBLE_PROTOCOL_VERSION = 0x19;
+    public static final short ID_IP_RECENTLY_CONNECTED = 0x1a;
+    public static final short ID_TIMESTAMP = 0x1b;
+    public static final short ID_UNCONNECTED_PONG = 0x1c;
+    public static final short ID_ADVERTISE_SYSTEM = 0x1d;
+    public static final short ID_USER_PACKET_ENUM = 0x80;
     /**
      * Magic used to identify RakNet packets
      */
