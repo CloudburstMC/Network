@@ -22,7 +22,6 @@ import java.util.concurrent.*;
 public class RakNetServer extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetServer.class);
     final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
-    final ConcurrentMap<Long, RakNetServerSession> sessionsByGuid = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
     private final Set<InetAddress> blockAddresses = new HashSet<>();
     private final Set<Channel> channels = new HashSet<>();
