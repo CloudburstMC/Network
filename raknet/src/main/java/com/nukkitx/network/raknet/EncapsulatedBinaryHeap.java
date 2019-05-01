@@ -23,7 +23,8 @@ public class EncapsulatedBinaryHeap {
         int pred = hole >> 1;
         EncapsulatedPacket predKey = this.heap[pred];
 
-        while (predKey.orderingIndex > packet.orderingIndex) {
+        int index = predKey == null ? Integer.MAX_VALUE : predKey.orderingIndex;
+        while (index > packet.orderingIndex) {
             this.heap[hole] = predKey;
             hole = pred;
             pred >>= 1;
