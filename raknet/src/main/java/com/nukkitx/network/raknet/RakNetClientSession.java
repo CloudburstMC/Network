@@ -51,7 +51,6 @@ public class RakNetClientSession extends RakNetSession {
 
     @Override
     protected void tick() {
-        super.onTick();
         if (this.getState() == RakNetState.UNCONNECTED) {
             if (this.connectionAttempts >= RakNetConstants.MAXIMUM_CONNECTION_ATTEMPTS) {
                 this.close(DisconnectReason.TIMED_OUT);
@@ -110,10 +109,6 @@ public class RakNetClientSession extends RakNetSession {
         }
         this.mtu = buffer.readUnsignedShort();
         boolean security = buffer.readBoolean();
-        if (security) {
-            this.close(DisconnectReason.CONNECTION_REQUEST_FAILED);
-            return;
-        }
 
         this.initialize();
         this.setState(RakNetState.INITIALIZED);

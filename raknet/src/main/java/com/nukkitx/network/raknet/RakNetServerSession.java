@@ -34,12 +34,10 @@ public class RakNetServerSession extends RakNetSession {
 
     private void onOpenConnectionRequest2(ByteBuf buffer) {
         if (this.getState() != RakNetState.INITIALIZING) {
-            log.debug("Incorrect state");
             return;
         }
 
         if (!RakNetUtils.verifyUnconnectedMagic(buffer)) {
-            log.debug("Invalid magic");
             return;
         }
 

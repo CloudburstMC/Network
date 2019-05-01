@@ -42,7 +42,7 @@ public abstract class RakNetSession {
     private final ChannelPromise voidPromise;
     int mtu;
     long guid;
-    private volatile RakNetState state = RakNetState.INITIALIZING;
+    private volatile RakNetState state = RakNetState.UNCONNECTED;
     private volatile long lastTouched = System.currentTimeMillis();
     @Getter
     @Setter
@@ -88,8 +88,12 @@ public abstract class RakNetSession {
         sequenceReadIndex = new AtomicIntegerArray(RakNetConstants.MAXIMUM_ORDERING_CHANNELS);
         sequenceWriteIndex = new AtomicIntegerArray(RakNetConstants.MAXIMUM_ORDERING_CHANNELS);
 
+        orderingHeaps = new EncapsulatedBinaryHeap[RakNetConstants.MAXIMUM_ORDERING_CHANNELS];
         splitPackets = new RoundRobinArray<>(RakNetConstants.MAXIMUM_SPLIT_COUNT);
         sentDatagrams = new RoundRobinArray<>(512);
+        for (int i = 0; i < RakNetConstants.MAXIMUM_ORDERING_CHANNELS; i++) {
+            orderingHeaps[i] = new EncapsulatedBinaryHeap(64);
+        }
     }
 
     public InetSocketAddress getAddress() {
@@ -246,30 +250,42 @@ public abstract class RakNetSession {
                         // Not reassembled
                         continue;
                     }
-                    this.onPacketInternal(reassembled.buffer);
+                    this.onEncapsulated(reassembled);
                 } finally {
                     if (reassembled != null) {
                         reassembled.release();
                     }
                 }
             } else {
-                this.onPacketInternal(encapsulated.buffer);
+                this.onEncapsulated(encapsulated);
             }
         }
     }
 
-    public void onOrderedReceived(EncapsulatedPacket packet) {
+    private void onEncapsulated(EncapsulatedPacket packet) {
+        if (packet.getReliability().isOrdered()) {
+            this.onOrderedReceived(packet);
+        } else {
+            this.onPacketInternal(packet.buffer);
+        }
+    }
+
+    private void onOrderedReceived(EncapsulatedPacket packet) {
         EncapsulatedBinaryHeap binaryHeap = this.orderingHeaps[packet.orderingChannel];
 
-        if (this.orderReadIndex.get(packet.orderingChannel) != packet.orderingIndex) {
+        if (this.orderReadIndex.get(packet.orderingChannel) < packet.orderingIndex) {
             // Not next in line so add to queue.
+            packet.retain();
             binaryHeap.insert(packet);
+            return;
+        } else if (this.orderReadIndex.get(packet.orderingChannel) > packet.orderingIndex) {
+            // We already have this
             return;
         }
         this.orderReadIndex.incrementAndGet(packet.orderingChannel);
 
         // Send this packet
-        this.onPacket(packet.buffer);
+        this.onPacketInternal(packet.buffer);
 
         EncapsulatedPacket queuedPacket;
         while ((queuedPacket = binaryHeap.peek()) != null) {
@@ -278,12 +294,16 @@ public abstract class RakNetSession {
                 binaryHeap.remove();
                 this.orderReadIndex.incrementAndGet(packet.orderingChannel);
 
-                this.onPacket(packet.buffer);
+                try {
+                    this.onPacketInternal(packet.buffer);
+                } finally {
+                    packet.release();
+                }
             }
         }
     }
 
-    public final void onTick() {
+    final void onTick() {
         if (this.closed) {
             return;
         }
@@ -434,7 +454,7 @@ public abstract class RakNetSession {
         Packet Handlers
      */
 
-    public void onAck(ByteBuf buffer) {
+    private void onAck(ByteBuf buffer) {
         this.checkForClosed();
 
         IntRange[] acked = RakNetUtils.readIntRanges(buffer);
@@ -450,7 +470,7 @@ public abstract class RakNetSession {
         }
     }
 
-    public void onNak(ByteBuf buffer) {
+    private void onNak(ByteBuf buffer) {
         this.checkForClosed();
 
         IntRange[] acked = RakNetUtils.readIntRanges(buffer);
@@ -560,7 +580,7 @@ public abstract class RakNetSession {
         this.sendDirect(buffer);
     }
 
-    public void touch() {
+    private void touch() {
         this.checkForClosed();
         this.lastTouched = System.currentTimeMillis();
     }
