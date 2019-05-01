@@ -1,12 +1,10 @@
 package com.nukkitx.network.raknet.util;
 
 import com.nukkitx.network.util.Preconditions;
-import lombok.Value;
 
-@Value
 public class IntRange {
-    private final int start;
-    private final int end;
+    public final int start;
+    public final int end;
 
     public IntRange(int num) {
         this(num, num);

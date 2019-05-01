@@ -5,9 +5,10 @@ import io.netty.bootstrap.AbstractBootstrap;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.*;
 import io.netty.channel.epoll.Native;
+import io.netty.channel.epoll.*;
 import io.netty.channel.kqueue.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
@@ -17,9 +18,11 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
+import lombok.RequiredArgsConstructor;
 import lombok.experimental.UtilityClass;
 
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadFactory;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
@@ -43,9 +46,9 @@ public final class BootstrapUtils {
             if (index > -1) {
                 kernelVersion = kernelVersion.substring(0, index);
             }
-            int[] kernalVer = fromString(kernelVersion);
-            KERNEL_VERSION = Optional.of(kernalVer);
-            REUSEPORT_AVAILABLE = checkVersion(kernalVer, 0);
+            int[] kernelVer = fromString(kernelVersion);
+            KERNEL_VERSION = Optional.of(kernelVer);
+            REUSEPORT_AVAILABLE = checkVersion(kernelVer, 0);
         } else {
             KERNEL_VERSION = Optional.empty();
             REUSEPORT_AVAILABLE = false;
@@ -54,10 +57,12 @@ public final class BootstrapUtils {
         ThreadFactory listenerThreadFactory = NetworkThreadFactory.builder().format("Network Listener - #%d")
                 .daemon(true).build();
 
-        if (Epoll.isAvailable()) {
+        boolean disableNative = System.getProperties().contains("disableNativeEventLoop");
+
+        if (Epoll.isAvailable() && !disableNative) {
             CHANNEL_TYPE = ChannelType.EPOLL;
             EVENT_LOOP_GROUP = new EpollEventLoopGroup(0, listenerThreadFactory);
-        } else if (KQueue.isAvailable()) {
+        } else if (KQueue.isAvailable() && !disableNative) {
             CHANNEL_TYPE = ChannelType.KQUEUE;
             EVENT_LOOP_GROUP = new KQueueEventLoopGroup(0, listenerThreadFactory);
         } else {
@@ -126,6 +131,28 @@ public final class BootstrapUtils {
         return false;
     }
 
+    public static CompletableFuture<Void> allOf(ChannelFuture... futures) {
+        if (futures == null || futures.length == 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+        @SuppressWarnings("unchecked")
+        CompletableFuture<Channel>[] completableFutures = new CompletableFuture[futures.length];
+        for (int i = 0; i < futures.length; i++) {
+            ChannelFuture channelFuture = futures[i];
+            CompletableFuture<Channel> completableFuture = new CompletableFuture<>();
+            channelFuture.addListener(future -> {
+                if (future.cause() != null) {
+                    completableFuture.completeExceptionally(future.cause());
+                }
+                completableFuture.complete(channelFuture.channel());
+            });
+            completableFutures[i] = completableFuture;
+        }
+
+        return CompletableFuture.allOf(completableFutures);
+    }
+
+    @RequiredArgsConstructor
     private enum ChannelType {
         EPOLL(EpollDatagramChannel.class, EpollSocketChannel.class, EpollServerSocketChannel.class),
         KQUEUE(KQueueDatagramChannel.class, KQueueSocketChannel.class, KQueueServerSocketChannel.class),
@@ -134,12 +161,5 @@ public final class BootstrapUtils {
         private final Class<? extends DatagramChannel> datagramChannel;
         private final Class<? extends SocketChannel> socketChannel;
         private final Class<? extends ServerSocketChannel> serverSocketChannel;
-
-        ChannelType(Class<? extends DatagramChannel> datagramChannel, Class<? extends SocketChannel> socketChannel,
-                    Class<? extends ServerSocketChannel> serverSocketChannel) {
-            this.datagramChannel = datagramChannel;
-            this.socketChannel = socketChannel;
-            this.serverSocketChannel = serverSocketChannel;
-        }
     }
 }

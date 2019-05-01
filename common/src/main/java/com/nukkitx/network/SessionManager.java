@@ -24,7 +24,7 @@ public class SessionManager<T extends NetworkSession> {
 
     public final boolean add(InetSocketAddress address, T session) {
         Preconditions.checkNotNull(address, "address");
-        Preconditions.checkNotNull(session, "session");
+        Preconditions.checkNotNull(session, "connection");
 
         boolean added = sessions.putIfAbsent(address, session) == null;
 
@@ -38,7 +38,7 @@ public class SessionManager<T extends NetworkSession> {
     }
 
     public final boolean remove(T session) {
-        Preconditions.checkNotNull(session, "session");
+        Preconditions.checkNotNull(session, "connection");
         boolean removed = sessions.values().remove(session);
 
         if (removed) {

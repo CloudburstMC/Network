@@ -1,142 +1,85 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.*;
-import com.nukkitx.network.raknet.session.RakNetSession;
+import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.util.Preconditions;
-import gnu.trove.map.TIntObjectMap;
-import gnu.trove.map.hash.TIntObjectHashMap;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.channel.AddressedEnvelope;
-import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
-import io.netty.channel.ChannelPipeline;
-import io.netty.channel.socket.DatagramChannel;
-import lombok.Getter;
+import io.netty.channel.socket.DatagramPacket;
 
+import javax.annotation.Nonnegative;
+import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-@Getter
-public abstract class RakNet<T extends NetworkSession<RakNetSession>> extends ChannelInitializer<DatagramChannel> {
-    private final SessionManager<T> sessionManager;
-    private final RakNetPacketRegistry<T> packetRegistry;
-    private final SessionFactory<T, RakNetSession> sessionFactory;
-    private final Bootstrap bootstrap;
-    private final long id;
-    private final long timestamp = System.currentTimeMillis();
-    private final Executor executor;
-    private final ScheduledExecutorService scheduler;
-    private DatagramChannel channel;
+@ParametersAreNonnullByDefault
+public abstract class RakNet implements AutoCloseable {
+    final long guid = ThreadLocalRandom.current().nextLong();
+    final Bootstrap bootstrap;
+    final Executor executor;
+    final InetSocketAddress bindAddress;
+    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final ScheduledFuture<?> tickFuture;
+    int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
 
-    protected RakNet(SessionManager<T> sessionManager, RakNetPacketRegistry<T> packetRegistry, SessionFactory<T, RakNetSession> sessionFactory, long id,
-                     Map<ChannelOption, Object> channelOptions, ScheduledExecutorService scheduler, Executor executor) {
-        this.sessionManager = sessionManager;
-        this.packetRegistry = packetRegistry;
-        this.sessionFactory = sessionFactory;
-        this.id = id;
-        this.scheduler = scheduler;
+    RakNet(InetSocketAddress bindAddress, ScheduledExecutorService scheduler, Executor executor) {
+        this.bindAddress = bindAddress;
         this.executor = executor;
 
-        this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT).handler(this);
+        this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
 
-        BootstrapUtils.setupBootstrap(bootstrap, true);
+        BootstrapUtils.setupBootstrap(this.bootstrap, true);
 
-        channelOptions.forEach(bootstrap::option);
-
-        scheduler.scheduleAtFixedRate(this::onTick, 50, 50, TimeUnit.MILLISECONDS);
+        tickFuture = scheduler.scheduleAtFixedRate(this::onTick, 50, 50, TimeUnit.MILLISECONDS);
     }
 
-    Bootstrap getBootstrap() {
+    static void send(ChannelHandlerContext ctx, InetSocketAddress recipient, ByteBuf buffer) {
+        ctx.writeAndFlush(new DatagramPacket(buffer, recipient), ctx.voidPromise());
+    }
+
+    public CompletableFuture<Void> bind() {
+        Preconditions.checkState(this.running.compareAndSet(false, true), "RakNet has already been started");
+
+        CompletableFuture<Void> future = bindInternal();
+
+        future.whenComplete((aVoid, throwable) -> {
+            if (throwable != null) {
+                // Failed to start. Set running to false
+                this.running.compareAndSet(true, false);
+            }
+        });
+        return future;
+    }
+
+    public void close() {
+        this.tickFuture.cancel(false);
+    }
+
+    protected abstract CompletableFuture<Void> bindInternal();
+
+    protected abstract void onTick();
+
+    public boolean isRunning() {
+        return this.running.get();
+    }
+
+    public Bootstrap getBootstrap() {
         return bootstrap;
     }
 
-    @Override
-    protected final void initChannel(DatagramChannel channel) throws Exception {
-        this.channel = channel;
-
-        initPipeline(channel.pipeline());
+    @Nonnegative
+    public int getProtocolVersion() {
+        return protocolVersion;
     }
 
-    protected abstract void initPipeline(ChannelPipeline pipeline) throws Exception;
-
-    private void onTick() {
-        for (T session : sessionManager.all()) {
-            executor.execute(() -> session.getConnection().onTick());
-        }
+    public void setProtocolVersion(@Nonnegative int protocolVersion) {
+        this.protocolVersion = protocolVersion;
     }
 
-
-    public long getTimestamp() {
-        return System.currentTimeMillis() - timestamp;
-    }
-
-    public abstract T getSessionFromPacket(AddressedEnvelope<?, InetSocketAddress> packet);
-
-    public abstract T getSessionFromSession(RakNetSession session);
-
-    protected abstract static class Builder<T extends NetworkSession<RakNetSession>> {
-        final TIntObjectMap<PacketFactory<CustomRakNetPacket<T>>> packets = new TIntObjectHashMap<>();
-        final Map<ChannelOption, Object> channelOptions = new HashMap<>();
-        SessionFactory<T, RakNetSession> sessionFactory;
-        SessionManager<T> sessionManager;
-        long id;
-        ScheduledExecutorService scheduler;
-        Executor executor;
-
-        void setSessionFactory(SessionFactory<T, RakNetSession> sessionFactory) {
-            this.sessionFactory = Preconditions.checkNotNull(sessionFactory, "sessionFactory");
-        }
-
-        void setSessionManager(SessionManager<T> sessionManager) {
-            this.sessionManager = Preconditions.checkNotNull(sessionManager, "sessionManager");
-        }
-
-        void addPacket(PacketFactory<CustomRakNetPacket<T>> factory, int id) {
-            Preconditions.checkNotNull(factory, "factory");
-            Preconditions.checkArgument(id >= 0 && id < 256, "Invalid ID");
-            packets.put(id, factory);
-        }
-
-        void setId(long id) {
-            this.id = id;
-        }
-
-        <O> void addChannelOption(ChannelOption<O> option, O value) {
-            Preconditions.checkNotNull(option, "option");
-            Preconditions.checkNotNull(value, "value");
-            channelOptions.put(option, value);
-        }
-
-        void setScheduler(ScheduledExecutorService scheduler) {
-            Preconditions.checkNotNull(scheduler, "scheduler");
-            this.scheduler = scheduler;
-        }
-
-        void setExecutor(Executor executor) {
-            Preconditions.checkNotNull(executor, "executor");
-            this.executor = executor;
-        }
-
-        RakNetPacketRegistry<T> checkCommonComponents() {
-            Preconditions.checkNotNull(sessionFactory, "sessionFactory");
-            if (scheduler == null) {
-                scheduler = Executors.newSingleThreadScheduledExecutor();
-            }
-            if (executor == null) {
-                executor = scheduler;
-            }
-            if (sessionManager == null) {
-                sessionManager = new SessionManager<>(executor);
-            }
-            if (id == 0) {
-                id = ThreadLocalRandom.current().nextLong();
-            }
-            return new RakNetPacketRegistry<>(packets);
-        }
-
-        public abstract RakNet<T> build();
+    public InetSocketAddress getBindAddress() {
+        return bindAddress;
     }
 }
