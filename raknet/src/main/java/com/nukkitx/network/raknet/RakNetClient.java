@@ -6,6 +6,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import lombok.RequiredArgsConstructor;
 
 import javax.annotation.ParametersAreNonnullByDefault;
@@ -15,9 +17,10 @@ import java.util.concurrent.*;
 
 @ParametersAreNonnullByDefault
 public class RakNetClient extends RakNet {
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
     private final ClientDatagramHandler handler = new ClientDatagramHandler();
     private final ConcurrentMap<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
-    private RakNetSession session;
+    RakNetSession session;
     private Channel channel;
 
     public RakNetClient(InetSocketAddress bindAddress) {
@@ -54,7 +57,7 @@ public class RakNetClient extends RakNet {
             throw new IllegalStateException("Session has already been created");
         }
 
-        this.session = new RakNetClientSession(address, this.channel, this, RakNetConstants.MAXIMUM_MTU_SIZE);
+        this.session = new RakNetClientSession(this, address, this.channel, RakNetConstants.MAXIMUM_MTU_SIZE);
         return this.session;
     }
 
@@ -162,6 +165,11 @@ public class RakNetClient extends RakNet {
             if (ctx.channel().isRegistered()) {
                 RakNetClient.this.channel = ctx.channel();
             }
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            log.error("An exception occurred in RakNet", cause);
         }
     }
 }

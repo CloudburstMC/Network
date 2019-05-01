@@ -37,7 +37,6 @@ public abstract class RakNetSession {
     private static final AtomicIntegerFieldUpdater<RakNetSession> reliabilityWriteIndexUpdater =
             AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "reliabilityWriteIndex");
     final InetSocketAddress address;
-    final RakNet rakNet;
     private final Channel channel;
     private final ChannelPromise voidPromise;
     int mtu;
@@ -69,10 +68,9 @@ public abstract class RakNetSession {
     private volatile long lastPongTime = -1;
     private RoundRobinArray<RakNetDatagram> sentDatagrams;
 
-    RakNetSession(InetSocketAddress address, Channel channel, RakNet rakNet, int mtu) {
+    RakNetSession(InetSocketAddress address, Channel channel, int mtu) {
         this.address = address;
         this.channel = channel;
-        this.rakNet = rakNet;
         this.mtu = mtu;
         // We can reuse this instead of creating a new one each time
         this.voidPromise = channel.voidPromise();
@@ -336,7 +334,8 @@ public abstract class RakNetSession {
         this.checkForClosed();
         this.closed = true;
         this.state = RakNetState.UNCONNECTED;
-        log.trace("RakNet Session ({} => {}) closed: {}", this.rakNet.bindAddress, this.address, reason);
+        this.onClose();
+        log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().bindAddress, this.address, reason);
 
         // Perform resource clean up.
         if (this.splitPackets != null) {
@@ -349,6 +348,9 @@ public abstract class RakNetSession {
         if (this.listener != null) {
             this.listener.onDisconnect(reason);
         }
+    }
+
+    protected void onClose() {
     }
 
     public void send(ByteBuf buf) {
@@ -542,9 +544,13 @@ public abstract class RakNetSession {
 
     private void sendDisconnectionNotification() {
         ByteBuf buffer = this.allocateBuffer(1);
-        buffer.writeByte(RakNetConstants.ID_DISCONNECTION_NOTIFICATION);
+        try {
+            buffer.writeByte(RakNetConstants.ID_DISCONNECTION_NOTIFICATION);
 
-        this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
+            this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
+        } finally {
+            buffer.release();
+        }
     }
 
     private void sendDetectLostConnection() {
@@ -601,9 +607,7 @@ public abstract class RakNetSession {
         return this.closed;
     }
 
-    public RakNet getRakNet() {
-        return this.rakNet;
-    }
+    public abstract RakNet getRakNet();
 
     boolean isIpv6Session() {
         return this.address.getAddress() instanceof Inet6Address;

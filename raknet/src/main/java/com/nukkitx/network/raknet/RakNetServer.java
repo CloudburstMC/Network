@@ -21,7 +21,7 @@ import java.util.concurrent.*;
 @ParametersAreNonnullByDefault
 public class RakNetServer extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetServer.class);
-    private final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
+    final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
     final ConcurrentMap<Long, RakNetServerSession> sessionsByGuid = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
     private final Set<InetAddress> blockAddresses = new HashSet<>();
@@ -131,7 +131,7 @@ public class RakNetServer extends RakNet {
             this.sendConnectionBanned(ctx, packet.sender());
         } else {
             // Passed all checks. Now create the session and send the first reply.
-            session = new RakNetServerSession(packet.sender(), ctx.channel(), this, mtu);
+            session = new RakNetServerSession(this, packet.sender(), ctx.channel(), mtu);
             session.setState(RakNetState.INITIALIZING);
             if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
                 session.sendOpenConnectionReply1();

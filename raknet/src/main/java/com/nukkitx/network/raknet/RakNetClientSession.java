@@ -10,11 +10,13 @@ import java.net.InetSocketAddress;
 
 @ParametersAreNonnullByDefault
 public class RakNetClientSession extends RakNetSession {
+    private final RakNetClient rakNet;
     private int connectionAttempts;
     private long nextConnectionAttempt;
 
-    RakNetClientSession(InetSocketAddress address, Channel channel, RakNet rakNet, int mtu) {
-        super(address, channel, rakNet, mtu);
+    RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu) {
+        super(address, channel, mtu);
+        this.rakNet = rakNet;
     }
 
     @Override
@@ -70,6 +72,18 @@ public class RakNetClientSession extends RakNetSession {
                 }
             }
         }
+    }
+
+    @Override
+    protected void onClose() {
+        if (this.rakNet.session == this) {
+            this.rakNet.session = null;
+        }
+    }
+
+    @Override
+    public RakNet getRakNet() {
+        return this.rakNet;
     }
 
     private void onOpenConnectionReply1(ByteBuf buffer) {

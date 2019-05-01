@@ -10,9 +10,11 @@ import java.net.InetSocketAddress;
 
 @ParametersAreNonnullByDefault
 public class RakNetServerSession extends RakNetSession {
+    private final RakNetServer rakNet;
 
-    RakNetServerSession(InetSocketAddress remoteAddress, Channel channel, RakNetServer rakNet, int mtu) {
-        super(remoteAddress, channel, rakNet, mtu);
+    RakNetServerSession(RakNetServer rakNet, InetSocketAddress remoteAddress, Channel channel, int mtu) {
+        super(remoteAddress, channel, mtu);
+        this.rakNet = rakNet;
     }
 
     @Override
@@ -30,6 +32,18 @@ public class RakNetServerSession extends RakNetSession {
                 this.onNewIncomingConnection();
                 break;
         }
+    }
+
+    @Override
+    protected void onClose() {
+        if (!this.rakNet.sessionsByAddress.remove(this.address, this)) {
+            throw new IllegalStateException("Session was not found in session map");
+        }
+    }
+
+    @Override
+    public RakNet getRakNet() {
+        return this.rakNet;
     }
 
     private void onOpenConnectionRequest2(ByteBuf buffer) {
