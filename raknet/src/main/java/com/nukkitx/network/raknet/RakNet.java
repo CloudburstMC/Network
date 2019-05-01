@@ -82,4 +82,8 @@ public abstract class RakNet implements AutoCloseable {
     public InetSocketAddress getBindAddress() {
         return bindAddress;
     }
+
+    public long getGuid() {
+        return guid;
+    }
 }
