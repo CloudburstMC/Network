@@ -1,6 +1,7 @@
 package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.BootstrapUtils;
+import com.nukkitx.network.raknet.util.RoundRobinIterator;
 import com.nukkitx.network.util.DisconnectReason;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
@@ -14,6 +15,7 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -26,6 +28,7 @@ public class RakNetServer extends RakNet {
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
     private final Set<InetAddress> blockAddresses = new HashSet<>();
     private final Set<Channel> channels = new HashSet<>();
+    private final Iterator<Channel> channelIterator = new RoundRobinIterator<>(channels);
     private RakNetServerListener listener = null;
     private final int maxThreads;
     private int maxConnections = 1024;
@@ -94,6 +97,10 @@ public class RakNetServer extends RakNet {
 
     public void setListener(RakNetServerListener listener) {
         this.listener = listener;
+    }
+
+    public void send(InetSocketAddress address, ByteBuf buffer) {
+        channelIterator.next().writeAndFlush(new DatagramPacket(buffer, address));
     }
 
     @Override
@@ -251,7 +258,7 @@ public class RakNetServer extends RakNet {
                     session.onDatagram(packet);
                 }
                 if (RakNetServer.this.listener != null) {
-                    RakNetServer.this.listener.onUnhandledDatagram(packet);
+                    RakNetServer.this.listener.onUnhandledDatagram(ctx, packet);
                 }
             } finally {
                 packet.release();

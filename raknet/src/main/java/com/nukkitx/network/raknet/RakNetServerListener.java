@@ -1,5 +1,6 @@
 package com.nukkitx.network.raknet;
 
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 
 import javax.annotation.Nullable;
@@ -36,7 +37,8 @@ public interface RakNetServerListener {
     /**
      * Called when an unknown session-less datagram is received which is not related to RakNet
      *
+     * @param ctx channel context of datagram
      * @param packet unhandled datagram
      */
-    void onUnhandledDatagram(DatagramPacket packet);
+    void onUnhandledDatagram(ChannelHandlerContext ctx, DatagramPacket packet);
 }
