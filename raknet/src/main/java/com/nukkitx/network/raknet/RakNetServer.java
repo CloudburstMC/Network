@@ -9,6 +9,7 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import javax.annotation.Nonnegative;
+import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -71,6 +72,11 @@ public class RakNetServer extends RakNet {
 
     public int getSessionCount() {
         return this.sessionsByAddress.size();
+    }
+
+    @Nullable
+    public RakNetServerSession getSession(InetSocketAddress address) {
+        return this.sessionsByAddress.get(address);
     }
 
     @Nonnegative
