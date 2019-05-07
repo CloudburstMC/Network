@@ -26,7 +26,7 @@ public class RakNetServer extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetServer.class);
     final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
-    private final Set<InetAddress> blockAddresses = new HashSet<>();
+    private final ConcurrentMap<InetAddress, Long> blockAddresses = new ConcurrentHashMap<>();
     private final Set<Channel> channels = new HashSet<>();
     private final Iterator<Channel> channelIterator = new RoundRobinIterator<>(channels);
     private RakNetServerListener listener = null;
@@ -63,14 +63,20 @@ public class RakNetServer extends RakNet {
         return BootstrapUtils.allOf(channelFutures);
     }
 
-    public boolean block(InetAddress address) {
+    public void block(InetAddress address) {
         Objects.requireNonNull(address, "address");
-        return this.blockAddresses.add(address);
+        this.blockAddresses.put(address, -1L);
+    }
+
+    public void block(InetAddress address, long timeout, TimeUnit timeUnit) {
+        Objects.requireNonNull(address, "address");
+        Objects.requireNonNull(address, "timeUnit");
+        this.blockAddresses.put(address, System.currentTimeMillis() + timeUnit.toMillis(timeout));
     }
 
     public boolean unblock(InetAddress address) {
         Objects.requireNonNull(address, "address");
-        return this.blockAddresses.remove(address);
+        return this.blockAddresses.remove(address) != null;
     }
 
     public int getSessionCount() {
@@ -118,6 +124,15 @@ public class RakNetServer extends RakNet {
     protected void onTick() {
         for (RakNetServerSession session : this.sessionsByAddress.values()) {
             this.executor.execute(session::onTick);
+        }
+        Iterator<Long> blockedAddresses = this.blockAddresses.values().iterator();
+        long time = System.currentTimeMillis();
+        long timeout;
+        while (blockedAddresses.hasNext()) {
+            timeout = blockedAddresses.next();
+            if (timeout > 0 && timeout < time) {
+                blockedAddresses.remove();
+            }
         }
     }
 
@@ -233,7 +248,7 @@ public class RakNetServer extends RakNet {
             final DatagramPacket packet = (DatagramPacket) msg;
 
             try {
-                if (blockAddresses.contains(packet.sender().getAddress())) {
+                if (blockAddresses.containsKey(packet.sender().getAddress())) {
                     // Ignore these addresses altogether.
                     return;
                 }
