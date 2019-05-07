@@ -65,6 +65,7 @@ public abstract class RakNetSession {
     private EncapsulatedBinaryHeap[] orderingHeaps;
     private volatile boolean closed = false;
     private volatile long currentPingTime = -1;
+    private volatile long lastPingTime = -1;
     private volatile long lastPongTime = -1;
     private RoundRobinArray<RakNetDatagram> sentDatagrams;
 
@@ -100,6 +101,10 @@ public abstract class RakNetSession {
 
     public int getMtu() {
         return this.mtu;
+    }
+
+    public long getPing() {
+        return this.lastPongTime - this.lastPingTime;
     }
 
     public ByteBuf allocateBuffer(int capacity) {
@@ -313,8 +318,10 @@ public abstract class RakNetSession {
             this.close(DisconnectReason.TIMED_OUT);
         }
 
-        if (this.isStale() && this.state.ordinal() >= RakNetState.INITIALIZED.ordinal()) {
-            this.sendConnectedPing(System.currentTimeMillis());
+        long time = System.currentTimeMillis();
+
+        if (this.getState().ordinal() >= RakNetState.INITIALIZED.ordinal() && this.currentPingTime + 2000L < time) {
+            this.sendConnectedPing(time);
         }
     }
 
@@ -502,8 +509,8 @@ public abstract class RakNetSession {
         long pingTime = buffer.readLong();
 
         if (this.currentPingTime == pingTime) {
-            this.lastPongTime = this.currentPingTime;
-            this.currentPingTime = System.currentTimeMillis();
+            this.lastPingTime = this.currentPingTime;
+            this.lastPongTime = System.currentTimeMillis();
         }
     }
 
