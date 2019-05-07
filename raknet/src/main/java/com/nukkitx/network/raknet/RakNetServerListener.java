@@ -1,5 +1,7 @@
 package com.nukkitx.network.raknet;
 
+import io.netty.channel.socket.DatagramPacket;
+
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
@@ -30,4 +32,11 @@ public interface RakNetServerListener {
      * @param session session created
      */
     void onSessionCreation(RakNetServerSession session);
+
+    /**
+     * Called when an unknown session-less datagram is received which is not related to RakNet
+     *
+     * @param packet unhandled datagram
+     */
+    void onUnhandledDatagram(DatagramPacket packet);
 }

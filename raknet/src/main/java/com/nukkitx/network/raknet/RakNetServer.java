@@ -250,6 +250,9 @@ public class RakNetServer extends RakNet {
                 if (session != null) {
                     session.onDatagram(packet);
                 }
+                if (RakNetServer.this.listener != null) {
+                    RakNetServer.this.listener.onUnhandledDatagram(packet);
+                }
             } finally {
                 packet.release();
             }
