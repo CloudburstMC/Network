@@ -12,5 +12,7 @@ public interface RakNetSessionListener {
 
     void onDisconnect(DisconnectReason reason);
 
-    void onUserPacket(ByteBuf buffer);
+    void onEncapsulated(EncapsulatedPacket packet);
+
+    void onDirect(ByteBuf buf);
 }

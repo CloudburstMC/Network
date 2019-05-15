@@ -30,9 +30,6 @@ public class RakNetClientSession extends RakNetSession {
             case RakNetConstants.ID_OPEN_CONNECTION_REPLY_2:
                 this.onOpenConnectionReply2(buffer);
                 break;
-            case RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED:
-                this.onConnectionRequestAccepted(buffer);
-                break;
             case RakNetConstants.ID_CONNECTION_REQUEST_FAILED:
                 this.close(DisconnectReason.CONNECTION_REQUEST_FAILED);
                 break;
@@ -52,13 +49,12 @@ public class RakNetClientSession extends RakNetSession {
     }
 
     @Override
-    protected void tick() {
+    protected void tick(long curTime) {
         if (this.getState() == RakNetState.UNCONNECTED) {
             if (this.connectionAttempts >= RakNetConstants.MAXIMUM_CONNECTION_ATTEMPTS) {
                 this.close(DisconnectReason.TIMED_OUT);
             } else {
-                long currentTime = System.currentTimeMillis();
-                if (this.nextConnectionAttempt < currentTime) {
+                if (this.nextConnectionAttempt < curTime) {
                     int mtuDiff = (RakNetConstants.MAXIMUM_MTU_SIZE - RakNetConstants.MINIMUM_MTU_SIZE) / 9;
                     int mtuSize = RakNetConstants.MAXIMUM_MTU_SIZE - (this.connectionAttempts * mtuDiff);
                     if (mtuSize < RakNetConstants.MINIMUM_MTU_SIZE) {
@@ -67,7 +63,7 @@ public class RakNetClientSession extends RakNetSession {
 
                     this.sendOpenConnectionRequest1(mtuSize);
 
-                    this.nextConnectionAttempt = currentTime + 1000;
+                    this.nextConnectionAttempt = curTime + 1000;
                     this.connectionAttempts++;
                 }
             }
@@ -170,33 +166,27 @@ public class RakNetClientSession extends RakNetSession {
 
     private void sendConnectionRequest() {
         ByteBuf buffer = this.allocateBuffer(18);
-        try {
-            buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST);
-            buffer.writeLong(this.rakNet.guid);
-            buffer.writeLong(System.currentTimeMillis());
-            buffer.writeBoolean(false);
 
-            this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
-        } finally {
-            buffer.release();
-        }
+        buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST);
+        buffer.writeLong(this.rakNet.guid);
+        buffer.writeLong(System.currentTimeMillis());
+        buffer.writeBoolean(false);
+
+        this.send(buffer, RakNetPriority.IMMEDIATE, RakNetReliability.RELIABLE_ORDERED);
     }
 
     private void sendNewIncomingConnection(long pingTime) {
         boolean ipv6 = this.isIpv6Session();
         ByteBuf buffer = this.allocateBuffer(ipv6 ? 294 : 94);
-        try {
-            buffer.writeByte(RakNetConstants.ID_NEW_INCOMING_CONNECTION);
-            NetworkUtils.writeAddress(buffer, address);
-            for (InetSocketAddress address : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
-                NetworkUtils.writeAddress(buffer, address);
-            }
-            buffer.writeLong(pingTime);
-            buffer.writeLong(System.currentTimeMillis());
 
-            this.send(buffer, RakNetReliability.RELIABLE_ORDERED);
-        } finally {
-            buffer.release();
+        buffer.writeByte(RakNetConstants.ID_NEW_INCOMING_CONNECTION);
+        NetworkUtils.writeAddress(buffer, address);
+        for (InetSocketAddress address : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
+            NetworkUtils.writeAddress(buffer, address);
         }
+        buffer.writeLong(pingTime);
+        buffer.writeLong(System.currentTimeMillis());
+
+        this.send(buffer, RakNetPriority.IMMEDIATE, RakNetReliability.RELIABLE_ORDERED);
     }
 }

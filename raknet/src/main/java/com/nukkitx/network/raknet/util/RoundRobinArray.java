@@ -23,21 +23,23 @@ public class RoundRobinArray<E> {
     }
 
     public void set(int index, E value) {
-        Object element = this.elements[index & this.mask];
-        this.elements[index & this.mask] = value;
+        int idx = index & this.mask;
+        Object element = this.elements[idx];
+        this.elements[idx] = value;
         // Make sure to release any reference counted objects that get overwritten.
         ReferenceCountUtil.release(element);
     }
 
     @SuppressWarnings("unchecked")
     public E remove(int index) {
-        E removed = (E) this.elements[index & this.mask];
-        this.elements[index & this.mask] = null;
+        int idx = index & this.mask;
+        E removed = (E) this.elements[idx];
+        this.elements[idx] = null;
         return removed;
     }
 
     public int size() {
-        return mask + 1;
+        return this.elements.length;
     }
 
     @SuppressWarnings("unchecked")

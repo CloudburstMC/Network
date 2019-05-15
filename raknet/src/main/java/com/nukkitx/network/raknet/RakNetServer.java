@@ -122,15 +122,15 @@ public class RakNetServer extends RakNet {
 
     @Override
     protected void onTick() {
+        final long curTime = System.currentTimeMillis();
         for (RakNetServerSession session : this.sessionsByAddress.values()) {
-            this.executor.execute(session::onTick);
+            this.executor.execute(() -> session.onTick(curTime));
         }
         Iterator<Long> blockedAddresses = this.blockAddresses.values().iterator();
-        long time = System.currentTimeMillis();
         long timeout;
         while (blockedAddresses.hasNext()) {
             timeout = blockedAddresses.next();
-            if (timeout > 0 && timeout < time) {
+            if (timeout > 0 && timeout < curTime) {
                 blockedAddresses.remove();
             }
         }

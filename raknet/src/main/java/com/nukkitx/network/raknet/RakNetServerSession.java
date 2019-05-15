@@ -136,20 +136,16 @@ public class RakNetServerSession extends RakNetSession {
             buffer = this.allocateBuffer(94);
         }
 
-        try {
-            buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED);
-            NetworkUtils.writeAddress(buffer, this.address);
+        buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED);
+        NetworkUtils.writeAddress(buffer, this.address);
 
-            for (InetSocketAddress socketAddress : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
-                NetworkUtils.writeAddress(buffer, socketAddress);
-            }
-
-            buffer.writeLong(time);
-            buffer.writeLong(System.currentTimeMillis());
-
-            this.send(buffer);
-        } finally {
-            buffer.release();
+        for (InetSocketAddress socketAddress : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
+            NetworkUtils.writeAddress(buffer, socketAddress);
         }
+
+        buffer.writeLong(time);
+        buffer.writeLong(System.currentTimeMillis());
+
+        this.send(buffer, RakNetPriority.IMMEDIATE);
     }
 }

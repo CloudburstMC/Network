@@ -2,7 +2,8 @@ package com.nukkitx.network.raknet;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.util.AbstractReferenceCounted;
-import io.netty.util.ReferenceCountUtil;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -12,9 +13,11 @@ import java.util.List;
 @Data
 @EqualsAndHashCode(callSuper = true)
 public class RakNetDatagram extends AbstractReferenceCounted {
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetDatagram.class);
     final List<EncapsulatedPacket> packets = new ArrayList<>();
-    byte flags = (byte) 0x84;
-    int sequenceIndex;
+    final long sendTime;
+    byte flags = (byte) 0x80;
+    int sequenceIndex = -1;
 
     @Override
     public RakNetDatagram retain() {
@@ -56,7 +59,7 @@ public class RakNetDatagram extends AbstractReferenceCounted {
 
     boolean tryAddPacket(EncapsulatedPacket packet, int mtu) {
         int packetLn = packet.getSize();
-        if (packetLn >= mtu - 4) {
+        if (packetLn >= mtu - RakNetConstants.MAXIMUM_UDP_HEADER_SIZE) {
             return false; // Packet is too large
         }
 
@@ -65,21 +68,34 @@ public class RakNetDatagram extends AbstractReferenceCounted {
             existingLn += netPacket.getSize();
         }
 
-        if (existingLn + packetLn >= mtu - 4) {
+        if (existingLn + packetLn >= mtu - RakNetConstants.MAXIMUM_UDP_HEADER_SIZE) {
             return false;
         }
 
         packets.add(packet);
-        if (packet.isSplit()) {
+        if (packet.split) {
             flags |= RakNetConstants.FLAG_CONTINOUS_SEND;
         }
         return true;
     }
 
     @Override
+    public boolean release() {
+        return super.release();
+    }
+
+    @Override
     protected void deallocate() {
         for (EncapsulatedPacket packet : packets) {
-            ReferenceCountUtil.release(packet);
+            packet.release();
         }
+    }
+
+    public int getSize() {
+        int size = 1;
+        for (EncapsulatedPacket packet : packets) {
+            size += packet.getSize();
+        }
+        return size;
     }
 }

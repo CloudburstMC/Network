@@ -2,11 +2,15 @@ package com.nukkitx.network.raknet;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.util.ReferenceCounted;
+import lombok.AccessLevel;
 import lombok.Data;
+import lombok.Setter;
 
 @Data
+@Setter(AccessLevel.NONE)
 public class EncapsulatedPacket implements ReferenceCounted {
     RakNetReliability reliability;
+    RakNetPriority priority;
     int reliabilityIndex;
     int sequenceIndex;
     int orderingIndex;
@@ -19,9 +23,11 @@ public class EncapsulatedPacket implements ReferenceCounted {
 
     public void encode(ByteBuf buf) {
         int flags = reliability.ordinal() << 5;
-        flags |= (split ? 0b00010000 : 0);
+        if (split) {
+            flags |= 0b00010000;
+        }
         buf.writeByte(flags); // flags
-        buf.writeShort(buffer.readableBytes() * 8); // size
+        buf.writeShort(buffer.readableBytes() << 3); // size
 
         if (reliability.isReliable()) {
             buf.writeMediumLE(reliabilityIndex);
@@ -46,9 +52,9 @@ public class EncapsulatedPacket implements ReferenceCounted {
     }
 
     public void decode(ByteBuf buf) {
-        short flags = buf.readUnsignedByte();
+        byte flags = buf.readByte();
         reliability = RakNetReliability.fromId((flags & 0b11100000) >> 5);
-        split = (flags & 0b00010000) > 0;
+        split = (flags & 0b00010000) != 0;
         short size = (short) Math.ceil(buf.readShort() / 8D);
 
         if (reliability.isReliable()) {
@@ -81,6 +87,7 @@ public class EncapsulatedPacket implements ReferenceCounted {
         if (this.split) {
             size += 10;
         }
+        size += buffer.readableBytes();
 
         return size;
     }

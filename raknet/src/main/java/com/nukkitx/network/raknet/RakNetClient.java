@@ -66,17 +66,17 @@ public class RakNetClient extends RakNet {
             throw new IllegalStateException("RakNet has not been started");
         }
 
-        if (session != null && session.address.equals(address)) {
+        if (this.session != null && this.session.address.equals(address)) {
             throw new IllegalArgumentException("Cannot ping connected address");
         }
-        if (pings.containsKey(address)) {
-            return pings.get(address).future;
+        if (this.pings.containsKey(address)) {
+            return this.pings.get(address).future;
         }
 
         CompletableFuture<RakNetPong> pongFuture = new CompletableFuture<>();
 
         PingEntry entry = new PingEntry(pongFuture, System.currentTimeMillis() + unit.toMillis(timeout));
-        pings.put(address, entry);
+        this.pings.put(address, entry);
         this.sendUnconnectedPing(address);
 
         return pongFuture;
@@ -84,14 +84,14 @@ public class RakNetClient extends RakNet {
 
     @Override
     protected void onTick() {
-        if (session != null) {
-            this.executor.execute(session::onTick);
+        final long curTime = System.currentTimeMillis();
+        if (this.session != null) {
+            this.executor.execute(() -> this.session.onTick(curTime));
         }
-        long currentTime = System.currentTimeMillis();
         Iterator<PingEntry> iterator = this.pings.values().iterator();
         while (iterator.hasNext()) {
             PingEntry entry = iterator.next();
-            if (currentTime >= entry.timeout) {
+            if (curTime >= entry.timeout) {
                 entry.future.completeExceptionally(new TimeoutException());
                 iterator.remove();
             }

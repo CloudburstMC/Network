@@ -33,11 +33,11 @@ public class RakNetConstants {
      * Time after {@link RakNetSession} is refreshed due to no activity.
      */
     public static final int SESSION_STALE_MS = 5000;
-    public static final byte FLAG_VALID = (byte) 0b10000000;
 
     /*
         Flags
      */
+    public static final byte FLAG_VALID = (byte) 0b10000000;
     public static final byte FLAG_ACK = (byte) 0b01000000;
     public static final byte FLAG_HAS_B_AND_AS = (byte) 0b00100000;
     public static final byte FLAG_NACK = (byte) 0b00100000;
@@ -81,4 +81,11 @@ public class RakNetConstants {
     static final byte[] RAKNET_UNCONNECTED_MAGIC = new byte[]{
             0, -1, -1, 0, -2, -2, -2, -2, -3, -3, -3, -3, 18, 52, 86, 120
     };
+
+    /*
+        Congestion Control related constants
+     */
+    public static final long CC_MAXIMUM_THRESHOLD = 2000;
+    public static final long CC_ADDITIONAL_VARIANCE = 30;
+    public static final long CC_SYN = 10;
 }
