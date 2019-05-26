@@ -30,6 +30,9 @@ public class RakNetClientSession extends RakNetSession {
             case RakNetConstants.ID_OPEN_CONNECTION_REPLY_2:
                 this.onOpenConnectionReply2(buffer);
                 break;
+            case RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED:
+                this.onConnectionRequestAccepted(buffer);
+                break;
             case RakNetConstants.ID_CONNECTION_REQUEST_FAILED:
                 this.close(DisconnectReason.CONNECTION_REQUEST_FAILED);
                 break;
