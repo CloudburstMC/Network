@@ -1,5 +1,6 @@
 package com.nukkitx.network.raknet;
 
+import com.nukkitx.network.NetworkClient;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -16,11 +17,11 @@ import java.util.Iterator;
 import java.util.concurrent.*;
 
 @ParametersAreNonnullByDefault
-public class RakNetClient extends RakNet {
+public class RakNetClient extends RakNet implements NetworkClient<RakNetClientSession> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
     private final ClientDatagramHandler handler = new ClientDatagramHandler();
     private final ConcurrentMap<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
-    RakNetSession session;
+    RakNetClientSession session;
     private Channel channel;
 
     public RakNetClient(InetSocketAddress bindAddress) {
@@ -49,7 +50,7 @@ public class RakNetClient extends RakNet {
         return future;
     }
 
-    public RakNetSession connect(InetSocketAddress address) {
+    public RakNetClientSession connect(InetSocketAddress address) {
         if (!this.isRunning()) {
             throw new IllegalStateException("RakNet has not been started");
         }

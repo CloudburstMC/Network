@@ -1,6 +1,7 @@
 package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.BootstrapUtils;
+import com.nukkitx.network.NetworkServer;
 import com.nukkitx.network.raknet.util.RoundRobinIterator;
 import com.nukkitx.network.util.DisconnectReason;
 import io.netty.buffer.ByteBuf;
@@ -20,9 +21,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
 
-@SuppressWarnings("ResultOfMethodCallIgnored")
 @ParametersAreNonnullByDefault
-public class RakNetServer extends RakNet {
+public class RakNetServer extends RakNet implements NetworkServer<RakNetServerSession> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetServer.class);
     final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();

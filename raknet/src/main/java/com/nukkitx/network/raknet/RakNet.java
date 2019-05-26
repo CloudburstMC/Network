@@ -1,6 +1,7 @@
 package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.BootstrapUtils;
+import com.nukkitx.network.NetworkInterface;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
@@ -16,7 +17,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @ParametersAreNonnullByDefault
-public abstract class RakNet implements AutoCloseable {
+public abstract class RakNet implements NetworkInterface, AutoCloseable {
     final long guid = ThreadLocalRandom.current().nextLong();
     final Bootstrap bootstrap;
     final Executor executor;
@@ -24,6 +25,7 @@ public abstract class RakNet implements AutoCloseable {
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ScheduledFuture<?> tickFuture;
     int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
+    private volatile boolean closed;
 
     RakNet(InetSocketAddress bindAddress, ScheduledExecutorService scheduler, Executor executor) {
         this.bindAddress = bindAddress;
@@ -56,6 +58,7 @@ public abstract class RakNet implements AutoCloseable {
 
     public void close() {
         this.tickFuture.cancel(false);
+        this.closed = true;
     }
 
     protected abstract CompletableFuture<Void> bindInternal();
@@ -64,6 +67,10 @@ public abstract class RakNet implements AutoCloseable {
 
     public boolean isRunning() {
         return this.running.get();
+    }
+
+    public boolean isClosed() {
+        return closed;
     }
 
     public Bootstrap getBootstrap() {

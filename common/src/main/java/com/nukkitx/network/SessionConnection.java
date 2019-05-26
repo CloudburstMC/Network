@@ -1,18 +1,26 @@
 package com.nukkitx.network;
 
-import javax.annotation.Nonnull;
+import com.nukkitx.network.util.DisconnectReason;
+
 import java.net.InetSocketAddress;
-import java.util.Optional;
 
-public interface SessionConnection<T extends NetworkPacket> {
+public interface SessionConnection<T> {
 
-    Optional<InetSocketAddress> getRemoteAddress();
+    InetSocketAddress getAddress();
+
+    void close();
+
+    void close(DisconnectReason reason);
 
     void disconnect();
 
-    void sendPacket(@Nonnull T packet);
+    void disconnect(DisconnectReason reason);
+
+    void send(T packet);
+
+    void sendImmediate(T packet);
 
     boolean isClosed();
 
-    void onTick();
+    long getPing();
 }

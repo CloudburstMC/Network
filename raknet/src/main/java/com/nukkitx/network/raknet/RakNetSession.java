@@ -1,5 +1,6 @@
 package com.nukkitx.network.raknet;
 
+import com.nukkitx.network.SessionConnection;
 import com.nukkitx.network.raknet.util.*;
 import com.nukkitx.network.util.DisconnectReason;
 import com.nukkitx.network.util.Preconditions;
@@ -25,7 +26,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 @ParametersAreNonnullByDefault
-public abstract class RakNetSession {
+public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSession.class);
     private static final AtomicIntegerFieldUpdater<RakNetSession> splitIndexUpdater =
             AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "splitIndex");
@@ -448,10 +449,12 @@ public abstract class RakNetSession {
         this.channel.flush();
     }
 
+    @Override
     public void disconnect() {
         disconnect(DisconnectReason.DISCONNECTED);
     }
 
+    @Override
     public void disconnect(DisconnectReason reason) {
         if (this.isClosed()) {
             return;
@@ -460,6 +463,12 @@ public abstract class RakNetSession {
         this.close(reason);
     }
 
+    @Override
+    public void close() {
+        this.close(DisconnectReason.DISCONNECTED);
+    }
+
+    @Override
     public void close(DisconnectReason reason) {
         this.checkForClosed();
         this.closed = true;
@@ -483,12 +492,18 @@ public abstract class RakNetSession {
     protected void onClose() {
     }
 
+    @Override
+    public void sendImmediate(ByteBuf buf) {
+        this.send(buf, RakNetPriority.IMMEDIATE);
+    }
+
+    @Override
     public void send(ByteBuf buf) {
         this.send(buf, RakNetPriority.MEDIUM);
     }
 
     public void send(ByteBuf buf, RakNetPriority priority) {
-        this.send(buf, priority, RakNetReliability.RELIABLE);
+        this.send(buf, priority, RakNetReliability.RELIABLE_ORDERED);
     }
 
     public void send(ByteBuf buf, RakNetReliability reliability) {
