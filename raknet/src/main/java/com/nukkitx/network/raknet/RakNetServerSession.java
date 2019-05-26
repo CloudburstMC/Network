@@ -131,13 +131,14 @@ public class RakNetServerSession extends RakNetSession {
         boolean ipv6 = this.isIpv6Session();
 
         if (ipv6) {
-            buffer = this.allocateBuffer(294);
+            buffer = this.allocateBuffer(626); // 29 bytes per address
         } else {
-            buffer = this.allocateBuffer(94);
+            buffer = this.allocateBuffer(166); // 7 bytes per address
         }
 
         buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED);
         NetworkUtils.writeAddress(buffer, this.address);
+        buffer.writeShort(0); // System index
 
         for (InetSocketAddress socketAddress : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
             NetworkUtils.writeAddress(buffer, socketAddress);

@@ -132,12 +132,8 @@ public class RakNetClientSession extends RakNetSession {
     private void onConnectionRequestAccepted(ByteBuf buffer) {
         InetSocketAddress address = NetworkUtils.readAddress(buffer);
         int systemIndex = buffer.readUnsignedShort();
-        for (int i = 0; i < 20; i++) {
-            if (buffer.readableBytes() > 16) {
-                NetworkUtils.readAddress(buffer);
-            } else {
-                break;
-            }
+        while (buffer.readableBytes() > 16) {
+            NetworkUtils.readAddress(buffer);
         }
         long pongTime = buffer.readLong();
 
