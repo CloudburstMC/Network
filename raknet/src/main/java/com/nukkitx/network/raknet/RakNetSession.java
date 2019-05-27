@@ -361,7 +361,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 try {
                     this.onEncapsulatedInternal(queuedPacket);
                 } finally {
-                    packet.release();
+                    queuedPacket.release();
                 }
             }
         }
