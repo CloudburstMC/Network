@@ -230,7 +230,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                         log.debug("Unhandled RakNet user packet");
                     }
                 } else {
-                    this.onPacket(packet.buffer);
+                    this.onPacket(buffer);
                 }
                 break;
         }

@@ -141,6 +141,6 @@ public class RakNetServerSession extends RakNetSession {
         buffer.writeLong(time);
         buffer.writeLong(System.currentTimeMillis());
 
-        this.send(buffer, RakNetPriority.IMMEDIATE);
+        this.send(buffer, RakNetPriority.IMMEDIATE, RakNetReliability.RELIABLE);
     }
 }
