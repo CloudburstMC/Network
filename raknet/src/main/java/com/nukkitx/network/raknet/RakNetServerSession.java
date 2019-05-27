@@ -127,14 +127,8 @@ public class RakNetServerSession extends RakNetSession {
     }
 
     private void sendConnectionRequestAccepted(long time) {
-        ByteBuf buffer;
         boolean ipv6 = this.isIpv6Session();
-
-        if (ipv6) {
-            buffer = this.allocateBuffer(626); // 29 bytes per address
-        } else {
-            buffer = this.allocateBuffer(166); // 7 bytes per address
-        }
+        ByteBuf buffer = this.allocateBuffer(ipv6 ? 628 : 166);
 
         buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED);
         NetworkUtils.writeAddress(buffer, this.address);

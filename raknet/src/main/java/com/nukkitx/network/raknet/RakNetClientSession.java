@@ -176,7 +176,7 @@ public class RakNetClientSession extends RakNetSession {
 
     private void sendNewIncomingConnection(long pingTime) {
         boolean ipv6 = this.isIpv6Session();
-        ByteBuf buffer = this.allocateBuffer(ipv6 ? 294 : 94);
+        ByteBuf buffer = this.allocateBuffer(ipv6 ? 626 : 164);
 
         buffer.writeByte(RakNetConstants.ID_NEW_INCOMING_CONNECTION);
         NetworkUtils.writeAddress(buffer, address);
