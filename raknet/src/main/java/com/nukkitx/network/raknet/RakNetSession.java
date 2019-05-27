@@ -347,7 +347,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         }
         this.orderReadIndex.incrementAndGet(packet.orderingChannel);
 
-        // Send this packet
+        // Can be handled
         this.onEncapsulatedInternal(packet);
 
         EncapsulatedPacket queuedPacket;
@@ -358,7 +358,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 this.orderReadIndex.incrementAndGet(packet.orderingChannel);
 
                 try {
-                    this.onPacketInternal(packet.buffer);
+                    this.onEncapsulatedInternal(queuedPacket);
                 } finally {
                     packet.release();
                 }
