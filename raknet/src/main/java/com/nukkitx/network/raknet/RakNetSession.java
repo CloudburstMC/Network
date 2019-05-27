@@ -209,6 +209,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private void onEncapsulatedInternal(EncapsulatedPacket packet) {
         ByteBuf buffer = packet.buffer;
         short packetId = buffer.readUnsignedByte();
+        log.trace(this.getClass().getSimpleName() + " Inbound: 0x" + Integer.toHexString(packetId));
         switch (packetId) {
             case RakNetConstants.ID_CONNECTED_PING:
                 this.onConnectedPing(buffer);
@@ -519,7 +520,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             // Session is not ready for RakNet datagrams.
             return;
         }
-        //log.debug("Outbound packet: {}", Integer.toHexString(buf.getUnsignedByte(buf.readerIndex())));
+        log.trace(this.getClass().getSimpleName() + " outbound: 0x" + Integer.toHexString(buf.getUnsignedByte(buf.readerIndex())));
         if (priority == RakNetPriority.IMMEDIATE) {
             this.sendImmediate(buf, reliability, orderingChannel);
             return;
