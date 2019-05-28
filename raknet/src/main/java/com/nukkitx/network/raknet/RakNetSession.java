@@ -396,17 +396,21 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
         // Send packets that were NAKed first
+        boolean hasResent = false;
         RakNetDatagram datagram;
-        while ((datagram = this.resendQueue.peek()) != null) {
+        while ((datagram = this.resendQueue.poll()) != null) {
+            if (!hasResent) {
+                hasResent = true;
+            }
+            this.sendDatagram(datagram);
+
             int size = datagram.getSize();
             if (transmissionBandwidth < size) {
                 break;
             }
             transmissionBandwidth -= size;
-            this.sendDatagram(datagram.retain());
-            this.resendQueue.remove();
         }
-        if (datagram != null) {
+        if (hasResent) {
             this.slidingWindow.onResend(curTime);
         }
 
@@ -635,6 +639,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     private void sendDatagram(RakNetDatagram datagram) {
+        Preconditions.checkArgument(!datagram.packets.isEmpty(), "RakNetDatagram with no packets");
         try {
             if (datagram.sequenceIndex == -1) {
                 datagram.sequenceIndex = datagramWriteIndexUpdater.getAndIncrement(this);
@@ -650,7 +655,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     }
                 }
             }
-            Preconditions.checkArgument(!datagram.packets.isEmpty(), "RakNetDatagram with no packets");
             ByteBuf buf = this.channel.alloc().directBuffer(datagram.getSize());
             datagram.encode(buf);
             this.channel.write(new DatagramPacket(buf, this.address), this.voidPromise);
@@ -698,7 +702,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     log.trace("Resending datagram {} after NAK to {}", datagram.sequenceIndex, address);
                     // Retain for resending
                     this.resendQueue.offer(datagram.retain());
-                } else {
+                } else if (log.isTraceEnabled()) {
                     log.trace("NAK received for {} but no datagram was found", i);
                 }
             }
