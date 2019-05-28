@@ -1,11 +1,9 @@
 package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.NetworkClient;
+import com.nukkitx.network.util.EventLoops;
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -25,15 +23,11 @@ public class RakNetClient extends RakNet implements NetworkClient<RakNetClientSe
     private Channel channel;
 
     public RakNetClient(InetSocketAddress bindAddress) {
-        this(bindAddress, Executors.newSingleThreadScheduledExecutor());
+        this(bindAddress, EventLoops.commonGroup());
     }
 
-    public RakNetClient(InetSocketAddress bindAddress, ScheduledExecutorService scheduler) {
-        this(bindAddress, scheduler, scheduler);
-    }
-
-    public RakNetClient(InetSocketAddress bindAddress, ScheduledExecutorService scheduler, Executor executor) {
-        super(bindAddress, scheduler, executor);
+    public RakNetClient(InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
+        super(bindAddress, eventLoopGroup);
     }
 
     @Override
@@ -87,7 +81,7 @@ public class RakNetClient extends RakNet implements NetworkClient<RakNetClientSe
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         if (this.session != null) {
-            this.executor.execute(() -> this.session.onTick(curTime));
+            this.eventLoopGroup.execute(() -> this.session.onTick(curTime));
         }
         Iterator<PingEntry> iterator = this.pings.values().iterator();
         while (iterator.hasNext()) {

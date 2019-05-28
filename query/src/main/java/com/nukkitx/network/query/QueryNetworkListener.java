@@ -1,9 +1,10 @@
 package com.nukkitx.network.query;
 
-import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.NetworkListener;
 import com.nukkitx.network.query.codec.QueryPacketCodec;
 import com.nukkitx.network.query.handler.QueryPacketHandler;
+import com.nukkitx.network.util.Bootstraps;
+import com.nukkitx.network.util.EventLoops;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
@@ -26,7 +27,8 @@ public class QueryNetworkListener extends ChannelInitializer<DatagramChannel> im
 
         bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT).handler(this);
 
-        BootstrapUtils.setupBootstrap(bootstrap, true);
+        Bootstraps.setupBootstrap(bootstrap, true);
+        this.bootstrap.group(EventLoops.commonGroup());
     }
 
     @Override

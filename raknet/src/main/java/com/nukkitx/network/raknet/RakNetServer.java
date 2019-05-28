@@ -1,9 +1,10 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.NetworkServer;
 import com.nukkitx.network.raknet.util.RoundRobinIterator;
+import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.DisconnectReason;
+import com.nukkitx.network.util.EventLoops;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
@@ -19,7 +20,10 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 
 @ParametersAreNonnullByDefault
 public class RakNetServer extends RakNet implements NetworkServer<RakNetServerSession> {
@@ -30,37 +34,31 @@ public class RakNetServer extends RakNet implements NetworkServer<RakNetServerSe
     private final Set<Channel> channels = new HashSet<>();
     private final Iterator<Channel> channelIterator = new RoundRobinIterator<>(channels);
     private RakNetServerListener listener = null;
-    private final int maxThreads;
+    private final int bindThreads;
     private int maxConnections = 1024;
 
     public RakNetServer(InetSocketAddress bindAddress) {
         this(bindAddress, 1);
     }
 
-    public RakNetServer(InetSocketAddress bindAddress, int maxThreads) {
-        this(bindAddress, maxThreads, Executors.newSingleThreadScheduledExecutor());
+    public RakNetServer(InetSocketAddress bindAddress, int bindThreads) {
+        this(bindAddress, bindThreads, EventLoops.commonGroup());
     }
 
-    public RakNetServer(InetSocketAddress bindAddress, int maxThreads, ScheduledExecutorService scheduler) {
-        this(bindAddress, maxThreads, scheduler, scheduler);
-    }
-
-    public RakNetServer(InetSocketAddress bindAddress, int maxThreads, ScheduledExecutorService scheduler, Executor executor) {
-        super(bindAddress, scheduler, executor);
-        this.maxThreads = maxThreads;
+    public RakNetServer(InetSocketAddress bindAddress, int bindThreads, EventLoopGroup eventLoopGroup) {
+        super(bindAddress, eventLoopGroup);
+        this.bindThreads = bindThreads;
     }
 
     @Override
     protected CompletableFuture<Void> bindInternal() {
-        int threads = BootstrapUtils.isReusePortAvailable() ? this.maxThreads : 1;
+        ChannelFuture[] channelFutures = new ChannelFuture[this.bindThreads];
 
-        ChannelFuture[] channelFutures = new ChannelFuture[threads];
-
-        for (int i = 0; i < threads; i++) {
+        for (int i = 0; i < this.bindThreads; i++) {
             channelFutures[i] = this.bootstrap.handler(datagramHandler).bind(this.bindAddress);
         }
 
-        return BootstrapUtils.allOf(channelFutures);
+        return Bootstraps.allOf(channelFutures);
     }
 
     public void block(InetAddress address) {
@@ -124,7 +122,7 @@ public class RakNetServer extends RakNet implements NetworkServer<RakNetServerSe
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         for (RakNetServerSession session : this.sessionsByAddress.values()) {
-            this.executor.execute(() -> session.onTick(curTime));
+            this.eventLoopGroup.execute(() -> session.onTick(curTime));
         }
         Iterator<Long> blockedAddresses = this.blockAddresses.values().iterator();
         long timeout;

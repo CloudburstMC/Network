@@ -1,41 +1,46 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.NetworkInterface;
+import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.DatagramPacket;
 
 import javax.annotation.Nonnegative;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @ParametersAreNonnullByDefault
 public abstract class RakNet implements NetworkInterface, AutoCloseable {
     final long guid = ThreadLocalRandom.current().nextLong();
     final Bootstrap bootstrap;
-    final Executor executor;
+    final EventLoopGroup eventLoopGroup;
     final InetSocketAddress bindAddress;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ScheduledFuture<?> tickFuture;
     int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
     private volatile boolean closed;
 
-    RakNet(InetSocketAddress bindAddress, ScheduledExecutorService scheduler, Executor executor) {
+    RakNet(InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
         this.bindAddress = bindAddress;
-        this.executor = executor;
+        this.eventLoopGroup = eventLoopGroup;
 
         this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
 
-        BootstrapUtils.setupBootstrap(this.bootstrap, true);
+        Bootstraps.setupBootstrap(this.bootstrap, true);
+        this.bootstrap.group(eventLoopGroup);
 
-        tickFuture = scheduler.scheduleAtFixedRate(this::onTick, 50, 50, TimeUnit.MILLISECONDS);
+        this.tickFuture = eventLoopGroup.scheduleAtFixedRate(this::onTick, 50, 50, TimeUnit.MILLISECONDS);
     }
 
     static void send(ChannelHandlerContext ctx, InetSocketAddress recipient, ByteBuf buffer) {

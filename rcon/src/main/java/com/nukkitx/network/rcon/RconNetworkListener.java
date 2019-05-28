@@ -1,10 +1,11 @@
 package com.nukkitx.network.rcon;
 
-import com.nukkitx.network.BootstrapUtils;
 import com.nukkitx.network.NetworkListener;
 import com.nukkitx.network.handler.ExceptionHandler;
 import com.nukkitx.network.rcon.codec.RconCodec;
 import com.nukkitx.network.rcon.handler.RconHandler;
+import com.nukkitx.network.util.Bootstraps;
+import com.nukkitx.network.util.EventLoops;
 import com.nukkitx.network.util.NetworkThreadFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
@@ -38,7 +39,8 @@ public class RconNetworkListener extends ChannelInitializer<SocketChannel> imple
 
         bootstrap = new ServerBootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT).handler(this);
 
-        BootstrapUtils.setupServerBootstrap(bootstrap);
+        Bootstraps.setupServerBootstrap(bootstrap);
+        this.bootstrap.group(EventLoops.commonGroup());
     }
 
     @Override

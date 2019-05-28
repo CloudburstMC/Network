@@ -1,38 +1,27 @@
-package com.nukkitx.network;
+package com.nukkitx.network.util;
 
-import com.nukkitx.network.util.NetworkThreadFactory;
 import io.netty.bootstrap.AbstractBootstrap;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.EventLoopGroup;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.epoll.Native;
-import io.netty.channel.epoll.*;
-import io.netty.channel.kqueue.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.ServerSocketChannel;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioDatagramChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
-import lombok.RequiredArgsConstructor;
 import lombok.experimental.UtilityClass;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ThreadFactory;
+
+import static com.nukkitx.network.util.EventLoops.CHANNEL_TYPE;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 @UtilityClass
-public final class BootstrapUtils {
+public final class Bootstraps {
     private static final Optional<int[]> KERNEL_VERSION;
     private static final int[] REUSEPORT_VERSION = new int[]{3, 9, 0};
     private static final boolean REUSEPORT_AVAILABLE;
-    private static final ChannelType CHANNEL_TYPE;
-    private static final EventLoopGroup EVENT_LOOP_GROUP;
 
     static {
         String kernelVersion;
@@ -53,22 +42,6 @@ public final class BootstrapUtils {
             KERNEL_VERSION = Optional.empty();
             REUSEPORT_AVAILABLE = false;
         }
-
-        ThreadFactory listenerThreadFactory = NetworkThreadFactory.builder().format("Network Listener - #%d")
-                .daemon(true).build();
-
-        boolean disableNative = System.getProperties().contains("disableNativeEventLoop");
-
-        if (Epoll.isAvailable() && !disableNative) {
-            CHANNEL_TYPE = ChannelType.EPOLL;
-            EVENT_LOOP_GROUP = new EpollEventLoopGroup(0, listenerThreadFactory);
-        } else if (KQueue.isAvailable() && !disableNative) {
-            CHANNEL_TYPE = ChannelType.KQUEUE;
-            EVENT_LOOP_GROUP = new KQueueEventLoopGroup(0, listenerThreadFactory);
-        } else {
-            CHANNEL_TYPE = ChannelType.NIO;
-            EVENT_LOOP_GROUP = new NioEventLoopGroup(0, listenerThreadFactory);
-        }
     }
 
     public static Optional<int[]> getKernelVersion() {
@@ -77,10 +50,6 @@ public final class BootstrapUtils {
 
     public static boolean isReusePortAvailable() {
         return REUSEPORT_AVAILABLE;
-    }
-
-    public static EventLoopGroup getEventLoopGroup() {
-        return EVENT_LOOP_GROUP;
     }
 
     public static void setupBootstrap(Bootstrap bootstrap, boolean datagram) {
@@ -98,10 +67,10 @@ public final class BootstrapUtils {
     }
 
     private static void setupAbstractBootstrap(AbstractBootstrap bootstrap) {
-        bootstrap.group(EVENT_LOOP_GROUP);
-
         if (REUSEPORT_AVAILABLE) {
             bootstrap.option(UnixChannelOption.SO_REUSEPORT, true);
+        } else {
+            bootstrap.option(ChannelOption.SO_REUSEADDR, true);
         }
     }
 
@@ -150,16 +119,5 @@ public final class BootstrapUtils {
         }
 
         return CompletableFuture.allOf(completableFutures);
-    }
-
-    @RequiredArgsConstructor
-    private enum ChannelType {
-        EPOLL(EpollDatagramChannel.class, EpollSocketChannel.class, EpollServerSocketChannel.class),
-        KQUEUE(KQueueDatagramChannel.class, KQueueSocketChannel.class, KQueueServerSocketChannel.class),
-        NIO(NioDatagramChannel.class, NioSocketChannel.class, NioServerSocketChannel.class);
-
-        private final Class<? extends DatagramChannel> datagramChannel;
-        private final Class<? extends SocketChannel> socketChannel;
-        private final Class<? extends ServerSocketChannel> serverSocketChannel;
     }
 }

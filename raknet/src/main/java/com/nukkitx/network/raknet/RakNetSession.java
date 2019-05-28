@@ -100,7 +100,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         //noinspection unchecked
         this.orderingHeaps = new FastBinaryMinHeap[RakNetConstants.MAXIMUM_ORDERING_CHANNELS];
-        this.splitPackets = new RoundRobinArray<>(RakNetConstants.MAXIMUM_SPLIT_COUNT);
+        this.splitPackets = new RoundRobinArray<>(512);
         this.sentDatagrams = new RoundRobinArray<>(512);
         for (int i = 0; i < RakNetConstants.MAXIMUM_ORDERING_CHANNELS; i++) {
             orderingHeaps[i] = new FastBinaryMinHeap<>(64);

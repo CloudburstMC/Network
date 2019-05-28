@@ -24,19 +24,19 @@ Network components used within NukkitX.
         <dependency>
             <groupId>com.nukkitx.network</groupId>
             <artifactId>query</artifactId>
-            <version>1.4.4</version>
+            <version>1.4.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.nukkitx.network</groupId>
             <artifactId>raknet</artifactId>
-            <version>1.4.4</version>
+            <version>1.4.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.nukkitx.network</groupId>
             <artifactId>rcon</artifactId>
-            <version>1.4.4</version>
+            <version>1.4.5</version>
             <scope>compile</scope>
         </dependency>
     </dependencies>
