@@ -48,7 +48,8 @@ public class EncapsulatedPacket implements ReferenceCounted {
             buf.writeInt((int) partIndex);
         }
 
-        buf.writeBytes(buffer);
+        buf.writeBytes(this.buffer, this.buffer.readerIndex(), this.buffer.readableBytes());
+        // If we need to resend, we don't want the buffer's reader index changing.
     }
 
     public void decode(ByteBuf buf) {
