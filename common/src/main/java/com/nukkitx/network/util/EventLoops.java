@@ -50,12 +50,12 @@ public final class EventLoops {
 
     @RequiredArgsConstructor
     public enum ChannelType {
-        EPOLL(threads -> new EpollEventLoopGroup(threads, EVENT_LOOP_FACTORY), EpollDatagramChannel.class,
-                EpollSocketChannel.class, EpollServerSocketChannel.class),
-        KQUEUE(threads -> new KQueueEventLoopGroup(threads, EVENT_LOOP_FACTORY), KQueueDatagramChannel.class,
-                KQueueSocketChannel.class, KQueueServerSocketChannel.class),
-        NIO(threads -> new NioEventLoopGroup(threads, EVENT_LOOP_FACTORY), NioDatagramChannel.class,
-                NioSocketChannel.class, NioServerSocketChannel.class);
+        EPOLL(EpollDatagramChannel.class, EpollSocketChannel.class, EpollServerSocketChannel.class,
+                threads -> new EpollEventLoopGroup(threads, EVENT_LOOP_FACTORY)),
+        KQUEUE(KQueueDatagramChannel.class, KQueueSocketChannel.class, KQueueServerSocketChannel.class,
+                threads -> new KQueueEventLoopGroup(threads, EVENT_LOOP_FACTORY)),
+        NIO(NioDatagramChannel.class, NioSocketChannel.class, NioServerSocketChannel.class,
+                threads -> new NioEventLoopGroup(threads, EVENT_LOOP_FACTORY));
 
         final Class<? extends DatagramChannel> datagramChannel;
         final Class<? extends SocketChannel> socketChannel;
