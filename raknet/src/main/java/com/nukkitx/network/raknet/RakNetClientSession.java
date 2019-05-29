@@ -71,6 +71,8 @@ public class RakNetClientSession extends RakNetSession {
                 }
             }
         }
+        
+        super.tick(curTime);
     }
 
     @Override
