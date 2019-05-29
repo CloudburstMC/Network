@@ -101,7 +101,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         //noinspection unchecked
         this.orderingHeaps = new FastBinaryMinHeap[RakNetConstants.MAXIMUM_ORDERING_CHANNELS];
-        this.splitPackets = new RoundRobinArray<>(512);
+        this.splitPackets = new RoundRobinArray<>(64);
         this.sentDatagrams = new RoundRobinArray<>(512);
         for (int i = 0; i < RakNetConstants.MAXIMUM_ORDERING_CHANNELS; i++) {
             orderingHeaps[i] = new FastBinaryMinHeap<>(64);
@@ -168,8 +168,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         EncapsulatedPacket result = helper.add(splitPacket, this);
         if (result != null) {
             // Packet reassembled. Remove the helper
-            this.splitPackets.remove(splitPacket.getPartId());
-            helper.release();
+            if (this.splitPackets.remove(splitPacket.getPartId(), helper)) {
+                helper.release();
+            }
         }
 
         return result;
@@ -402,8 +403,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         while (iterator.hasNext()) {
             RakNetDatagram datagram = iterator.next();
             if (datagram.nextSend == -1) {
-                // Release the native buffers so we don't cause memory leaks
-                datagram.release();
+                if (this.sentDatagrams.remove(datagram.sequenceIndex, datagram)) {
+                    datagram.release();
+                }
                 iterator.remove();
             } else if (datagram.nextSend <= curTime) {
                 int size = datagram.getSize();
@@ -414,7 +416,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 if (!hasResent) {
                     hasResent = true;
                 }
-                this.sendDatagram(datagram.retain(), curTime);
+                this.sendDatagram(datagram.retain(), curTime, false);
             }
         }
         if (hasResent) {
@@ -446,7 +448,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
                     if (!datagram.tryAddPacket(packet, this.mtu)) {
                         // Send
-                        this.sendDatagram(datagram, curTime);
+                        this.sendDatagram(datagram, curTime, true);
 
                         datagram = new RakNetDatagram(curTime);
 
@@ -458,7 +460,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 }
 
                 if (!datagram.packets.isEmpty()) {
-                    this.sendDatagram(datagram, curTime);
+                    this.sendDatagram(datagram, curTime, true);
                 }
             }
             this.channel.flush();
@@ -572,7 +574,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() +
                         ", MTU: " + this.mtu + ")");
             }
-            this.sendDatagram(datagram, curTime);
+            this.sendDatagram(datagram, curTime, true);
         }
         this.channel.flush();
     }
@@ -645,23 +647,22 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         return packets;
     }
 
-    private void sendDatagram(RakNetDatagram datagram, long time) {
+    private void sendDatagram(RakNetDatagram datagram, long time, boolean firstSend) {
         Preconditions.checkArgument(!datagram.packets.isEmpty(), "RakNetDatagram with no packets");
         try {
             if (datagram.sequenceIndex == -1) {
                 datagram.sequenceIndex = datagramWriteIndexUpdater.getAndIncrement(this);
             }
-            RakNetDatagram sentDatagram = this.sentDatagrams.get(datagram.sequenceIndex);
-            if (sentDatagram == null || sentDatagram.sequenceIndex < datagram.sequenceIndex) {
-                for (EncapsulatedPacket packet : datagram.packets) {
-                    // check if packet is reliable so it can be resent later if a NAK is received.
-                    if (packet.reliability != RakNetReliability.UNRELIABLE &&
-                            packet.reliability != RakNetReliability.UNRELIABLE_SEQUENCED) {
-                        datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
+            for (EncapsulatedPacket packet : datagram.packets) {
+                // check if packet is reliable so it can be resent later if a NAK is received.
+                if (packet.reliability != RakNetReliability.UNRELIABLE &&
+                        packet.reliability != RakNetReliability.UNRELIABLE_SEQUENCED) {
+                    datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
+                    if (firstSend) {
                         this.sentDatagrams.set(datagram.sequenceIndex, datagram.retain());
                         this.resendQueue.offer(datagram);
-                        break;
                     }
+                    break;
                 }
             }
             ByteBuf buf = this.channel.alloc().directBuffer(datagram.getSize());
@@ -684,15 +685,16 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.checkForClosed();
 
         IntRange[] acked = RakNetUtils.readIntRanges(buffer);
+        long curTime = System.currentTimeMillis();
 
         for (IntRange range : acked) {
             for (int i = range.start; i <= range.end; i++) {
                 RakNetDatagram datagram = this.sentDatagrams.get(i);
                 if (datagram != null && datagram.sequenceIndex == i) {
-                    // Release next tick
+                    // Remove next tick
                     datagram.nextSend = -1;
                     unackedBytesUpdater.addAndGet(this, -datagram.getSize());
-                    this.slidingWindow.onAck(System.currentTimeMillis() - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
+                    this.slidingWindow.onAck(curTime - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
                 }
             }
         }
@@ -712,7 +714,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     // Resend next tick
                     datagram.nextSend = 0;
                 } else if (log.isTraceEnabled()) {
-                    log.trace("NAK received for {} but no datagram was found", i);
+                    log.trace("NAK received for {} but was out of window", i);
                 }
             }
         }

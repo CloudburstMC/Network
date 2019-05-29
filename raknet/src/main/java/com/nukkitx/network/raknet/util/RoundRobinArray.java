@@ -29,9 +29,9 @@ public class RoundRobinArray<E> {
         ReferenceCountUtil.release(element);
     }
 
-    public E remove(int index) {
+    public boolean remove(int index, E expected) {
         int idx = index & this.mask;
-        return this.elements.getAndSet(idx, null);
+        return this.elements.compareAndSet(idx, expected, null);
     }
 
     public void forEach(Consumer<E> consumer) {

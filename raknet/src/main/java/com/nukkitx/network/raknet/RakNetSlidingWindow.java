@@ -1,10 +1,6 @@
 package com.nukkitx.network.raknet;
 
-import io.netty.util.internal.logging.InternalLogger;
-import io.netty.util.internal.logging.InternalLoggerFactory;
-
 public class RakNetSlidingWindow {
-    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetSlidingWindow.class);
     private final int mtu;
     private double cwnd;
     private double ssThresh;
