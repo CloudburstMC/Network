@@ -4,6 +4,7 @@ import com.nukkitx.network.NetworkUtils;
 import com.nukkitx.network.util.DisconnectReason;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
+import io.netty.channel.EventLoop;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
@@ -12,10 +13,10 @@ import java.net.InetSocketAddress;
 public class RakNetClientSession extends RakNetSession {
     private final RakNetClient rakNet;
     private int connectionAttempts;
-    private long nextConnectionAttempt;
+    private long nextConnectionAttempt = System.currentTimeMillis() + 50;
 
-    RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu) {
-        super(address, channel, mtu);
+    RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu, EventLoop eventLoop) {
+        super(address, channel, mtu, eventLoop);
         this.rakNet = rakNet;
     }
 

@@ -1,6 +1,5 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.NetworkInterface;
 import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.bootstrap.Bootstrap;
@@ -21,7 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @ParametersAreNonnullByDefault
-public abstract class RakNet implements NetworkInterface, AutoCloseable {
+public abstract class RakNet implements AutoCloseable {
     final long guid = ThreadLocalRandom.current().nextLong();
     final Bootstrap bootstrap;
     final EventLoopGroup eventLoopGroup;

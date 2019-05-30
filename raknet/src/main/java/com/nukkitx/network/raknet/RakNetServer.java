@@ -1,6 +1,5 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.NetworkServer;
 import com.nukkitx.network.raknet.util.RoundRobinIterator;
 import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.DisconnectReason;
@@ -26,7 +25,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
 @ParametersAreNonnullByDefault
-public class RakNetServer extends RakNet implements NetworkServer<RakNetServerSession> {
+public class RakNetServer extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetServer.class);
     final ConcurrentMap<InetSocketAddress, RakNetServerSession> sessionsByAddress = new ConcurrentHashMap<>();
     private final ServerDatagramHandler datagramHandler = new ServerDatagramHandler();
@@ -122,7 +121,7 @@ public class RakNetServer extends RakNet implements NetworkServer<RakNetServerSe
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         for (RakNetServerSession session : this.sessionsByAddress.values()) {
-            this.eventLoopGroup.execute(() -> session.onTick(curTime));
+            session.eventLoop.execute(() -> session.onTick(curTime));
         }
         Iterator<Long> blockedAddresses = this.blockAddresses.values().iterator();
         long timeout;
@@ -156,7 +155,8 @@ public class RakNetServer extends RakNet implements NetworkServer<RakNetServerSe
             this.sendConnectionBanned(ctx, packet.sender());
         } else {
             // Passed all checks. Now create the session and send the first reply.
-            session = new RakNetServerSession(this, packet.sender(), ctx.channel(), mtu);
+            session = new RakNetServerSession(this, packet.sender(), ctx.channel(), mtu,
+                    this.eventLoopGroup.next());
             session.setState(RakNetState.INITIALIZING);
             if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
                 session.sendOpenConnectionReply1();

@@ -7,6 +7,7 @@ import com.nukkitx.network.util.Preconditions;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
+import io.netty.channel.EventLoop;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
@@ -42,6 +43,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     final InetSocketAddress address;
     private final Channel channel;
     private final ChannelPromise voidPromise;
+    final EventLoop eventLoop;
     int mtu;
     long guid;
     private volatile RakNetState state = RakNetState.UNCONNECTED;
@@ -79,10 +81,11 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private volatile int unackedBytes;
     private volatile long lastMinWeight;
 
-    RakNetSession(InetSocketAddress address, Channel channel, int mtu) {
+    RakNetSession(InetSocketAddress address, Channel channel, int mtu, EventLoop eventLoop) {
         this.address = address;
         this.channel = channel;
         this.mtu = mtu;
+        this.eventLoop = eventLoop;
         // We can reuse this instead of creating a new one each time
         this.voidPromise = channel.voidPromise();
     }
@@ -303,6 +306,11 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     } else {
                         // Duplicate packet
                         continue;
+                    }
+
+                    while (!this.reliableDatagramQueue.isEmpty() && !this.reliableDatagramQueue.peek()) {
+                        this.reliableDatagramQueue.poll();
+                        ++this.reliabilityReadIndex;
                     }
                 } finally {
                     reliabilityReadLock.unlock();

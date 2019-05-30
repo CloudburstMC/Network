@@ -1,6 +1,5 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.NetworkClient;
 import com.nukkitx.network.util.EventLoops;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
@@ -15,7 +14,7 @@ import java.util.Iterator;
 import java.util.concurrent.*;
 
 @ParametersAreNonnullByDefault
-public class RakNetClient extends RakNet implements NetworkClient<RakNetClientSession> {
+public class RakNetClient extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
     private final ClientDatagramHandler handler = new ClientDatagramHandler();
     private final ConcurrentMap<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
@@ -52,7 +51,8 @@ public class RakNetClient extends RakNet implements NetworkClient<RakNetClientSe
             throw new IllegalStateException("Session has already been created");
         }
 
-        this.session = new RakNetClientSession(this, address, this.channel, RakNetConstants.MAXIMUM_MTU_SIZE);
+        this.session = new RakNetClientSession(this, address, this.channel, RakNetConstants.MAXIMUM_MTU_SIZE,
+                this.eventLoopGroup.next());
         return this.session;
     }
 
@@ -81,7 +81,7 @@ public class RakNetClient extends RakNet implements NetworkClient<RakNetClientSe
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         if (this.session != null) {
-            this.eventLoopGroup.execute(() -> this.session.onTick(curTime));
+            session.eventLoop.execute(() -> session.onTick(curTime));
         }
         Iterator<PingEntry> iterator = this.pings.values().iterator();
         while (iterator.hasNext()) {
