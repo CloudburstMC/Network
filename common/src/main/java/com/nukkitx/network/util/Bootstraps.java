@@ -5,7 +5,6 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelOption;
 import io.netty.channel.epoll.Native;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
@@ -69,8 +68,6 @@ public final class Bootstraps {
     private static void setupAbstractBootstrap(AbstractBootstrap bootstrap) {
         if (REUSEPORT_AVAILABLE) {
             bootstrap.option(UnixChannelOption.SO_REUSEPORT, true);
-        } else {
-            bootstrap.option(ChannelOption.SO_REUSEADDR, true);
         }
     }
 

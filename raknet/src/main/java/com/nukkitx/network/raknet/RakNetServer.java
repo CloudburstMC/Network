@@ -51,9 +51,10 @@ public class RakNetServer extends RakNet {
 
     @Override
     protected CompletableFuture<Void> bindInternal() {
+        int bindThreads = Bootstraps.isReusePortAvailable() ? this.bindThreads : 1;
         ChannelFuture[] channelFutures = new ChannelFuture[this.bindThreads];
 
-        for (int i = 0; i < this.bindThreads; i++) {
+        for (int i = 0; i < bindThreads; i++) {
             channelFutures[i] = this.bootstrap.handler(datagramHandler).bind(this.bindAddress);
         }
 
