@@ -10,6 +10,7 @@ import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import lombok.Getter;
@@ -19,9 +20,9 @@ import javax.annotation.Nonnegative;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
-import java.util.Iterator;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.locks.Lock;
@@ -72,12 +73,14 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private FastBinaryMinHeap<EncapsulatedPacket> outgoingPackets;
     private long[] outgoingPacketNextWeights;
     private FastBinaryMinHeap<EncapsulatedPacket>[] orderingHeaps;
+    private Lock orderingLock;
     private volatile boolean closed = false;
     private volatile long currentPingTime = -1;
     private volatile long lastPingTime = -1;
     private volatile long lastPongTime = -1;
-    private RoundRobinArray<RakNetDatagram> sentDatagrams;
-    private Queue<RakNetDatagram> resendQueue;
+    private ConcurrentMap<Integer, RakNetDatagram> resendQueue;
+    private Queue<IntRange> incomingAcks;
+    private Queue<IntRange> incomingNaks;
     private volatile int unackedBytes;
     private volatile long lastMinWeight;
 
@@ -104,15 +107,17 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         //noinspection unchecked
         this.orderingHeaps = new FastBinaryMinHeap[RakNetConstants.MAXIMUM_ORDERING_CHANNELS];
-        this.splitPackets = new RoundRobinArray<>(64);
-        this.sentDatagrams = new RoundRobinArray<>(512);
+        this.orderingLock = new ReentrantLock(true);
+        this.splitPackets = new RoundRobinArray<>(256);
+        this.resendQueue = new ConcurrentHashMap<>(512);
         for (int i = 0; i < RakNetConstants.MAXIMUM_ORDERING_CHANNELS; i++) {
             orderingHeaps[i] = new FastBinaryMinHeap<>(64);
         }
 
         this.outgoingPackets = new FastBinaryMinHeap<>(8);
         this.outgoingLock = new ReentrantLock();
-        this.resendQueue = new ConcurrentLinkedQueue<>();
+        this.incomingAcks = PlatformDependent.newMpscQueue();
+        this.incomingNaks = PlatformDependent.newMpscQueue();
         this.outgoingPacketNextWeights = new long[4];
         this.initHeapWeights();
     }
@@ -320,16 +325,14 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
             if (encapsulated.split) {
                 final EncapsulatedPacket reassembled = this.getReassembledPacket(encapsulated);
+                if (reassembled == null) {
+                    // Not reassembled
+                    continue;
+                }
                 try {
-                    if (reassembled == null) {
-                        // Not reassembled
-                        continue;
-                    }
                     this.checkForOrdered(reassembled);
                 } finally {
-                    if (reassembled != null) {
-                        reassembled.release();
-                    }
+                    reassembled.release();
                 }
             } else {
                 this.checkForOrdered(encapsulated);
@@ -346,35 +349,40 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     private void onOrderedReceived(EncapsulatedPacket packet) {
-        FastBinaryMinHeap<EncapsulatedPacket> binaryHeap = this.orderingHeaps[packet.orderingChannel];
+        this.orderingLock.lock();
+        try {
+            FastBinaryMinHeap<EncapsulatedPacket> binaryHeap = this.orderingHeaps[packet.orderingChannel];
 
-        if (this.orderReadIndex.get(packet.orderingChannel) < packet.orderingIndex) {
-            // Not next in line so add to queue.
-            packet.retain();
-            binaryHeap.insert(packet.orderingIndex, packet);
-            return;
-        } else if (this.orderReadIndex.get(packet.orderingChannel) > packet.orderingIndex) {
-            // We already have this
-            return;
-        }
-        this.orderReadIndex.incrementAndGet(packet.orderingChannel);
+            if (this.orderReadIndex.get(packet.orderingChannel) < packet.orderingIndex) {
+                // Not next in line so add to queue.
+                packet.retain();
+                binaryHeap.insert(packet.orderingIndex, packet);
+                return;
+            } else if (this.orderReadIndex.get(packet.orderingChannel) > packet.orderingIndex) {
+                // We already have this
+                return;
+            }
+            this.orderReadIndex.incrementAndGet(packet.orderingChannel);
 
-        // Can be handled
-        this.onEncapsulatedInternal(packet);
+            // Can be handled
+            this.onEncapsulatedInternal(packet);
 
-        EncapsulatedPacket queuedPacket;
-        while ((queuedPacket = binaryHeap.peek()) != null) {
-            if (queuedPacket.orderingIndex == this.orderReadIndex.get(packet.orderingChannel)) {
-                // We got the expected packet
-                binaryHeap.remove();
-                this.orderReadIndex.incrementAndGet(packet.orderingChannel);
+            EncapsulatedPacket queuedPacket;
+            while ((queuedPacket = binaryHeap.peek()) != null) {
+                if (queuedPacket.orderingIndex == this.orderReadIndex.get(packet.orderingChannel)) {
+                    // We got the expected packet
+                    binaryHeap.remove();
+                    this.orderReadIndex.incrementAndGet(packet.orderingChannel);
 
-                try {
-                    this.onEncapsulatedInternal(queuedPacket);
-                } finally {
-                    queuedPacket.release();
+                    try {
+                        this.onEncapsulatedInternal(queuedPacket);
+                    } finally {
+                        queuedPacket.release();
+                    }
                 }
             }
+        } finally {
+            this.orderingLock.unlock();
         }
     }
 
@@ -399,23 +407,47 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             this.sendConnectedPing(curTime);
         }
 
-        this.sendQueued(curTime);
-    }
+        // Incoming queues
 
-    private void sendQueued(long curTime) {
+        if (!this.incomingAcks.isEmpty()) {
+
+            IntRange range;
+            while ((range = this.incomingAcks.poll()) != null) {
+                for (int i = range.start; i <= range.end; i++) {
+                    RakNetDatagram datagram = this.resendQueue.remove(i);
+                    if (datagram != null) {
+                        datagram.release();
+                        unackedBytesUpdater.addAndGet(this, -datagram.getSize());
+                        this.slidingWindow.onAck(curTime - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
+                    }
+                }
+            }
+        }
+
+        if (!this.incomingNaks.isEmpty()) {
+            this.slidingWindow.onNak();
+            IntRange range;
+            while ((range = this.incomingNaks.poll()) != null) {
+                for (int i = range.start; i <= range.end; i++) {
+                    RakNetDatagram datagram = this.resendQueue.get(i);
+                    if (datagram != null) {
+                        log.trace("Resending datagram {} after NAK to {}", datagram.sequenceIndex, address);
+                        // Resend this tick
+                        datagram.nextSend = 0;
+                    } else if (log.isTraceEnabled()) {
+                        log.trace("NAK received for {} but was already ACK'ed", i);
+                    }
+                }
+            }
+        }
+
+        // Outgoing queues
 
         int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
         // Send packets that were NAKed or stale first
         boolean hasResent = false;
-        Iterator<RakNetDatagram> iterator = this.resendQueue.iterator();
-        while (iterator.hasNext()) {
-            RakNetDatagram datagram = iterator.next();
-            if (datagram.nextSend == -1) {
-                if (this.sentDatagrams.remove(datagram.sequenceIndex, datagram)) {
-                    datagram.release();
-                }
-                iterator.remove();
-            } else if (datagram.nextSend <= curTime) {
+        for (RakNetDatagram datagram : this.resendQueue.values()) {
+            if (datagram.nextSend <= curTime) {
                 int size = datagram.getSize();
                 if (transmissionBandwidth < size) {
                     break;
@@ -508,8 +540,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         if (this.splitPackets != null) {
             this.splitPackets.forEach(ReferenceCountUtil::release);
         }
-        if (this.sentDatagrams != null) {
-            this.sentDatagrams.forEach(ReferenceCountUtil::release);
+        if (this.resendQueue != null) {
+            this.resendQueue.values().forEach(ReferenceCountUtil::release);
         }
 
         if (this.listener != null) {
@@ -667,8 +699,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                         packet.reliability != RakNetReliability.UNRELIABLE_SEQUENCED) {
                     datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
                     if (firstSend) {
-                        this.sentDatagrams.set(datagram.sequenceIndex, datagram.retain());
-                        this.resendQueue.offer(datagram);
+                        this.resendQueue.put(datagram.sequenceIndex, datagram.retain());
                     }
                     break;
                 }
@@ -692,42 +723,13 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private void onAck(ByteBuf buffer) {
         this.checkForClosed();
 
-        IntRange[] acked = RakNetUtils.readIntRanges(buffer);
-        long curTime = System.currentTimeMillis();
-
-        for (IntRange range : acked) {
-            for (int i = range.start; i <= range.end; i++) {
-                RakNetDatagram datagram = this.sentDatagrams.get(i);
-                if (datagram != null && datagram.sequenceIndex == i) {
-                    // Remove next tick
-                    datagram.nextSend = -1;
-                    unackedBytesUpdater.addAndGet(this, -datagram.getSize());
-                    this.slidingWindow.onAck(curTime - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
-                }
-            }
-        }
+        RakNetUtils.readIntRangesToQueue(buffer, this.incomingAcks);
     }
 
     private void onNak(ByteBuf buffer) {
         this.checkForClosed();
-        this.slidingWindow.onNak();
 
-        IntRange[] acked = RakNetUtils.readIntRanges(buffer);
-
-        for (IntRange range : acked) {
-            for (int i = range.start; i <= range.end; i++) {
-                RakNetDatagram datagram = this.sentDatagrams.get(i);
-                if (datagram != null && datagram.sequenceIndex == i) {
-                    log.trace("Resending datagram {} after NAK to {}", datagram.sequenceIndex, address);
-                    // Resend next tick
-                    datagram.nextSend = 0;
-                } else if (log.isTraceEnabled()) {
-                    log.trace("NAK received for {} but was out of window", i);
-                }
-            }
-        }
-
-        this.channel.flush();
+        RakNetUtils.readIntRangesToQueue(buffer, this.incomingNaks);
     }
 
     private void onConnectedPing(ByteBuf buffer) {

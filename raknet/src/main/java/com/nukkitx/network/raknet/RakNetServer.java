@@ -32,7 +32,7 @@ public class RakNetServer extends RakNet {
     private final ConcurrentMap<InetAddress, Long> blockAddresses = new ConcurrentHashMap<>();
     private final Set<Channel> channels = new HashSet<>();
     private final Iterator<Channel> channelIterator = new RoundRobinIterator<>(channels);
-    private RakNetServerListener listener = null;
+    private volatile RakNetServerListener listener = null;
     private final int bindThreads;
     private int maxConnections = 1024;
 
@@ -52,7 +52,7 @@ public class RakNetServer extends RakNet {
     @Override
     protected CompletableFuture<Void> bindInternal() {
         int bindThreads = Bootstraps.isReusePortAvailable() ? this.bindThreads : 1;
-        ChannelFuture[] channelFutures = new ChannelFuture[this.bindThreads];
+        ChannelFuture[] channelFutures = new ChannelFuture[bindThreads];
 
         for (int i = 0; i < bindThreads; i++) {
             channelFutures[i] = this.bootstrap.handler(datagramHandler).bind(this.bindAddress);

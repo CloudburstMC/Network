@@ -8,6 +8,7 @@ import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
+import java.util.Queue;
 
 @UtilityClass
 public class RakNetUtils {
@@ -44,17 +45,15 @@ public class RakNetUtils {
         }
     }
 
-    public static IntRange[] readIntRanges(ByteBuf buffer) {
+    public static void readIntRangesToQueue(ByteBuf buffer, Queue<IntRange> queue) {
         int size = buffer.readUnsignedShort();
-        IntRange[] ranges = new IntRange[size];
         for (int i = 0; i < size; i++) {
             boolean singleton = buffer.readBoolean();
             int start = buffer.readUnsignedMediumLE();
             // We don't need the upper limit if it's a singleton
             int end = singleton ? start : buffer.readMediumLE();
-            ranges[i] = new IntRange(start, end);
+            queue.offer(new IntRange(start, end));
         }
-        return ranges;
     }
 
     public static void writeIntRanges(ByteBuf buffer, IntRange[] ranges) {
