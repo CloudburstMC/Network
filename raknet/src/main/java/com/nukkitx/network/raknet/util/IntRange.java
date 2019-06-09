@@ -3,8 +3,8 @@ package com.nukkitx.network.raknet.util;
 import com.nukkitx.network.util.Preconditions;
 
 public class IntRange {
-    public final int start;
-    public final int end;
+    public int start;
+    public int end;
 
     public IntRange(int num) {
         this(num, num);

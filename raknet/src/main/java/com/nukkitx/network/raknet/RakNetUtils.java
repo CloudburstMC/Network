@@ -56,17 +56,46 @@ public class RakNetUtils {
         }
     }
 
-    public static void writeIntRanges(ByteBuf buffer, IntRange[] ranges) {
-        buffer.writeShort(ranges.length);
+    public static void writeIntRanges(ByteBuf buffer, Queue<IntRange> ackQueue, int mtu) {
+        int lengthIndex = buffer.writerIndex();
+        buffer.writeZero(2);
+        mtu -= 2;
 
-        for (IntRange range : ranges) {
-            boolean singleton = range.start == range.end;
-            buffer.writeBoolean(singleton);
-            buffer.writeMediumLE(range.start);
-            if (!singleton) {
-                buffer.writeMediumLE(range.end);
+        int count = 0;
+        IntRange ackRange;
+        while ((ackRange = ackQueue.poll()) != null) {
+
+            IntRange nextRange;
+            while ((nextRange = ackQueue.peek()) != null && (ackRange.end + 1) == nextRange.start) {
+                ackQueue.remove();
+                ackRange.end = nextRange.end;
             }
+
+            if (ackRange.start == ackRange.end) {
+                if (mtu < 4) {
+                    break;
+                }
+                mtu -= 4;
+
+                buffer.writeBoolean(true);
+                buffer.writeMediumLE(ackRange.start);
+            } else {
+                if (mtu < 7) {
+                    break;
+                }
+                mtu -= 7;
+
+                buffer.writeBoolean(false);
+                buffer.writeMediumLE(ackRange.start);
+                buffer.writeMediumLE(ackRange.end);
+            }
+            count++;
         }
+
+        int finalIndex = buffer.writerIndex();
+        buffer.writerIndex(lengthIndex);
+        buffer.writeShort(count);
+        buffer.writerIndex(finalIndex);
     }
 
     public static boolean verifyUnconnectedMagic(ByteBuf buffer) {

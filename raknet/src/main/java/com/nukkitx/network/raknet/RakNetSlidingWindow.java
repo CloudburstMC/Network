@@ -109,7 +109,7 @@ public class RakNetSlidingWindow {
     public boolean shouldSendAcks(long curTime) {
         long rto = this.getSenderRtoForAck();
 
-        return rto == -1 || curTime >= oldestUnsentAck + RakNetConstants.CC_SYN;
+        return rto == -1 || curTime >= this.oldestUnsentAck + RakNetConstants.CC_SYN;
     }
 
     public long getSenderRtoForAck() {
