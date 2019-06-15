@@ -433,7 +433,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         }
         long startTime = System.currentTimeMillis();
 
-        if (this.state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+        if (this.state == null || this.state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
             return;
         }
 
@@ -637,7 +637,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public void send(ByteBuf buf, RakNetPriority priority, RakNetReliability reliability, @Nonnegative int orderingChannel) {
-        if (state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+        if (state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
             // Session is not ready for RakNet datagrams.
             return;
         }
