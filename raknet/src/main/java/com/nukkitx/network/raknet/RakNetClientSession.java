@@ -91,7 +91,8 @@ public class RakNetClientSession extends RakNetSession {
     }
 
     public void connect() {
-        Preconditions.checkState(closed, "Session is already started");
+        Preconditions.checkState(this.closed, "Session is already started");
+        this.closed = false;
 
         this.attemptConnection(System.currentTimeMillis());
 
