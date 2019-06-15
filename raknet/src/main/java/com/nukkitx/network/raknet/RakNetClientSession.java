@@ -14,12 +14,13 @@ import java.net.InetSocketAddress;
 public class RakNetClientSession extends RakNetSession {
     private final RakNetClient rakNet;
     private int connectionAttempts;
-    private long nextConnectionAttempt = System.currentTimeMillis() + 50;
+    private long nextConnectionAttempt;
 
     RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu, EventLoop eventLoop) {
         super(address, channel, mtu, eventLoop);
         this.rakNet = rakNet;
         this.closed = true;
+        this.setState(null);
     }
 
     @Override
