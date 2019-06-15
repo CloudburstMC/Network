@@ -2,6 +2,7 @@ package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.NetworkUtils;
 import com.nukkitx.network.util.DisconnectReason;
+import com.nukkitx.network.util.Preconditions;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoop;
@@ -18,6 +19,7 @@ public class RakNetClientSession extends RakNetSession {
     RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu, EventLoop eventLoop) {
         super(address, channel, mtu, eventLoop);
         this.rakNet = rakNet;
+        this.closed = true;
     }
 
     @Override
@@ -59,16 +61,7 @@ public class RakNetClientSession extends RakNetSession {
                 this.close(DisconnectReason.TIMED_OUT);
             } else {
                 if (this.nextConnectionAttempt < curTime) {
-                    int mtuDiff = (RakNetConstants.MAXIMUM_MTU_SIZE - RakNetConstants.MINIMUM_MTU_SIZE) / 9;
-                    int mtuSize = RakNetConstants.MAXIMUM_MTU_SIZE - (this.connectionAttempts * mtuDiff);
-                    if (mtuSize < RakNetConstants.MINIMUM_MTU_SIZE) {
-                        mtuSize = RakNetConstants.MINIMUM_MTU_SIZE;
-                    }
-
-                    this.sendOpenConnectionRequest1(mtuSize);
-
-                    this.nextConnectionAttempt = curTime + 1000;
-                    this.connectionAttempts++;
+                    this.attemptConnection(curTime);
                 }
             }
         }
@@ -76,11 +69,32 @@ public class RakNetClientSession extends RakNetSession {
         super.tick(curTime);
     }
 
+    private void attemptConnection(long curTime) {
+        int mtuDiff = (RakNetConstants.MAXIMUM_MTU_SIZE - RakNetConstants.MINIMUM_MTU_SIZE) / 9;
+        int mtuSize = RakNetConstants.MAXIMUM_MTU_SIZE - (this.connectionAttempts * mtuDiff);
+        if (mtuSize < RakNetConstants.MINIMUM_MTU_SIZE) {
+            mtuSize = RakNetConstants.MINIMUM_MTU_SIZE;
+        }
+
+        this.sendOpenConnectionRequest1(mtuSize);
+
+        this.nextConnectionAttempt = curTime + 1000;
+        this.connectionAttempts++;
+    }
+
     @Override
     protected void onClose() {
         if (this.rakNet.session == this) {
             this.rakNet.session = null;
         }
+    }
+
+    public void connect() {
+        Preconditions.checkState(closed, "Session is already started");
+
+        this.attemptConnection(System.currentTimeMillis());
+
+        this.setState(RakNetState.UNCONNECTED);
     }
 
     @Override

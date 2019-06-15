@@ -43,7 +43,7 @@ public class RakNetClient extends RakNet {
         return future;
     }
 
-    public RakNetClientSession connect(InetSocketAddress address) {
+    public RakNetClientSession create(InetSocketAddress address) {
         if (!this.isRunning()) {
             throw new IllegalStateException("RakNet has not been started");
         }

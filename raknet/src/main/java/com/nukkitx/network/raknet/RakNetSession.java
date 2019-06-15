@@ -49,9 +49,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     long guid;
     private volatile RakNetState state = RakNetState.UNCONNECTED;
     private volatile long lastTouched = System.currentTimeMillis();
-    @Getter
-    @Setter
-    private RakNetSessionListener listener = null;
+    volatile boolean closed = false;
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakNetSlidingWindow slidingWindow;
@@ -74,7 +72,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private long[] outgoingPacketNextWeights;
     private FastBinaryMinHeap<EncapsulatedPacket>[] orderingHeaps;
     private Lock orderingLock;
-    private volatile boolean closed = false;
+    @Getter
+    @Setter
+    private volatile RakNetSessionListener listener = null;
     private volatile long currentPingTime = -1;
     private volatile long lastPingTime = -1;
     private volatile long lastPongTime = -1;
@@ -123,6 +123,33 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.incomingNaks = PlatformDependent.newMpscQueue();
         this.outgoingAcks = PlatformDependent.newMpscQueue();
         this.outgoingNaks = PlatformDependent.newMpscQueue();
+
+        this.outgoingPacketNextWeights = new long[4];
+        this.initHeapWeights();
+    }
+
+    private void deinitialize() {
+        this.slidingWindow = null;
+
+        this.reliableDatagramQueue = null;
+        this.reliabilityReadLock = null;
+        this.orderReadIndex = null;
+        this.orderWriteIndex = null;
+        this.sequenceReadIndex = null;
+        this.sequenceWriteIndex = null;
+
+        this.orderingHeaps = null;
+        this.orderingLock = null;
+        this.splitPackets = null;
+        this.sentDatagrams = null;
+
+        this.outgoingPackets = null;
+        this.outgoingLock = null;
+
+        this.incomingAcks = null;
+        this.incomingNaks = null;
+        this.outgoingAcks = null;
+        this.outgoingNaks = null;
 
         this.outgoingPacketNextWeights = new long[4];
         this.initHeapWeights();
@@ -576,6 +603,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         if (this.sentDatagrams != null) {
             this.sentDatagrams.values().forEach(ReferenceCountUtil::release);
         }
+
+        this.deinitialize();
 
         if (this.listener != null) {
             this.listener.onDisconnect(reason);
