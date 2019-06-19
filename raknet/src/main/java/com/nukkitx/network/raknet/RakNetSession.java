@@ -216,7 +216,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     void onDatagram(DatagramPacket datagram) {
-        if (!datagram.sender().equals(address)) {
+        if (!datagram.sender().equals(address) || this.closed) {
             // Somehow we have received a datagram from the wrong peer...
             return;
         }
