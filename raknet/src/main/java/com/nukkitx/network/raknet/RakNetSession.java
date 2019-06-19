@@ -268,8 +268,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     // Forward to user
                     if (this.listener != null) {
                         this.listener.onEncapsulated(packet);
-                    } else {
-                        log.debug("Unhandled RakNet user packet");
                     }
                 } else {
                     this.onPacket(buffer);
@@ -285,8 +283,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             // Forward to user
             if (this.listener != null) {
                 this.listener.onDirect(buffer);
-            } else {
-                log.debug("Unhandled RakNet user packet");
             }
         } else {
             this.onPacket(buffer);
@@ -305,8 +301,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         this.slidingWindow.onPacketReceived(datagram.sendTime);
 
-        int missedDatagrams = datagram.sequenceIndex - datagramReadIndexUpdater.getAndAccumulate(this,
-                datagram.sequenceIndex, (prev, newIndex) -> newIndex + 1);
+        int prevSequenceIndex = datagramReadIndexUpdater.getAndAccumulate(this, datagram.sequenceIndex,
+                (prev, newIndex) -> prev <= newIndex ? newIndex + 1 : prev);
+        int missedDatagrams = datagram.sequenceIndex - prevSequenceIndex;
 
         if (missedDatagrams > 0) {
             this.outgoingNaks.offer(new IntRange(datagram.sequenceIndex - missedDatagrams, datagram.sequenceIndex));
@@ -338,7 +335,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                         }
                     } else if (missed == 0) {
                         this.reliabilityReadIndex++;
-                        if (!this.reliableDatagramQueue.isEmpty()) this.reliableDatagramQueue.poll();
+                        if (!this.reliableDatagramQueue.isEmpty()) {
+                            this.reliableDatagramQueue.poll();
+                        }
                     } else {
                         // Duplicate packet
                         continue;
@@ -429,7 +428,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             this.close(DisconnectReason.TIMED_OUT);
             return;
         }
-        long startTime = System.currentTimeMillis();
 
         if (this.state == null || this.state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
             return;
@@ -463,10 +461,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 for (int i = range.start; i <= range.end; i++) {
                     RakNetDatagram datagram = this.sentDatagrams.get(i);
                     if (datagram != null) {
-                        log.trace("Resending NAK'ed datagram {} to {}", datagram.sequenceIndex, address);
+                        if (log.isTraceEnabled()) {
+                            log.trace("Resending NAK'ed datagram {} to {}", datagram.sequenceIndex, address);
+                        }
                         this.sendDatagram(datagram.retain(), curTime, false);
-                    } else if (log.isTraceEnabled()) {
-                        log.trace("NAK received for {} but was already ACK'ed", i);
                     }
                 }
             }
@@ -561,10 +559,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         } finally {
             this.outgoingLock.unlock();
         }
-        long diffTime = System.currentTimeMillis() - startTime;
-        if (diffTime > 10) {
-            log.trace("Tick took {}ms", diffTime);
-        }
     }
 
     @Override
@@ -592,7 +586,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.closed = true;
         this.state = RakNetState.UNCONNECTED;
         this.onClose();
-        log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().bindAddress, this.address, reason);
+        if (log.isTraceEnabled()) {
+            log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().bindAddress, this.address, reason);
+        }
 
         // Perform resource clean up.
         if (this.splitPackets != null) {
