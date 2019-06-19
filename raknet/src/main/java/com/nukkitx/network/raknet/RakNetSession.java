@@ -139,12 +139,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.sequenceWriteIndex = null;
 
         this.orderingHeaps = null;
-        this.orderingLock = null;
         this.splitPackets = null;
         this.sentDatagrams = null;
 
         this.outgoingPackets = null;
-        this.outgoingLock = null;
 
         this.incomingAcks = null;
         this.incomingNaks = null;
