@@ -385,8 +385,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
             if (this.orderReadIndex.get(packet.orderingChannel) < packet.orderingIndex) {
                 // Not next in line so add to queue.
-                packet.retain();
-                binaryHeap.insert(packet.orderingIndex, packet);
+                binaryHeap.insert(packet.orderingIndex, packet.retain());
                 return;
             } else if (this.orderReadIndex.get(packet.orderingChannel) > packet.orderingIndex) {
                 // We already have this
@@ -596,6 +595,15 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         }
         if (this.sentDatagrams != null) {
             this.sentDatagrams.values().forEach(ReferenceCountUtil::release);
+        }
+        if (this.orderingHeaps != null) {
+            for (FastBinaryMinHeap<EncapsulatedPacket> orderingHeap : this.orderingHeaps) {
+                EncapsulatedPacket packet;
+                while ((packet = orderingHeap.peek()) != null) {
+                    packet.release();
+                    orderingHeap.remove();
+                }
+            }
         }
 
         this.deinitialize();
