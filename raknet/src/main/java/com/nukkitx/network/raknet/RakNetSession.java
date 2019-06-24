@@ -20,6 +20,7 @@ import javax.annotation.Nonnegative;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
+import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -494,7 +495,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
         // Send packets that are stale first
         boolean hasResent = false;
-        for (RakNetDatagram datagram : this.sentDatagrams.values()) {
+
+        Iterator<RakNetDatagram> iterator = this.sentDatagrams.values().iterator();
+        while (iterator.hasNext()) {
+            RakNetDatagram datagram = iterator.next();
             if (datagram.nextSend <= curTime) {
                 int size = datagram.getSize();
                 if (transmissionBandwidth < size) {
@@ -507,7 +511,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 if (log.isTraceEnabled()) {
                     log.trace("Resending stale datagram {} to {}", datagram.sequenceIndex, this.address);
                 }
-                this.sendDatagram(datagram.retain(), curTime, false);
+                iterator.remove();
+                datagram.sequenceIndex = -1;
+                this.sendDatagram(datagram, curTime, true);
             }
         }
         if (hasResent) {
@@ -539,7 +545,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
                     if (!datagram.tryAddPacket(packet, this.mtu)) {
                         // Send
-                        this.sendDatagram(datagram, curTime, true);
+                        this.sendDatagram(datagram.retain(), curTime, true);
 
                         datagram = new RakNetDatagram(curTime);
 
@@ -551,7 +557,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 }
 
                 if (!datagram.packets.isEmpty()) {
-                    this.sendDatagram(datagram, curTime, true);
+                    this.sendDatagram(datagram.retain(), curTime, true);
                 }
             }
             this.channel.flush();
@@ -763,7 +769,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                         packet.reliability != RakNetReliability.UNRELIABLE_SEQUENCED) {
                     datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
                     if (firstSend) {
-                        this.sentDatagrams.put(datagram.sequenceIndex, datagram.retain());
+                        this.sentDatagrams.put(datagram.sequenceIndex, datagram);
                     }
                     break;
                 }
