@@ -110,23 +110,27 @@ public class EncapsulatedPacket implements ReferenceCounted {
     }
 
     @Override
-    public ReferenceCounted retain() {
-        return buffer.retain();
+    public EncapsulatedPacket retain() {
+        this.buffer.retain();
+        return this;
     }
 
     @Override
-    public ReferenceCounted retain(int i) {
-        return buffer.retain(i);
+    public EncapsulatedPacket retain(int i) {
+        this.buffer.retain(i);
+        return this;
     }
 
     @Override
-    public ReferenceCounted touch() {
-        return buffer.touch();
+    public EncapsulatedPacket touch() {
+        this.buffer.touch();
+        return this;
     }
 
     @Override
-    public ReferenceCounted touch(Object o) {
-        return buffer.touch(o);
+    public EncapsulatedPacket touch(Object o) {
+        this.buffer.touch(o);
+        return this;
     }
 
     @Override
