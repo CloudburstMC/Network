@@ -39,7 +39,7 @@ public abstract class RakNet implements AutoCloseable {
         Bootstraps.setupBootstrap(this.bootstrap, true);
         this.bootstrap.group(eventLoopGroup);
 
-        this.tickFuture = eventLoopGroup.scheduleAtFixedRate(this::onTick, 10, 10, TimeUnit.MILLISECONDS);
+        this.tickFuture = eventLoopGroup.scheduleAtFixedRate(this::onTick, 200, 10, TimeUnit.MILLISECONDS);
     }
 
     static void send(ChannelHandlerContext ctx, InetSocketAddress recipient, ByteBuf buffer) {
