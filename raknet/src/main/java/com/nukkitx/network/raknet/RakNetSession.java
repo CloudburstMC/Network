@@ -545,7 +545,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
                     if (!datagram.tryAddPacket(packet, this.mtu)) {
                         // Send
-                        this.sendDatagram(datagram.retain(), curTime, true);
+                        this.sendDatagram(datagram, curTime, true);
 
                         datagram = new RakNetDatagram(curTime);
 
@@ -557,7 +557,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 }
 
                 if (!datagram.packets.isEmpty()) {
-                    this.sendDatagram(datagram.retain(), curTime, true);
+                    this.sendDatagram(datagram, curTime, true);
                 }
             }
             this.channel.flush();
@@ -769,7 +769,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                         packet.reliability != RakNetReliability.UNRELIABLE_SEQUENCED) {
                     datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
                     if (firstSend) {
-                        this.sentDatagrams.put(datagram.sequenceIndex, datagram);
+                        this.sentDatagrams.put(datagram.sequenceIndex, datagram.retain());
                     }
                     break;
                 }
