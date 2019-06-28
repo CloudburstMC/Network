@@ -541,7 +541,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     if (packet.reliability.isReliable()) {
                         packet.reliabilityIndex = reliabilityWriteIndexUpdater.getAndIncrement(this);
                     }
-                    unackedBytesUpdater.addAndGet(this, packet.getSize());
 
                     if (!datagram.tryAddPacket(packet, this.mtu)) {
                         // Send
@@ -770,6 +769,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
                     if (firstSend) {
                         this.sentDatagrams.put(datagram.sequenceIndex, datagram.retain());
+                        unackedBytesUpdater.addAndGet(this, datagram.getSize());
                     }
                     break;
                 }
