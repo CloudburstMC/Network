@@ -4,137 +4,132 @@ import com.nukkitx.network.raknet.RakNetUtils;
 
 public class BitQueue {
 
-    private int capacity;
-    private long[] queue;
+    private byte[] queue;
     private int head;
     private int tail;
 
     public BitQueue(int capacity) {
-        this.capacity = RakNetUtils.powerOfTwoCeiling(capacity);
-        this.queue = this.newArray(this.capacity + 1);
+        capacity = RakNetUtils.powerOfTwoCeiling(capacity);
+        if (capacity <= 0) {
+            capacity = 8;
+        }
+
+        this.queue = new byte[((capacity + 7) >> 3)];
         this.head = 0;
         this.tail = 0;
     }
 
-    public void resize(int newCapacity) {
-        int size = this.size();
-        if (newCapacity < size)
-            throw new IndexOutOfBoundsException("Resizing would lose data");
-        newCapacity++;
-        if (newCapacity == this.capacity)
-            return;
-        long[] newQueue = newArray(newCapacity);
+    public void add(boolean bit) {
+        if (((this.head + 1) & ((this.queue.length << 3) - 1)) == this.tail) {
+            this.resize(this.queue.length << 4);
+        }
 
-        if ((this.tail & 63) == 0) {
+        int by = this.head >> 3;
+        byte bi = (byte) (1 << (this.head & 7));
+        this.queue[by] ^= (byte) (((bit ? 0xFF : 0x00) ^ this.queue[by]) & bi);
+        this.head = (this.head + 1) & ((this.queue.length << 3) - 1);
+    }
+
+    private void resize(int capacity) {
+        byte[] newQueue = new byte[(capacity + 7) >> 3];
+        int size = this.size();
+
+        if ((this.tail & 7) == 0) {
             if (this.head > this.tail) {
-                int srcPos = this.tail >> 6;
-                int length = (this.head - this.tail + 63) >> 6;
+                int srcPos = this.tail >> 3;
+                int length = (this.head - this.tail + 7) >> 3;
                 System.arraycopy(this.queue, srcPos, newQueue, 0, length);
             } else if (this.head < this.tail) {
-                int srcPos = this.tail >> 6;
-                int adjustedPos = ((this.capacity << 6) - this.tail + 63) >> 6;
-                int length = (this.head + 63) >> 6;
-                System.arraycopy(this.queue, srcPos, newQueue, 0, adjustedPos);
-                System.arraycopy(this.queue, srcPos, newQueue, adjustedPos, length);
+                int length = this.tail >> 3;
+                int adjustedPos = ((this.queue.length << 3) - this.tail + 7) >> 3;
+                System.arraycopy(this.queue, length, newQueue, 0, adjustedPos);
+                length = (this.head + 7) >> 3;
+                System.arraycopy(this.queue, 0, newQueue, adjustedPos, length);
             }
+
+            this.tail = 0;
+            this.head = size;
         } else {
-            int tailBits = (this.tail & 63);
-            int tailIdx = this.tail >> 6;
-            int by2 = (tailIdx + 1) & (this.capacity - 1);
-            long mask;
-            long bit1;
-            long bit2;
+            int tailBits = (this.tail & 7);
+            int tailIdx = this.tail >> 3;
+            int by2 = (tailIdx + 1) & (this.queue.length - 1);
+            int mask;
+            int bit1;
+            int bit2;
 
             int cursor = 0;
             while (cursor < size) {
-                mask = ((1L << tailBits) - 1) & 0xFF;
+                mask = ((1 << tailBits) - 1) & 0xFF;
                 bit1 = ((this.queue[tailIdx] & (~mask & 0xFF)) >>> tailBits);
-                bit2 = (this.queue[by2] << (64 - tailBits));
-                newQueue[cursor >> 6] = bit1 | bit2;
+                bit2 = (this.queue[by2] << (8 - tailBits));
+                newQueue[cursor >> 3] = (byte) (bit1 | bit2);
 
                 cursor += 8;
-                tailIdx = (tailIdx + 1) & (this.capacity - 1);
-                by2 = (by2 + 1) & (this.capacity - 1);
+                tailIdx = (tailIdx + 1) & (this.queue.length - 1);
+                by2 = (by2 + 1) & (this.queue.length - 1);
             }
 
             this.tail = 0;
             this.head = size;
         }
 
-        this.capacity = newCapacity;
         this.queue = newQueue;
-        this.head = 0;
-        this.tail = size;
-    }
-
-    private long[] newArray(int capacity) {
-        return new long[(capacity + 63) >> 6];
-    }
-
-    public void add(boolean val) {
-        if (((this.head + 1) & ((this.queue.length << 6) - 1)) == this.tail) {
-            this.resize(this.queue.length << 7);
-        }
-
-        int idx = this.head >> 6;
-        long mask = 1L << ((this.tail) & 63);
-        this.queue[idx] ^= ((val ? 0xFF : 0x00) ^ this.queue[idx]) & mask;
-        this.head = (this.head + 1) & ((this.queue.length << 6) - 1);
-    }
-
-    public void set(int i, boolean val) {
-        if (i >= this.size() || i < 0) {
-            return;
-        }
-
-        int idx = (this.tail + i) & ((this.queue.length << 6) - 1);
-        int arrIdx = idx >> 6;
-        long mask = 1L << (idx & 63);
-        this.queue[arrIdx] ^= ((val ? 0xFF : 0x00) ^ this.queue[arrIdx]) & mask;
-    }
-
-    public boolean poll() {
-        if (this.head == this.tail) {
-            return false;
-        }
-        int arrIdx = this.tail >> 6;
-        long mask = 1L << ((this.tail) & 63);
-        this.tail = (this.tail + 1) & ((this.queue.length << 6) - 1);
-        return (this.queue[arrIdx] & mask) != 0;
-    }
-
-    public boolean peek() {
-        if (this.head == this.tail) {
-            return false;
-        }
-        int arrIdx = this.tail >> 6;
-        long mask = 1L << ((this.tail) & 63);
-        return (this.queue[arrIdx] & mask) != 0;
-    }
-
-    public boolean get(int i) {
-        int size = this.size();
-        if (i < 0 || i >= size) {
-            final String msg = "Index " + i + ", queue size " + size;
-            throw new IndexOutOfBoundsException(msg);
-        }
-        int index = (this.tail + i) & ((this.queue.length << 6) - 1);
-        int arrIndex = index >> 6;
-        long mask = 1L << (index & 63);
-        return (this.queue[arrIndex] & mask) != 0;
     }
 
     public int size() {
         if (this.head > this.tail) {
             return (this.head - this.tail);
         } else if (this.head < this.tail) {
-            return ((this.queue.length << 6) - (this.tail - this.head));
+            return ((this.queue.length << 3) - (this.tail - this.head));
         } else {
             return 0;
         }
     }
 
+    public void set(int n, boolean bit) {
+        if (n >= this.size() || n < 0) {
+            return;
+        }
+
+        int idx = (this.tail + n) & ((this.queue.length << 3) - 1);
+        int arrIdx = idx >> 3;
+        byte mask = (byte) (1 << (idx & 7));
+        this.queue[arrIdx] ^= (byte) (((bit ? 0xFF : 0x00) ^ this.queue[arrIdx]) & mask);
+    }
+
+    public boolean get(int n) {
+        if (n >= this.size() || n < 0) {
+            return false;
+        }
+
+        int idx = (this.tail + n) & ((this.queue.length << 3) - 1);
+        int arrIdx = idx >> 3;
+        byte mask = (byte) (1 << (idx & 7));
+        return (this.queue[arrIdx] & mask) != 0;
+    }
+
     public boolean isEmpty() {
         return (this.head == this.tail);
+    }
+
+    public boolean peek() {
+        if (this.head == this.tail) {
+            return false;
+        }
+
+        int arrIdx = this.tail >> 3;
+        byte mask = (byte) (1 << ((this.tail) & 7));
+        return (this.queue[arrIdx] & mask) != 0;
+    }
+
+    public boolean poll() {
+        if (this.head == this.tail) {
+            return false;
+        }
+
+        int arrIdx = this.tail >> 3;
+        byte mask = (byte) (1 << ((this.tail) & 7));
+        this.tail = (this.tail + 1) & ((this.queue.length << 3) - 1);
+        return (this.queue[arrIdx] & mask) != 0;
     }
 }

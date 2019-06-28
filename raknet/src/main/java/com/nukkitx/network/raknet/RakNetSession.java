@@ -54,7 +54,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakNetSlidingWindow slidingWindow;
-    private volatile int splitIndex = 1;
+    private volatile int splitIndex;
     private volatile int datagramReadIndex;
     private volatile int datagramWriteIndex;
     private Lock reliabilityReadLock;
@@ -314,7 +314,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         for (final EncapsulatedPacket encapsulated : datagram.packets) {
             if (encapsulated.reliability.isReliable()) {
-                reliabilityReadLock.lock();
+                this.reliabilityReadLock.lock();
                 try {
                     int missed = encapsulated.reliabilityIndex - this.reliabilityReadIndex;
 
@@ -349,7 +349,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                         ++this.reliabilityReadIndex;
                     }
                 } finally {
-                    reliabilityReadLock.unlock();
+                    this.reliabilityReadLock.unlock();
                 }
             }
 
