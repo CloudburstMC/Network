@@ -644,27 +644,31 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public void send(ByteBuf buf, RakNetPriority priority, RakNetReliability reliability, @Nonnegative int orderingChannel) {
-        if (state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
-            // Session is not ready for RakNet datagrams.
-            return;
-        }
-        if (priority == RakNetPriority.IMMEDIATE) {
-            this.sendImmediate(buf, reliability, orderingChannel);
-            return;
-        }
-
-        EncapsulatedPacket[] packets = this.createEncapsulated(buf, priority, reliability, orderingChannel);
-
-        this.outgoingLock.lock();
         try {
-            long weight = this.getNextWeight(priority);
-            if (packets.length == 1) {
-                this.outgoingPackets.insert(weight, packets[0]);
-            } else {
-                this.outgoingPackets.insertSeries(weight, packets);
+            if (state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+                // Session is not ready for RakNet datagrams.
+                return;
+            }
+            if (priority == RakNetPriority.IMMEDIATE) {
+                this.sendImmediate(buf, reliability, orderingChannel);
+                return;
+            }
+
+            EncapsulatedPacket[] packets = this.createEncapsulated(buf, priority, reliability, orderingChannel);
+
+            this.outgoingLock.lock();
+            try {
+                long weight = this.getNextWeight(priority);
+                if (packets.length == 1) {
+                    this.outgoingPackets.insert(weight, packets[0]);
+                } else {
+                    this.outgoingPackets.insertSeries(weight, packets);
+                }
+            } finally {
+                this.outgoingLock.unlock();
             }
         } finally {
-            this.outgoingLock.unlock();
+            buf.release();
         }
     }
 
@@ -712,9 +716,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
             int split = ((buf.readableBytes() - 1) / maxLength) + 1;
             bufs = new ByteBuf[split];
-            buf.retain(split - 1); // Retain all split buffers minus 1 for the existing reference count
             for (int i = 0; i < split; i++) {
-                bufs[i] = buf.readSlice(Math.min(maxLength, buf.readableBytes()));
+                bufs[i] = buf.readRetainedSlice(Math.min(maxLength, buf.readableBytes()));
             }
 
             // Allocate split ID
