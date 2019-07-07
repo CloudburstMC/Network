@@ -141,7 +141,7 @@ public class RakNetServer extends RakNet {
             return;
         }
         int protocolVersion = buffer.readUnsignedByte();
-        int mtu = RakNetUtils.clamp(buffer.readableBytes() + 18, RakNetConstants.MINIMUM_MTU_SIZE,
+        int mtu = RakNetUtils.clamp(buffer.readableBytes() + 46, RakNetConstants.MINIMUM_MTU_SIZE,
                 RakNetConstants.MAXIMUM_MTU_SIZE);
 
         RakNetServerSession session = this.sessionsByAddress.get(packet.sender());

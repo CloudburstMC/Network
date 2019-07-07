@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import javax.annotation.Nonnegative;
+import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
@@ -133,7 +134,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.slidingWindow = null;
 
         this.reliableDatagramQueue = null;
-        this.reliabilityReadLock = null;
         this.orderReadIndex = null;
         this.orderWriteIndex = null;
         this.sequenceReadIndex = null;
@@ -293,7 +293,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     protected abstract void onPacket(ByteBuf buffer);
 
     private void onRakNetDatagram(ByteBuf buffer) {
-        if (this.state == RakNetState.DISCONNECTED) {
+        if (this.state == null || RakNetState.INITIALIZED.compareTo(this.state) > 0) {
             return;
         }
 
@@ -715,15 +715,17 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             }
 
             int split = ((buf.readableBytes() - 1) / maxLength) + 1;
+            buf.retain(split);
+
             bufs = new ByteBuf[split];
             for (int i = 0; i < split; i++) {
-                bufs[i] = buf.readRetainedSlice(Math.min(maxLength, buf.readableBytes()));
+                bufs[i] = buf.readSlice(Math.min(maxLength, buf.readableBytes()));
             }
 
             // Allocate split ID
             splitId = splitIndexUpdater.getAndIncrement(this);
         } else {
-            bufs = new ByteBuf[]{buf};
+            bufs = new ByteBuf[]{buf.retain()};
         }
 
         // Set meta
@@ -895,7 +897,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         return state;
     }
 
-    void setState(RakNetState state) {
+    void setState(@Nullable RakNetState state) {
         if (this.state != state) {
             this.state = state;
             if (this.listener != null) {

@@ -5,6 +5,5 @@ public enum RakNetState {
     INITIALIZING,
     INITIALIZED,
     CONNECTING,
-    CONNECTED,
-    DISCONNECTED
+    CONNECTED
 }
