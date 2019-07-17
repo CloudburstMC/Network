@@ -4,6 +4,8 @@ import com.nukkitx.network.SessionConnection;
 import com.nukkitx.network.raknet.util.*;
 import com.nukkitx.network.util.DisconnectReason;
 import com.nukkitx.network.util.Preconditions;
+import gnu.trove.list.TIntList;
+import gnu.trove.list.array.TIntArrayList;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
@@ -23,6 +25,7 @@ import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.Iterator;
 import java.util.Queue;
+import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicIntegerArray;
@@ -492,32 +495,54 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             this.slidingWindow.onSendAck();
         }
 
-        int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
+        int transmissionBandwidth;
         // Send packets that are stale first
-        boolean hasResent = false;
 
-        Iterator<RakNetDatagram> iterator = this.sentDatagrams.values().iterator();
-        while (iterator.hasNext()) {
-            RakNetDatagram datagram = iterator.next();
-            if (datagram.nextSend <= curTime) {
-                int size = datagram.getSize();
-                if (transmissionBandwidth < size) {
-                    break;
-                }
-                transmissionBandwidth -= size;
-                if (!hasResent) {
-                    hasResent = true;
-                }
-                if (log.isTraceEnabled()) {
-                    log.trace("Resending stale datagram {} to {}", datagram.sequenceIndex, this.address);
-                }
-                iterator.remove();
-                datagram.sequenceIndex = -1;
-                this.sendDatagram(datagram, curTime, true);
+        if (!this.sentDatagrams.isEmpty()) {
+            transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
+            boolean hasResent = false;
+            TIntList resent = null;
+
+            if (log.isTraceEnabled()) {
+                resent = new TIntArrayList();
             }
-        }
-        if (hasResent) {
-            this.slidingWindow.onResend(curTime);
+
+            Iterator<RakNetDatagram> iterator = this.sentDatagrams.values().iterator();
+            while (iterator.hasNext()) {
+                RakNetDatagram datagram = iterator.next();
+                if (datagram.nextSend <= curTime) {
+                    int size = datagram.getSize();
+                    if (transmissionBandwidth < size) {
+                        break;
+                    }
+                    transmissionBandwidth -= size;
+
+                    if (!hasResent) {
+                        hasResent = true;
+                    }
+                    if (resent != null) {
+                        resent.add(datagram.sequenceIndex);
+                    }
+
+                    iterator.remove();
+                    datagram.sequenceIndex = -1;
+                    this.sendDatagram(datagram, curTime, true);
+                }
+            }
+
+            if (hasResent) {
+                this.slidingWindow.onResend(curTime);
+            }
+
+            if (resent != null) {
+                StringJoiner joiner = new StringJoiner(", ");
+                resent.forEach(index -> {
+                    joiner.add(Integer.toString(index));
+                    return true;
+                });
+
+                log.trace("Resending stale datagram(s) {} to {}", joiner.toString(), this.address);
+            }
         }
 
         this.outgoingLock.lock();
