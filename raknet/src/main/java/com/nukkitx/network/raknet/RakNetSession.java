@@ -532,16 +532,16 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
             if (hasResent) {
                 this.slidingWindow.onResend(curTime);
-            }
 
-            if (resent != null) {
-                StringJoiner joiner = new StringJoiner(", ");
-                resent.forEach(index -> {
-                    joiner.add(Integer.toString(index));
-                    return true;
-                });
+                if (resent != null) {
+                    StringJoiner joiner = new StringJoiner(", ");
+                    resent.forEach(index -> {
+                        joiner.add(Integer.toString(index));
+                        return true;
+                    });
 
-                log.trace("Resending stale datagram(s) {} to {}", joiner.toString(), this.address);
+                    log.trace("Resending stale datagram(s) {} to {}", joiner.toString(), this.address);
+                }
             }
         }
 
