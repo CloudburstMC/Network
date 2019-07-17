@@ -503,10 +503,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             boolean hasResent = false;
             TIntList resent = null;
 
-            if (log.isTraceEnabled()) {
-                resent = new TIntArrayList();
-            }
-
             Iterator<RakNetDatagram> iterator = this.sentDatagrams.values().iterator();
             while (iterator.hasNext()) {
                 RakNetDatagram datagram = iterator.next();
@@ -519,6 +515,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
                     if (!hasResent) {
                         hasResent = true;
+
+                        if (log.isTraceEnabled()) {
+                            resent = new TIntArrayList();
+                        }
                     }
                     if (resent != null) {
                         resent.add(datagram.sequenceIndex);
