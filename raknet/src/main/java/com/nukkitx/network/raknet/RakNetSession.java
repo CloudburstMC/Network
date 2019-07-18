@@ -64,7 +64,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private Lock reliabilityReadLock;
     private int reliabilityReadIndex;
     private volatile int reliabilityWriteIndex;
-    private AtomicIntegerArray orderReadIndex;
+    private int[] orderReadIndex;
     private AtomicIntegerArray orderWriteIndex;
     private AtomicIntegerArray sequenceReadIndex;
     private AtomicIntegerArray sequenceWriteIndex;
@@ -107,7 +107,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         this.reliableDatagramQueue = new BitQueue(512);
         this.reliabilityReadLock = new ReentrantLock(true);
-        this.orderReadIndex = new AtomicIntegerArray(RakNetConstants.MAXIMUM_ORDERING_CHANNELS);
+        this.orderReadIndex = new int[RakNetConstants.MAXIMUM_ORDERING_CHANNELS];
         this.orderWriteIndex = new AtomicIntegerArray(RakNetConstants.MAXIMUM_ORDERING_CHANNELS);
         this.sequenceReadIndex = new AtomicIntegerArray(RakNetConstants.MAXIMUM_ORDERING_CHANNELS);
         this.sequenceWriteIndex = new AtomicIntegerArray(RakNetConstants.MAXIMUM_ORDERING_CHANNELS);
@@ -142,8 +142,30 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.sequenceReadIndex = null;
         this.sequenceWriteIndex = null;
 
-        this.orderingHeaps = null;
+        RoundRobinArray<SplitPacketHelper> splitPackets = this.splitPackets;
         this.splitPackets = null;
+        // Perform resource clean up.
+        if (splitPackets != null) {
+            splitPackets.forEach(ReferenceCountUtil::release);
+        }
+        ConcurrentMap<Integer, RakNetDatagram> sentDatagrams = this.sentDatagrams;
+        this.sentDatagrams = null;
+        if (sentDatagrams != null) {
+            sentDatagrams.values().forEach(ReferenceCountUtil::release);
+        }
+        FastBinaryMinHeap<EncapsulatedPacket>[] orderingHeaps = this.orderingHeaps;
+        this.orderingHeaps = null;
+        if (orderingHeaps != null) {
+            for (FastBinaryMinHeap<EncapsulatedPacket> orderingHeap : orderingHeaps) {
+                EncapsulatedPacket packet;
+                while ((packet = orderingHeap.peek()) != null) {
+                    packet.release();
+                    orderingHeap.remove();
+                }
+            }
+        }
+
+        this.orderingHeaps = null;
         this.sentDatagrams = null;
 
         this.outgoingPackets = null;
@@ -220,7 +242,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     void onDatagram(DatagramPacket datagram) {
-        if (!datagram.sender().equals(address) || this.closed) {
+        if (!datagram.sender().equals(this.address) || this.closed) {
             // Somehow we have received a datagram from the wrong peer...
             return;
         }
@@ -387,31 +409,34 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         try {
             FastBinaryMinHeap<EncapsulatedPacket> binaryHeap = this.orderingHeaps[packet.orderingChannel];
 
-            if (this.orderReadIndex.get(packet.orderingChannel) < packet.orderingIndex) {
+            if (this.orderReadIndex[packet.orderingChannel] < packet.orderingIndex) {
                 // Not next in line so add to queue.
                 binaryHeap.insert(packet.orderingIndex, packet.retain());
                 return;
-            } else if (this.orderReadIndex.get(packet.orderingChannel) > packet.orderingIndex) {
+            } else if (this.orderReadIndex[packet.orderingChannel] > packet.orderingIndex) {
                 // We already have this
                 return;
             }
-            this.orderReadIndex.incrementAndGet(packet.orderingChannel);
+            this.orderReadIndex[packet.orderingChannel]++;
 
             // Can be handled
             this.onEncapsulatedInternal(packet);
 
             EncapsulatedPacket queuedPacket;
             while ((queuedPacket = binaryHeap.peek()) != null) {
-                if (queuedPacket.orderingIndex == this.orderReadIndex.get(packet.orderingChannel)) {
-                    // We got the expected packet
-                    binaryHeap.remove();
-                    this.orderReadIndex.incrementAndGet(packet.orderingChannel);
-
+                if (queuedPacket.orderingIndex == this.orderReadIndex[packet.orderingChannel]) {
                     try {
+                        // We got the expected packet
+                        binaryHeap.remove();
+                        this.orderReadIndex[packet.orderingChannel]++;
+
                         this.onEncapsulatedInternal(queuedPacket);
                     } finally {
                         queuedPacket.release();
                     }
+                } else {
+                    // Found a gap. Wait till we start receive another ordered packet.
+                    break;
                 }
             }
         } finally {
@@ -619,23 +644,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().bindAddress, this.address, reason);
         }
 
-        // Perform resource clean up.
-        if (this.splitPackets != null) {
-            this.splitPackets.forEach(ReferenceCountUtil::release);
-        }
-        if (this.sentDatagrams != null) {
-            this.sentDatagrams.values().forEach(ReferenceCountUtil::release);
-        }
-        if (this.orderingHeaps != null) {
-            for (FastBinaryMinHeap<EncapsulatedPacket> orderingHeap : this.orderingHeaps) {
-                EncapsulatedPacket packet;
-                while ((packet = orderingHeap.peek()) != null) {
-                    packet.release();
-                    orderingHeap.remove();
-                }
-            }
-        }
-
         this.deinitialize();
 
         if (this.listener != null) {
@@ -670,7 +678,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     public void send(ByteBuf buf, RakNetPriority priority, RakNetReliability reliability, @Nonnegative int orderingChannel) {
         try {
-            if (state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+            if (closed || state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
                 // Session is not ready for RakNet datagrams.
                 return;
             }
