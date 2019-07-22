@@ -46,7 +46,8 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
         // We can't use a composite buffer as the native code will choke on it
         ByteBuf reassembled = session.allocateBuffer(sz);
         for (EncapsulatedPacket netPacket : this.packets) {
-            reassembled.writeBytes(netPacket.getBuffer());
+            ByteBuf buf = netPacket.getBuffer();
+            reassembled.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
         }
 
         return packet.fromSplit(reassembled);

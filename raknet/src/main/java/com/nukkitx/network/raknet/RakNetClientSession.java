@@ -113,8 +113,8 @@ public class RakNetClientSession extends RakNetSession {
         }
         this.guid = buffer.readLong();
         boolean security = buffer.readBoolean();
-        this.mtu = RakNetUtils.clamp(buffer.readUnsignedShort(), RakNetConstants.MINIMUM_MTU_SIZE,
-                RakNetConstants.MAXIMUM_MTU_SIZE);
+        int mtu = buffer.readUnsignedShort();
+        this.setMtu(mtu);
 
         if (security) {
             this.close(DisconnectReason.CONNECTION_REQUEST_FAILED);
@@ -141,8 +141,8 @@ public class RakNetClientSession extends RakNetSession {
             return;
         }
         InetSocketAddress address = NetworkUtils.readAddress(buffer);
-        this.mtu = RakNetUtils.clamp(buffer.readUnsignedShort(), RakNetConstants.MINIMUM_MTU_SIZE,
-                RakNetConstants.MAXIMUM_MTU_SIZE);
+        int mtu = buffer.readUnsignedShort();
+        this.setMtu(mtu);
         boolean security = buffer.readBoolean();
 
         this.initialize();
@@ -179,7 +179,7 @@ public class RakNetClientSession extends RakNetSession {
         buffer.writeByte(RakNetConstants.ID_OPEN_CONNECTION_REQUEST_2);
         RakNetUtils.writeUnconnectedMagic(buffer);
         NetworkUtils.writeAddress(buffer, this.address);
-        buffer.writeShort(this.mtu);
+        buffer.writeShort(this.getMtu());
         buffer.writeLong(this.rakNet.guid);
 
         this.sendDirect(buffer);

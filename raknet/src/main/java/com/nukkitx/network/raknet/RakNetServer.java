@@ -13,6 +13,7 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import javax.annotation.Nonnegative;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.HashSet;
@@ -23,6 +24,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+
+import static com.nukkitx.network.raknet.RakNetConstants.UDP_HEADER_SIZE;
 
 @ParametersAreNonnullByDefault
 public class RakNetServer extends RakNet {
@@ -141,8 +144,8 @@ public class RakNetServer extends RakNet {
             return;
         }
         int protocolVersion = buffer.readUnsignedByte();
-        int mtu = RakNetUtils.clamp(buffer.readableBytes() + 46, RakNetConstants.MINIMUM_MTU_SIZE,
-                RakNetConstants.MAXIMUM_MTU_SIZE);
+        int mtu = buffer.readableBytes() + 1 + 16 + 1 + (packet.sender().getAddress() instanceof Inet6Address ? 40 : 20)
+                + UDP_HEADER_SIZE; // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
 
         RakNetServerSession session = this.sessionsByAddress.get(packet.sender());
 
@@ -150,7 +153,7 @@ public class RakNetServer extends RakNet {
             this.sendAlreadyConnected(ctx, packet.sender());
         } else if (this.protocolVersion >= 0 && this.protocolVersion != protocolVersion) {
             this.sendIncompatibleProtocolVersion(ctx, packet.sender());
-        } else if (this.maxConnections <= getSessionCount()) {
+        } else if (this.maxConnections >= 0 && this.maxConnections <= getSessionCount()) {
             this.sendNoFreeIncomingConnections(ctx, packet.sender());
         } else if (this.listener != null && !this.listener.onConnectionRequest(packet.sender())) {
             this.sendConnectionBanned(ctx, packet.sender());
@@ -170,6 +173,9 @@ public class RakNetServer extends RakNet {
 
     private void onUnconnectedPing(ChannelHandlerContext ctx, DatagramPacket packet) {
         long pingTime = packet.content().readLong();
+        if (!RakNetUtils.verifyUnconnectedMagic(packet.content())) {
+            return;
+        }
 
         byte[] userData = null;
 

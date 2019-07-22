@@ -6,18 +6,24 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.nukkitx.network.raknet.RakNetConstants.FLAG_CONTINUOUS_SEND;
+import static com.nukkitx.network.raknet.RakNetConstants.RAKNET_DATAGRAM_HEADER_SIZE;
+
 @Data
-@EqualsAndHashCode(callSuper = true)
+@EqualsAndHashCode(callSuper = false)
+@ToString()
 public class RakNetDatagram extends AbstractReferenceCounted {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetDatagram.class);
+
     final List<EncapsulatedPacket> packets = new ArrayList<>();
+    byte flags = RakNetConstants.FLAG_VALID;
     final long sendTime;
     long nextSend;
-    byte flags = (byte) 0x80;
     int sequenceIndex = -1;
 
     @Override
@@ -40,7 +46,7 @@ public class RakNetDatagram extends AbstractReferenceCounted {
         return this;
     }
 
-    public void decode(ByteBuf buf) {
+    void decode(ByteBuf buf) {
         flags = buf.readByte();
         sequenceIndex = buf.readUnsignedMediumLE();
         while (buf.isReadable()) {
@@ -59,23 +65,13 @@ public class RakNetDatagram extends AbstractReferenceCounted {
     }
 
     boolean tryAddPacket(EncapsulatedPacket packet, int mtu) {
-        int packetLn = packet.getSize();
-        if (packetLn >= mtu - RakNetConstants.MAXIMUM_UDP_HEADER_SIZE) {
-            return false; // Packet is too large
-        }
-
-        int existingLn = 0;
-        for (EncapsulatedPacket netPacket : this.packets) {
-            existingLn += netPacket.getSize();
-        }
-
-        if (existingLn + packetLn >= mtu - RakNetConstants.MAXIMUM_UDP_HEADER_SIZE) {
+        if (this.getSize() + packet.getSize() > mtu - RAKNET_DATAGRAM_HEADER_SIZE) {
             return false;
         }
 
         packets.add(packet);
         if (packet.split) {
-            flags |= RakNetConstants.FLAG_CONTINOUS_SEND;
+            flags |= FLAG_CONTINUOUS_SEND;
         }
         return true;
     }
@@ -93,7 +89,7 @@ public class RakNetDatagram extends AbstractReferenceCounted {
     }
 
     public int getSize() {
-        int size = 1;
+        int size = RAKNET_DATAGRAM_HEADER_SIZE;
         for (EncapsulatedPacket packet : packets) {
             size += packet.getSize();
         }

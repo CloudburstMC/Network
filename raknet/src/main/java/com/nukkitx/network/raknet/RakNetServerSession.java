@@ -58,8 +58,8 @@ public class RakNetServerSession extends RakNetSession {
 
         NetworkUtils.readAddress(buffer);
 
-        this.mtu = RakNetUtils.clamp(buffer.readUnsignedShort(), RakNetConstants.MINIMUM_MTU_SIZE,
-                RakNetConstants.MAXIMUM_MTU_SIZE);
+        int mtu = buffer.readUnsignedShort();
+        this.setMtu(mtu);
         this.guid = buffer.readLong();
 
         // We can now accept RakNet datagrams.
@@ -100,7 +100,7 @@ public class RakNetServerSession extends RakNetSession {
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.rakNet.guid);
         buffer.writeBoolean(false); // Security
-        buffer.writeShort(this.mtu);
+        buffer.writeShort(this.getMtu());
 
         this.sendDirect(buffer);
     }
@@ -112,7 +112,7 @@ public class RakNetServerSession extends RakNetSession {
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.rakNet.guid);
         NetworkUtils.writeAddress(buffer, this.address);
-        buffer.writeShort(this.mtu);
+        buffer.writeShort(this.getMtu());
         buffer.writeBoolean(false); // Security
 
         this.sendDirect(buffer);

@@ -40,12 +40,12 @@ public class NetworkUtils {
     public static void writeAddress(ByteBuf buffer, InetSocketAddress address) {
         byte[] addressBytes = address.getAddress().getAddress();
         if (address.getAddress() instanceof Inet4Address) {
-            buffer.writeByte((4 & 0xFF));
+            buffer.writeByte(4);
             flip(addressBytes);
             buffer.writeBytes(addressBytes);
             buffer.writeShort(address.getPort());
         } else if (address.getAddress() instanceof Inet6Address) {
-            buffer.writeByte((6 & 0xFF));
+            buffer.writeByte(6);
             buffer.writeShortLE(AF_INET6);
             buffer.writeShort(address.getPort());
             buffer.writeInt(0);

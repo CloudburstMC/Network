@@ -6,8 +6,8 @@ import lombok.experimental.UtilityClass;
 public class RakNetConstants {
 
     public static final byte RAKNET_PROTOCOL_VERSION = 9; // Mojang's version.
-    public static final short MINIMUM_MTU_SIZE = 576;
-    public static final short MAXIMUM_MTU_SIZE = 1464;
+    public static final short MINIMUM_MTU_SIZE = 400;
+    public static final short MAXIMUM_MTU_SIZE = 6000;
     /**
      * Maximum amount of ordering channels as defined in vanilla RakNet.
      */
@@ -16,14 +16,11 @@ public class RakNetConstants {
      * Maximum size of an {@link EncapsulatedPacket} header.
      */
     public static final int MAXIMUM_ENCAPSULATED_HEADER_SIZE = 28;
-    /**
-     * Maximum size of the UDP header.
-     */
-    public static final int MAXIMUM_UDP_HEADER_SIZE = 23;
-    /**
-     * Maximum allowed {@link com.nukkitx.network.raknet.util.SplitPacketHelper}s per {@link RakNetSession}.
-     */
-    public static final int MAXIMUM_SPLIT_COUNT = 32;
+
+    public static final int UDP_HEADER_SIZE = 8;
+
+    public static final int RAKNET_DATAGRAM_HEADER_SIZE = 4;
+
     public static final int MAXIMUM_CONNECTION_ATTEMPTS = 10;
     /**
      * Time after {@link RakNetSession} is closed due to no activity.
@@ -42,7 +39,7 @@ public class RakNetConstants {
     public static final byte FLAG_HAS_B_AND_AS = (byte) 0b00100000;
     public static final byte FLAG_NACK = (byte) 0b00100000;
     public static final byte FLAG_PACKET_PAIR = (byte) 0b00010000;
-    public static final byte FLAG_CONTINOUS_SEND = (byte) 0b00001000;
+    public static final byte FLAG_CONTINUOUS_SEND = (byte) 0b00001000;
     public static final byte FLAG_NEEDS_B_AND_AS = (byte) 0b00000100;
     /**
      *

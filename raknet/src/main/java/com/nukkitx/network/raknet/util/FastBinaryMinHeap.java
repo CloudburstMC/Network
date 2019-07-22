@@ -8,8 +8,12 @@ import java.util.Objects;
 
 public class FastBinaryMinHeap<E> {
     private Object[] heap;
-    private long[] weights;
+    public long[] weights;
     private int size;
+
+    public FastBinaryMinHeap() {
+        this(8);
+    }
 
     public FastBinaryMinHeap(int initialCapacity) {
         this.heap = new Object[++initialCapacity];
@@ -33,6 +37,7 @@ public class FastBinaryMinHeap<E> {
     }
 
     public void insert(long weight, E element) {
+        Objects.requireNonNull(element, "element");
         this.ensureCapacity(this.size + 1);
         this.insert0(weight, element);
     }
@@ -50,8 +55,8 @@ public class FastBinaryMinHeap<E> {
             predWeight = this.weights[pred];
         }
 
-        this.heap[hole] = element;
         this.weights[hole] = weight;
+        this.heap[hole] = element;
     }
 
     public void insertSeries(long weight, E[] elements) {
@@ -75,11 +80,13 @@ public class FastBinaryMinHeap<E> {
         if (optimized) {
             // Parents are all less than series weight so we can directly insert.
             for (E element : elements) {
+                Objects.requireNonNull(element, "element");
                 this.heap[++this.size] = element;
                 this.weights[this.size] = weight;
             }
         } else {
             for (E element : elements) {
+                Objects.requireNonNull(element, "element");
                 this.insert0(weight, element);
             }
         }
@@ -97,8 +104,14 @@ public class FastBinaryMinHeap<E> {
         return (E) this.heap[1];
     }
 
-    public long peekWeight() {
-        return this.weights[1];
+    @SuppressWarnings("unchecked")
+    public E poll() {
+        if (this.size > 0) {
+            E e = (E) this.heap[1];
+            this.remove();
+            return e;
+        }
+        return null;
     }
 
     public void remove() {
@@ -125,10 +138,9 @@ public class FastBinaryMinHeap<E> {
         }
 
         // bubble up rightmost element
-        long bubbleWeight = this.weights[sz];
-        Object bubble = this.heap[sz];
+        long bubble = this.weights[sz];
         int pred = hole >> 1;
-        while (this.weights[pred] > bubbleWeight) { // must terminate since min at root
+        while (this.weights[pred] > bubble) { // must terminate since min at root
             this.weights[hole] = this.weights[pred];
             this.heap[hole] = this.heap[pred];
             hole = pred;
@@ -136,8 +148,8 @@ public class FastBinaryMinHeap<E> {
         }
 
         // finally move data to hole
-        this.weights[hole] = bubbleWeight;
-        this.heap[hole] = bubble;
+        this.weights[hole] = bubble;
+        this.heap[hole] = this.heap[sz];
 
         this.heap[sz] = null; // mark as deleted
         this.weights[sz] = Long.MAX_VALUE;

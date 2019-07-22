@@ -16,9 +16,9 @@ public class EncapsulatedPacket implements ReferenceCounted {
     int orderingIndex;
     short orderingChannel;
     boolean split;
-    long partCount;
+    int partCount;
     int partId;
-    long partIndex;
+    int partIndex;
     ByteBuf buffer;
 
     public void encode(ByteBuf buf) {
@@ -43,9 +43,9 @@ public class EncapsulatedPacket implements ReferenceCounted {
         }
 
         if (split) {
-            buf.writeInt((int) partCount);
+            buf.writeInt(partCount);
             buf.writeShort(partId);
-            buf.writeInt((int) partIndex);
+            buf.writeInt(partIndex);
         }
 
         buf.writeBytes(this.buffer, this.buffer.readerIndex(), this.buffer.readableBytes());
@@ -56,7 +56,7 @@ public class EncapsulatedPacket implements ReferenceCounted {
         byte flags = buf.readByte();
         reliability = RakNetReliability.fromId((flags & 0b11100000) >> 5);
         split = (flags & 0b00010000) != 0;
-        short size = (short) Math.ceil(buf.readShort() / 8D);
+        int size = (buf.readUnsignedShort() + 7) >> 3;
 
         if (reliability.isReliable()) {
             reliabilityIndex = buf.readUnsignedMediumLE();
@@ -72,9 +72,9 @@ public class EncapsulatedPacket implements ReferenceCounted {
         }
 
         if (split) {
-            partCount = buf.readUnsignedInt();
+            partCount = buf.readInt();
             partId = buf.readUnsignedShort();
-            partIndex = buf.readUnsignedInt();
+            partIndex = buf.readInt();
         }
 
         // Slice the buffer to use less memory
@@ -83,14 +83,7 @@ public class EncapsulatedPacket implements ReferenceCounted {
 
     public int getSize() {
         // Include back of the envelope calculation
-        int size = 3 + reliability.getSize();
-
-        if (this.split) {
-            size += 10;
-        }
-        size += buffer.readableBytes();
-
-        return size;
+        return 3 + this.reliability.getSize() + (this.split ? 10 : 0) + this.buffer.readableBytes();
     }
 
     public EncapsulatedPacket fromSplit(ByteBuf reassembled) {
