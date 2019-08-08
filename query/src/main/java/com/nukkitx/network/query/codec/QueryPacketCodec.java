@@ -21,7 +21,7 @@ public class QueryPacketCodec extends MessageToMessageCodec<DatagramPacket, Dire
     @Override
     protected void encode(ChannelHandlerContext channelHandlerContext, DirectAddressedQueryPacket packet, List<Object> list) throws Exception {
         try {
-            ByteBuf buf = PooledByteBufAllocator.DEFAULT.directBuffer();
+            ByteBuf buf = PooledByteBufAllocator.DEFAULT.ioBuffer();
             buf.writeByte(packet.content().getId() & 0xFF);
             packet.content().encode(buf);
             list.add(new DatagramPacket(buf, packet.recipient(), packet.sender()));

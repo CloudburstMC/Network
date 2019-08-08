@@ -24,35 +24,12 @@ public class RakNetUtils {
 
 
     static {
-
-//        Enumeration<NetworkInterface> interfaces;
-//        try {
-//            interfaces = NetworkInterface.getNetworkInterfaces();
-//        } catch (SocketException e) {
-//            throw new RuntimeException(e);
-//        }
-//
-//        for (NetworkInterface interfaze = interfaces.nextElement(); interfaces.hasMoreElements();) {
-//            //interfaze.
-//        }
-
         LOCAL_IP_ADDRESSES_V4[0] = LOOPBACK_V4;
         LOCAL_IP_ADDRESSES_V6[0] = LOOPBACK_V6;
 
         for (int i = 1; i < 20; i++) {
             LOCAL_IP_ADDRESSES_V4[i] = new InetSocketAddress("0.0.0.0", 19132);
             LOCAL_IP_ADDRESSES_V6[i] = new InetSocketAddress("::0", 19132);
-        }
-    }
-
-    public static void readIntRangesToQueue(ByteBuf buffer, Queue<IntRange> queue) {
-        int size = buffer.readUnsignedShort();
-        for (int i = 0; i < size; i++) {
-            boolean singleton = buffer.readBoolean();
-            int start = buffer.readUnsignedMediumLE();
-            // We don't need the upper limit if it's a singleton
-            int end = singleton ? start : buffer.readMediumLE();
-            queue.offer(new IntRange(start, end));
         }
     }
 

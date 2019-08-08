@@ -116,7 +116,7 @@ public class RakNetClient extends RakNet {
     }
 
     private void sendUnconnectedPing(InetSocketAddress recipient) {
-        ByteBuf buffer = this.channel.alloc().directBuffer(9);
+        ByteBuf buffer = this.channel.alloc().ioBuffer(9);
         buffer.writeByte(RakNetConstants.ID_UNCONNECTED_PING);
         buffer.writeLong(System.currentTimeMillis());
         RakNetUtils.writeUnconnectedMagic(buffer);

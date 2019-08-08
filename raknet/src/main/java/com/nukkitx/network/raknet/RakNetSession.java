@@ -215,7 +215,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public ByteBuf allocateBuffer(int capacity) {
-        return this.channel.alloc().directBuffer(capacity);
+        return this.channel.alloc().ioBuffer(capacity);
     }
 
     private void initHeapWeights() {
@@ -279,9 +279,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             // Block RakNet datagrams if we haven't initialized the session yet.
             if (this.state.ordinal() >= RakNetState.INITIALIZED.ordinal()) {
                 if ((potentialFlags & FLAG_ACK) != 0) {
-                    this.onAck(buffer);
+                    this.onAcknowledge(buffer, this.incomingAcks);
                 } else if ((potentialFlags & FLAG_NACK) != 0) {
-                    this.onNak(buffer);
+                    this.onAcknowledge(buffer, this.incomingNaks);
                 } else {
                     buffer.readerIndex(0);
                     this.onRakNetDatagram(buffer);
@@ -766,8 +766,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             orderingIndex = this.orderWriteIndex.getAndIncrement(orderingChannel);
         }
 
-        maxLength += 24;
-
         // Now create the packets.
         EncapsulatedPacket[] packets = new EncapsulatedPacket[buffers.length];
         for (int i = 0, parts = buffers.length; i < parts; i++) {
@@ -787,10 +785,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 packet.partIndex = i;
                 packet.partCount = parts;
                 packet.partId = splitId;
-            }
-
-            if (packet.getSize() >= maxLength) {
-                log.trace("Expected size {} but got {}", maxLength, packet.getSize());
             }
 
             packets[i] = packet;
@@ -816,7 +810,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     break;
                 }
             }
-            ByteBuf buf = this.channel.alloc().directBuffer(datagram.getSize());
+            ByteBuf buf = this.channel.alloc().ioBuffer(datagram.getSize());
             Preconditions.checkArgument(buf.writerIndex() < this.adjustedMtu, "Packet length was %s but expected %s", buf.writerIndex(), this.adjustedMtu);
             datagram.encode(buf);
             this.channel.write(new DatagramPacket(buf, this.address), this.voidPromise);
@@ -833,16 +827,25 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         Packet Handlers
      */
 
-    private void onAck(ByteBuf buffer) {
+    private void onAcknowledge(ByteBuf buffer, Queue<IntRange> queue) {
         this.checkForClosed();
 
-        RakNetUtils.readIntRangesToQueue(buffer, this.incomingAcks);
-    }
-
-    private void onNak(ByteBuf buffer) {
-        this.checkForClosed();
-
-        RakNetUtils.readIntRangesToQueue(buffer, this.incomingNaks);
+        int size = buffer.readUnsignedShort();
+        for (int i = 0; i < size; i++) {
+            boolean singleton = buffer.readBoolean();
+            int start = buffer.readUnsignedMediumLE();
+            // We don't need the upper limit if it's a singleton
+            int end = singleton ? start : buffer.readMediumLE();
+            if (start > end) {
+                if (log.isTraceEnabled()) {
+                    log.trace("{} sent an IntRange with a start value {} greater than an end value of {}", this.address,
+                            start, end);
+                }
+                this.disconnect(DisconnectReason.BAD_PACKET);
+                return;
+            }
+            queue.offer(new IntRange(start, end));
+        }
     }
 
     private void onConnectedPing(ByteBuf buffer) {

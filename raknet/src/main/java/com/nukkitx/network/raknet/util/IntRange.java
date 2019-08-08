@@ -11,7 +11,7 @@ public class IntRange {
     }
 
     public IntRange(int start, int end) {
-        Preconditions.checkArgument(start <= end, "start is less than end");
+        Preconditions.checkArgument(start <= end, "start is greater than end");
         this.start = start;
         this.end = end;
     }

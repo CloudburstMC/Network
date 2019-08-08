@@ -188,7 +188,7 @@ public class RakNetServer extends RakNet {
 
         int packetLength = 35 + userData.length;
 
-        ByteBuf buffer = ctx.alloc().directBuffer(packetLength, packetLength);
+        ByteBuf buffer = ctx.alloc().ioBuffer(packetLength, packetLength);
 
         buffer.writeByte(RakNetConstants.ID_UNCONNECTED_PONG);
         buffer.writeLong(pingTime);
@@ -205,7 +205,7 @@ public class RakNetServer extends RakNet {
      */
 
     private void sendAlreadyConnected(ChannelHandlerContext ctx, InetSocketAddress recipient) {
-        ByteBuf buffer = ctx.alloc().directBuffer(25, 25);
+        ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
         buffer.writeByte(RakNetConstants.ID_ALREADY_CONNECTED);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
@@ -214,7 +214,7 @@ public class RakNetServer extends RakNet {
     }
 
     private void sendConnectionBanned(ChannelHandlerContext ctx, InetSocketAddress recipient) {
-        ByteBuf buffer = ctx.alloc().directBuffer(25, 25);
+        ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
         buffer.writeByte(RakNetConstants.ID_CONNECTION_BANNED);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
@@ -223,7 +223,7 @@ public class RakNetServer extends RakNet {
     }
 
     private void sendIncompatibleProtocolVersion(ChannelHandlerContext ctx, InetSocketAddress recipient) {
-        ByteBuf buffer = ctx.alloc().directBuffer(26, 26);
+        ByteBuf buffer = ctx.alloc().ioBuffer(26, 26);
         buffer.writeByte(RakNetConstants.ID_INCOMPATIBLE_PROTOCOL_VERSION);
         buffer.writeByte(this.protocolVersion);
         RakNetUtils.writeUnconnectedMagic(buffer);
@@ -233,7 +233,7 @@ public class RakNetServer extends RakNet {
     }
 
     private void sendNoFreeIncomingConnections(ChannelHandlerContext ctx, InetSocketAddress recipient) {
-        ByteBuf buffer = ctx.alloc().directBuffer(25, 25);
+        ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
         buffer.writeByte(RakNetConstants.ID_NO_FREE_INCOMING_CONNECTIONS);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
