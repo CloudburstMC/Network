@@ -810,7 +810,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     break;
                 }
             }
-            ByteBuf buf = this.channel.alloc().ioBuffer(datagram.getSize());
+            ByteBuf buf = this.allocateBuffer(datagram.getSize());
             Preconditions.checkArgument(buf.writerIndex() < this.adjustedMtu, "Packet length was %s but expected %s", buf.writerIndex(), this.adjustedMtu);
             datagram.encode(buf);
             this.channel.write(new DatagramPacket(buf, this.address), this.voidPromise);

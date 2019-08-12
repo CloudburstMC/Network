@@ -138,6 +138,9 @@ public class RakNetServer extends RakNet {
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet) {
+        if (!packet.content().isReadable(16)) {
+            return;
+        }
         // We want to do as many checks as possible before creating a session so memory is not wasted.
         ByteBuf buffer = packet.content();
         if (!RakNetUtils.verifyUnconnectedMagic(buffer)) {
@@ -172,6 +175,9 @@ public class RakNetServer extends RakNet {
     }
 
     private void onUnconnectedPing(ChannelHandlerContext ctx, DatagramPacket packet) {
+        if (!packet.content().isReadable(24)) {
+            return;
+        }
         long pingTime = packet.content().readLong();
         if (!RakNetUtils.verifyUnconnectedMagic(packet.content())) {
             return;
@@ -259,6 +265,10 @@ public class RakNetServer extends RakNet {
                 }
 
                 ByteBuf content = packet.content();
+                if (!content.isReadable()) {
+                    // We have no use for empty packets.
+                    return;
+                }
                 byte packetId = content.readByte();
 
                 // These packets don't require a session
