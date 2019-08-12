@@ -5,7 +5,7 @@ import com.nukkitx.network.query.enveloped.DirectAddressedQueryPacket;
 import com.nukkitx.network.query.packet.HandshakePacket;
 import com.nukkitx.network.query.packet.StatisticsPacket;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.codec.MessageToMessageCodec;
@@ -21,7 +21,7 @@ public class QueryPacketCodec extends MessageToMessageCodec<DatagramPacket, Dire
     @Override
     protected void encode(ChannelHandlerContext channelHandlerContext, DirectAddressedQueryPacket packet, List<Object> list) throws Exception {
         try {
-            ByteBuf buf = PooledByteBufAllocator.DEFAULT.ioBuffer();
+            ByteBuf buf = ByteBufAllocator.DEFAULT.ioBuffer();
             buf.writeByte(packet.content().getId() & 0xFF);
             packet.content().encode(buf);
             list.add(new DatagramPacket(buf, packet.recipient(), packet.sender()));

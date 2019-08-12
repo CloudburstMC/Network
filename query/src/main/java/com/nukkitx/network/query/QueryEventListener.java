@@ -1,7 +1,7 @@
 package com.nukkitx.network.query;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.ByteBufAllocator;
 import lombok.Value;
 import lombok.experimental.NonFinal;
 
@@ -39,7 +39,7 @@ public interface QueryEventListener {
                 return longStats;
             }
 
-            longStats = PooledByteBufAllocator.DEFAULT.buffer();
+            longStats = ByteBufAllocator.DEFAULT.buffer();
 
             longStats.writeBytes(QueryUtil.LONG_RESPONSE_PADDING_TOP);
 
@@ -86,7 +86,7 @@ public interface QueryEventListener {
                 return shortStats;
             }
 
-            shortStats = PooledByteBufAllocator.DEFAULT.buffer();
+            shortStats = ByteBufAllocator.DEFAULT.buffer();
 
             QueryUtil.writeNullTerminatedString(shortStats, hostname);
             QueryUtil.writeNullTerminatedString(shortStats, gametype);

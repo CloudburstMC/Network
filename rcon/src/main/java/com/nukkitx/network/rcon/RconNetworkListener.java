@@ -8,7 +8,7 @@ import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.EventLoops;
 import com.nukkitx.network.util.NetworkThreadFactory;
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.socket.SocketChannel;
@@ -37,7 +37,7 @@ public class RconNetworkListener extends ChannelInitializer<SocketChannel> imple
         this.password = password;
         this.address = new InetSocketAddress(address, port);
 
-        bootstrap = new ServerBootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT).handler(this);
+        bootstrap = new ServerBootstrap().option(ChannelOption.ALLOCATOR, ByteBufAllocator.DEFAULT).handler(this);
 
         Bootstraps.setupServerBootstrap(bootstrap);
         this.bootstrap.group(EventLoops.commonGroup());

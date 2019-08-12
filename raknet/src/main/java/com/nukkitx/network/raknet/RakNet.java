@@ -4,7 +4,7 @@ import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -34,7 +34,7 @@ public abstract class RakNet implements AutoCloseable {
         this.bindAddress = bindAddress;
         this.eventLoopGroup = eventLoopGroup;
 
-        this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+        this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, ByteBufAllocator.DEFAULT);
 
         Bootstraps.setupBootstrap(this.bootstrap, true);
         this.bootstrap.group(eventLoopGroup);
