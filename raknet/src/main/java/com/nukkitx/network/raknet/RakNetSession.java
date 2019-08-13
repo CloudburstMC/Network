@@ -619,7 +619,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void disconnect(DisconnectReason reason) {
-        if (this.isClosed()) {
+        if (this.closed) {
             return;
         }
         this.sendDisconnectionNotification();
@@ -633,7 +633,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void close(DisconnectReason reason) {
-        this.checkForClosed();
+        if (this.closed) {
+            return;
+        }
         this.closed = true;
         this.state = RakNetState.UNCONNECTED;
         this.onClose();
