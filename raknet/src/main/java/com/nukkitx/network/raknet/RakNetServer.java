@@ -175,13 +175,13 @@ public class RakNetServer extends RakNet {
     }
 
     private void onUnconnectedPing(ChannelHandlerContext ctx, DatagramPacket packet) {
-        if (!packet.content().isReadable(24)) {
+        if (!packet.content().isReadable(8)) { // NetEase has only 8 readable bytes instead of 24 readable bytes.
             return;
         }
         long pingTime = packet.content().readLong();
-        if (!RakNetUtils.verifyUnconnectedMagic(packet.content())) {
-            return;
-        }
+        //if (!RakNetUtils.verifyUnconnectedMagic(packet.content())) {
+        //    return;
+        //}
 
         byte[] userData = null;
 
