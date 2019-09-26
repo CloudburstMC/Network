@@ -136,24 +136,12 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     private void deinitialize() {
-        this.slidingWindow = null;
-
-        this.reliableDatagramQueue = null;
-        this.orderReadIndex = null;
-        this.orderWriteIndex = null;
-        this.sequenceReadIndex = null;
-        this.sequenceWriteIndex = null;
-
-        RoundRobinArray<SplitPacketHelper> splitPackets = this.splitPackets;
-        this.splitPackets = null;
         // Perform resource clean up.
-        if (splitPackets != null) {
-            splitPackets.forEach(ReferenceCountUtil::release);
+        if (this.splitPackets != null) {
+            this.splitPackets.forEach(ReferenceCountUtil::release);
         }
-        ConcurrentMap<Integer, RakNetDatagram> sentDatagrams = this.sentDatagrams;
-        this.sentDatagrams = null;
-        if (sentDatagrams != null) {
-            sentDatagrams.values().forEach(ReferenceCountUtil::release);
+        if (this.sentDatagrams != null) {
+            this.sentDatagrams.values().forEach(ReferenceCountUtil::release);
         }
         if (this.orderingLock != null) {
             this.orderingLock.lock();
@@ -181,7 +169,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 if (outgoingPackets != null) {
                     EncapsulatedPacket packet;
                     while ((packet = outgoingPackets.poll()) != null) {
-                        packet.release(packet.refCnt()); // Remove all references.
+                        packet.release();
                     }
                 }
                 this.initHeapWeights();
@@ -189,11 +177,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 this.outgoingLock.unlock();
             }
         }
-
-        this.incomingAcks = null;
-        this.incomingNaks = null;
-        this.outgoingAcks = null;
-        this.outgoingNaks = null;
     }
 
     public InetSocketAddress getAddress() {

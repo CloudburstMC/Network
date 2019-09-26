@@ -7,7 +7,7 @@
     <groupId>com.nukkitx.network</groupId>
     <artifactId>network-parent</artifactId>
     <packaging>pom</packaging>
-    <version>1.6.13</version>
+    <version>1.6.14</version>
     <inceptionYear>2018</inceptionYear>
     <url>https://github.com/NukkitX/Network</url>
 
@@ -41,7 +41,7 @@
 
     <scm>
         <connection>scm:git:https://github.com/NukkitX/Network.git</connection>
-        <developerConnection>scm:git:git@github.com:NukkitX/Network.git</developerConnection>
+        <developerConnection>scm:git:ssh://github.com:NukkitX/Network.git</developerConnection>
         <url>https://github.com/NukkitX/Network</url>
     </scm>
 
