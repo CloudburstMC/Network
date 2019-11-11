@@ -8,7 +8,10 @@ import io.netty.channel.Channel;
 import io.netty.channel.EventLoop;
 
 import javax.annotation.ParametersAreNonnullByDefault;
+import java.net.Inet6Address;
 import java.net.InetSocketAddress;
+
+import static com.nukkitx.network.raknet.RakNetConstants.UDP_HEADER_SIZE;
 
 @ParametersAreNonnullByDefault
 public class RakNetClientSession extends RakNetSession {
@@ -154,7 +157,7 @@ public class RakNetClientSession extends RakNetSession {
     private void onConnectionRequestAccepted(ByteBuf buffer) {
         InetSocketAddress address = NetworkUtils.readAddress(buffer);
         int systemIndex = buffer.readUnsignedShort();
-        while (buffer.readableBytes() > 16) {
+        while (buffer.isReadable(16)) {
             NetworkUtils.readAddress(buffer);
         }
         long pongTime = buffer.readLong();
@@ -169,7 +172,8 @@ public class RakNetClientSession extends RakNetSession {
         buffer.writeByte(RakNetConstants.ID_OPEN_CONNECTION_REQUEST_1);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeByte(this.rakNet.protocolVersion);
-        buffer.writeZero(mtuSize - 46);
+        buffer.writeZero(mtuSize - 1 - 16 - 1 - (this.address.getAddress() instanceof Inet6Address ? 40 : 20)
+                - UDP_HEADER_SIZE); // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header));
 
         this.sendDirect(buffer);
     }
