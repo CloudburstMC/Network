@@ -76,7 +76,7 @@ public class RakNetServerSession extends RakNetSession {
 
         if (this.guid != guid || security) {
             this.sendConnectionFailure(RakNetConstants.ID_CONNECTION_REQUEST_FAILED);
-            this.close(DisconnectReason.DISCONNECTED);
+            this.close(DisconnectReason.CONNECTION_REQUEST_FAILED);
             return;
         }
 
