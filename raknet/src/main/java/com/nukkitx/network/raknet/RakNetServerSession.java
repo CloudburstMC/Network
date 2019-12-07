@@ -9,6 +9,8 @@ import io.netty.channel.EventLoop;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
 
+import static com.nukkitx.network.raknet.RakNetConstants.*;
+
 @ParametersAreNonnullByDefault
 public class RakNetServerSession extends RakNetSession {
     private final RakNetServer rakNet;
@@ -23,13 +25,13 @@ public class RakNetServerSession extends RakNetSession {
         short packetId = buffer.readUnsignedByte();
 
         switch (packetId) {
-            case RakNetConstants.ID_OPEN_CONNECTION_REQUEST_2:
+            case ID_OPEN_CONNECTION_REQUEST_2:
                 this.onOpenConnectionRequest2(buffer);
                 break;
-            case RakNetConstants.ID_CONNECTION_REQUEST:
+            case ID_CONNECTION_REQUEST:
                 this.onConnectionRequest(buffer);
                 break;
-            case RakNetConstants.ID_NEW_INCOMING_CONNECTION:
+            case ID_NEW_INCOMING_CONNECTION:
                 this.onNewIncomingConnection();
                 break;
         }
@@ -75,7 +77,7 @@ public class RakNetServerSession extends RakNetSession {
         boolean security = buffer.readBoolean();
 
         if (this.guid != guid || security) {
-            this.sendConnectionFailure(RakNetConstants.ID_CONNECTION_REQUEST_FAILED);
+            this.sendConnectionFailure(ID_CONNECTION_REQUEST_FAILED);
             this.close(DisconnectReason.CONNECTION_REQUEST_FAILED);
             return;
         }
@@ -96,7 +98,7 @@ public class RakNetServerSession extends RakNetSession {
     void sendOpenConnectionReply1() {
         ByteBuf buffer = this.allocateBuffer(28);
 
-        buffer.writeByte(RakNetConstants.ID_OPEN_CONNECTION_REPLY_1);
+        buffer.writeByte(ID_OPEN_CONNECTION_REPLY_1);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.rakNet.guid);
         buffer.writeBoolean(false); // Security
@@ -108,7 +110,7 @@ public class RakNetServerSession extends RakNetSession {
     private void sendOpenConnectionReply2() {
         ByteBuf buffer = this.allocateBuffer(31);
 
-        buffer.writeByte(RakNetConstants.ID_OPEN_CONNECTION_REPLY_2);
+        buffer.writeByte(ID_OPEN_CONNECTION_REPLY_2);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.rakNet.guid);
         NetworkUtils.writeAddress(buffer, this.address);
@@ -131,11 +133,11 @@ public class RakNetServerSession extends RakNetSession {
         boolean ipv6 = this.isIpv6Session();
         ByteBuf buffer = this.allocateBuffer(ipv6 ? 628 : 166);
 
-        buffer.writeByte(RakNetConstants.ID_CONNECTION_REQUEST_ACCEPTED);
+        buffer.writeByte(ID_CONNECTION_REQUEST_ACCEPTED);
         NetworkUtils.writeAddress(buffer, this.address);
         buffer.writeShort(0); // System index
 
-        for (InetSocketAddress socketAddress : ipv6 ? RakNetUtils.LOCAL_IP_ADDRESSES_V6 : RakNetUtils.LOCAL_IP_ADDRESSES_V4) {
+        for (InetSocketAddress socketAddress : ipv6 ? LOCAL_IP_ADDRESSES_V6 : LOCAL_IP_ADDRESSES_V4) {
             NetworkUtils.writeAddress(buffer, socketAddress);
         }
 

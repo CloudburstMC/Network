@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
-import static com.nukkitx.network.raknet.RakNetConstants.UDP_HEADER_SIZE;
+import static com.nukkitx.network.raknet.RakNetConstants.*;
 
 @ParametersAreNonnullByDefault
 public class RakNetServer extends RakNet {
@@ -196,7 +196,7 @@ public class RakNetServer extends RakNet {
 
         ByteBuf buffer = ctx.alloc().ioBuffer(packetLength, packetLength);
 
-        buffer.writeByte(RakNetConstants.ID_UNCONNECTED_PONG);
+        buffer.writeByte(ID_UNCONNECTED_PONG);
         buffer.writeLong(pingTime);
         buffer.writeLong(this.guid);
         RakNetUtils.writeUnconnectedMagic(buffer);
@@ -212,7 +212,7 @@ public class RakNetServer extends RakNet {
 
     private void sendAlreadyConnected(ChannelHandlerContext ctx, InetSocketAddress recipient) {
         ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
-        buffer.writeByte(RakNetConstants.ID_ALREADY_CONNECTED);
+        buffer.writeByte(ID_ALREADY_CONNECTED);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
 
@@ -221,7 +221,7 @@ public class RakNetServer extends RakNet {
 
     private void sendConnectionBanned(ChannelHandlerContext ctx, InetSocketAddress recipient) {
         ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
-        buffer.writeByte(RakNetConstants.ID_CONNECTION_BANNED);
+        buffer.writeByte(ID_CONNECTION_BANNED);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
 
@@ -230,7 +230,7 @@ public class RakNetServer extends RakNet {
 
     private void sendIncompatibleProtocolVersion(ChannelHandlerContext ctx, InetSocketAddress recipient) {
         ByteBuf buffer = ctx.alloc().ioBuffer(26, 26);
-        buffer.writeByte(RakNetConstants.ID_INCOMPATIBLE_PROTOCOL_VERSION);
+        buffer.writeByte(ID_INCOMPATIBLE_PROTOCOL_VERSION);
         buffer.writeByte(this.protocolVersion);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
@@ -240,7 +240,7 @@ public class RakNetServer extends RakNet {
 
     private void sendNoFreeIncomingConnections(ChannelHandlerContext ctx, InetSocketAddress recipient) {
         ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
-        buffer.writeByte(RakNetConstants.ID_NO_FREE_INCOMING_CONNECTIONS);
+        buffer.writeByte(ID_NO_FREE_INCOMING_CONNECTIONS);
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
 
@@ -273,10 +273,10 @@ public class RakNetServer extends RakNet {
 
                 // These packets don't require a session
                 switch (packetId) {
-                    case RakNetConstants.ID_UNCONNECTED_PING:
+                    case ID_UNCONNECTED_PING:
                         RakNetServer.this.onUnconnectedPing(ctx, packet);
                         return;
-                    case RakNetConstants.ID_OPEN_CONNECTION_REQUEST_1:
+                    case ID_OPEN_CONNECTION_REQUEST_1:
                         RakNetServer.this.onOpenConnectionRequest1(ctx, packet);
                         return;
                 }

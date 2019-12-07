@@ -1,5 +1,7 @@
 package com.nukkitx.network.raknet;
 
+import static com.nukkitx.network.raknet.RakNetConstants.*;
+
 public class RakNetSlidingWindow {
     private final int mtu;
     private double cwnd;
@@ -94,12 +96,12 @@ public class RakNetSlidingWindow {
 
     public long getRtoForRetransmission() {
         if (this.estimatedRTT == -1) {
-            return RakNetConstants.CC_MAXIMUM_THRESHOLD;
+            return CC_MAXIMUM_THRESHOLD;
         }
 
-        long threshold = (long) ((2.0D * this.estimatedRTT + 4.0D * this.deviationRTT) + RakNetConstants.CC_ADDITIONAL_VARIANCE);
+        long threshold = (long) ((2.0D * this.estimatedRTT + 4.0D * this.deviationRTT) + CC_ADDITIONAL_VARIANCE);
 
-        return threshold > RakNetConstants.CC_MAXIMUM_THRESHOLD ? RakNetConstants.CC_MAXIMUM_THRESHOLD : threshold;
+        return threshold > CC_MAXIMUM_THRESHOLD ? CC_MAXIMUM_THRESHOLD : threshold;
     }
 
     public double getRTT() {
@@ -109,14 +111,14 @@ public class RakNetSlidingWindow {
     public boolean shouldSendAcks(long curTime) {
         long rto = this.getSenderRtoForAck();
 
-        return rto == -1 || curTime >= this.oldestUnsentAck + RakNetConstants.CC_SYN;
+        return rto == -1 || curTime >= this.oldestUnsentAck + CC_SYN;
     }
 
     public long getSenderRtoForAck() {
         if (this.lastRTT == -1) {
             return -1;
         } else {
-            return (long) (this.lastRTT + RakNetConstants.CC_SYN);
+            return (long) (this.lastRTT + CC_SYN);
         }
     }
 }

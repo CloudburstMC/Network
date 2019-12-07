@@ -13,6 +13,8 @@ import java.net.InetSocketAddress;
 import java.util.Iterator;
 import java.util.concurrent.*;
 
+import static com.nukkitx.network.raknet.RakNetConstants.*;
+
 @ParametersAreNonnullByDefault
 public class RakNetClient extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
@@ -51,7 +53,7 @@ public class RakNetClient extends RakNet {
             throw new IllegalStateException("Session has already been created");
         }
 
-        this.session = new RakNetClientSession(this, address, this.channel, RakNetConstants.MAXIMUM_MTU_SIZE,
+        this.session = new RakNetClientSession(this, address, this.channel, MAXIMUM_MTU_SIZE,
                 this.eventLoopGroup.next());
         return this.session;
     }
@@ -117,7 +119,7 @@ public class RakNetClient extends RakNet {
 
     private void sendUnconnectedPing(InetSocketAddress recipient) {
         ByteBuf buffer = this.channel.alloc().ioBuffer(23);
-        buffer.writeByte(RakNetConstants.ID_UNCONNECTED_PING);
+        buffer.writeByte(ID_UNCONNECTED_PING);
         buffer.writeLong(System.currentTimeMillis());
         RakNetUtils.writeUnconnectedMagic(buffer);
         buffer.writeLong(this.guid);
@@ -144,7 +146,7 @@ public class RakNetClient extends RakNet {
                 ByteBuf content = packet.content();
                 int packetId = content.readUnsignedByte();
 
-                if (packetId == RakNetConstants.ID_UNCONNECTED_PONG) {
+                if (packetId == ID_UNCONNECTED_PONG) {
                     RakNetClient.this.onUnconnectedPong(packet);
                 } else if (session != null) {
                     content.readerIndex(0);
