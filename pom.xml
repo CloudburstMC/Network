@@ -27,6 +27,14 @@
         <junit.version>5.4.2</junit.version>
     </properties>
 
+    <licenses>
+        <license>
+            <name>The Apache Software License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
     <issueManagement>
         <system>GitHub</system>
         <url>https://github.com/NukkitX/Network/issues</url>
