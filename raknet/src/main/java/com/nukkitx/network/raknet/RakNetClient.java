@@ -54,7 +54,7 @@ public class RakNetClient extends RakNet {
         }
 
         this.session = new RakNetClientSession(this, address, this.channel, MAXIMUM_MTU_SIZE,
-                this.eventLoopGroup.next());
+                this.protocolVersion, this.eventLoopGroup.next());
         return this.session;
     }
 

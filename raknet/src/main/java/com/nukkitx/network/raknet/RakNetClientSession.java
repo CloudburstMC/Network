@@ -19,8 +19,9 @@ public class RakNetClientSession extends RakNetSession {
     private int connectionAttempts;
     private long nextConnectionAttempt;
 
-    RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu, EventLoop eventLoop) {
-        super(address, channel, mtu, eventLoop);
+    RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu,
+                        int protocolVersion, EventLoop eventLoop) {
+        super(address, channel, mtu, protocolVersion, eventLoop);
         this.rakNet = rakNet;
         this.closed = true;
         this.setState(null);
@@ -173,7 +174,7 @@ public class RakNetClientSession extends RakNetSession {
         ByteBuf buffer = this.allocateBuffer(mtuSize);
         buffer.writeByte(ID_OPEN_CONNECTION_REQUEST_1);
         RakNetUtils.writeUnconnectedMagic(buffer);
-        buffer.writeByte(this.rakNet.protocolVersion);
+        buffer.writeByte(this.protocolVersion);
         buffer.writeZero(mtuSize - 1 - 16 - 1 - (this.address.getAddress() instanceof Inet6Address ? 40 : 20)
                 - UDP_HEADER_SIZE); // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header));
 

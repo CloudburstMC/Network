@@ -49,6 +49,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     final InetSocketAddress address;
     private final Channel channel;
     private final ChannelPromise voidPromise;
+    final int protocolVersion;
     final EventLoop eventLoop;
     private int mtu;
     private int adjustedMtu; // Used in datagram calculations
@@ -93,10 +94,11 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private volatile int unackedBytes;
     private volatile long lastMinWeight;
 
-    RakNetSession(InetSocketAddress address, Channel channel, int mtu, EventLoop eventLoop) {
+    RakNetSession(InetSocketAddress address, Channel channel, int mtu, int protocolVersion, EventLoop eventLoop) {
         this.address = address;
         this.channel = channel;
         this.setMtu(mtu);
+        this.protocolVersion = protocolVersion;
         this.eventLoop = eventLoop;
         // We can reuse this instead of creating a new one each time
         this.voidPromise = channel.voidPromise();
@@ -190,6 +192,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     void setMtu(int mtu) {
         this.mtu = RakNetUtils.clamp(mtu, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE);
         this.adjustedMtu = (this.mtu - UDP_HEADER_SIZE) - (this.address.getAddress() instanceof Inet6Address ? 40 : 20);
+    }
+
+    public int getProtocolVersion() {
+        return protocolVersion;
     }
 
     public long getPing() {

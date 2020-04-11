@@ -15,8 +15,9 @@ import static com.nukkitx.network.raknet.RakNetConstants.*;
 public class RakNetServerSession extends RakNetSession {
     private final RakNetServer rakNet;
 
-    RakNetServerSession(RakNetServer rakNet, InetSocketAddress remoteAddress, Channel channel, int mtu, EventLoop eventLoop) {
-        super(remoteAddress, channel, mtu, eventLoop);
+    RakNetServerSession(RakNetServer rakNet, InetSocketAddress remoteAddress, Channel channel, int mtu,
+                        int protocolVersion, EventLoop eventLoop) {
+        super(remoteAddress, channel, mtu, protocolVersion, eventLoop);
         this.rakNet = rakNet;
     }
 

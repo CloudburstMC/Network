@@ -45,14 +45,11 @@ public class RakNetConstants {
     public static final byte FLAG_PACKET_PAIR = (byte) 0b00010000;
     public static final byte FLAG_CONTINUOUS_SEND = (byte) 0b00001000;
     public static final byte FLAG_NEEDS_B_AND_AS = (byte) 0b00000100;
-    /**
-     *
-     */
-    public static final byte ID_CONNECTED_PING = (byte) 0x00;
 
     /*
         Packet IDs
      */
+    public static final short ID_CONNECTED_PING = 0x00;
     public static final short ID_UNCONNECTED_PING = 0x01;
     public static final short ID_UNCONNECTED_PING_OPEN_CONNECTIONS = 0x02;
     public static final short ID_CONNECTED_PONG = 0x03;
@@ -76,6 +73,7 @@ public class RakNetConstants {
     public static final short ID_UNCONNECTED_PONG = 0x1c;
     public static final short ID_ADVERTISE_SYSTEM = 0x1d;
     public static final short ID_USER_PACKET_ENUM = 0x80;
+
     /**
      * Magic used to identify RakNet packets
      */
@@ -94,7 +92,6 @@ public class RakNetConstants {
     /*
         IP constants
      */
-
     public static final int IPV4_MESSAGE_SIZE = 7;
     public static final int IPV6_MESSAGE_SIZE = 29;
 
