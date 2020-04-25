@@ -14,6 +14,10 @@ public class VarInts {
         return (n >>> 1) ^ -(n & 1);
     }
 
+    public static void writeUnsignedInt(ByteBuf buffer, int integer) {
+        writeUnsignedInt(buffer, integer & 0x00000000FFFFFFFFL);
+    }
+
     public static void writeUnsignedInt(ByteBuf buffer, long integer) {
         encodeUnsigned(buffer, integer);
     }
