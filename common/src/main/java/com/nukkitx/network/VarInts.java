@@ -5,8 +5,8 @@ import lombok.experimental.UtilityClass;
 
 @UtilityClass
 public class VarInts {
-    public static void writeInt(ByteBuf buffer, int integer) {
-        encodeUnsigned(buffer, (integer << 1) ^ (integer >> 31));
+    public static void writeInt(ByteBuf buffer, int value) {
+        encodeUnsigned(buffer, (value << 1) ^ (value >> 31));
     }
 
     public static int readInt(ByteBuf buffer) {
@@ -14,20 +14,16 @@ public class VarInts {
         return (n >>> 1) ^ -(n & 1);
     }
 
-    public static void writeUnsignedInt(ByteBuf buffer, int integer) {
-        writeUnsignedInt(buffer, integer & 0x00000000FFFFFFFFL);
-    }
-
-    public static void writeUnsignedInt(ByteBuf buffer, long integer) {
-        encodeUnsigned(buffer, integer);
+    public static void writeUnsignedInt(ByteBuf buffer, int value) {
+        encodeUnsigned(buffer, value & 0xFFFFFFFFL);
     }
 
     public static int readUnsignedInt(ByteBuf buffer) {
         return (int) decodeUnsigned(buffer);
     }
 
-    public static void writeLong(ByteBuf buffer, long longInteger) {
-        encodeUnsigned(buffer, (longInteger << 1) ^ (longInteger >> 63));
+    public static void writeLong(ByteBuf buffer, long value) {
+        encodeUnsigned(buffer, (value << 1) ^ (value >> 63));
     }
 
     public static long readLong(ByteBuf buffer) {
@@ -35,8 +31,8 @@ public class VarInts {
         return (n >>> 1) ^ -(n & 1);
     }
 
-    public static void writeUnsignedLong(ByteBuf buffer, long longInteger) {
-        encodeUnsigned(buffer, longInteger);
+    public static void writeUnsignedLong(ByteBuf buffer, long value) {
+        encodeUnsigned(buffer, value);
     }
 
     public static long readUnsignedLong(ByteBuf buffer) {

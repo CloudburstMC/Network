@@ -498,12 +498,12 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             IntRange range;
             while ((range = this.incomingNaks.poll()) != null) {
                 for (int i = range.start; i <= range.end; i++) {
-                    RakNetDatagram datagram = this.sentDatagrams.get(i);
+                    RakNetDatagram datagram = this.sentDatagrams.remove(i);
                     if (datagram != null) {
                         if (log.isTraceEnabled()) {
                             log.trace("NAK'ed datagram {} from {}", datagram.sequenceIndex, this.address);
                         }
-                        this.sendDatagram(datagram.retain(), curTime, false);
+                        this.sendDatagram(datagram, curTime);
                     }
                 }
             }
@@ -555,7 +555,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                         log.trace("Stale datagram {} from {}", datagram.sequenceIndex,
                                 this.address);
                     }
-                    this.sendDatagram(datagram.retain(), curTime, false);
+                    this.sendDatagram(datagram, curTime);
                 }
             }
 
@@ -584,7 +584,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
                     if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
                         // Send full datagram
-                        this.sendDatagram(datagram, curTime, true);
+                        this.sendDatagram(datagram, curTime);
 
                         datagram = new RakNetDatagram(curTime);
 
@@ -595,7 +595,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 }
 
                 if (!datagram.packets.isEmpty()) {
-                    this.sendDatagram(datagram, curTime, true);
+                    this.sendDatagram(datagram, curTime);
                 }
             }
         } finally {
@@ -713,7 +713,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() +
                         ", MTU: " + this.adjustedMtu + ")");
             }
-            this.sendDatagram(datagram, curTime, true);
+            this.sendDatagram(datagram, curTime);
         }
         this.channel.flush();
     }
@@ -793,21 +793,23 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         return packets;
     }
 
-    private void sendDatagram(RakNetDatagram datagram, long time, boolean firstSend) {
+    private void sendDatagram(RakNetDatagram datagram, long time) {
         Preconditions.checkArgument(!datagram.packets.isEmpty(), "RakNetDatagram with no packets");
         try {
-            if (datagram.sequenceIndex == -1) {
-                datagram.sequenceIndex = datagramWriteIndexUpdater.getAndIncrement(this);
-            }
+            int oldIndex = datagram.sequenceIndex;
+            datagram.sequenceIndex = datagramWriteIndexUpdater.getAndIncrement(this);
+
             for (EncapsulatedPacket packet : datagram.packets) {
                 // check if packet is reliable so it can be resent later if a NAK is received.
                 if (packet.reliability != RakNetReliability.UNRELIABLE &&
                         packet.reliability != RakNetReliability.UNRELIABLE_SEQUENCED) {
                     datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
-                    if (firstSend) {
-                        this.sentDatagrams.put(datagram.sequenceIndex, datagram.retain());
+                    if (oldIndex == -1) {
                         unackedBytesUpdater.addAndGet(this, datagram.getSize());
+                    } else {
+                        this.sentDatagrams.remove(oldIndex, datagram);
                     }
+                    this.sentDatagrams.put(datagram.sequenceIndex, datagram.retain()); // Keep for resending
                     break;
                 }
             }
