@@ -51,6 +51,18 @@ public class VarInts {
         throw new ArithmeticException("Varint was too large");
     }
 
+    private static void encodeUnsigned(ByteBuf buffer, int value) {
+        while (true) {
+            if ((value & ~0x7FL) == 0) {
+                buffer.writeByte((int) value);
+                return;
+            } else {
+                buffer.writeByte((byte) (((int) value & 0x7F) | 0x80));
+                value >>>= 7;
+            }
+        }
+    }
+
     private static void encodeUnsigned(ByteBuf buffer, long value) {
         while (true) {
             if ((value & ~0x7FL) == 0) {
