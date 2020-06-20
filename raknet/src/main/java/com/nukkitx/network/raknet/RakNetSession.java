@@ -463,7 +463,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     protected void tick(long curTime) {
-        if (this.isTimedOut()) {
+        if (this.isTimedOut(curTime)) {
             this.close(DisconnectReason.TIMED_OUT);
             return;
         }
@@ -915,14 +915,23 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.lastTouched = System.currentTimeMillis();
     }
 
+    public boolean isStale(long curTime) {
+        return curTime - this.lastTouched >= SESSION_STALE_MS;
+    }
+    
     public boolean isStale() {
-        return System.currentTimeMillis() - this.lastTouched >= SESSION_STALE_MS;
+        return isStale(System.currentTimeMillis());
+    }
+
+    public boolean isTimedOut(long curTime) {
+        return curTime - this.lastTouched >= SESSION_TIMEOUT_MS;
     }
 
     public boolean isTimedOut() {
-        return System.currentTimeMillis() - this.lastTouched >= SESSION_TIMEOUT_MS;
+        return isTimedOut(System.currentTimeMillis());
     }
 
+    
     private void checkForClosed() {
         Preconditions.checkState(!this.closed, "Session already closed");
     }
