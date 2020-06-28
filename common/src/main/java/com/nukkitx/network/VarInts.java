@@ -5,45 +5,46 @@ import lombok.experimental.UtilityClass;
 
 @UtilityClass
 public class VarInts {
+
     public static void writeInt(ByteBuf buffer, int value) {
-        encodeUnsigned(buffer, (value << 1) ^ (value >> 31));
+        encode(buffer, ((value << 1) ^ (value >> 31)) & 0xFFFFFFFFL);
     }
 
     public static int readInt(ByteBuf buffer) {
-        int n = (int) decodeUnsigned(buffer);
+        int n = (int) decode(buffer);
         return (n >>> 1) ^ -(n & 1);
     }
 
     public static void writeUnsignedInt(ByteBuf buffer, int value) {
-        encodeUnsigned(buffer, value & 0xFFFFFFFFL);
+        encode(buffer, value & 0xFFFFFFFFL);
     }
 
     public static int readUnsignedInt(ByteBuf buffer) {
-        return (int) decodeUnsigned(buffer);
+        return (int) decode(buffer);
     }
 
     public static void writeLong(ByteBuf buffer, long value) {
-        encodeUnsigned(buffer, (value << 1) ^ (value >> 63));
+        encode(buffer, (value << 1) ^ (value >> 63));
     }
 
     public static long readLong(ByteBuf buffer) {
-        long n = decodeUnsigned(buffer);
+        long n = decode(buffer);
         return (n >>> 1) ^ -(n & 1);
     }
 
     public static void writeUnsignedLong(ByteBuf buffer, long value) {
-        encodeUnsigned(buffer, value);
+        encode(buffer, value);
     }
 
     public static long readUnsignedLong(ByteBuf buffer) {
-        return decodeUnsigned(buffer);
+        return decode(buffer);
     }
 
-    private static long decodeUnsigned(ByteBuf buffer) {
+    private static long decode(ByteBuf buffer) {
         long result = 0;
         for (int shift = 0; shift < 64; shift += 7) {
             final byte b = buffer.readByte();
-            result |= (long) (b & 0x7F) << shift;
+            result |= (b & 0x7FL) << shift;
             if ((b & 0x80) == 0) {
                 return result;
             }
@@ -51,19 +52,7 @@ public class VarInts {
         throw new ArithmeticException("Varint was too large");
     }
 
-    private static void encodeUnsigned(ByteBuf buffer, int value) {
-        while (true) {
-            if ((value & ~0x7FL) == 0) {
-                buffer.writeByte((int) value);
-                return;
-            } else {
-                buffer.writeByte((byte) (((int) value & 0x7F) | 0x80));
-                value >>>= 7;
-            }
-        }
-    }
-
-    private static void encodeUnsigned(ByteBuf buffer, long value) {
+    private static void encode(ByteBuf buffer, long value) {
         while (true) {
             if ((value & ~0x7FL) == 0) {
                 buffer.writeByte((int) value);
