@@ -9,7 +9,7 @@ import java.net.InetSocketAddress;
 @UtilityClass
 public class RakNetConstants {
 
-    public static final byte RAKNET_PROTOCOL_VERSION = 9; // Mojang's version.
+    public static final byte RAKNET_PROTOCOL_VERSION = 10; // Mojang's version.
     public static final short MINIMUM_MTU_SIZE = 576;
     public static final short MAXIMUM_MTU_SIZE = 1492;
     /**
