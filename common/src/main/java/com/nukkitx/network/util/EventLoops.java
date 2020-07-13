@@ -13,6 +13,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.UtilityClass;
 
+import java.lang.reflect.Method;
 import java.util.concurrent.ThreadFactory;
 import java.util.function.Function;
 
@@ -26,9 +27,24 @@ public final class EventLoops {
     static {
         boolean disableNative = System.getProperties().contains("disableNativeEventLoop");
 
-        if (Epoll.isAvailable() && !disableNative) {
+        boolean hasEpol = false;
+        boolean hasKQueue = false;
+
+        try {
+            Class<?> epoll = Class.forName("io.netty.channel.epoll.Epoll");
+            Method isAvailable = epoll.getDeclaredMethod("isAvailable");
+            hasEpol = (boolean) isAvailable.invoke(null);
+        } catch (Exception ignore) { }
+
+        try {
+            Class<?> kqueue = Class.forName("io.netty.channel.kqueue.KQueue");
+            Method isAvailable = kqueue.getDeclaredMethod("isAvailable");
+            hasKQueue = (boolean) isAvailable.invoke(null);
+        } catch (Exception ignore) { }
+
+        if (hasEpol && !disableNative) {
             CHANNEL_TYPE = ChannelType.EPOLL;
-        } else if (KQueue.isAvailable() && !disableNative) {
+        } else if (hasKQueue && !disableNative) {
             CHANNEL_TYPE = ChannelType.KQUEUE;
         } else {
             CHANNEL_TYPE = ChannelType.NIO;
