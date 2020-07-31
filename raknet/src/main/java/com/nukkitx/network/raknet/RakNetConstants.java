@@ -11,7 +11,7 @@ public class RakNetConstants {
 
     public static final byte RAKNET_PROTOCOL_VERSION = 10; // Mojang's version.
     public static final short MINIMUM_MTU_SIZE = 576;
-    public static final short MAXIMUM_MTU_SIZE = 1492;
+    public static short MAXIMUM_MTU_SIZE = 1400;
     /**
      * Maximum amount of ordering channels as defined in vanilla RakNet.
      */
