@@ -7,7 +7,7 @@
     <groupId>com.nukkitx.network</groupId>
     <artifactId>network-parent</artifactId>
     <packaging>pom</packaging>
-    <version>1.6.19</version>
+    <version>1.6.20</version>
     <inceptionYear>2018</inceptionYear>
     <url>https://github.com/NukkitX/Network</url>
 
