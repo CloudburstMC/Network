@@ -23,7 +23,7 @@ public class RakNetClientSession extends RakNetSession {
                         int protocolVersion, EventLoop eventLoop) {
         super(address, channel, mtu, protocolVersion, eventLoop);
         this.rakNet = rakNet;
-        this.closed = true;
+        this.closed = 1;
         this.setState(null);
     }
 
@@ -95,8 +95,7 @@ public class RakNetClientSession extends RakNetSession {
     }
 
     public void connect() {
-        Preconditions.checkState(this.closed, "Session is already started");
-        this.closed = false;
+        Preconditions.checkState(closedUpdater.compareAndSet(this, 1, 0), "Session is already started");
 
         this.attemptConnection(System.currentTimeMillis());
 

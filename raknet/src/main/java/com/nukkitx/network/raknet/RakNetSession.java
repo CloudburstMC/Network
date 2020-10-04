@@ -27,9 +27,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static com.nukkitx.network.raknet.RakNetConstants.*;
 
@@ -46,6 +44,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "reliabilityWriteIndex");
     private static final AtomicIntegerFieldUpdater<RakNetSession> unackedBytesUpdater =
             AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "unackedBytes");
+    static final AtomicIntegerFieldUpdater<RakNetSession> closedUpdater =
+            AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "closed");
     final InetSocketAddress address;
     private final Channel channel;
     private final ChannelPromise voidPromise;
@@ -56,8 +56,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     long guid;
     private volatile RakNetState state = RakNetState.UNCONNECTED;
     private volatile long lastTouched = System.currentTimeMillis();
-    volatile boolean closed = false;
-    private final ReadWriteLock sessionLock = new ReentrantReadWriteLock(true);
+    volatile int closed = 0;
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakNetSlidingWindow slidingWindow;
@@ -253,7 +252,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     void onDatagram(DatagramPacket datagram) {
-        if (!datagram.sender().equals(this.address) || this.closed) {
+        if (!datagram.sender().equals(this.address) || this.isClosed()) {
             // Somehow we have received a datagram from the wrong peer...
             return;
         }
@@ -456,7 +455,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     final void onTick(long curTime) {
-        if (this.closed) {
+        if (this.isClosed()) {
             return;
         }
         this.tick(curTime);
@@ -611,7 +610,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void disconnect(DisconnectReason reason) {
-        if (this.closed) {
+        if (this.isClosed()) {
             return;
         }
         this.sendDisconnectionNotification();
@@ -625,12 +624,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void close(DisconnectReason reason) {
-        this.sessionLock.writeLock().lock();
-        try {
-            if (this.closed) {
-                return;
-            }
-            this.closed = true;
+        if (!closedUpdater.compareAndSet(this, 0, 1)) {
+            return;
+        }
+        this.eventLoop.execute(() -> {
             this.state = RakNetState.UNCONNECTED;
             this.onClose();
             if (log.isTraceEnabled()) {
@@ -642,9 +639,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             if (this.listener != null) {
                 this.listener.onDisconnect(reason);
             }
-        } finally {
-            this.sessionLock.writeLock().unlock();
-        }
+        });
     }
 
     protected void onClose() {
@@ -673,16 +668,15 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public void send(ByteBuf buf, RakNetPriority priority, RakNetReliability reliability, @Nonnegative int orderingChannel) {
-        this.sessionLock.readLock().lock();
         try {
-            if (closed || state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+            if (isClosed() || state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
                 // Session is not ready for RakNet datagrams.
                 return;
             }
             EncapsulatedPacket[] packets = this.createEncapsulated(buf, priority, reliability, orderingChannel);
 
             if (priority == RakNetPriority.IMMEDIATE) {
-                this.sendImmediate(packets);
+                this.eventLoop.execute(() -> this.sendImmediate(packets));
                 return;
             }
 
@@ -698,7 +692,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 this.outgoingLock.unlock();
             }
         } finally {
-            this.sessionLock.readLock().unlock();
             buf.release();
         }
     }
@@ -933,11 +926,11 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     
     private void checkForClosed() {
-        Preconditions.checkState(!this.closed, "Session already closed");
+        Preconditions.checkState(!this.isClosed(), "Session already closed");
     }
 
     public boolean isClosed() {
-        return this.closed;
+        return this.closed != 1;
     }
 
     public abstract RakNet getRakNet();

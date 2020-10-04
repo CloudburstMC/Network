@@ -163,7 +163,7 @@ public class RakNetServer extends RakNet {
         } else {
             // Passed all checks. Now create the session and send the first reply.
             session = new RakNetServerSession(this, packet.sender(), ctx.channel(), mtu, protocolVersion,
-                    this.eventLoopGroup.next());
+                    ctx.channel().eventLoop());
             session.setState(RakNetState.INITIALIZING);
             if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
                 session.sendOpenConnectionReply1();
