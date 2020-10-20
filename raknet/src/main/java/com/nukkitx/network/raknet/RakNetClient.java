@@ -10,8 +10,12 @@ import lombok.RequiredArgsConstructor;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 import static com.nukkitx.network.raknet.RakNetConstants.*;
 
@@ -20,6 +24,8 @@ public class RakNetClient extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
     private final ClientDatagramHandler handler = new ClientDatagramHandler();
     private final ConcurrentMap<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
+    private final Set<Consumer<Throwable>> exceptionHandlers = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
     RakNetClientSession session;
     private Channel channel;
 
@@ -77,6 +83,15 @@ public class RakNetClient extends RakNet {
         this.sendUnconnectedPing(address);
 
         return pongFuture;
+    }
+
+    public void addExceptionHandler(Consumer<Throwable> handler) {
+        Objects.requireNonNull(handler, "clientExceptionHandler");
+        this.exceptionHandlers.add(handler);
+    }
+
+    public void clearExceptionHandlers() {
+        this.exceptionHandlers.clear();
     }
 
     @Override
@@ -167,6 +182,9 @@ public class RakNetClient extends RakNet {
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             log.error("An exception occurred in RakNet", cause);
+            for (Consumer<Throwable> handler : RakNetClient.this.exceptionHandlers) {
+                handler.accept(cause);
+            }
         }
     }
 }

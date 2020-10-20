@@ -16,14 +16,12 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static com.nukkitx.network.raknet.RakNetConstants.*;
 
@@ -38,6 +36,7 @@ public class RakNetServer extends RakNet {
     private volatile RakNetServerListener listener = null;
     private final int bindThreads;
     private int maxConnections = 1024;
+    private Set<Consumer<Throwable>> exceptionHandler = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public RakNetServer(InetSocketAddress bindAddress) {
         this(bindAddress, 1);
@@ -135,6 +134,15 @@ public class RakNetServer extends RakNet {
                 blockedAddresses.remove();
             }
         }
+    }
+
+    public void addExceptionHandler(Consumer<Throwable> handler) {
+        Objects.requireNonNull(handler, "exceptionHandler");
+        this.exceptionHandler.add(handler);
+    }
+
+    public void clearExceptionHandlers() {
+        this.exceptionHandler.clear();
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet) {
@@ -305,6 +313,9 @@ public class RakNetServer extends RakNet {
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             log.error("An exception occurred in RakNet", cause);
+            for (Consumer<Throwable> exceptionHandler : RakNetServer.this.exceptionHandler) {
+                exceptionHandler.accept(cause);
+            }
         }
     }
 }
