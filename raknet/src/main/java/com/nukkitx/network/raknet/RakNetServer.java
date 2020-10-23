@@ -49,6 +49,7 @@ public class RakNetServer extends RakNet {
     public RakNetServer(InetSocketAddress bindAddress, int bindThreads, EventLoopGroup eventLoopGroup) {
         super(bindAddress, eventLoopGroup);
         this.bindThreads = bindThreads;
+        exceptionHandler.add((t) -> log.error("An exception occurred in RakNet (Server)", t));
     }
 
     @Override
@@ -312,7 +313,7 @@ public class RakNetServer extends RakNet {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.error("An exception occurred in RakNet", cause);
+
             for (Consumer<Throwable> exceptionHandler : RakNetServer.this.exceptionHandler) {
                 exceptionHandler.accept(cause);
             }

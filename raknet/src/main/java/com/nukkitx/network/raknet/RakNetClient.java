@@ -35,6 +35,7 @@ public class RakNetClient extends RakNet {
 
     public RakNetClient(InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
         super(bindAddress, eventLoopGroup);
+        exceptionHandlers.add((t) -> log.error("An exception occurred in RakNet (Client)", t));
     }
 
     @Override
@@ -181,7 +182,6 @@ public class RakNetClient extends RakNet {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.error("An exception occurred in RakNet", cause);
             for (Consumer<Throwable> handler : RakNetClient.this.exceptionHandlers) {
                 handler.accept(cause);
             }
