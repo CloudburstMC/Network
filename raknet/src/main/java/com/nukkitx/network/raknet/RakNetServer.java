@@ -16,14 +16,12 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static com.nukkitx.network.raknet.RakNetConstants.*;
 
@@ -38,6 +36,7 @@ public class RakNetServer extends RakNet {
     private volatile RakNetServerListener listener = null;
     private final int bindThreads;
     private int maxConnections = 1024;
+    private Map<String, Consumer<Throwable>> exceptionHandler = new HashMap<>();
 
     public RakNetServer(InetSocketAddress bindAddress) {
         this(bindAddress, 1);
@@ -50,6 +49,7 @@ public class RakNetServer extends RakNet {
     public RakNetServer(InetSocketAddress bindAddress, int bindThreads, EventLoopGroup eventLoopGroup) {
         super(bindAddress, eventLoopGroup);
         this.bindThreads = bindThreads;
+        exceptionHandler.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Server)", t));
     }
 
     @Override
@@ -135,6 +135,20 @@ public class RakNetServer extends RakNet {
                 blockedAddresses.remove();
             }
         }
+    }
+
+    public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
+        Objects.requireNonNull(handlerId, "handlerId is null (server)");
+        Objects.requireNonNull(handler, "exceptionHandler");
+        this.exceptionHandler.put(handlerId, handler);
+    }
+
+    public void clearExceptionHandlers() {
+        this.exceptionHandler.clear();
+    }
+
+    public void removeExceptionHandler(String handlerId) {
+        this.exceptionHandler.remove(handlerId);
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet) {
@@ -303,7 +317,10 @@ public class RakNetServer extends RakNet {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.error("An exception occurred in RakNet", cause);
+
+            for (Consumer<Throwable> exceptionHandler : RakNetServer.this.exceptionHandler.values()) {
+                exceptionHandler.accept(cause);
+            }
         }
     }
 }

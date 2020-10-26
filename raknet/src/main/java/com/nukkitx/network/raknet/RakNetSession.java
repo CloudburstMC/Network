@@ -88,6 +88,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private Queue<IntRange> outgoingNaks;
     private volatile int unackedBytes;
     private volatile long lastMinWeight;
+    private int sessionTimeout = SESSION_TIMEOUT_MS;
 
     RakNetSession(InetSocketAddress address, Channel channel, int mtu, int protocolVersion) {
         this.address = address;
@@ -812,6 +813,15 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.channel.writeAndFlush(new DatagramPacket(buffer, this.address));
     }
 
+    public int getSessionTimeout(){
+        return sessionTimeout;
+    }
+
+    /** timeout in ms ( 1 second = 1000 ) **/
+    public void setSessionTimeout(int timeout){
+        this.sessionTimeout = timeout;
+    }
+
     /*
         Packet Handlers
      */
@@ -910,7 +920,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public boolean isTimedOut(long curTime) {
-        return curTime - this.lastTouched >= SESSION_TIMEOUT_MS;
+        return curTime - this.lastTouched >= this.sessionTimeout;
     }
 
     public boolean isTimedOut() {

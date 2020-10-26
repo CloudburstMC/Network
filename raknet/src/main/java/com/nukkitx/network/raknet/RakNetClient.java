@@ -10,8 +10,12 @@ import lombok.RequiredArgsConstructor;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 import static com.nukkitx.network.raknet.RakNetConstants.*;
 
@@ -20,6 +24,8 @@ public class RakNetClient extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
     private final ClientDatagramHandler handler = new ClientDatagramHandler();
     private final ConcurrentMap<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
+    private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
+
     RakNetClientSession session;
     private Channel channel;
 
@@ -29,6 +35,7 @@ public class RakNetClient extends RakNet {
 
     public RakNetClient(InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
         super(bindAddress, eventLoopGroup);
+        exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Client)", t));
     }
 
     @Override
@@ -76,6 +83,20 @@ public class RakNetClient extends RakNet {
         this.sendUnconnectedPing(address);
 
         return pongFuture;
+    }
+
+    public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
+        Objects.requireNonNull(handlerId, "handlerId is empty (client)");
+        Objects.requireNonNull(handler, "clientExceptionHandler (handler is null)");
+        this.exceptionHandlers.put(handlerId, handler);
+    }
+
+    public void clearExceptionHandlers() {
+        this.exceptionHandlers.clear();
+    }
+
+    public void removeExceptionHandler(String handlerId) {
+        this.exceptionHandlers.remove(handlerId);
     }
 
     @Override
@@ -169,7 +190,9 @@ public class RakNetClient extends RakNet {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.error("An exception occurred in RakNet", cause);
+            for (Consumer<Throwable> handler : RakNetClient.this.exceptionHandlers.values()) {
+                handler.accept(cause);
+            }
         }
     }
 }
