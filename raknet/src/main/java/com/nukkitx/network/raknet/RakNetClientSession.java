@@ -2,7 +2,6 @@ package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.NetworkUtils;
 import com.nukkitx.network.util.DisconnectReason;
-import com.nukkitx.network.util.Preconditions;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 
@@ -21,8 +20,6 @@ public class RakNetClientSession extends RakNetSession {
     RakNetClientSession(RakNetClient rakNet, InetSocketAddress address, Channel channel, int mtu, int protocolVersion) {
         super(address, channel, mtu, protocolVersion);
         this.rakNet = rakNet;
-        this.closed = 1;
-        this.setState(null);
     }
 
     @Override
@@ -83,21 +80,6 @@ public class RakNetClientSession extends RakNetSession {
 
         this.nextConnectionAttempt = curTime + 1000;
         this.connectionAttempts++;
-    }
-
-    @Override
-    protected void onClose() {
-        if (this.rakNet.session == this) {
-            this.rakNet.session = null;
-        }
-    }
-
-    public void connect() {
-        Preconditions.checkState(closedUpdater.compareAndSet(this, 1, 0), "Session is already started");
-
-        this.attemptConnection(System.currentTimeMillis());
-
-        this.setState(RakNetState.UNCONNECTED);
     }
 
     @Override

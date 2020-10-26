@@ -45,7 +45,7 @@ public class RakNetClient extends RakNet {
         return future;
     }
 
-    public RakNetClientSession create(InetSocketAddress address) {
+    public RakNetClientSession connect(InetSocketAddress address) {
         if (!this.isRunning()) {
             throw new IllegalStateException("RakNet has not been started");
         }
@@ -82,7 +82,11 @@ public class RakNetClient extends RakNet {
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         if (this.session != null) {
-            session.channel.eventLoop().execute(() -> session.onTick(curTime));
+            if (this.session.isClosed()) {
+                this.session = null;
+            } else {
+                this.session.channel.eventLoop().execute(() -> session.onTick(curTime));
+            }
         }
         Iterator<PingEntry> iterator = this.pings.values().iterator();
         while (iterator.hasNext()) {
