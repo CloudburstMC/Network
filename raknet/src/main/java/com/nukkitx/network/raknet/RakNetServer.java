@@ -125,7 +125,7 @@ public class RakNetServer extends RakNet {
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         for (RakNetServerSession session : this.sessionsByAddress.values()) {
-            session.eventLoop.execute(() -> session.onTick(curTime));
+            session.channel.eventLoop().execute(() -> session.onTick(curTime));
         }
         Iterator<Long> blockedAddresses = this.blockAddresses.values().iterator();
         long timeout;
@@ -162,8 +162,7 @@ public class RakNetServer extends RakNet {
             this.sendConnectionBanned(ctx, packet.sender());
         } else {
             // Passed all checks. Now create the session and send the first reply.
-            session = new RakNetServerSession(this, packet.sender(), ctx.channel(), mtu, protocolVersion,
-                    ctx.channel().eventLoop());
+            session = new RakNetServerSession(this, packet.sender(), ctx.channel(), mtu, protocolVersion);
             session.setState(RakNetState.INITIALIZING);
             if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
                 session.sendOpenConnectionReply1();

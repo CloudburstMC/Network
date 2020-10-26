@@ -53,8 +53,7 @@ public class RakNetClient extends RakNet {
             throw new IllegalStateException("Session has already been created");
         }
 
-        this.session = new RakNetClientSession(this, address, this.channel, MAXIMUM_MTU_SIZE,
-                this.protocolVersion, this.eventLoopGroup.next());
+        this.session = new RakNetClientSession(this, address, this.channel, MAXIMUM_MTU_SIZE, this.protocolVersion);
         return this.session;
     }
 
@@ -83,7 +82,7 @@ public class RakNetClient extends RakNet {
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         if (this.session != null) {
-            session.eventLoop.execute(() -> session.onTick(curTime));
+            session.channel.eventLoop().execute(() -> session.onTick(curTime));
         }
         Iterator<PingEntry> iterator = this.pings.values().iterator();
         while (iterator.hasNext()) {

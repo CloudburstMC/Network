@@ -6,8 +6,6 @@ import com.nukkitx.network.util.DisconnectReason;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelPromise;
-import io.netty.channel.EventLoop;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.PlatformDependent;
@@ -47,10 +45,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     static final AtomicIntegerFieldUpdater<RakNetSession> closedUpdater =
             AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "closed");
     final InetSocketAddress address;
-    private final Channel channel;
-    private final ChannelPromise voidPromise;
+    final Channel channel;
     final int protocolVersion;
-    final EventLoop eventLoop;
     private int mtu;
     private int adjustedMtu; // Used in datagram calculations
     long guid;
@@ -93,14 +89,11 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private volatile int unackedBytes;
     private volatile long lastMinWeight;
 
-    RakNetSession(InetSocketAddress address, Channel channel, int mtu, int protocolVersion, EventLoop eventLoop) {
+    RakNetSession(InetSocketAddress address, Channel channel, int mtu, int protocolVersion) {
         this.address = address;
         this.channel = channel;
         this.setMtu(mtu);
         this.protocolVersion = protocolVersion;
-        this.eventLoop = eventLoop;
-        // We can reuse this instead of creating a new one each time
-        this.voidPromise = channel.voidPromise();
     }
 
     final void initialize() {
@@ -627,7 +620,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         if (!closedUpdater.compareAndSet(this, 0, 1)) {
             return;
         }
-        this.eventLoop.execute(() -> {
+        this.channel.eventLoop().execute(() -> {
             this.state = RakNetState.UNCONNECTED;
             this.onClose();
             if (log.isTraceEnabled()) {
@@ -676,7 +669,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             EncapsulatedPacket[] packets = this.createEncapsulated(buf, priority, reliability, orderingChannel);
 
             if (priority == RakNetPriority.IMMEDIATE) {
-                this.eventLoop.execute(() -> this.sendImmediate(packets));
+                this.channel.eventLoop().execute(() -> this.sendImmediate(packets));
                 return;
             }
 
@@ -809,14 +802,14 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             ByteBuf buf = this.allocateBuffer(datagram.getSize());
             Preconditions.checkArgument(buf.writerIndex() < this.adjustedMtu, "Packet length was %s but expected %s", buf.writerIndex(), this.adjustedMtu);
             datagram.encode(buf);
-            this.channel.write(new DatagramPacket(buf, this.address), this.voidPromise);
+            this.channel.write(new DatagramPacket(buf, this.address));
         } finally {
             datagram.release();
         }
     }
 
     void sendDirect(ByteBuf buffer) {
-        this.channel.writeAndFlush(new DatagramPacket(buffer, this.address), this.voidPromise);
+        this.channel.writeAndFlush(new DatagramPacket(buffer, this.address));
     }
 
     /*
@@ -930,7 +923,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public boolean isClosed() {
-        return this.closed != 1;
+        return this.closed != 0;
     }
 
     public abstract RakNet getRakNet();

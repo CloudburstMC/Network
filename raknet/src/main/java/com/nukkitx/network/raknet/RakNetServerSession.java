@@ -4,7 +4,6 @@ import com.nukkitx.network.NetworkUtils;
 import com.nukkitx.network.util.DisconnectReason;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
-import io.netty.channel.EventLoop;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
@@ -16,8 +15,8 @@ public class RakNetServerSession extends RakNetSession {
     private final RakNetServer rakNet;
 
     RakNetServerSession(RakNetServer rakNet, InetSocketAddress remoteAddress, Channel channel, int mtu,
-                        int protocolVersion, EventLoop eventLoop) {
-        super(remoteAddress, channel, mtu, protocolVersion, eventLoop);
+                        int protocolVersion) {
+        super(remoteAddress, channel, mtu, protocolVersion);
         this.rakNet = rakNet;
     }
 
