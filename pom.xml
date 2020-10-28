@@ -7,7 +7,7 @@
     <groupId>com.nukkitx.network</groupId>
     <artifactId>network-parent</artifactId>
     <packaging>pom</packaging>
-    <version>1.6.22-SNAPSHOT</version>
+    <version>1.6.22</version>
     <inceptionYear>2018</inceptionYear>
     <url>https://github.com/NukkitX/Network</url>
 
@@ -54,20 +54,20 @@
     <distributionManagement>
         <repository>
             <id>releases</id>
-            <name>nukkitx-releases</name>
-            <url>https://repo.nukkitx.com/release</url>
+            <name>opencollab-releases</name>
+            <url>https://repo.opencollab.dev/maven-releases</url>
         </repository>
         <snapshotRepository>
             <id>snapshots</id>
-            <name>nukkitx-snapshots</name>
-            <url>https://repo.nukkitx.com/snapshot</url>
+            <name>opencollab-snapshots</name>
+            <url>https://repo.opencollab.dev/maven-snapshots</url>
         </snapshotRepository>
     </distributionManagement>
 
     <repositories>
         <repository>
-            <id>nukkitx-repo-release</id>
-            <url>https://repo.nukkitx.com/release/</url>
+            <id>opencollab-repo-release</id>
+            <url>https://repo.opencollab.dev/release/</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -76,8 +76,8 @@
             </snapshots>
         </repository>
         <repository>
-            <id>nukkitx-repo-snapshot</id>
-            <url>https://repo.nukkitx.com/snapshot/</url>
+            <id>opencollab-repo-snapshot</id>
+            <url>https://repo.opencollab.dev/snapshot/</url>
             <releases>
                 <enabled>false</enabled>
             </releases>
