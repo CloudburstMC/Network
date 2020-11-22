@@ -120,7 +120,7 @@ public class RakNetClient extends RakNet {
     }
 
     private void onUnconnectedPong(DatagramPacket packet) {
-        PingEntry entry = this.pings.get(packet.sender());
+        PingEntry entry = this.pings.remove(packet.sender());
         if (entry == null) {
             return;
         }
@@ -129,6 +129,7 @@ public class RakNetClient extends RakNet {
         long pingTime = content.readLong();
         long guid = content.readLong();
         if (!RakNetUtils.verifyUnconnectedMagic(content)) {
+            entry.future.completeExceptionally(new IllegalArgumentException("Received pong did not contain valid magic"));
             return;
         }
 
