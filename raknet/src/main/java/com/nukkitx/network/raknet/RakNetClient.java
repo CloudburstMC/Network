@@ -102,13 +102,11 @@ public class RakNetClient extends RakNet {
     @Override
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
-        if (this.session != null) {
-            if (this.session.isClosed()) {
-                this.session = null;
-            } else {
-                this.session.channel.eventLoop().execute(() -> session.onTick(curTime));
-            }
+        final RakNetClientSession session = this.session;
+        if (session != null && !session.isClosed()) {
+            session.channel.eventLoop().execute(() -> session.onTick(curTime));
         }
+
         Iterator<PingEntry> iterator = this.pings.values().iterator();
         while (iterator.hasNext()) {
             PingEntry entry = iterator.next();
