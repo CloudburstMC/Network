@@ -954,4 +954,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             }
         }
     }
+
+    public Channel getChannel() {
+        return channel;
+    }
 }
