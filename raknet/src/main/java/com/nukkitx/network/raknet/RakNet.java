@@ -55,7 +55,7 @@ public abstract class RakNet implements AutoCloseable {
                 this.running.compareAndSet(true, false);
             } else {
                 this.closed = false;
-                this.tickFuture = this.eventLoopGroup.scheduleAtFixedRate(this::onTick, 0, 10,
+                this.tickFuture = this.eventLoopGroup.next().scheduleAtFixedRate(this::onTick, 0, 10,
                         TimeUnit.MILLISECONDS);
             }
         });
