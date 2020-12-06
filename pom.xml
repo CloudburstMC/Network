@@ -3,29 +3,23 @@
          xmlns="http://maven.apache.org/POM/4.0.0"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <artifactId>netty-parent</artifactId>
+        <groupId>io.netty</groupId>
+        <version>4.1.51.Final</version>
+    </parent>
 
-    <groupId>com.nukkitx.network</groupId>
-    <artifactId>network-parent</artifactId>
+    <name>CloudburstMC Netty</name>
+    <artifactId>cloudburstmc-netty-parent</artifactId>
     <packaging>pom</packaging>
-    <version>1.6.20</version>
     <inceptionYear>2018</inceptionYear>
-    <url>https://github.com/NukkitX/Network</url>
+    <url>https://github.com/CloudburstMC/Network</url>
 
     <modules>
-        <module>common</module>
-        <module>query</module>
-        <module>raknet</module>
-        <module>rcon</module>
+        <module>transport-raknet</module>
+        <module>codec-query</module>
+        <module>codec-rcon</module>
     </modules>
-
-    <properties>
-        <maven.compiler.source>1.8</maven.compiler.source>
-        <maven.compiler.target>1.8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.build.timestamp.format>HHmm-ddMMyyyy</maven.build.timestamp.format>
-        <netty.version>4.1.43.Final</netty.version>
-        <junit.version>5.4.2</junit.version>
-    </properties>
 
     <licenses>
         <license>
@@ -37,7 +31,7 @@
 
     <issueManagement>
         <system>GitHub</system>
-        <url>https://github.com/NukkitX/Network/issues</url>
+        <url>https://github.com/CloudburstMC/Network/issues</url>
     </issueManagement>
 
     <ciManagement>
@@ -52,6 +46,9 @@
     </scm>
 
     <distributionManagement>
+        <relocation>
+            <groupId>org.cloudburstmc.netty</groupId>
+        </relocation>
         <repository>
             <id>releases</id>
             <name>nukkitx-releases</name>
@@ -86,41 +83,4 @@
             </snapshots>
         </repository>
     </repositories>
-
-    <dependencies>
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <version>1.16.20</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.google.code.findbugs</groupId>
-            <artifactId>jsr305</artifactId>
-            <version>3.0.2</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-api</artifactId>
-            <version>${junit.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-engine</artifactId>
-            <version>${junit.version}</version>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>2.22.1</version>
-            </plugin>
-        </plugins>
-    </build>
 </project>
