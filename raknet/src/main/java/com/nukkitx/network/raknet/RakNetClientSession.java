@@ -137,7 +137,7 @@ public class RakNetClientSession extends RakNetSession {
     private void onConnectionRequestAccepted(ByteBuf buffer) {
         NetworkUtils.readAddress(buffer); // our address
         buffer.readUnsignedShort(); // system index
-        final int required = (this.address.getAddress() instanceof Inet6Address ? IPV6_MESSAGE_SIZE : IPV4_MESSAGE_SIZE) + 16;
+        final int required = IPV4_MESSAGE_SIZE + 16; // Address + 2 * Long - Minimum amount of data
         while (buffer.isReadable(required)) {
             NetworkUtils.readAddress(buffer);
         }
