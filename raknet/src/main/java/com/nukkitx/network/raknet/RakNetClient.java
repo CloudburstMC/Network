@@ -128,6 +128,15 @@ public class RakNetClient extends RakNet {
         }
     }
 
+    @Override
+    public void close() {
+        super.close();
+
+        if (channel != null) {
+            channel.close().syncUninterruptibly();
+        }
+    }
+
     private void onUnconnectedPong(DatagramPacket packet) {
         ByteBuf content = packet.content();
         long pingTime = content.readLong();
