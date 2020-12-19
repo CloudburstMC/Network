@@ -138,11 +138,16 @@ public class RakNetClientSession extends RakNetSession {
         NetworkUtils.readAddress(buffer); // our address
         buffer.readUnsignedShort(); // system index
         final int required = IPV4_MESSAGE_SIZE + 16; // Address + 2 * Long - Minimum amount of data
-        while (buffer.isReadable(required)) {
-            NetworkUtils.readAddress(buffer);
+        long pongTime = 0;
+        try {
+            while (buffer.isReadable(required)) {
+                NetworkUtils.readAddress(buffer);
+            }
+            pongTime = buffer.readLong();
+            buffer.readLong();
+        } catch (IndexOutOfBoundsException ignored) {
+            // Hive sends malformed IPv6 address
         }
-        long pongTime = buffer.readLong();
-        buffer.readLong();
 
         this.sendNewIncomingConnection(pongTime);
 
