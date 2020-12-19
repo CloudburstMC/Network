@@ -1,7 +1,6 @@
 package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ReadOnlyByteBuf;
 import io.netty.channel.ChannelOption;
 
 public class RakChannelOption<T> extends ChannelOption<T> {
@@ -21,7 +20,7 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     /**
      * Unique ID of the RakNet peer sent.
      */
-    public static final ChannelOption<Integer> RAK_GUID =
+    public static final ChannelOption<Long> RAK_GUID =
             valueOf(RakChannelOption.class, "RAK_GUID");
 
     /**
@@ -47,6 +46,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<ByteBuf> RAK_UNCONNECTED_MAGIC =
             valueOf(RakChannelOption.class, "RAK_UNCONNECTED_MAGIC");
+
+    /**
+     * Payload to advertise to unconnected users.
+     */
+    public static final ChannelOption<ByteBuf> RAK_ADVERT =
+            valueOf(RakChannelOption.class, "RAK_ADVERT");
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {

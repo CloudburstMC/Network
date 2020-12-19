@@ -5,6 +5,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.DefaultChannelConfig;
 
+import java.util.Arrays;
 import java.util.Map;
 
 import static org.cloudburstmc.netty.RakNetConstants.DEFAULT_UNCONNECTED_MAGIC;
@@ -19,6 +20,7 @@ public class DefaultRakServerChannelConfig extends DefaultChannelConfig implemen
     private volatile int[] supportedProtocols;
     private volatile int maxConnections;
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
+    private volatile ByteBuf unconnectedAdvert = Unpooled.EMPTY_BUFFER;
 
     public DefaultRakServerChannelConfig(RakServerChannel channel) {
         super(channel);
@@ -106,7 +108,8 @@ public class DefaultRakServerChannelConfig extends DefaultChannelConfig implemen
 
     @Override
     public RakServerChannelConfig setSupportedProtocols(int[] supportedProtocols) {
-        this.supportedProtocols = supportedProtocols;
+        this.supportedProtocols = Arrays.copyOf(supportedProtocols, supportedProtocols.length);
+        Arrays.sort(this.supportedProtocols);
         return this;
     }
 
@@ -132,6 +135,17 @@ public class DefaultRakServerChannelConfig extends DefaultChannelConfig implemen
             throw new IllegalArgumentException("Unconnect magic must at least be 16 bytes");
         }
         this.unconnectedMagic = unconnectedMagic.copy().asReadOnly();
+        return null;
+    }
+
+    @Override
+    public ByteBuf getUnconnectedAdvert() {
+        return this.unconnectedAdvert;
+    }
+
+    @Override
+    public RakServerChannelConfig setUnconnectedAdvert(ByteBuf unconnectedAdvert) {
+        this.unconnectedAdvert = unconnectedAdvert.copy().asReadOnly();
         return null;
     }
 }

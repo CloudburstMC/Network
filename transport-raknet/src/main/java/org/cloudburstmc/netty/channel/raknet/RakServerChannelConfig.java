@@ -23,4 +23,8 @@ public interface RakServerChannelConfig {
     ByteBuf getUnconnectedMagic();
 
     RakServerChannelConfig setUnconnectedMagic(ByteBuf unconnectedMagic);
+
+    ByteBuf getUnconnectedAdvert();
+
+    RakServerChannelConfig setUnconnectedAdvert(ByteBuf unconnectedAdvert);
 }
