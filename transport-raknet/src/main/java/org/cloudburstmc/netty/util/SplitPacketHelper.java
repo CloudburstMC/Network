@@ -1,12 +1,12 @@
 package org.cloudburstmc.netty.util;
 
-import org.cloudburstmc.netty.EncapsulatedPacket;
-import org.cloudburstmc.netty.RakNetSession;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
+import org.cloudburstmc.netty.EncapsulatedPacket;
+import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
 
 import javax.annotation.Nullable;
 
@@ -20,7 +20,7 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
     }
 
     @Nullable
-    public EncapsulatedPacket add(EncapsulatedPacket packet, RakNetSession session) {
+    public EncapsulatedPacket add(EncapsulatedPacket packet, RakSessionCodec session) {
         Preconditions.checkNotNull(packet, "packet");
         Preconditions.checkArgument(packet.isSplit(), "packet is not split");
         Preconditions.checkState(this.refCnt() > 0, "packet has been released");

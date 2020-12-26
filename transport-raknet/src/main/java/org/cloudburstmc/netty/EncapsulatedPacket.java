@@ -4,9 +4,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.ReferenceCounted;
 import io.netty.util.internal.ObjectPool;
-import lombok.AccessLevel;
-import lombok.Data;
-import lombok.Setter;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 
@@ -45,7 +42,7 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     }
 
     public EncapsulatedPacket fromSplit(ByteBuf reassembled) {
-        EncapsulatedPacket packet = new EncapsulatedPacket();
+        EncapsulatedPacket packet = newInstance();
         packet.reliability = this.reliability;
         packet.reliabilityIndex = this.reliabilityIndex;
         packet.sequenceIndex = this.sequenceIndex;

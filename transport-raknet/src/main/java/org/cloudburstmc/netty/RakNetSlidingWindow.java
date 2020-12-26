@@ -12,19 +12,20 @@ public class RakNetSlidingWindow {
     private long oldestUnsentAck;
     private long nextCongestionControlBlock;
     private boolean backoffThisBlock;
+    private int unackedBytes;
 
     public RakNetSlidingWindow(int mtu) {
         this.mtu = mtu;
         this.cwnd = mtu;
     }
 
-    public int getRetransmissionBandwidth(int unAckedBytes) {
-        return unAckedBytes;
+    public int getRetransmissionBandwidth() {
+        return unackedBytes;
     }
 
-    public int getTransmissionBandwidth(int unAckedBytes) {
-        if (unAckedBytes <= this.cwnd) {
-            return (int) (this.cwnd - unAckedBytes);
+    public int getTransmissionBandwidth() {
+        if (this.unackedBytes <= this.cwnd) {
+            return (int) (this.cwnd - this.unackedBytes);
         } else {
             return 0;
         }
@@ -56,8 +57,10 @@ public class RakNetSlidingWindow {
         }
     }
 
-    public void onAck(long rtt, long sequenceIndex, long curSequenceIndex) {
+    public void onAck(long curTime, RakDatagramPacket datagram, long curSequenceIndex) {
+        long rtt = curTime - datagram.sendTime;
         this.lastRTT = rtt;
+        this.unackedBytes -= datagram.getSize();
 
         if (this.estimatedRTT == -1) {
             this.estimatedRTT = rtt;
@@ -68,7 +71,7 @@ public class RakNetSlidingWindow {
             this.deviationRTT += 0.5 * (Math.abs(difference) - this.deviationRTT);
         }
 
-        boolean isNewCongestionControlPeriod = sequenceIndex > this.nextCongestionControlBlock;
+        boolean isNewCongestionControlPeriod = datagram.sequenceIndex > this.nextCongestionControlBlock;
 
         if (isNewCongestionControlPeriod) {
             this.backoffThisBlock = false;
@@ -84,6 +87,10 @@ public class RakNetSlidingWindow {
         } else if (isNewCongestionControlPeriod) {
             this.cwnd += this.mtu * this.mtu / this.cwnd;
         }
+    }
+
+    public void onReliableSend(RakDatagramPacket datagram) {
+        this.unackedBytes += datagram.getSize();
     }
 
     public boolean isInSlowStart() {
@@ -120,5 +127,9 @@ public class RakNetSlidingWindow {
         } else {
             return (long) (this.lastRTT + CC_SYN);
         }
+    }
+
+    public int getUnackedBytes() {
+        return unackedBytes;
     }
 }

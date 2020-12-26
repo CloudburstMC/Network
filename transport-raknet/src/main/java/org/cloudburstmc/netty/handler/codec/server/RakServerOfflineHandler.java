@@ -1,14 +1,16 @@
-package org.cloudburstmc.netty.handler.codec;
+package org.cloudburstmc.netty.handler.codec.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.util.ReferenceCountUtil;
 import org.cloudburstmc.netty.RakNetUtils;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannelConfig;
+import org.cloudburstmc.netty.handler.codec.RakDatagramCodec;
 
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
@@ -17,17 +19,50 @@ import java.util.Arrays;
 import static org.cloudburstmc.netty.RakNetConstants.*;
 
 @Sharable
-public class RakServerOfflineMessageHandler extends SimpleChannelInboundHandler<DatagramPacket> {
+public class RakServerOfflineHandler extends ChannelInboundHandlerAdapter {
 
     public static String NAME = "rak-offline-handler";
 
-    private static boolean verifyOfflineMagic(ByteBuf buf, ByteBuf magicBuf) {
-        if (!buf.isReadable(magicBuf.readableBytes())) return false;
-        return ByteBufUtil.equals(buf.readSlice(magicBuf.readableBytes()), magicBuf);
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        boolean release = true;
+        try {
+            if (msg instanceof DatagramPacket && isRakNet(ctx, (DatagramPacket) msg)) {
+                channelRead0(ctx, (DatagramPacket) msg);
+            } else {
+                release = false;
+                ctx.fireChannelRead(msg);
+            }
+        } finally {
+            if (release) {
+                ReferenceCountUtil.release(msg);
+            }
+        }
     }
 
-    @Override
-    protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) throws Exception {
+    private boolean isRakNet(ChannelHandlerContext ctx, DatagramPacket packet) {
+        ByteBuf buf = packet.content();
+        int startIndex = buf.readerIndex();
+        try {
+
+            if (!buf.isReadable()) return false; // No packet ID
+            int packetId = buf.readUnsignedByte();
+
+            if (packetId == ID_UNCONNECTED_PING && buf.isReadable(8)) {
+                buf.readLong();
+            }
+
+            ByteBuf magicBuf = ((RakServerChannelConfig) ctx.channel().config()).getUnconnectedMagic();
+
+            if (!buf.isReadable(magicBuf.readableBytes())) return false; // Invalid magic
+
+            return ByteBufUtil.equals(buf.readSlice(magicBuf.readableBytes()), magicBuf);
+        } finally {
+            buf.readerIndex(startIndex);
+        }
+    }
+
+    private void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) throws Exception {
         ByteBuf buf = packet.content();
         if (buf.isReadable()) return; // Empty packet?
         short packetId = buf.readUnsignedByte();
@@ -37,9 +72,8 @@ public class RakServerOfflineMessageHandler extends SimpleChannelInboundHandler<
 
         switch (packetId) {
             case ID_UNCONNECTED_PING:
-                if (!buf.isReadable(8)) return;
                 long pingTime = buf.readLong();
-                if (!verifyOfflineMagic(buf, magicBuf)) return;
+                buf.skipBytes(magicBuf.readableBytes()); // We have already verified this
 
                 // Send ping
                 ByteBuf advertBuf = ((RakServerChannelConfig) ctx.channel().config()).getUnconnectedAdvert();
@@ -54,7 +88,7 @@ public class RakServerOfflineMessageHandler extends SimpleChannelInboundHandler<
                 ctx.writeAndFlush(outBuf);
                 break;
             case ID_OPEN_CONNECTION_REQUEST_1:
-                if (!verifyOfflineMagic(buf, magicBuf)) return;
+                buf.skipBytes(magicBuf.readableBytes()); // We have already verified this
                 int protocolVersion = buf.readUnsignedByte();
                 int mtu = buf.readableBytes() + 1 + 16 + 1 + (packet.sender().getAddress() instanceof Inet6Address ? 40 : 20)
                         + UDP_HEADER_SIZE; // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
@@ -77,7 +111,7 @@ public class RakServerOfflineMessageHandler extends SimpleChannelInboundHandler<
                 ctx.writeAndFlush(outBuf);
                 break;
             case ID_OPEN_CONNECTION_REQUEST_2:
-                if (!verifyOfflineMagic(buf, magicBuf)) return;
+                buf.skipBytes(magicBuf.readableBytes()); // We have already verified this
                 // TODO: Verify address matches?
                 InetSocketAddress serverAddress = RakNetUtils.readAddress(buf);
                 mtu = buf.readUnsignedShort();
@@ -96,8 +130,7 @@ public class RakServerOfflineMessageHandler extends SimpleChannelInboundHandler<
                 // Setup session
                 Channel channel = ctx.channel();
                 channel.pipeline()
-                        .remove(this)
-                        .addLast(RakDatagramDecoder.INSTANCE, RakDatagramEncoder.INSTANCE);
+                        .addLast(RakDatagramCodec.NAME, RakDatagramCodec.INSTANCE);
                 // TODO: Add the extra handlers
                 break;
         }

@@ -7,6 +7,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.EventLoop;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
+import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
@@ -14,7 +15,7 @@ import java.net.InetSocketAddress;
 import static org.cloudburstmc.netty.RakNetConstants.*;
 
 @ParametersAreNonnullByDefault
-public class RakNetServerSession extends RakNetSession {
+public class RakNetServerSession extends RakSessionCodec {
     private final RakNetServer rakNet;
 
     RakNetServerSession(RakNetServer rakNet, InetSocketAddress remoteAddress, Channel channel, int mtu,

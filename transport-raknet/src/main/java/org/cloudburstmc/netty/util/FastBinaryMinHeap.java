@@ -1,95 +1,59 @@
 package org.cloudburstmc.netty.util;
 
+import io.netty.util.AbstractReferenceCounted;
+import io.netty.util.internal.ObjectPool;
+import io.netty.util.internal.ObjectUtil;
 import org.cloudburstmc.netty.RakNetUtils;
 
 import java.util.Arrays;
 import java.util.NoSuchElementException;
-import java.util.Objects;
 
-public class FastBinaryMinHeap<E> {
-    private Object[] heap;
-    public long[] weights;
+public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
+
+    private static final Entry INFIMUM = new Entry(Long.MAX_VALUE);
+    private static final Entry SUPREMUM = new Entry(Long.MIN_VALUE);
+    private static final ObjectPool<Entry> RECYCLER = ObjectPool.newPool(new ObjectPool.ObjectCreator<Entry>() {
+        public Entry newObject(ObjectPool.Handle<Entry> handle) {
+            return new Entry(handle);
+        }
+    });
     private int size;
 
     public FastBinaryMinHeap() {
         this(8);
     }
 
+    private Entry[] heap;
+
     public FastBinaryMinHeap(int initialCapacity) {
-        this.heap = new Object[++initialCapacity];
-        this.weights = new long[initialCapacity];
-        Arrays.fill(this.weights, Long.MAX_VALUE); // infimum
-        this.weights[0] = Long.MIN_VALUE; // supremum
+        this.heap = new Entry[++initialCapacity];
+        Arrays.fill(this.heap, INFIMUM);
+        this.heap[0] = SUPREMUM;
+    }
+
+    private static Entry newEntry(Object element, long weight) {
+        Entry entry = RECYCLER.get();
+        entry.element = element;
+        entry.weight = weight;
+
+        return entry;
     }
 
     private void resize(int capacity) {
         int adjustedSize = this.size + 1;
         int copyLength = Math.min(this.heap.length, adjustedSize);
-        Object[] newHeap = new Object[capacity];
-        long[] newWeights = new long[capacity];
+        Entry[] newHeap = new Entry[capacity];
         System.arraycopy(this.heap, 0, newHeap, 0, copyLength);
-        System.arraycopy(this.weights, 0, newWeights, 0, copyLength);
         if (capacity > adjustedSize) {
-            Arrays.fill(newWeights, adjustedSize, capacity, Long.MAX_VALUE);
+            Arrays.fill(newHeap, adjustedSize, capacity, INFIMUM);
         }
         this.heap = newHeap;
-        this.weights = newWeights;
     }
 
     public void insert(long weight, E element) {
-        Objects.requireNonNull(element, "element");
+        ObjectUtil.checkNotNull(element, "element");
         this.ensureCapacity(this.size + 1);
         this.insert0(weight, element);
-    }
-
-    private void insert0(long weight, E element) {
-        int hole = ++this.size;
-        int pred = hole >> 1;
-        long predWeight = this.weights[pred];
-
-        while (predWeight > weight) {
-            this.weights[hole] = predWeight;
-            this.heap[hole] = this.heap[pred];
-            hole = pred;
-            pred >>= 1;
-            predWeight = this.weights[pred];
-        }
-
-        this.weights[hole] = weight;
-        this.heap[hole] = element;
-    }
-
-    public void insertSeries(long weight, E[] elements) {
-        Objects.requireNonNull(elements, "elements");
-        if (elements.length == 0) return;
-
-        this.ensureCapacity(this.size + elements.length);
-
-        // Try and optimize insertion.
-        boolean optimized = this.size == 0;
-        if (!optimized) {
-            optimized = true;
-            for (int parentIdx = 0, currentIdx = this.size; parentIdx < currentIdx; parentIdx++) {
-                if (weight < this.weights[parentIdx]) {
-                    optimized = false;
-                    break;
-                }
-            }
-        }
-
-        if (optimized) {
-            // Parents are all less than series weight so we can directly insert.
-            for (E element : elements) {
-                Objects.requireNonNull(element, "element");
-                this.heap[++this.size] = element;
-                this.weights[this.size] = weight;
-            }
-        } else {
-            for (E element : elements) {
-                Objects.requireNonNull(element, "element");
-                this.insert0(weight, element);
-            }
-        }
     }
 
     private void ensureCapacity(int size) {
@@ -104,55 +68,104 @@ public class FastBinaryMinHeap<E> {
         return (E) this.heap[1];
     }
 
+    private void insert0(long weight, E element) {
+        int hole = ++this.size;
+        int pred = hole >> 1;
+        long predWeight = this.heap[pred].weight;
+
+        while (predWeight > weight) {
+            this.heap[hole] = this.heap[pred];
+            hole = pred;
+            pred >>= 1;
+            predWeight = this.heap[pred].weight;
+        }
+
+        this.heap[hole] = newEntry(element, weight);
+    }
+
+    public void insertSeries(long weight, E[] elements) {
+        ObjectUtil.checkNotNull(elements, "elements");
+        if (elements.length == 0) return;
+
+        this.ensureCapacity(this.size + elements.length);
+
+        // Try and optimize insertion.
+        boolean optimized = this.size == 0;
+        if (!optimized) {
+            optimized = true;
+            for (int parentIdx = 0, currentIdx = this.size; parentIdx < currentIdx; parentIdx++) {
+                if (weight < this.heap[parentIdx].weight) {
+                    optimized = false;
+                    break;
+                }
+            }
+        }
+
+        if (optimized) {
+            // Parents are all less than series weight so we can directly insert.
+            for (E element : elements) {
+                ObjectUtil.checkNotNull(element, "element");
+
+                this.heap[++this.size] = newEntry(element, weight);
+            }
+        } else {
+            for (E element : elements) {
+                ObjectUtil.checkNotNull(element, "element");
+                this.insert0(weight, element);
+            }
+        }
+    }
+
     @SuppressWarnings("unchecked")
     public E poll() {
         if (this.size > 0) {
-            E e = (E) this.heap[1];
+            E e = (E) this.heap[1].element;
             this.remove();
             return e;
         }
         return null;
     }
 
+    public int size() {
+        return this.size;
+    }
+
     public void remove() {
         if (this.size == 0) {
             throw new NoSuchElementException("Heap is empty");
         }
+        this.heap[1].release();
         int hole = 1;
         int succ = 2;
         int sz = this.size;
 
         while (succ < sz) {
-            long weight1 = this.weights[succ];
-            long weight2 = this.weights[succ + 1];
+            Entry entry1 = this.heap[succ];
+            Entry entry2 = this.heap[succ + 1];
 
-            if (weight1 > weight2) {
-                this.weights[hole] = weight2;
-                this.heap[hole] = this.heap[++succ];
+            if (entry1.weight > entry2.weight) {
+                this.heap[hole] = entry2;
+                succ++;
             } else {
-                this.weights[hole] = weight1;
-                this.heap[hole] = this.heap[succ];
+                this.heap[hole] = entry1;
             }
             hole = succ;
             succ <<= 1;
         }
 
         // bubble up rightmost element
-        long bubble = this.weights[sz];
+        Entry bubble = this.heap[sz];
         int pred = hole >> 1;
-        while (this.weights[pred] > bubble) { // must terminate since min at root
-            this.weights[hole] = this.weights[pred];
+        while (this.heap[pred].weight > bubble.weight) { // must terminate since min at root
             this.heap[hole] = this.heap[pred];
             hole = pred;
             pred >>= 1;
         }
 
         // finally move data to hole
-        this.weights[hole] = bubble;
-        this.heap[hole] = this.heap[sz];
+        this.heap[hole] = bubble;
 
-        this.heap[sz] = null; // mark as deleted
-        this.weights[sz] = Long.MAX_VALUE;
+        this.heap[sz] = INFIMUM; // mark as deleted
 
         this.size--;
 
@@ -161,11 +174,48 @@ public class FastBinaryMinHeap<E> {
         }
     }
 
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     public boolean isEmpty() {
         return this.size == 0;
     }
 
-    public int size() {
-        return this.size;
+    @Override
+    protected void deallocate() {
+        while (this.size > 0) {
+            Entry entry = this.heap[1];
+            this.remove();
+            entry.release();
+        }
+    }
+
+    @Override
+    public FastBinaryMinHeap<E> touch(Object hint) {
+        return this;
+    }
+
+    private static class Entry extends AbstractReferenceCounted {
+        private final ObjectPool.Handle<Entry> handle;
+        private Object element;
+        private long weight;
+
+        private Entry(long weight) {
+            this.weight = weight;
+            this.handle = null;
+        }
+
+        private Entry(ObjectPool.Handle<Entry> handle) {
+            this.handle = handle;
+        }
+
+        @Override
+        protected void deallocate() {
+            if (handle == null) return;
+            this.handle.recycle(this);
+        }
+
+        @Override
+        public Entry touch(Object hint) {
+            return this;
+        }
     }
 }

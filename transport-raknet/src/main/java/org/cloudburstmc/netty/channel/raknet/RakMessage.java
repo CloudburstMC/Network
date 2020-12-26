@@ -12,14 +12,18 @@ public final class RakMessage extends DefaultByteBufHolder {
     private final int channel;
 
     public RakMessage(ByteBuf payloadBuffer) {
-        this(RakReliability.RELIABLE_ORDERED, RakPriority.NORMAL, 0, payloadBuffer);
+        this(payloadBuffer, RakReliability.RELIABLE_ORDERED, RakPriority.NORMAL, 0);
     }
 
-    public RakMessage(RakReliability reliability, ByteBuf payloadBuffer) {
-        this(reliability, RakPriority.NORMAL, 0, payloadBuffer);
+    public RakMessage(ByteBuf payloadBuffer, RakReliability reliability) {
+        this(payloadBuffer, reliability, RakPriority.NORMAL, 0);
     }
 
-    public RakMessage(RakReliability reliability, RakPriority priority, int channel, ByteBuf payloadBuffer) {
+    public RakMessage(ByteBuf payloadBuffer, RakReliability reliability, RakPriority priority) {
+        this(payloadBuffer, reliability, priority, 0);
+    }
+
+    public RakMessage(ByteBuf payloadBuffer, RakReliability reliability, RakPriority priority, int channel) {
         super(payloadBuffer);
         this.reliability = reliability;
         this.priority = priority;
