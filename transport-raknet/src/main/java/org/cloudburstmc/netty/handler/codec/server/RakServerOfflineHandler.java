@@ -7,6 +7,7 @@ import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.RakNetUtils;
+import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannelConfig;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
 import org.cloudburstmc.netty.handler.codec.RakDatagramCodec;
@@ -56,23 +57,16 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
     }
 
     private void onUnconnectedPong(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
-        ByteBuf advertBuf = ((RakServerChannelConfig) ctx.channel().config()).getUnconnectedAdvert();
         long pingTime = packet.content().readLong();
-        packet.content().skipBytes(magicBuf.readableBytes()); // We have already verified this
 
-        ByteBuf pongBuffer = ctx.alloc().ioBuffer(magicBuf.readableBytes() + 19 + advertBuf.readableBytes());
-        pongBuffer.writeByte(ID_UNCONNECTED_PONG);
-        pongBuffer.writeLong(pingTime);
-        pongBuffer.writeLong(guid);
-        pongBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
-        pongBuffer.writeShort(advertBuf.readableBytes());
-        pongBuffer.writeBytes(advertBuf, advertBuf.readerIndex(), advertBuf.readableBytes());
-        ctx.writeAndFlush(pongBuffer);
+        // We have already verified this
+        packet.content().skipBytes(magicBuf.readableBytes());
+        ctx.fireChannelRead(new RakPing(pingTime, packet.sender()));
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
         ByteBuf buffer = packet.content();
-        // Skin already verified magic
+        // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
         int protocolVersion = buffer.readUnsignedByte();
         // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
@@ -95,7 +89,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
     private void onOpenConnectionRequest2(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
         ByteBuf buffer = packet.content();
-        // Skin already verified magic
+        // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
 
         // TODO: Verify address matches?
