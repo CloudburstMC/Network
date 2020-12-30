@@ -74,7 +74,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
         int[] supportedProtocols = ((RakServerChannelConfig) ctx.channel().config()).getSupportedProtocols();
         if (Arrays.binarySearch(supportedProtocols, protocolVersion) < 0) {
-            this.sendIncompatibleVersion(ctx, protocolVersion, magicBuf, guid);
+            this.sendIncompatibleVersion(ctx, packet.sender(), protocolVersion, magicBuf, guid);
             return;
         }
 
@@ -84,7 +84,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         replyBuffer.writeLong(guid);
         replyBuffer.writeBoolean(false); // Security
         replyBuffer.writeShort(RakNetUtils.clamp(mtu, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE));
-        ctx.writeAndFlush(replyBuffer);
+        ctx.writeAndFlush(new DatagramPacket(replyBuffer, packet.sender()));
     }
 
     private void onOpenConnectionRequest2(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
@@ -105,7 +105,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         RakNetUtils.writeAddress(replyBuffer, packet.recipient());
         replyBuffer.writeShort(mtu);
         replyBuffer.writeBoolean(false); // Security
-        ctx.writeAndFlush(replyBuffer);
+        ctx.writeAndFlush(new DatagramPacket(replyBuffer, packet.sender()));
 
         // Setup session
         Channel channel = ctx.channel();
@@ -113,13 +113,13 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         // TODO: Add the extra handlers
     }
 
-    private void sendIncompatibleVersion(ChannelHandlerContext ctx, int protocolVersion, ByteBuf magicBuf, long guid) {
+    private void sendIncompatibleVersion(ChannelHandlerContext ctx, InetSocketAddress sender, int protocolVersion, ByteBuf magicBuf, long guid) {
         ByteBuf buffer = ctx.alloc().ioBuffer(26, 26);
         buffer.writeByte(ID_INCOMPATIBLE_PROTOCOL_VERSION);
         buffer.writeByte(protocolVersion);
         buffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         buffer.writeLong(guid);
-        ctx.writeAndFlush(buffer);
+        ctx.writeAndFlush(new DatagramPacket(buffer, sender));
     }
 
     private boolean isRakNet(ChannelHandlerContext ctx, DatagramPacket packet) {

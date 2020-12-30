@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannelConfig;
 
@@ -29,6 +30,6 @@ public class RakServerPingHandler extends SimpleChannelInboundHandler<RakPing> {
         pongBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         pongBuffer.writeShort(advertBuf.readableBytes());
         pongBuffer.writeBytes(advertBuf, advertBuf.readerIndex(), advertBuf.readableBytes());
-        ctx.writeAndFlush(pongBuffer);
+        ctx.writeAndFlush(new DatagramPacket(pongBuffer, ping.getSender()));
     }
 }
