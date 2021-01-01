@@ -5,7 +5,7 @@
     <parent>
         <artifactId>network-parent</artifactId>
         <groupId>com.nukkitx.network</groupId>
-        <version>1.6.25-SNAPSHOT</version>
+        <version>1.6.25</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
