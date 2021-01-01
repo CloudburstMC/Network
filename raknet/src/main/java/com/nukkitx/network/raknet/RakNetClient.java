@@ -61,7 +61,8 @@ public class RakNetClient extends RakNet {
             throw new IllegalStateException("Session has already been created");
         }
 
-        this.session = new RakNetClientSession(this, address, this.channel, MAXIMUM_MTU_SIZE, this.protocolVersion);
+        this.session = new RakNetClientSession(this, address, this.channel, this.channel.eventLoop(),
+                MAXIMUM_MTU_SIZE, this.protocolVersion);
         return this.session;
     }
 
@@ -105,7 +106,7 @@ public class RakNetClient extends RakNet {
         final long curTime = System.currentTimeMillis();
         final RakNetClientSession session = this.session;
         if (session != null && !session.isClosed()) {
-            session.channel.eventLoop().execute(() -> session.onTick(curTime));
+            session.eventLoop.execute(() -> session.onTick(curTime));
         }
 
         PongEntry pong;
@@ -193,9 +194,13 @@ public class RakNetClient extends RakNet {
 
                 if (packetId == ID_UNCONNECTED_PONG) {
                     RakNetClient.this.onUnconnectedPong(packet);
-                } else if (session != null) {
+                } else if (session != null && session.address.equals(packet.sender())) {
                     content.readerIndex(0);
-                    session.onDatagram(packet);
+                    if (session.eventLoop.inEventLoop()) {
+                        session.onDatagram(content);
+                    } else {
+                        session.eventLoop.execute(() -> session.onDatagram(content));
+                    }
                 }
             } finally {
                 packet.release();

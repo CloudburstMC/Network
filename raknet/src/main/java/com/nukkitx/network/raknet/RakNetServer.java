@@ -125,7 +125,7 @@ public class RakNetServer extends RakNet {
     protected void onTick() {
         final long curTime = System.currentTimeMillis();
         for (RakNetServerSession session : this.sessionsByAddress.values()) {
-            session.channel.eventLoop().execute(() -> session.onTick(curTime));
+            session.eventLoop.execute(() -> session.onTick(curTime));
         }
         Iterator<Long> blockedAddresses = this.blockAddresses.values().iterator();
         long timeout;
@@ -176,9 +176,10 @@ public class RakNetServer extends RakNet {
             this.sendConnectionBanned(ctx, packet.sender());
         } else if (session == null) {
             // Passed all checks. Now create the session and send the first reply.
-            session = new RakNetServerSession(this, packet.sender(), ctx.channel(), mtu, protocolVersion);
-            session.setState(RakNetState.INITIALIZING);
+            session = new RakNetServerSession(this, packet.sender(), ctx.channel(),
+                    ctx.channel().eventLoop().next(), mtu, protocolVersion);
             if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
+                session.setState(RakNetState.INITIALIZING);
                 session.sendOpenConnectionReply1();
                 if (listener != null) {
                     listener.onSessionCreation(session);
@@ -300,7 +301,11 @@ public class RakNetServer extends RakNet {
                 RakNetServerSession session = RakNetServer.this.sessionsByAddress.get(packet.sender());
 
                 if (session != null) {
-                    session.onDatagram(packet);
+                    if (session.eventLoop.inEventLoop()) {
+                        session.onDatagram(content);
+                    } else {
+                        session.eventLoop.execute(() -> session.onDatagram(content));
+                    }
                 }
                 if (RakNetServer.this.listener != null) {
                     RakNetServer.this.listener.onUnhandledDatagram(ctx, packet);

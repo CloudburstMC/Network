@@ -23,7 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public abstract class RakNet implements AutoCloseable {
     final long guid = ThreadLocalRandom.current().nextLong();
     final Bootstrap bootstrap;
-    final EventLoopGroup eventLoopGroup;
     final InetSocketAddress bindAddress;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private ScheduledFuture<?> tickFuture;
@@ -32,7 +31,6 @@ public abstract class RakNet implements AutoCloseable {
 
     RakNet(InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
         this.bindAddress = bindAddress;
-        this.eventLoopGroup = eventLoopGroup;
 
         this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, ByteBufAllocator.DEFAULT);
 
@@ -55,8 +53,8 @@ public abstract class RakNet implements AutoCloseable {
                 this.running.compareAndSet(true, false);
             } else {
                 this.closed = false;
-                this.tickFuture = this.eventLoopGroup.next().scheduleAtFixedRate(this::onTick, 0, 10,
-                        TimeUnit.MILLISECONDS);
+                this.tickFuture = this.getEventLoopGroup().next().scheduleAtFixedRate(this::onTick,
+                        0, 10, TimeUnit.MILLISECONDS);
             }
         });
         return future;
@@ -100,5 +98,9 @@ public abstract class RakNet implements AutoCloseable {
 
     public long getGuid() {
         return guid;
+    }
+
+    protected EventLoopGroup getEventLoopGroup() {
+        return this.bootstrap.config().group();
     }
 }
