@@ -898,7 +898,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public boolean isClosed() {
-        return this.closed != 0;
+        return closedUpdater.get(this) != 0;
     }
 
     public abstract RakNet getRakNet();

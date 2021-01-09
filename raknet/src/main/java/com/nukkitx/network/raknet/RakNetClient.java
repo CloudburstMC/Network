@@ -36,7 +36,7 @@ public class RakNetClient extends RakNet {
 
     public RakNetClient(InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
         super(bindAddress, eventLoopGroup);
-        exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Client)", t));
+        this.exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Client)", t));
     }
 
     @Override
@@ -93,12 +93,16 @@ public class RakNetClient extends RakNet {
         this.exceptionHandlers.put(handlerId, handler);
     }
 
+    public void removeExceptionHandler(String handlerId) {
+        this.exceptionHandlers.remove(handlerId);
+    }
+
     public void clearExceptionHandlers() {
         this.exceptionHandlers.clear();
     }
 
-    public void removeExceptionHandler(String handlerId) {
-        this.exceptionHandlers.remove(handlerId);
+    public Collection<Consumer<Throwable>> getExceptionHandlers() {
+        return this.exceptionHandlers.values();
     }
 
     @Override
@@ -216,7 +220,7 @@ public class RakNetClient extends RakNet {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            for (Consumer<Throwable> handler : RakNetClient.this.exceptionHandlers.values()) {
+            for (Consumer<Throwable> handler : RakNetClient.this.getExceptionHandlers()) {
                 handler.accept(cause);
             }
         }

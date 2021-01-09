@@ -36,7 +36,7 @@ public class RakNetServer extends RakNet {
     private volatile RakNetServerListener listener = null;
     private final int bindThreads;
     private int maxConnections = 1024;
-    private Map<String, Consumer<Throwable>> exceptionHandler = new HashMap<>();
+    private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
 
     public RakNetServer(InetSocketAddress bindAddress) {
         this(bindAddress, 1);
@@ -49,7 +49,7 @@ public class RakNetServer extends RakNet {
     public RakNetServer(InetSocketAddress bindAddress, int bindThreads, EventLoopGroup eventLoopGroup) {
         super(bindAddress, eventLoopGroup);
         this.bindThreads = bindThreads;
-        exceptionHandler.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Server)", t));
+        this.exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Server)", t));
     }
 
     @Override
@@ -140,15 +140,19 @@ public class RakNetServer extends RakNet {
     public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
         Objects.requireNonNull(handlerId, "handlerId is null (server)");
         Objects.requireNonNull(handler, "exceptionHandler");
-        this.exceptionHandler.put(handlerId, handler);
-    }
-
-    public void clearExceptionHandlers() {
-        this.exceptionHandler.clear();
+        this.exceptionHandlers.put(handlerId, handler);
     }
 
     public void removeExceptionHandler(String handlerId) {
-        this.exceptionHandler.remove(handlerId);
+        this.exceptionHandlers.remove(handlerId);
+    }
+
+    public void clearExceptionHandlers() {
+        this.exceptionHandlers.clear();
+    }
+
+    public Collection<Consumer<Throwable>> getExceptionHandlers() {
+        return this.exceptionHandlers.values();
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet) {
@@ -324,9 +328,8 @@ public class RakNetServer extends RakNet {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-
-            for (Consumer<Throwable> exceptionHandler : RakNetServer.this.exceptionHandler.values()) {
-                exceptionHandler.accept(cause);
+            for (Consumer<Throwable> handler : RakNetServer.this.getExceptionHandlers()) {
+                handler.accept(cause);
             }
         }
     }
