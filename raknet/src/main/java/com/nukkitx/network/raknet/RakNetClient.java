@@ -158,9 +158,12 @@ public class RakNetClient extends RakNet {
     @Override
     public void close() {
         super.close();
+        if (this.session != null && !this.session.isClosed()) {
+            this.session.close();
+        }
 
-        if (channel != null) {
-            channel.close().syncUninterruptibly();
+        if (this.channel != null) {
+            this.channel.close().syncUninterruptibly();
         }
     }
 
