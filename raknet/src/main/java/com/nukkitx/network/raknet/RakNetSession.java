@@ -588,7 +588,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.state = RakNetState.UNCONNECTED;
         this.onClose();
         if (log.isTraceEnabled()) {
-            log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().bindAddress, this.address, reason);
+            log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().getBindAddress(), this.address, reason);
         }
 
         this.deinitialize();

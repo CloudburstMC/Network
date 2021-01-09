@@ -34,6 +34,7 @@ public class RakNetServer extends RakNet {
     private final Set<Channel> channels = new HashSet<>();
     private final Iterator<Channel> channelIterator = new RoundRobinIterator<>(channels);
     private volatile RakNetServerListener listener = null;
+    private final InetSocketAddress bindAddress;
     private final int bindThreads;
     private int maxConnections = 1024;
     private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
@@ -47,8 +48,9 @@ public class RakNetServer extends RakNet {
     }
 
     public RakNetServer(InetSocketAddress bindAddress, int bindThreads, EventLoopGroup eventLoopGroup) {
-        super(bindAddress, eventLoopGroup);
+        super(eventLoopGroup);
         this.bindThreads = bindThreads;
+        this.bindAddress = bindAddress;
         this.exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Server)", t));
     }
 
@@ -96,6 +98,11 @@ public class RakNetServer extends RakNet {
 
     public void setMaxConnections(@Nonnegative int maxConnections) {
         this.maxConnections = maxConnections;
+    }
+
+    @Override
+    public InetSocketAddress getBindAddress() {
+        return this.bindAddress;
     }
 
     public RakNetServerListener getListener() {

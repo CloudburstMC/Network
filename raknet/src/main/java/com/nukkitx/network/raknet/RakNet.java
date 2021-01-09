@@ -21,7 +21,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @ParametersAreNonnullByDefault
 public abstract class RakNet implements AutoCloseable {
-    protected final InetSocketAddress bindAddress;
     protected final long guid = ThreadLocalRandom.current().nextLong();
     protected final Bootstrap bootstrap;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -29,9 +28,7 @@ public abstract class RakNet implements AutoCloseable {
     protected int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
     protected final AtomicBoolean closed = new AtomicBoolean(false);
 
-    RakNet(InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
-        this.bindAddress = bindAddress;
-
+    RakNet(EventLoopGroup eventLoopGroup) {
         this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, ByteBufAllocator.DEFAULT);
         this.bootstrap.group(eventLoopGroup);
         Bootstraps.setupBootstrap(this.bootstrap, true);
@@ -90,9 +87,7 @@ public abstract class RakNet implements AutoCloseable {
         this.protocolVersion = protocolVersion;
     }
 
-    public InetSocketAddress getBindAddress() {
-        return this.bindAddress;
-    }
+    public abstract InetSocketAddress getBindAddress();
 
     public long getGuid() {
         return this.guid;
