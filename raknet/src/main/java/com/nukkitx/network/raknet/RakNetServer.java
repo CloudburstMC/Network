@@ -118,8 +118,8 @@ public class RakNetServer extends RakNet {
     }
 
     @Override
-    public void close() {
-        super.close();
+    public void close(boolean force) {
+        super.close(force);
         for (RakNetServerSession session : this.sessionsByAddress.values()) {
             session.disconnect(DisconnectReason.SHUTTING_DOWN);
         }

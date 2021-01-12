@@ -56,6 +56,10 @@ public abstract class RakNet implements AutoCloseable {
     }
 
     public void close() {
+        this.close(false);
+    }
+
+    public void close(boolean force) {
         this.closed.set(true);
         if (this.tickFuture != null) {
             this.tickFuture.cancel(false);
