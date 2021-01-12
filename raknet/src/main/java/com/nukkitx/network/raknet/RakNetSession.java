@@ -143,7 +143,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 packet.release();
             }
         }
-        this.initHeapWeights();
     }
 
     public InetSocketAddress getAddress() {
