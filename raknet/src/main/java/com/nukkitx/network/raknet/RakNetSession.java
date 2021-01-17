@@ -573,7 +573,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void close(DisconnectReason reason) {
-        if (!closedUpdater.compareAndSet(this, 0, 1)) {
+        if (closedUpdater.get(this) != 0) {
             return;
         }
         if (this.eventLoop.inEventLoop()) {
@@ -584,6 +584,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     private void close0(DisconnectReason reason) {
+        if (!closedUpdater.compareAndSet(this, 0, 1)) {
+            return;
+        }
         this.state = RakNetState.UNCONNECTED;
         this.onClose();
         if (log.isTraceEnabled()) {
@@ -632,7 +635,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     private void send0(ByteBuf buf, RakNetPriority priority, RakNetReliability reliability, @Nonnegative int orderingChannel) {
         try {
-            if (isClosed() || state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+            if (this.isClosed() || state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
                 // Session is not ready for RakNet datagrams.
                 return;
             }
