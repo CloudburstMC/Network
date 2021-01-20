@@ -19,8 +19,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.ProtocolDetectionResult;
 import io.netty.util.CharsetUtil;
 
-import java.net.InetSocketAddress;
-
 /**
  * Decodes an HAProxy proxy protocol header
  *
@@ -63,7 +61,7 @@ public final class ProxyProtocolDecoder implements ProxyProtocolConstants {
     /**
      * Protocol specification version
      */
-    private int version = -1;
+    private int decodingVersion = -1;
 
     /**
      * The latest v2 spec (2014/05/18) allows for additional data to be sent in the proxy protocol header beyond the
@@ -71,28 +69,27 @@ public final class ProxyProtocolDecoder implements ProxyProtocolConstants {
      */
     private final int v2MaxHeaderSize = V2_MAX_LENGTH; // TODO: need to calculate max length if TLVs are desired.
 
-    private ProxyProtocolDecoder() {}
+    private ProxyProtocolDecoder(int version) {
+        this.decodingVersion = version;
+    }
 
-    public static HAProxyMessage decode(ByteBuf packet) {
-        ProxyProtocolDecoder decoder = new ProxyProtocolDecoder();
+    public static HAProxyMessage decode(ByteBuf packet, int version) {
+        if (version == -1) {
+            return null;
+        }
+        ProxyProtocolDecoder decoder = new ProxyProtocolDecoder(version);
         return decoder.decodeHeader(packet);
     }
 
     private HAProxyMessage decodeHeader(ByteBuf in) {
-        if (version == -1) {
-            if ((version = findVersion(in)) == -1) {
-                return null;
-            }
-        }
-
-        final ByteBuf decoded = version == 1 ? decodeLine(in) : decodeStruct(in);
+        final ByteBuf decoded = decodingVersion == 1 ? decodeLine(in) : decodeStruct(in);
         if (decoded == null) {
             return null;
         }
 
         finished = true;
         try {
-            if (version == 1) {
+            if (decodingVersion == 1) {
                 return HAProxyMessage.decodeHeader(decoded.toString(CharsetUtil.US_ASCII));
             } else {
                 return HAProxyMessage.decodeHeader(decoded);
@@ -102,7 +99,7 @@ public final class ProxyProtocolDecoder implements ProxyProtocolConstants {
         }
     }
 
-    private static int findVersion(final ByteBuf buffer) {
+    public static int findVersion(final ByteBuf buffer) {
         final int n = buffer.readableBytes();
         // per spec, the version number is found in the 13th byte
         if (n < 13) {
@@ -142,7 +139,7 @@ public final class ProxyProtocolDecoder implements ProxyProtocolConstants {
     }
 
     private void failOverLimit(String length) {
-        int maxLength = version == 1 ? V1_MAX_LENGTH : v2MaxHeaderSize;
+        int maxLength = decodingVersion == 1 ? V1_MAX_LENGTH : v2MaxHeaderSize;
         throw fail("header length (" + length + ") exceeds the allowed maximum (" + maxLength + ')', null);
     }
 

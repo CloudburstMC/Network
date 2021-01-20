@@ -1,6 +1,7 @@
 package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.raknet.proxy.HAProxyMessage;
+import com.nukkitx.network.raknet.proxy.HAProxyProtocolException;
 import com.nukkitx.network.raknet.proxy.ProxyProtocolDecoder;
 import com.nukkitx.network.raknet.util.RoundRobinIterator;
 import com.nukkitx.network.util.Bootstraps;
@@ -310,22 +311,31 @@ public class RakNetServer extends RakNet {
                 }
 
                 if (useProxyProtocol) {
-                    InetSocketAddress presentAddress;
                     boolean hasSession = sessionsByAddress.containsKey(packet.sender());
-                    if ((presentAddress = proxiedAddresses.get(packet.sender())) == null || !hasSession) {
-                        HAProxyMessage decoded = ProxyProtocolDecoder.decode(content);
-                        if (decoded == null) {
-                            // PROXY header was not present.
-                            return;
-                        }
+                    int detectedVersion = !hasSession ? ProxyProtocolDecoder.findVersion(content) : -1;
+                    InetSocketAddress presentAddress = proxiedAddresses.get(packet.sender());
 
-                        if (hasSession) {
-                            log.trace("{} sent a PROXY header while session was established, ignoring", packet.sender());
+                    if (presentAddress == null && detectedVersion == -1) {
+                        // We haven't received a header from given address before and we couldn't detect a
+                        // PROXY header, ignore.
+                        return;
+                    } else if (presentAddress == null) {
+                        final HAProxyMessage decoded;
+                        try {
+                            if ((decoded = ProxyProtocolDecoder.decode(content, detectedVersion)) == null) {
+                                // PROXY header was not present in the packet, ignore.
+                                return;
+                            }
+                        } catch (HAProxyProtocolException e) {
+                            log.debug("{} sent malformed PROXY header", packet.sender(), e);
                             return;
                         }
 
                         presentAddress = decoded.sourceInetSocketAddress();
-                        log.trace("Got PROXY header: (from {}) {}", packet.sender(), presentAddress);
+                        log.debug("Got PROXY header: (from {}) {}", packet.sender(), presentAddress);
+                        if (log.isDebugEnabled()) {
+                            log.debug("PROXY Headers map size: {}", proxiedAddresses.size());
+                        }
                         proxiedAddresses.put(packet.sender(), presentAddress);
                         return;
                     } else {
