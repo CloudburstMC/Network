@@ -27,6 +27,11 @@ import io.netty.util.ResourceLeakTracker;
 import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.StringUtil;
 
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
+
 /**
  * Message container for decoded HAProxy proxy protocol parameters
  */
@@ -515,5 +520,19 @@ public final class HAProxyMessage extends AbstractReferenceCounted {
                 ", sourcePort: " + sourcePort +
                 ", destinationPort: " + destinationPort +
                 ")";
+    }
+
+    public InetSocketAddress sourceInetSocketAddress() {
+        AddressFamily af = proxiedProtocol.addressFamily();
+        if (af != AddressFamily.AF_IPv4 && af!= AddressFamily.AF_IPv6) {
+            throw new IllegalStateException("Unsupported address family: " + proxiedProtocol.addressFamily());
+        }
+        InetAddress addr;
+        try {
+            addr = Inet4Address.getByName(sourceAddress);
+        } catch (UnknownHostException e) {
+            throw new RuntimeException(e);
+        }
+        return new InetSocketAddress(addr, sourcePort);
     }
 }
