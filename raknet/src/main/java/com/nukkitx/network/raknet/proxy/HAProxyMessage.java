@@ -17,13 +17,9 @@ package com.nukkitx.network.raknet.proxy;
 
 import com.nukkitx.network.raknet.proxy.HAProxyProxiedProtocol.AddressFamily;
 import io.netty.buffer.ByteBuf;
-import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.ByteProcessor;
 import io.netty.util.CharsetUtil;
 import io.netty.util.NetUtil;
-import io.netty.util.ResourceLeakDetector;
-import io.netty.util.ResourceLeakDetectorFactory;
-import io.netty.util.ResourceLeakTracker;
 import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.StringUtil;
 
@@ -35,11 +31,7 @@ import java.net.UnknownHostException;
 /**
  * Message container for decoded HAProxy proxy protocol parameters
  */
-public final class HAProxyMessage extends AbstractReferenceCounted {
-    private static final ResourceLeakDetector<HAProxyMessage> leakDetector =
-            ResourceLeakDetectorFactory.instance().newResourceLeakDetector(HAProxyMessage.class);
-
-    private final ResourceLeakTracker<HAProxyMessage> leak;
+public final class HAProxyMessage {
     private final HAProxyProtocolVersion protocolVersion;
     private final HAProxyCommand command;
     private final HAProxyProxiedProtocol proxiedProtocol;
@@ -89,8 +81,6 @@ public final class HAProxyMessage extends AbstractReferenceCounted {
         this.destinationAddress = destinationAddress;
         this.sourcePort = sourcePort;
         this.destinationPort = destinationPort;
-
-        leak = leakDetector.track(this);
     }
 
     /**
@@ -454,59 +444,6 @@ public final class HAProxyMessage extends AbstractReferenceCounted {
      */
     public int destinationPort() {
         return destinationPort;
-    }
-
-    @Override
-    public HAProxyMessage touch() {
-        tryRecord();
-        return (HAProxyMessage) super.touch();
-    }
-
-    @Override
-    public HAProxyMessage touch(Object hint) {
-        if (leak != null) {
-            leak.record(hint);
-        }
-        return this;
-    }
-
-    @Override
-    public HAProxyMessage retain() {
-        tryRecord();
-        return (HAProxyMessage) super.retain();
-    }
-
-    @Override
-    public HAProxyMessage retain(int increment) {
-        tryRecord();
-        return (HAProxyMessage) super.retain(increment);
-    }
-
-    @Override
-    public boolean release() {
-        tryRecord();
-        return super.release();
-    }
-
-    @Override
-    public boolean release(int decrement) {
-        tryRecord();
-        return super.release(decrement);
-    }
-
-    private void tryRecord() {
-        if (leak != null) {
-            leak.record();
-        }
-    }
-
-    @Override
-    protected void deallocate() {
-        final ResourceLeakTracker<HAProxyMessage> leak = this.leak;
-        if (leak != null) {
-            boolean closed = leak.close(this);
-            assert closed;
-        }
     }
 
     @Override
