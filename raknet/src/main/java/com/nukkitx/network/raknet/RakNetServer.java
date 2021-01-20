@@ -311,14 +311,20 @@ public class RakNetServer extends RakNet {
 
                 if (useProxyProtocol) {
                     InetSocketAddress presentAddress;
-                    if ((presentAddress = proxiedAddresses.get(packet.sender())) == null) {
+                    boolean hasSession = sessionsByAddress.containsKey(packet.sender());
+                    if ((presentAddress = proxiedAddresses.get(packet.sender())) == null || !hasSession) {
                         HAProxyMessage decoded = ProxyProtocolDecoder.decode(content);
                         if (decoded == null) {
                             // PROXY header was not present.
                             return;
                         }
 
-                        presentAddress = InetSocketAddress.createUnresolved(decoded.sourceAddress(), decoded.sourcePort());
+                        if (hasSession) {
+                            log.trace("{} sent a PROXY header while session was established, ignoring", packet.sender());
+                            return;
+                        }
+
+                        presentAddress = decoded.sourceInetSocketAddress();
                         log.trace("Got PROXY header: (from {}) {}", packet.sender(), presentAddress);
                         proxiedAddresses.put(packet.sender(), presentAddress);
                         return;
