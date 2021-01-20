@@ -180,7 +180,13 @@ public class RakNetServer extends RakNet {
                 + UDP_HEADER_SIZE; // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
 
         RakNetServerSession session = this.sessionsByAddress.get(packet.sender());
-        final InetSocketAddress proxiedAddress = useProxyProtocol ? this.proxiedAddresses.get(packet.sender()) : null;
+        final InetSocketAddress clientAddress;
+        final InetSocketAddress proxiedAddress;
+        if (useProxyProtocol && (proxiedAddress = this.proxiedAddresses.get(packet.sender())) != null) {
+            clientAddress = proxiedAddress;
+        } else {
+            clientAddress = packet.sender();
+        }
 
         if (session != null && session.getState() == RakNetState.CONNECTED) {
             this.sendAlreadyConnected(ctx, packet.sender());
@@ -188,9 +194,7 @@ public class RakNetServer extends RakNet {
             this.sendIncompatibleProtocolVersion(ctx, packet.sender());
         } else if (this.maxConnections >= 0 && this.maxConnections <= getSessionCount()) {
             this.sendNoFreeIncomingConnections(ctx, packet.sender());
-        } else if (this.listener != null && !this.listener.onConnectionRequest(packet.sender())) {
-            this.sendConnectionBanned(ctx, packet.sender());
-        } else if (this.listener != null && proxiedAddress != null && !this.listener.onConnectionRequest(proxiedAddress)) {
+        } else if (this.listener != null && !this.listener.onConnectionRequest(packet.sender(), clientAddress)) {
             this.sendConnectionBanned(ctx, packet.sender());
         } else if (session == null) {
             // Passed all checks. Now create the session and send the first reply.
@@ -322,7 +326,8 @@ public class RakNetServer extends RakNet {
                         log.trace("Reusing PROXY header: (from {}) {}", packet.sender(), presentAddress);
                     }
 
-                    if (blockAddresses.containsKey(presentAddress.getAddress())) {
+                    InetAddress addr = presentAddress.getAddress();
+                    if (addr != null && blockAddresses.containsKey(addr)) {
                         return;
                     }
                 }
