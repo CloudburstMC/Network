@@ -410,6 +410,46 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         }
     }
 
+    public void flush() {
+        flush(false);
+    }
+
+    public void flush(boolean force) {
+        if (!this.outgoingPackets.isEmpty()) {
+            long curTime = System.currentTimeMillis();
+            int transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth(this.unackedBytes);
+            RakNetDatagram datagram = new RakNetDatagram(curTime);
+            EncapsulatedPacket packet;
+
+            while ((packet = this.outgoingPackets.peek()) != null) {
+                int size = packet.getSize();
+                if (!force && transmissionBandwidth < size) {
+                    break;
+                }
+                transmissionBandwidth -= size;
+
+                this.outgoingPackets.remove();
+
+                if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
+                    // Send full datagram
+                    this.sendDatagram(datagram, curTime);
+
+                    datagram = new RakNetDatagram(curTime);
+
+                    Preconditions.checkArgument(datagram.tryAddPacket(packet, this.adjustedMtu),
+                            "Packet too large to fit in MTU (size: %s, MTU: %s)",
+                            packet.getSize(), this.adjustedMtu);
+                }
+            }
+
+            if (!datagram.packets.isEmpty()) {
+                this.sendDatagram(datagram, curTime);
+            }
+        }
+
+        this.channel.flush();
+    }
+
     final void onTick(long curTime) {
         if (this.isClosed()) {
             return;
@@ -520,37 +560,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         }
 
         // Now send usual packets
-        if (!this.outgoingPackets.isEmpty()) {
-            transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth(this.unackedBytes);
-            RakNetDatagram datagram = new RakNetDatagram(curTime);
-            EncapsulatedPacket packet;
-
-            while ((packet = this.outgoingPackets.peek()) != null) {
-                int size = packet.getSize();
-                if (transmissionBandwidth < size) {
-                    break;
-                }
-                transmissionBandwidth -= size;
-
-                this.outgoingPackets.remove();
-
-                if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
-                    // Send full datagram
-                    this.sendDatagram(datagram, curTime);
-
-                    datagram = new RakNetDatagram(curTime);
-
-                    Preconditions.checkArgument(datagram.tryAddPacket(packet, this.adjustedMtu),
-                            "Packet too large to fit in MTU (size: %s, MTU: %s)",
-                            packet.getSize(), this.adjustedMtu);
-                }
-            }
-
-            if (!datagram.packets.isEmpty()) {
-                this.sendDatagram(datagram, curTime);
-            }
-        }
-        this.channel.flush();
+        this.flush();
     }
 
     @Override
@@ -778,12 +788,14 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.channel.writeAndFlush(new DatagramPacket(buffer, this.address));
     }
 
-    public int getSessionTimeout(){
+    public int getSessionTimeout() {
         return sessionTimeout;
     }
 
-    /** timeout in ms ( 1 second = 1000 ) **/
-    public void setSessionTimeout(int timeout){
+    /**
+     * timeout in ms ( 1 second = 1000 )
+     **/
+    public void setSessionTimeout(int timeout) {
         this.sessionTimeout = timeout;
     }
 
@@ -879,7 +891,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     public boolean isStale(long curTime) {
         return curTime - this.lastTouched >= SESSION_STALE_MS;
     }
-    
+
     public boolean isStale() {
         return isStale(System.currentTimeMillis());
     }
@@ -892,7 +904,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         return isTimedOut(System.currentTimeMillis());
     }
 
-    
+
     private void checkForClosed() {
         Preconditions.checkState(!this.isClosed(), "Session already closed");
     }
