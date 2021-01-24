@@ -8,6 +8,7 @@ import io.netty.util.internal.ObjectUtil;
 import org.cloudburstmc.netty.handler.codec.ProxyInboundRouter;
 import org.cloudburstmc.netty.handler.codec.ProxyOutboundRouter;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 
 public abstract class ProxyChannel<T extends Channel> implements Channel {
@@ -84,13 +85,13 @@ public abstract class ProxyChannel<T extends Channel> implements Channel {
     }
 
     @Override
-    public SocketAddress localAddress() {
-        return this.channel.localAddress();
+    public InetSocketAddress localAddress() {
+        return (InetSocketAddress) this.channel.localAddress();
     }
 
     @Override
-    public SocketAddress remoteAddress() {
-        return this.channel.remoteAddress();
+    public InetSocketAddress remoteAddress() {
+        return (InetSocketAddress) this.channel.remoteAddress();
     }
 
     @Override
