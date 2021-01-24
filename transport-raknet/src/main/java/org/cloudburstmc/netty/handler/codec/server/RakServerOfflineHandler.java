@@ -9,7 +9,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
 import org.cloudburstmc.netty.RakNetUtils;
-import org.cloudburstmc.netty.channel.raknet.RakServerChannelConfig;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 import org.cloudburstmc.netty.handler.codec.RakDatagramCodec;
 
 import java.net.Inet6Address;

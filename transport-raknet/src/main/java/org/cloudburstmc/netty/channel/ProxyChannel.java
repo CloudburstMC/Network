@@ -5,230 +5,257 @@ import io.netty.channel.*;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
 import io.netty.util.internal.ObjectUtil;
+import org.cloudburstmc.netty.handler.codec.ProxyInboundRouter;
+import org.cloudburstmc.netty.handler.codec.ProxyOutboundRouter;
 
 import java.net.SocketAddress;
 
 public abstract class ProxyChannel<T extends Channel> implements Channel {
 
-    protected final T channel;
+    /**
+     * TODO: consider config mixing with parent
+     */
 
-    protected ProxyChannel(T channel) {
-        ObjectUtil.checkNotNull(channel, "channel");
-        this.channel = channel;
+    protected final T channel;
+    protected final ChannelPipeline pipeline;
+
+    protected ProxyChannel(T parent) {
+        ObjectUtil.checkNotNull(parent, "parent");
+        this.channel = parent;
+        this.pipeline = new DefaultChannelPipeline(this){};
+        this.pipeline.addLast(ProxyInboundRouter.NAME, new ProxyInboundRouter(this));
+        this.pipeline.addLast(ProxyOutboundRouter.NAME, new ProxyOutboundRouter(this));
+    }
+
+    public void onCloseTriggered(ChannelPromise promise) {
+        this.channel.close(this.correctPromise(promise));
+    }
+
+    public ChannelPromise correctPromise(ChannelPromise remotePromise) {
+        ChannelPromise localPromise = this.channel.newPromise();
+        localPromise.addListener(future -> {
+           if (future.isSuccess()) {
+               remotePromise.trySuccess();
+           } else {
+               remotePromise.tryFailure(future.cause());
+           }
+        });
+        return localPromise;
     }
 
     @Override
     public ChannelId id() {
-        return channel.id();
+        return this.channel.id();
     }
 
     @Override
     public EventLoop eventLoop() {
-        return channel.eventLoop();
+        return this.channel.eventLoop();
     }
 
     @Override
     public Channel parent() {
-        return channel.parent();
+        return this.channel;
     }
 
     @Override
     public ChannelConfig config() {
-        return channel.config();
+        return this.channel.config();
     }
 
     @Override
     public boolean isOpen() {
-        return channel.isOpen();
+        return this.channel.isOpen();
     }
 
     @Override
     public boolean isRegistered() {
-        return channel.isRegistered();
+        return this.channel.isRegistered();
     }
 
     @Override
     public boolean isActive() {
-        return channel.isActive();
+        return this.channel.isActive();
     }
 
     @Override
     public ChannelMetadata metadata() {
-        return channel.metadata();
+        return this.channel.metadata();
     }
 
     @Override
     public SocketAddress localAddress() {
-        return channel.localAddress();
+        return this.channel.localAddress();
     }
 
     @Override
     public SocketAddress remoteAddress() {
-        return channel.remoteAddress();
+        return this.channel.remoteAddress();
     }
 
     @Override
     public ChannelFuture closeFuture() {
-        return channel.closeFuture();
+        return this.channel.closeFuture();
     }
 
     @Override
     public boolean isWritable() {
-        return channel.isWritable();
+        return this.channel.isWritable();
     }
 
     @Override
     public long bytesBeforeUnwritable() {
-        return channel.bytesBeforeUnwritable();
+        return this.channel.bytesBeforeUnwritable();
     }
 
     @Override
     public long bytesBeforeWritable() {
-        return channel.bytesBeforeWritable();
+        return this.channel.bytesBeforeWritable();
     }
 
     @Override
     public Unsafe unsafe() {
-        return channel.unsafe();
+        return this.channel.unsafe();
     }
 
     @Override
     public ChannelPipeline pipeline() {
-        return channel.pipeline();
+        return this.pipeline;
     }
 
     @Override
     public ByteBufAllocator alloc() {
-        return channel.alloc();
+        return this.config().getAllocator();
     }
 
     @Override
     public ChannelFuture bind(SocketAddress localAddress) {
-        return channel.bind(localAddress);
+        return this.pipeline.bind(localAddress);
     }
 
     @Override
     public ChannelFuture connect(SocketAddress remoteAddress) {
-        return channel.connect(remoteAddress);
+        return this.pipeline.connect(remoteAddress);
     }
 
     @Override
     public ChannelFuture connect(SocketAddress remoteAddress, SocketAddress localAddress) {
-        return channel.connect(remoteAddress, localAddress);
+        return this.pipeline.connect(remoteAddress, localAddress);
     }
 
     @Override
     public ChannelFuture disconnect() {
-        return channel.disconnect();
+        return this.pipeline.disconnect();
     }
 
     @Override
     public ChannelFuture close() {
-        return channel.close();
+        return this.pipeline.close();
     }
 
     @Override
     public ChannelFuture deregister() {
-        return channel.deregister();
+        return this.pipeline.deregister();
     }
 
     @Override
     public ChannelFuture bind(SocketAddress localAddress, ChannelPromise promise) {
-        return channel.bind(localAddress, promise);
+        return this.pipeline.bind(localAddress, promise);
     }
 
     @Override
     public ChannelFuture connect(SocketAddress remoteAddress, ChannelPromise promise) {
-        return channel.connect(remoteAddress, promise);
+        return this.pipeline.connect(remoteAddress, promise);
     }
 
     @Override
     public ChannelFuture connect(SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
-        return channel.connect(remoteAddress, localAddress, promise);
+        return this.pipeline.connect(remoteAddress, localAddress, promise);
     }
 
     @Override
     public ChannelFuture disconnect(ChannelPromise promise) {
-        return channel.disconnect(promise);
+        return this.pipeline.disconnect(promise);
     }
 
     @Override
     public ChannelFuture close(ChannelPromise promise) {
-        return channel.close(promise);
+        return this.pipeline.close(promise);
     }
 
     @Override
     public ChannelFuture deregister(ChannelPromise promise) {
-        return channel.deregister(promise);
+        return this.pipeline.deregister(promise);
     }
 
     @Override
     public Channel read() {
-        return channel.read();
+        return this.channel.read();
     }
 
     @Override
     public ChannelFuture write(Object msg) {
-        return channel.write(msg);
+        return this.pipeline.write(msg);
     }
 
     @Override
     public ChannelFuture write(Object msg, ChannelPromise promise) {
-        return channel.write(msg, promise);
+        return this.pipeline.write(msg, promise);
     }
 
     @Override
     public Channel flush() {
-        return channel.flush();
+        this.pipeline.flush();
+        return this;
     }
 
     @Override
     public ChannelFuture writeAndFlush(Object msg, ChannelPromise promise) {
-        return channel.writeAndFlush(msg, promise);
+        return this.pipeline.writeAndFlush(msg, promise);
     }
 
     @Override
     public ChannelFuture writeAndFlush(Object msg) {
-        return channel.writeAndFlush(msg);
+        return this.pipeline.writeAndFlush(msg);
     }
 
     @Override
     public ChannelPromise newPromise() {
-        return channel.newPromise();
+        return this.pipeline.newPromise();
     }
 
     @Override
     public ChannelProgressivePromise newProgressivePromise() {
-        return channel.newProgressivePromise();
+        return this.pipeline.newProgressivePromise();
     }
 
     @Override
     public ChannelFuture newSucceededFuture() {
-        return channel.newSucceededFuture();
+        return this.pipeline.newSucceededFuture();
     }
 
     @Override
     public ChannelFuture newFailedFuture(Throwable cause) {
-        return channel.newFailedFuture(cause);
+        return this.pipeline.newFailedFuture(cause);
     }
 
     @Override
     public ChannelPromise voidPromise() {
-        return channel.voidPromise();
+        return this.pipeline.voidPromise();
     }
 
     @Override
     public <U> Attribute<U> attr(AttributeKey<U> key) {
-        return channel.attr(key);
+        return this.channel.attr(key);
     }
 
     @Override
     public <U> boolean hasAttr(AttributeKey<U> key) {
-        return channel.hasAttr(key);
+        return this.channel.hasAttr(key);
     }
 
     @Override
     public int compareTo(Channel o) {
-        return channel.compareTo(o);
+        return this.channel.compareTo(o);
     }
 }

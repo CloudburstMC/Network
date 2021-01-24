@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.channel.raknet;
+package org.cloudburstmc.netty.channel.raknet.config;
 
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
@@ -6,20 +6,22 @@ import io.netty.channel.DefaultChannelConfig;
 
 import java.util.Map;
 
-public class DefaultRakChannelConfig extends DefaultChannelConfig implements RakChannelConfig {
+/**
+ * The default {@link RakChannelConfig} implementation for RakNet server child channel or client channel.
+ */
+public class DefaultRakSessionConfig extends DefaultChannelConfig implements RakChannelConfig {
 
-    private volatile int maxChannels;
     private volatile long guid;
     private volatile int mtu;
     private volatile int protocolVersion;
 
-    public DefaultRakChannelConfig(Channel channel) {
+    public DefaultRakSessionConfig(Channel channel) {
         super(channel);
     }
 
     @Override
     public Map<ChannelOption<?>, Object> getOptions() {
-        return getOptions(
+        return this.getOptions(
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MTU,
                 RakChannelOption.RAK_PROTOCOL_VERSION);
@@ -29,32 +31,27 @@ public class DefaultRakChannelConfig extends DefaultChannelConfig implements Rak
     @Override
     public <T> T getOption(ChannelOption<T> option) {
         if (option == RakChannelOption.RAK_GUID) {
-            return (T) Long.valueOf(getGuid());
-        }
-        if (option == RakChannelOption.RAK_MAX_CHANNELS) {
-            return (T) Integer.valueOf(getMaxChannels());
+            return (T) Long.valueOf(this.getGuid());
         }
         if (option == RakChannelOption.RAK_MTU) {
-            return (T) Integer.valueOf(getMtu());
+            return (T) Integer.valueOf(this.getMtu());
         }
         if (option == RakChannelOption.RAK_PROTOCOL_VERSION) {
-            return (T) Integer.valueOf(getProtocolVersion());
+            return (T) Integer.valueOf(this.getProtocolVersion());
         }
         return super.getOption(option);
     }
 
     @Override
     public <T> boolean setOption(ChannelOption<T> option, T value) {
-        validate(option, value);
+        this.validate(option, value);
 
         if (option == RakChannelOption.RAK_GUID) {
-            setGuid((Long) value);
-        } else if (option == RakChannelOption.RAK_MAX_CHANNELS) {
-            setMaxChannels((Integer) value);
+            this.setGuid((Long) value);
         } else if (option == RakChannelOption.RAK_MTU) {
-            setMtu((Integer) value);
+            this.setMtu((Integer) value);
         } else if (option == RakChannelOption.RAK_PROTOCOL_VERSION) {
-            setProtocolVersion((Integer) value);
+            this.setProtocolVersion((Integer) value);
         } else {
             return super.setOption(option, value);
         }
@@ -63,19 +60,8 @@ public class DefaultRakChannelConfig extends DefaultChannelConfig implements Rak
     }
 
     @Override
-    public int getMaxChannels() {
-        return maxChannels;
-    }
-
-    @Override
-    public RakChannelConfig setMaxChannels(int maxChannels) {
-        this.maxChannels = maxChannels;
-        return this;
-    }
-
-    @Override
     public long getGuid() {
-        return guid;
+        return this.guid;
     }
 
     @Override
@@ -86,7 +72,7 @@ public class DefaultRakChannelConfig extends DefaultChannelConfig implements Rak
 
     @Override
     public int getMtu() {
-        return mtu;
+        return this.mtu;
     }
 
     @Override
@@ -97,7 +83,7 @@ public class DefaultRakChannelConfig extends DefaultChannelConfig implements Rak
 
     @Override
     public int getProtocolVersion() {
-        return protocolVersion;
+        return this.protocolVersion;
     }
 
     @Override
