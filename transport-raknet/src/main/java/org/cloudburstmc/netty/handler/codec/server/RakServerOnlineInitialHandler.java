@@ -24,37 +24,30 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<R
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RakMessage msg) throws Exception {
         ByteBuf buf = msg.content();
-
-        long guid = ((RakServerChannelConfig) ctx.channel().config()).getGuid();
         int packetId = buf.readUnsignedByte();
 
         switch (packetId) {
             case ID_CONNECTION_REQUEST:
-                long serverGuid = buf.readLong();
-                long timestamp = buf.readLong();
-                boolean security = buf.readBoolean();
-
-                if (serverGuid != guid || security) {
-                    ByteBuf magicBuf = ((RakServerChannelConfig) ctx.channel().config()).getUnconnectedMagic();
-                    int length = 9 + magicBuf.readableBytes();
-                    ByteBuf outBuf = ctx.alloc().ioBuffer(length, length);
-                    outBuf.writeByte(ID_CONNECTION_REQUEST_FAILED);
-                    outBuf.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
-                    outBuf.writeLong(guid);
-                    ctx.writeAndFlush(outBuf);
-
-                    ctx.fireUserEventTriggered(RakDisconnectReason.CONNECTION_REQUEST_FAILED);
-                    ctx.close();
-                } else {
-                    sendConnectionRequestAccepted(ctx, timestamp);
-                }
+                this.onConnectionRequest(ctx, buf);
                 break;
             case ID_NEW_INCOMING_CONNECTION:
                 // We have connected and no longer need this handler
                 ctx.pipeline().remove(this);
-
                 ctx.fireUserEventTriggered(RakEvent.NEW_INCOMING_CONNECTION);
                 break;
+        }
+    }
+
+    private void onConnectionRequest(ChannelHandlerContext ctx, ByteBuf buffer) {
+        long guid = ((RakServerChannelConfig) ctx.channel().config()).getGuid();
+        long serverGuid = buffer.readLong();
+        long timestamp = buffer.readLong();
+        boolean security = buffer.readBoolean();
+
+        if (serverGuid != guid || security) {
+            this.sendConnectionRequestFailed(ctx, guid);
+        } else {
+            this.sendConnectionRequestAccepted(ctx, timestamp);
         }
     }
 
@@ -73,5 +66,17 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<R
         outBuf.writeLong(System.currentTimeMillis());
 
         ctx.writeAndFlush(new RakMessage(outBuf, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
+    }
+
+    private void sendConnectionRequestFailed(ChannelHandlerContext ctx, long guid) {
+        ByteBuf magicBuf = ((RakServerChannelConfig) ctx.channel().config()).getUnconnectedMagic();
+        int length = 9 + magicBuf.readableBytes();
+
+        ByteBuf reply = ctx.alloc().ioBuffer(length, length);
+        reply.writeByte(ID_CONNECTION_REQUEST_FAILED);
+        reply.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
+        reply.writeLong(guid);
+        ctx.writeAndFlush(reply);
+        ctx.fireUserEventTriggered(RakDisconnectReason.CONNECTION_REQUEST_FAILED).close();
     }
 }
