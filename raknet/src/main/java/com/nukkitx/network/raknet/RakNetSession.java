@@ -506,10 +506,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     if (!hasResent) {
                         hasResent = true;
                     }
-                    if (log.isTraceEnabled()) {
-                        log.trace("Stale datagram {} from {}", datagram.sequenceIndex,
-                                this.address);
-                    }
                     this.sendDatagram(datagram, curTime);
                 }
             }
