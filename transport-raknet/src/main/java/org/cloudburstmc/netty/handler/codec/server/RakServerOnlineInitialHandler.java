@@ -6,6 +6,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import org.cloudburstmc.netty.RakNetUtils;
 import org.cloudburstmc.netty.channel.raknet.*;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;

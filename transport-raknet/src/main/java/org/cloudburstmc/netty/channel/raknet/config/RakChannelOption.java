@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.channel.raknet;
+package org.cloudburstmc.netty.channel.raknet.config;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelOption;
@@ -46,12 +46,6 @@ public class RakChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<ByteBuf> RAK_UNCONNECTED_MAGIC =
             valueOf(RakChannelOption.class, "RAK_UNCONNECTED_MAGIC");
-
-    /**
-     * Payload to advertise to unconnected users.
-     */
-    public static final ChannelOption<ByteBuf> RAK_ADVERT =
-            valueOf(RakChannelOption.class, "RAK_ADVERT");
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {

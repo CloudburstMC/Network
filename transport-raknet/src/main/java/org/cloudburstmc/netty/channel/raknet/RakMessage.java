@@ -107,7 +107,7 @@ public final class RakMessage extends DefaultByteBufHolder {
 
     @Override
     public RakMessage replace(ByteBuf content) {
-        return new RakMessage(reliability, priority, channel, content);
+        return new RakMessage(content, reliability, priority, channel);
     }
 
     @Override

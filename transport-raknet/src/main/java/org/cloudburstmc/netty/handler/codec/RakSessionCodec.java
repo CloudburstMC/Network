@@ -11,6 +11,7 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.*;
 import org.cloudburstmc.netty.channel.raknet.*;
+import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.util.*;
 
 import java.net.Inet6Address;

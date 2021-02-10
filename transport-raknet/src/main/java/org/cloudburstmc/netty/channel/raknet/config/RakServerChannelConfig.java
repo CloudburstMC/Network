@@ -1,8 +1,9 @@
-package org.cloudburstmc.netty.channel.raknet;
+package org.cloudburstmc.netty.channel.raknet.config;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelConfig;
 
-public interface RakServerChannelConfig {
+public interface RakServerChannelConfig extends ChannelConfig {
 
     int getMaxChannels();
 
@@ -23,8 +24,4 @@ public interface RakServerChannelConfig {
     ByteBuf getUnconnectedMagic();
 
     RakServerChannelConfig setUnconnectedMagic(ByteBuf unconnectedMagic);
-
-    ByteBuf getUnconnectedAdvert();
-
-    RakServerChannelConfig setUnconnectedAdvert(ByteBuf unconnectedAdvert);
 }

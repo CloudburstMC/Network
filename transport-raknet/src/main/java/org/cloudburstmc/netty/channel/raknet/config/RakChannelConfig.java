@@ -1,10 +1,8 @@
-package org.cloudburstmc.netty.channel.raknet;
+package org.cloudburstmc.netty.channel.raknet.config;
 
-public interface RakChannelConfig {
+import io.netty.channel.ChannelConfig;
 
-    int getMaxChannels();
-
-    RakChannelConfig setMaxChannels(int maxChannels);
+public interface RakChannelConfig extends ChannelConfig {
 
     long getGuid();
 

@@ -15,6 +15,11 @@
     <inceptionYear>2018</inceptionYear>
     <url>https://github.com/CloudburstMC/Network</url>
 
+    <properties>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+    </properties>
+
     <modules>
         <module>transport-raknet</module>
         <module>codec-query</module>

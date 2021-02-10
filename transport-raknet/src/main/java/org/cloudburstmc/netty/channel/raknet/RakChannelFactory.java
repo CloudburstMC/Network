@@ -35,8 +35,8 @@ public class RakChannelFactory<T extends Channel> implements ChannelFactory<T> {
         return new RakChannelFactory<>(RakServerChannel.class, clazz);
     }
 
-    public static RakChannelFactory<RakChannel> client(Class<? extends DatagramChannel> clazz) {
-        return new RakChannelFactory<>(RakChannel.class, clazz);
+    public static RakChannelFactory<RakClientChannel> client(Class<? extends DatagramChannel> clazz) {
+        return new RakChannelFactory<>(RakClientChannel.class, clazz);
     }
 
     @Override

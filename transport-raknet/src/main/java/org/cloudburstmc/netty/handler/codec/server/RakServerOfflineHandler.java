@@ -7,8 +7,8 @@ import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.RakNetUtils;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
-import org.cloudburstmc.netty.channel.raknet.RakServerChannelConfig;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
 import org.cloudburstmc.netty.handler.codec.RakDatagramCodec;
 

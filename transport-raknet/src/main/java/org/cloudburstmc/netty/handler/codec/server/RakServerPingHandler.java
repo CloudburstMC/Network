@@ -6,7 +6,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
-import org.cloudburstmc.netty.channel.raknet.RakServerChannelConfig;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 
 import static org.cloudburstmc.netty.RakNetConstants.ID_UNCONNECTED_PONG;
 
