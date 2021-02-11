@@ -3,6 +3,7 @@ package org.cloudburstmc.netty.channel.raknet;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
+import org.cloudburstmc.netty.handler.codec.RakDatagramCodec;
 import org.cloudburstmc.netty.handler.codec.server.RakChildDatagramHandler;
 
 import java.net.InetSocketAddress;
@@ -22,6 +23,10 @@ public class RakChildChannel extends AbstractChannel {
         this.remoteAddress = remoteAddress;
         this.config = new DefaultRakSessionConfig(this);
         this.pipeline().addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
+
+        // Setup session
+        this.pipeline().addLast(RakDatagramCodec.NAME, RakDatagramCodec.INSTANCE);
+        // TODO: Add the extra handlers
     }
 
     @Override

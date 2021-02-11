@@ -2,25 +2,32 @@ package org.cloudburstmc.netty.handler.codec.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.util.NettyRuntime;
 import org.cloudburstmc.netty.RakNetUtils;
-import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
+import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
+import org.cloudburstmc.netty.channel.raknet.RakPendingConnection;
+import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
+import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
-import org.cloudburstmc.netty.handler.codec.RakDatagramCodec;
 
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.cloudburstmc.netty.RakNetConstants.*;
 
 @Sharable
 public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<DatagramPacket> {
-    public static String NAME = "rak-offline-handler";
+
+    public static final String NAME = "rak-offline-handler";
+    public static final RakServerOfflineHandler INSTANCE = new RakServerOfflineHandler();
+    public static final Map<InetSocketAddress, RakPendingConnection> pendingConnections = new ConcurrentHashMap<>(128, NettyRuntime.availableProcessors());
 
     @Override
     protected boolean acceptInboundMessage(ChannelHandlerContext ctx, Object msg) throws Exception {
@@ -40,8 +47,8 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         }
 
         short packetId = buf.readUnsignedByte();
-        ByteBuf magicBuf = ((RakServerChannelConfig) ctx.channel().config()).getUnconnectedMagic();
-        long guid = ((RakServerChannelConfig) ctx.channel().config()).getGuid();
+        ByteBuf magicBuf =  ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+        long guid =  ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
 
         switch (packetId) {
             case ID_UNCONNECTED_PING:
@@ -66,15 +73,26 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
         ByteBuf buffer = packet.content();
+        InetSocketAddress sender = packet.sender();
+
         // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
         int protocolVersion = buffer.readUnsignedByte();
-        // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
-        int mtu = buffer.readableBytes() + 1 + 16 + 1 + (packet.sender().getAddress() instanceof Inet6Address ? 40 : 20) + UDP_HEADER_SIZE;
 
-        int[] supportedProtocols = ((RakServerChannelConfig) ctx.channel().config()).getSupportedProtocols();
+        // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
+        int mtu = buffer.readableBytes() + 1 + 16 + 1 + (sender.getAddress() instanceof Inet6Address ? 40 : 20) + UDP_HEADER_SIZE;
+
+        int[] supportedProtocols = ctx.channel().config().getOption(RakChannelOption.RAK_SUPPORTED_PROTOCOLS);
         if (Arrays.binarySearch(supportedProtocols, protocolVersion) < 0) {
             this.sendIncompatibleVersion(ctx, packet.sender(), protocolVersion, magicBuf, guid);
+            return;
+        }
+
+        RakPendingConnection pendingConnection = pendingConnections.compute(sender, (addr, oldValue)
+                -> oldValue != null ? null : new RakPendingConnection(protocolVersion));
+        if (pendingConnection == null) {
+            // Already connected
+            this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
             return;
         }
 
@@ -84,19 +102,38 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         replyBuffer.writeLong(guid);
         replyBuffer.writeBoolean(false); // Security
         replyBuffer.writeShort(RakNetUtils.clamp(mtu, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE));
-        ctx.writeAndFlush(new DatagramPacket(replyBuffer, packet.sender()));
+        ctx.writeAndFlush(new DatagramPacket(replyBuffer, sender));
     }
 
     private void onOpenConnectionRequest2(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
         ByteBuf buffer = packet.content();
+        InetSocketAddress sender = packet.sender();
         // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
+
+        RakPendingConnection pendingConnection = pendingConnections.remove(sender);
+        if (pendingConnection == null) {
+            // No incoming connection?
+            // TODO: kick?
+            return;
+        }
 
         // TODO: Verify address matches?
         InetSocketAddress serverAddress = RakNetUtils.readAddress(buffer);
         int mtu = buffer.readUnsignedShort();
         long clientGuid = buffer.readLong();
 
+        RakServerChannel serverChannel = (RakServerChannel) ctx.channel();
+        RakChildChannel channel = serverChannel.createChildChannel(sender);
+        if (channel == null) {
+            // Already connected
+            this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
+            return;
+        }
+
+        channel.config().setMtu(mtu);
+        channel.config().setGuid(clientGuid);
+        channel.config().setProtocolVersion(pendingConnection.getProtocolVersion());
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(31);
         replyBuffer.writeByte(ID_OPEN_CONNECTION_REPLY_2);
@@ -105,18 +142,21 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         RakNetUtils.writeAddress(replyBuffer, packet.recipient());
         replyBuffer.writeShort(mtu);
         replyBuffer.writeBoolean(false); // Security
-        ctx.writeAndFlush(new DatagramPacket(replyBuffer, packet.sender()));
-
-        // Setup session
-        Channel channel = ctx.channel();
-        channel.pipeline().addLast(RakDatagramCodec.NAME, RakDatagramCodec.INSTANCE);
-        // TODO: Add the extra handlers
+        channel.writeAndFlush(replyBuffer); // Send first packet thought child channel
     }
 
     private void sendIncompatibleVersion(ChannelHandlerContext ctx, InetSocketAddress sender, int protocolVersion, ByteBuf magicBuf, long guid) {
         ByteBuf buffer = ctx.alloc().ioBuffer(26, 26);
         buffer.writeByte(ID_INCOMPATIBLE_PROTOCOL_VERSION);
         buffer.writeByte(protocolVersion);
+        buffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
+        buffer.writeLong(guid);
+        ctx.writeAndFlush(new DatagramPacket(buffer, sender));
+    }
+
+    private void sendAlreadyConnected(ChannelHandlerContext ctx, InetSocketAddress sender,  ByteBuf magicBuf, long guid) {
+        ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
+        buffer.writeByte(ID_ALREADY_CONNECTED);
         buffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         buffer.writeLong(guid);
         ctx.writeAndFlush(new DatagramPacket(buffer, sender));
@@ -135,7 +175,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
                 buf.readLong(); // Ping time
             }
 
-            ByteBuf magicBuf = ((RakServerChannelConfig) ctx.channel().config()).getUnconnectedMagic();
+            ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
             return buf.isReadable(magicBuf.readableBytes()) && ByteBufUtil.equals(buf.readSlice(magicBuf.readableBytes()), magicBuf);
         } finally {
             buf.readerIndex(startIndex);
