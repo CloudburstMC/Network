@@ -4,8 +4,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.socket.DatagramPacket;
-import io.netty.handler.codec.MessageToMessageCodec;
+import io.netty.handler.codec.ByteToMessageCodec;
 import org.cloudburstmc.netty.EncapsulatedPacket;
 import org.cloudburstmc.netty.RakDatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
@@ -15,7 +14,7 @@ import java.util.List;
 import static org.cloudburstmc.netty.RakNetConstants.FLAG_VALID;
 
 @Sharable
-public class RakDatagramCodec extends MessageToMessageCodec<DatagramPacket, RakDatagramPacket> {
+public class RakDatagramCodec extends ByteToMessageCodec<RakDatagramPacket> {
 
     public static final RakDatagramCodec INSTANCE = new RakDatagramCodec();
     public static final String NAME = "rak-datagram-codec";
@@ -87,9 +86,8 @@ public class RakDatagramCodec extends MessageToMessageCodec<DatagramPacket, RakD
     }
 
     @Override
-    protected void encode(ChannelHandlerContext ctx, RakDatagramPacket datagram, List<Object> list) throws Exception {
+    protected void encode(ChannelHandlerContext ctx, RakDatagramPacket datagram, ByteBuf buf) throws Exception {
         ByteBuf header = ctx.alloc().ioBuffer(4);
-
         header.writeByte(datagram.flags);
         header.writeMediumLE(datagram.sequenceIndex);
 
@@ -100,19 +98,18 @@ public class RakDatagramCodec extends MessageToMessageCodec<DatagramPacket, RakD
         for (EncapsulatedPacket packet : datagram.packets) {
             encodeEncapsulated(buffer, packet);
         }
+        buf.writeBytes(buffer);
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, DatagramPacket datagram, List<Object> list) throws Exception {
-        ByteBuf buffer = datagram.content();
-
+    protected void decode(ChannelHandlerContext ctx, ByteBuf buffer, List<Object> list) throws Exception {
         buffer.markReaderIndex();
         byte potentialFlags = buffer.readByte();
 
         if ((potentialFlags & FLAG_VALID) == 0) {
             // Not a RakNet datagram
             buffer.resetReaderIndex();
-            list.add(datagram);
+            list.add(buffer);
             return;
         }
 
