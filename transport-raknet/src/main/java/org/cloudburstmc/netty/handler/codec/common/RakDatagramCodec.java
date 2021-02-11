@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.handler.codec;
+package org.cloudburstmc.netty.handler.codec.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;

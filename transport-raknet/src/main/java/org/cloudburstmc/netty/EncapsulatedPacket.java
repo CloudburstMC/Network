@@ -63,5 +63,10 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     public ReferenceCounted touch(Object o) {
         return this.buffer.touch();
     }
+
+    @Override
+    public EncapsulatedPacket retain() {
+        return (EncapsulatedPacket) super.retain();
+    }
 }
 
