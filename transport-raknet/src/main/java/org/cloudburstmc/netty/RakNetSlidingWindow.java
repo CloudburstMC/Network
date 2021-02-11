@@ -39,7 +39,7 @@ public class RakNetSlidingWindow {
 
     public void onResend(long curSequenceIndex) {
         if (!this.backoffThisBlock && this.cwnd > this.mtu * 2) {
-            this.ssThresh = this.cwnd / 2;
+            this.ssThresh = this.cwnd * 0.75D;
 
             if (this.ssThresh < this.mtu) {
                 this.ssThresh = this.mtu;
@@ -53,7 +53,7 @@ public class RakNetSlidingWindow {
 
     public void onNak() {
         if (!this.backoffThisBlock) {
-            this.ssThresh = this.cwnd / 2D;
+            this.ssThresh = this.cwnd * 0.75D;
         }
     }
 
