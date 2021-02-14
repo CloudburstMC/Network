@@ -24,8 +24,8 @@ import static org.cloudburstmc.netty.RakNetConstants.*;
 
 public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, RakMessage> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakSessionCodec.class);
+    public static final String NAME = "rak-session-codec";
 
-    long guid;
     private volatile RakState state = RakState.UNCONNECTED;
     private volatile long lastTouched = System.currentTimeMillis();
     volatile boolean closed = false;

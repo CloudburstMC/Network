@@ -8,6 +8,7 @@ import org.cloudburstmc.netty.handler.codec.common.ConnectedPingHandler;
 import org.cloudburstmc.netty.handler.codec.common.ConnectedPongHandler;
 import org.cloudburstmc.netty.handler.codec.common.RakDatagramCodec;
 import org.cloudburstmc.netty.handler.codec.server.RakChildDatagramHandler;
+import org.cloudburstmc.netty.handler.codec.server.RakServerOnlineInitialHandler;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -26,17 +27,14 @@ public class RakChildChannel extends AbstractChannel {
         this.remoteAddress = remoteAddress;
         this.config = new DefaultRakSessionConfig(this);
         this.pipeline().addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
-
-        // Setup handlers
         this.pipeline().addLast(RakDatagramCodec.NAME, RakDatagramCodec.INSTANCE);
 
-        RakSessionCodec sessionCodec = null; // TODO: session here
-        this.pipeline().addLast(sessionCodec);
+        // Setup session/online phase
+        RakSessionCodec sessionCodec = null; // TODO: new session here
+        this.pipeline().addLast(RakSessionCodec.NAME, sessionCodec);
+        this.pipeline().addLast(RakServerOnlineInitialHandler.NAME, RakServerOnlineInitialHandler.INSTANCE); // Will be removed
         this.pipeline().addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());
         this.pipeline().addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
-
-        // Notify users about new created session
-        this.pipeline().fireUserEventTriggered(sessionCodec);
     }
 
     @Override

@@ -36,17 +36,36 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         }
 
         DatagramPacket packet = (DatagramPacket) msg;
-        return this.isRakNet(ctx, packet);
+        ByteBuf buf = packet.content();
+        if (!buf.isReadable()){
+            return false; // No packet ID
+        }
+
+        int startIndex = buf.readerIndex();
+        try {
+            int packetId = buf.readUnsignedByte();
+            switch (packetId) {
+                case ID_UNCONNECTED_PING:
+                    if (buf.isReadable(8)) {
+                        buf.readLong(); // Ping time
+                    }
+                case ID_OPEN_CONNECTION_REQUEST_1:
+                case ID_OPEN_CONNECTION_REQUEST_2:
+                    ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+                    return buf.isReadable(magicBuf.readableBytes()) && ByteBufUtil.equals(buf.readSlice(magicBuf.readableBytes()), magicBuf);
+                default:
+                    return false;
+            }
+        } finally {
+            buf.readerIndex(startIndex);
+        }
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) throws Exception {
         ByteBuf buf = packet.content();
-        if (buf.isReadable()){
-            return; // Empty packet?
-        }
-
         short packetId = buf.readUnsignedByte();
+
         ByteBuf magicBuf =  ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
         long guid =  ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
 
@@ -160,25 +179,5 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         buffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         buffer.writeLong(guid);
         ctx.writeAndFlush(new DatagramPacket(buffer, sender));
-    }
-
-    private boolean isRakNet(ChannelHandlerContext ctx, DatagramPacket packet) {
-        ByteBuf buf = packet.content();
-        if (!buf.isReadable()){
-            return false; // No packet ID
-        }
-
-        int startIndex = buf.readerIndex();
-        try {
-            int packetId = buf.readUnsignedByte();
-            if (packetId == ID_UNCONNECTED_PING && buf.isReadable(8)) {
-                buf.readLong(); // Ping time
-            }
-
-            ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
-            return buf.isReadable(magicBuf.readableBytes()) && ByteBufUtil.equals(buf.readSlice(magicBuf.readableBytes()), magicBuf);
-        } finally {
-            buf.readerIndex(startIndex);
-        }
     }
 }

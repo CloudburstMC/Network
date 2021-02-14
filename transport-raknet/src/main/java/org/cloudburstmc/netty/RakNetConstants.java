@@ -1,13 +1,11 @@
 package org.cloudburstmc.netty;
 
-import lombok.experimental.UtilityClass;
 import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 
-@UtilityClass
 public class RakNetConstants {
 
     public static final byte RAKNET_PROTOCOL_VERSION = 10; // Mojang's version.
@@ -98,6 +96,7 @@ public class RakNetConstants {
 
     public static final InetSocketAddress LOOPBACK_V4 = new InetSocketAddress(Inet4Address.getLoopbackAddress(), 19132);
     public static final InetSocketAddress LOOPBACK_V6 = new InetSocketAddress(Inet6Address.getLoopbackAddress(), 19132);
+    public static final InetSocketAddress LOCAL_ADDRESS = new InetSocketAddress(0);
     public static final InetSocketAddress[] LOCAL_IP_ADDRESSES_V4 = new InetSocketAddress[20];
     public static final InetSocketAddress[] LOCAL_IP_ADDRESSES_V6 = new InetSocketAddress[20];
 

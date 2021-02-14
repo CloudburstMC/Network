@@ -7,7 +7,7 @@ import io.netty.channel.ChannelOption;
 
 import java.util.Map;
 
-import static org.cloudburstmc.netty.RakNetConstants.DEFAULT_UNCONNECTED_MAGIC;
+import static org.cloudburstmc.netty.RakNetConstants.*;
 
 /**
  * The extended implementation of {@link RakChannelConfig} based on {@link DefaultRakSessionConfig} used by client.
@@ -15,6 +15,7 @@ import static org.cloudburstmc.netty.RakNetConstants.DEFAULT_UNCONNECTED_MAGIC;
 public class DefaultRakClientConfig extends DefaultRakSessionConfig {
 
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
+    private volatile long connectTimeout = SESSION_TIMEOUT_MS;
 
     public DefaultRakClientConfig(Channel channel) {
         super(channel);
@@ -30,6 +31,8 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
     public <T> T getOption(ChannelOption<T> option) {
         if (option == RakChannelOption.RAK_UNCONNECTED_MAGIC) {
             return (T) this.getUnconnectedMagic();
+        } else if (option == RakChannelOption.RAK_CONNECT_TIMEOUT) {
+            return (T) Long.valueOf(this.getConnectTimeout());
         }
         return super.getOption(option);
     }
@@ -40,6 +43,9 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
 
         if (option == RakChannelOption.RAK_UNCONNECTED_MAGIC) {
             this.setUnconnectedMagic((ByteBuf) value);
+            return true;
+        } else if (option == RakChannelOption.RAK_CONNECT_TIMEOUT) {
+            this.setConnectTimeout((long) value);
             return true;
         }
         return super.setOption(option, value);
@@ -55,5 +61,13 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
         }
         this.unconnectedMagic = unconnectedMagic.copy().asReadOnly();
         return null;
+    }
+
+    public long getConnectTimeout() {
+        return this.connectTimeout;
+    }
+
+    public void setConnectTimeout(long connectTimeout) {
+        this.connectTimeout = connectTimeout;
     }
 }
