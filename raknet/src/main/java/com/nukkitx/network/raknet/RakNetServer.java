@@ -1,5 +1,8 @@
 package com.nukkitx.network.raknet;
 
+import com.nukkitx.network.raknet.proxy.HAProxyMessage;
+import com.nukkitx.network.raknet.proxy.HAProxyProtocolException;
+import com.nukkitx.network.raknet.proxy.ProxyProtocolDecoder;
 import com.nukkitx.network.raknet.util.RoundRobinIterator;
 import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.DisconnectReason;
@@ -9,6 +12,8 @@ import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import net.jodah.expiringmap.ExpirationPolicy;
+import net.jodah.expiringmap.ExpiringMap;
 
 import javax.annotation.Nonnegative;
 import javax.annotation.Nullable;
@@ -36,6 +41,8 @@ public class RakNetServer extends RakNet {
     private volatile RakNetServerListener listener = null;
     private final InetSocketAddress bindAddress;
     private final int bindThreads;
+    private final boolean useProxyProtocol;
+    final ExpiringMap<InetSocketAddress, InetSocketAddress> proxiedAddresses;
     private int maxConnections = 1024;
     private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
 
@@ -48,10 +55,18 @@ public class RakNetServer extends RakNet {
     }
 
     public RakNetServer(InetSocketAddress bindAddress, int bindThreads, EventLoopGroup eventLoopGroup) {
+        this(bindAddress, bindThreads, eventLoopGroup, false);
+    }
+
+    public RakNetServer(InetSocketAddress bindAddress, int bindThreads, EventLoopGroup eventLoopGroup, boolean useProxyProtocol) {
         super(eventLoopGroup);
         this.bindThreads = bindThreads;
         this.bindAddress = bindAddress;
-        this.exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Server)", t));
+        this.useProxyProtocol = useProxyProtocol;
+        this.proxiedAddresses = ExpiringMap.builder()
+                .expiration(30 + 1, TimeUnit.MINUTES)
+                .expirationPolicy(ExpirationPolicy.ACCESSED)
+                .build();
     }
 
     @Override
@@ -176,6 +191,13 @@ public class RakNetServer extends RakNet {
                 + UDP_HEADER_SIZE; // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
 
         RakNetServerSession session = this.sessionsByAddress.get(packet.sender());
+        final InetSocketAddress clientAddress;
+        final InetSocketAddress proxiedAddress;
+        if (useProxyProtocol && (proxiedAddress = this.proxiedAddresses.get(packet.sender())) != null) {
+            clientAddress = proxiedAddress;
+        } else {
+            clientAddress = packet.sender();
+        }
 
         if (session != null && session.getState() == RakNetState.CONNECTED) {
             this.sendAlreadyConnected(ctx, packet.sender());
@@ -183,7 +205,7 @@ public class RakNetServer extends RakNet {
             this.sendIncompatibleProtocolVersion(ctx, packet.sender());
         } else if (this.maxConnections >= 0 && this.maxConnections <= getSessionCount()) {
             this.sendNoFreeIncomingConnections(ctx, packet.sender());
-        } else if (this.listener != null && !this.listener.onConnectionRequest(packet.sender())) {
+        } else if (this.listener != null && !this.listener.onConnectionRequest(packet.sender(), clientAddress)) {
             this.sendConnectionBanned(ctx, packet.sender());
         } else if (session == null) {
             // Passed all checks. Now create the session and send the first reply.
@@ -191,6 +213,7 @@ public class RakNetServer extends RakNet {
                     ctx.channel().eventLoop().next(), mtu, protocolVersion);
             if (this.sessionsByAddress.putIfAbsent(packet.sender(), session) == null) {
                 session.setState(RakNetState.INITIALIZING);
+                session.proxiedAddress = this.proxiedAddresses.get(packet.sender());
                 session.sendOpenConnectionReply1();
                 if (listener != null) {
                     listener.onSessionCreation(session);
@@ -291,11 +314,50 @@ public class RakNetServer extends RakNet {
                     return;
                 }
 
-                ByteBuf content = packet.content();
+                final ByteBuf content = packet.content();
                 if (!content.isReadable()) {
                     // We have no use for empty packets.
                     return;
                 }
+
+                if (useProxyProtocol) {
+                    boolean hasSession = sessionsByAddress.containsKey(packet.sender());
+                    int detectedVersion = !hasSession ? ProxyProtocolDecoder.findVersion(content) : -1;
+                    InetSocketAddress presentAddress = proxiedAddresses.get(packet.sender());
+
+                    if (presentAddress == null && detectedVersion == -1) {
+                        // We haven't received a header from given address before and we couldn't detect a
+                        // PROXY header, ignore.
+                        return;
+                    } else if (presentAddress == null) {
+                        final HAProxyMessage decoded;
+                        try {
+                            if ((decoded = ProxyProtocolDecoder.decode(content, detectedVersion)) == null) {
+                                // PROXY header was not present in the packet, ignore.
+                                return;
+                            }
+                        } catch (HAProxyProtocolException e) {
+                            log.debug("{} sent malformed PROXY header", packet.sender(), e);
+                            return;
+                        }
+
+                        presentAddress = decoded.sourceInetSocketAddress();
+                        log.debug("Got PROXY header: (from {}) {}", packet.sender(), presentAddress);
+                        if (log.isDebugEnabled()) {
+                            log.debug("PROXY Headers map size: {}", proxiedAddresses.size());
+                        }
+                        proxiedAddresses.put(packet.sender(), presentAddress);
+                        return;
+                    } else {
+                        log.trace("Reusing PROXY header: (from {}) {}", packet.sender(), presentAddress);
+                    }
+
+                    InetAddress addr = presentAddress.getAddress();
+                    if (addr != null && blockAddresses.containsKey(addr)) {
+                        return;
+                    }
+                }
+
                 byte packetId = content.readByte();
 
                 // These packets don't require a session

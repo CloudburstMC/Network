@@ -34,6 +34,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             AtomicIntegerFieldUpdater.newUpdater(RakNetSession.class, "closed");
 
     final InetSocketAddress address;
+    InetSocketAddress proxiedAddress = null;
     final Channel channel;
     final EventLoop eventLoop;
     final int protocolVersion;
@@ -147,6 +148,12 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     public InetSocketAddress getAddress() {
         return this.address;
+    }
+
+    @Override
+    public InetSocketAddress getRealAddress() {
+        InetSocketAddress proxied = this.proxiedAddress;
+        return proxied == null ? this.address : proxied;
     }
 
     public int getMtu() {

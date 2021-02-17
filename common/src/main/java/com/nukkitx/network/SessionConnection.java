@@ -8,6 +8,10 @@ public interface SessionConnection<T> {
 
     InetSocketAddress getAddress();
 
+    default InetSocketAddress getRealAddress() {
+        return getAddress();
+    }
+
     void close();
 
     void close(DisconnectReason reason);
