@@ -144,7 +144,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 packet.release();
             }
         }
-        this.initHeapWeights();
     }
 
     public InetSocketAddress getAddress() {
@@ -513,10 +512,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                     if (!hasResent) {
                         hasResent = true;
                     }
-                    if (log.isTraceEnabled()) {
-                        log.trace("Stale datagram {} from {}", datagram.sequenceIndex,
-                                this.address);
-                    }
                     this.sendDatagram(datagram, curTime);
                 }
             }
@@ -581,7 +576,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void close(DisconnectReason reason) {
-        if (!closedUpdater.compareAndSet(this, 0, 1)) {
+        if (closedUpdater.get(this) != 0) {
             return;
         }
         if (this.eventLoop.inEventLoop()) {
@@ -592,10 +587,13 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     private void close0(DisconnectReason reason) {
+        if (!closedUpdater.compareAndSet(this, 0, 1)) {
+            return;
+        }
         this.state = RakNetState.UNCONNECTED;
         this.onClose();
         if (log.isTraceEnabled()) {
-            log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().bindAddress, this.address, reason);
+            log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().getBindAddress(), this.address, reason);
         }
 
         this.deinitialize();
@@ -640,7 +638,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     private void send0(ByteBuf buf, RakNetPriority priority, RakNetReliability reliability, @Nonnegative int orderingChannel) {
         try {
-            if (isClosed() || state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+            if (this.isClosed() || state == null || state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
                 // Session is not ready for RakNet datagrams.
                 return;
             }
@@ -905,7 +903,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     public boolean isClosed() {
-        return this.closed != 0;
+        return closedUpdater.get(this) != 0;
     }
 
     public abstract RakNet getRakNet();

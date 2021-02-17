@@ -7,37 +7,86 @@ pipeline {
     options {
         buildDiscarder(logRotator(artifactNumToKeepStr: '1'))
     }
+
     stages {
         stage ('Build') {
+            when { not { anyOf {
+                branch 'master'
+                branch 'develop'
+            }}}
+
             steps {
                 sh 'mvn clean package'
             }
         }
-
-        stage ('Javadoc') {
-            when {
-                branch "master"
-            }
-            steps {
-                sh 'mvn javadoc:aggregate -DskipTests'
-            }
-            post {
-                success {
-                    step([
-                        $class: 'JavadocArchiver',
-                        javadocDir: 'target/site/apidocs',
-                        keepAll: true
-                    ])
-                }
-            }
-        }
-
         stage ('Deploy') {
             when {
-                branch "master"
+                anyOf {
+                    branch 'master'
+                    branch 'develop'
+                }
             }
-            steps {
-                sh 'mvn javadoc:jar source:jar deploy -DskipTests'
+
+            stages {
+                stage('Setup') {
+                    steps {
+                        rtMavenDeployer(
+                                id: "maven-deployer",
+                                serverId: "opencollab-artifactory",
+                                releaseRepo: "maven-releases",
+                                snapshotRepo: "maven-snapshots"
+                        )
+                        rtMavenResolver(
+                                id: "maven-resolver",
+                                serverId: "opencollab-artifactory",
+                                releaseRepo: "release",
+                                snapshotRepo: "snapshot"
+                        )
+                    }
+                }
+
+                stage('Release') {
+                    when {
+                        branch 'master'
+                    }
+
+                    steps {
+                        rtMavenRun(
+                                pom: 'pom.xml',
+                                goals: 'javadoc:jar source:jar install',
+                                deployerId: "maven-deployer",
+                                resolverId: "maven-resolver"
+                        )
+                        sh 'mvn javadoc:aggregate -DskipTests'
+                    }
+                    post {
+                        success {
+                            step([$class: 'JavadocArchiver', javadocDir: 'target/site/apidocs', keepAll: false])
+                        }
+                    }
+                }
+
+                stage('Snapshot') {
+                    when {
+                        branch 'develop'
+                    }
+                    steps {
+                        rtMavenRun(
+                                pom: 'pom.xml',
+                                goals: 'javadoc:jar source:jar install',
+                                deployerId: "maven-deployer",
+                                resolverId: "maven-resolver"
+                        )
+                    }
+                }
+
+                stage('Publish') {
+                    steps {
+                        rtPublishBuildInfo(
+                                serverId: "opencollab-artifactory"
+                        )
+                    }
+                }
             }
         }
     }
