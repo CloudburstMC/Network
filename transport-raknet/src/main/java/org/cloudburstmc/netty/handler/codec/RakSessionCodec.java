@@ -22,10 +22,10 @@ import java.util.Queue;
 
 import static org.cloudburstmc.netty.RakNetConstants.*;
 
-public abstract class RakSessionCodec extends MessageToMessageCodec<DatagramPacket, RakMessage> {
+public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, RakMessage> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakSessionCodec.class);
+    public static final String NAME = "rak-session-codec";
 
-    long guid;
     private volatile RakState state = RakState.UNCONNECTED;
     private volatile long lastTouched = System.currentTimeMillis();
     volatile boolean closed = false;
@@ -209,45 +209,10 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<DatagramPack
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, DatagramPacket datagramPacket, List<Object> list) throws Exception {
-        ByteBuf buffer = datagramPacket.content();
-
-        byte potentialFlags = buffer.readByte();
-
-        boolean rakNetDatagram = (potentialFlags & FLAG_VALID) != 0;
-
-        // Potential RakNet datagram
-        if (rakNetDatagram) {
-            if ((potentialFlags & FLAG_ACK) != 0) {
-                this.onAcknowledge(buffer, this.incomingAcks);
-            } else if ((potentialFlags & FLAG_NACK) != 0) {
-                this.onAcknowledge(buffer, this.incomingNaks);
-            } else {
-                buffer.readerIndex(0);
-                this.onRakNetDatagram(buffer);
-            }
-        } else {
-            // Direct packet
-            buffer.readerIndex(0);
-            list.add(datagramPacket);
-        }
-    }
-
-    private void checkForOrdered(EncapsulatedPacket packet) {
-        if (packet.getReliability().isOrdered()) {
-            this.onOrderedReceived(packet);
-        } else {
-            this.onEncapsulatedInternal(packet);
-        }
-    }
-
-    private void onRakNetDatagram(ByteBuf buffer) {
+    protected void decode(ChannelHandlerContext ctx, RakDatagramPacket datagram, List<Object> list) throws Exception {
         if (this.state == null || RakState.INITIALIZED.compareTo(this.state) > 0) {
             return;
         }
-
-        RakDatagramPacket datagram = new RakDatagramPacket(System.currentTimeMillis());
-        datagram.decode(buffer);
 
         this.slidingWindow.onPacketReceived(datagram.sendTime);
 
@@ -305,24 +270,25 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<DatagramPack
                     continue;
                 }
                 try {
-                    this.checkForOrdered(reassembled);
+                    this.checkForOrdered(ctx, reassembled);
                 } finally {
                     reassembled.release();
                 }
             } else {
-                this.checkForOrdered(encapsulated);
+                this.checkForOrdered(ctx, encapsulated);
             }
         }
     }
 
-    final void onTick(long curTime) {
-        if (this.closed) {
-            return;
+    private void checkForOrdered(ChannelHandlerContext ctx, EncapsulatedPacket packet) {
+        if (packet.reliability.isOrdered()) {
+            this.onOrderedReceived(ctx, packet);
+        } else {
+            ctx.fireChannelRead(packet);
         }
-        this.tick(curTime);
     }
 
-    private void onOrderedReceived(EncapsulatedPacket packet) {
+    private void onOrderedReceived(ChannelHandlerContext ctx, EncapsulatedPacket packet) {
         FastBinaryMinHeap<EncapsulatedPacket> binaryHeap = this.orderingHeaps[packet.orderingChannel];
 
         if (this.orderReadIndex[packet.orderingChannel] < packet.orderingIndex) {
@@ -336,7 +302,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<DatagramPack
         this.orderReadIndex[packet.orderingChannel]++;
 
         // Can be handled
-        this.onEncapsulatedInternal(packet);
+        ctx.fireChannelRead(packet);
 
         EncapsulatedPacket queuedPacket;
         while ((queuedPacket = binaryHeap.peek()) != null) {
@@ -345,8 +311,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<DatagramPack
                     // We got the expected packet
                     binaryHeap.remove();
                     this.orderReadIndex[packet.orderingChannel]++;
-
-                    this.onEncapsulatedInternal(queuedPacket);
+                    ctx.fireChannelRead(queuedPacket);
                 } finally {
                     queuedPacket.release();
                 }
@@ -355,6 +320,13 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<DatagramPack
                 break;
             }
         }
+    }
+
+    final void onTick(long curTime) {
+        if (this.closed) {
+            return;
+        }
+        this.tick(curTime);
     }
 
     @Override

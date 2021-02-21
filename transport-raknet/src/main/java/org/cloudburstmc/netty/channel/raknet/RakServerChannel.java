@@ -7,6 +7,7 @@ import io.netty.util.concurrent.PromiseCombiner;
 import org.cloudburstmc.netty.channel.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakServerConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
+import org.cloudburstmc.netty.handler.codec.server.RakServerOfflineHandler;
 import org.cloudburstmc.netty.handler.codec.server.RakServerRouteHandler;
 
 import java.net.InetSocketAddress;
@@ -23,6 +24,9 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         super(channel);
         this.config = new DefaultRakServerConfig(this);
         this.pipeline().addLast(RakServerRouteHandler.NAME, new RakServerRouteHandler(this));
+        // In case of proxied connections (fe. HAProxy) customized handler should be injected before.
+        // Default common handler of offline phase. Handles only raknet packets, forwards rest.
+        this.pipeline.addLast(RakServerOfflineHandler.NAME, RakServerOfflineHandler.INSTANCE);
     }
 
     /**

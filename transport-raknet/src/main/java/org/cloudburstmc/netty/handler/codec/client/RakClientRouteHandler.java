@@ -1,11 +1,14 @@
 package org.cloudburstmc.netty.handler.codec.client;
 
 import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.util.concurrent.PromiseCombiner;
 import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 
 public class RakClientRouteHandler extends ChannelDuplexHandler {
@@ -19,10 +22,24 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
 
     @Override
     public void connect(ChannelHandlerContext ctx, SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) throws Exception {
-        // TODO:
-        // - parent active check
-        // - parent.connect() handle future
-        // finish original promise
+        if (!(remoteAddress instanceof InetSocketAddress)) {
+            promise.tryFailure(new IllegalArgumentException("Provided remote address must be InetSocketAddress"));
+            return;
+        }
+
+        // TODO: active check?
+
+        ChannelFuture clientFuture = this.channel.connect(remoteAddress, localAddress);
+        clientFuture.addListener(future -> {
+           if (future.isSuccess()) {
+               this.channel.pipeline().addLast(RakClientOfflineHandler.NAME, new RakClientOfflineHandler(this.channel.getConnectPromise()));
+           }
+        });
+
+        PromiseCombiner combiner = new PromiseCombiner(this.channel.eventLoop());
+        combiner.add(clientFuture);
+        combiner.add((ChannelFuture) this.channel.getConnectPromise());
+        combiner.finish(promise);
     }
 
     @Override

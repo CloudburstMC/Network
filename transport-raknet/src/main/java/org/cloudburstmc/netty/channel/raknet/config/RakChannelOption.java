@@ -47,6 +47,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<ByteBuf> RAK_UNCONNECTED_MAGIC =
             valueOf(RakChannelOption.class, "RAK_UNCONNECTED_MAGIC");
 
+    /**
+     * Timeout delay used during client offline phase in millis.
+     */
+    public static final ChannelOption<Long> RAK_CONNECT_TIMEOUT =
+            valueOf(RakChannelOption.class, "RAK_CONNECT_TIMEOUT");
+
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {
         super(null);
