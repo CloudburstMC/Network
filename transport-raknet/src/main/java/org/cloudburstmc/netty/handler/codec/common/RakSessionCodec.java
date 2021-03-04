@@ -259,7 +259,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPack
                 this.disconnect(RakDisconnectReason.BAD_PACKET);
                 return;
             }
-            queue.offer(new IntRange(range.start, range.end));
+            queue.offer(range);
         }
     }
 
