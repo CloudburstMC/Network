@@ -6,7 +6,7 @@ import io.netty.channel.socket.DatagramChannel;
 import org.cloudburstmc.netty.channel.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 import org.cloudburstmc.netty.handler.codec.client.RakClientPongHandler;
 import org.cloudburstmc.netty.handler.codec.client.RakClientRouteHandler;
 import org.cloudburstmc.netty.handler.codec.common.ConnectedPingHandler;

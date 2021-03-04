@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty;
 
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
+import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;

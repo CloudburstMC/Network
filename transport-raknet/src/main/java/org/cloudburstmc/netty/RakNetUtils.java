@@ -1,9 +1,12 @@
 package org.cloudburstmc.netty;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.util.internal.PlatformDependent;
 import org.cloudburstmc.netty.util.IntRange;
 
 import java.net.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 
 public class RakNetUtils {
@@ -63,46 +66,27 @@ public class RakNetUtils {
         }
     }
 
-    public static void writeIntRanges(ByteBuf buffer, Queue<IntRange> ackQueue, int mtu) {
-        int lengthIndex = buffer.writerIndex();
-        buffer.writeZero(2);
-        mtu -= 2;
+    public static IntRange[] createAckEntries(Queue<IntRange> ackQueue, int mtu) {
+        List<IntRange> entries = new ArrayList<>();
+        mtu -= 3; // Skip datagram header + entries size (short)
 
-        int count = 0;
         IntRange ackRange;
         while ((ackRange = ackQueue.poll()) != null) {
-
             IntRange nextRange;
             while ((nextRange = ackQueue.peek()) != null && (ackRange.end + 1) == nextRange.start) {
                 ackQueue.remove();
                 ackRange.end = nextRange.end;
             }
 
-            if (ackRange.start == ackRange.end) {
-                if (mtu < 4) {
-                    break;
-                }
-                mtu -= 4;
-
-                buffer.writeBoolean(true);
-                buffer.writeMediumLE(ackRange.start);
-            } else {
-                if (mtu < 7) {
-                    break;
-                }
-                mtu -= 7;
-
-                buffer.writeBoolean(false);
-                buffer.writeMediumLE(ackRange.start);
-                buffer.writeMediumLE(ackRange.end);
+            int size = ackRange.start == ackRange.end ? 4 : 7;
+            if (mtu < size) {
+                break;
             }
-            count++;
-        }
 
-        int finalIndex = buffer.writerIndex();
-        buffer.writerIndex(lengthIndex);
-        buffer.writeShort(count);
-        buffer.writerIndex(finalIndex);
+            mtu -= size;
+            entries.add(ackRange);
+        }
+        return entries.toArray(new IntRange[0]);
     }
 
     public static int clamp(int value, int low, int high) {

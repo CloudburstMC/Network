@@ -3,7 +3,7 @@ package org.cloudburstmc.netty.channel.raknet;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 import org.cloudburstmc.netty.handler.codec.common.ConnectedPingHandler;
 import org.cloudburstmc.netty.handler.codec.common.ConnectedPongHandler;
 import org.cloudburstmc.netty.handler.codec.common.RakDatagramCodec;
@@ -27,7 +27,7 @@ public class RakChildChannel extends AbstractChannel {
         this.remoteAddress = remoteAddress;
         this.config = new DefaultRakSessionConfig(this);
         this.pipeline().addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
-        this.pipeline().addLast(RakDatagramCodec.NAME, RakDatagramCodec.INSTANCE);
+        this.pipeline().addLast(RakDatagramCodec.NAME, new RakDatagramCodec());
 
         // Setup session/online phase
         RakSessionCodec sessionCodec = null; // TODO: new session here
