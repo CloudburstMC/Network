@@ -34,11 +34,11 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakNetSlidingWindow slidingWindow;
-    private int splitIndex;
-    private int datagramReadIndex;
-    private int datagramWriteIndex;
-    private int reliabilityReadIndex;
-    private int reliabilityWriteIndex;
+    private volatile int splitIndex;
+    private volatile int datagramReadIndex;
+    private volatile int datagramWriteIndex;
+    private volatile int reliabilityReadIndex;
+    private volatile int reliabilityWriteIndex;
     private int[] orderReadIndex;
     private int[] orderWriteIndex;
     private int[] sequenceReadIndex;
@@ -65,7 +65,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     }
 
     private static int getAdjustedMtu(Channel channel) {
-        int mtu = channel.attr(RakAttributes.RAK_MTU).get();
+        int mtu = channel.config().getOption(RakChannelOption.RAK_MTU);
         return (mtu - UDP_HEADER_SIZE) - (((InetSocketAddress) channel.remoteAddress()).getAddress() instanceof Inet6Address ? 40 : 20);
     }
 
@@ -79,31 +79,28 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         this.outgoingPacketNextWeights = new long[4];
         this.initHeapWeights();
 
-        // TODO: find better name for config option name
-        // int maxChannels = ((RakChannelConfig) ctx.channel().config()).getMaxChannels();
-
+        int maxChannels = ctx.channel().config().getOption(RakChannelOption.RAK_ORDERING_CHANNELS);
         this.orderReadIndex = new int[maxChannels];
         this.orderWriteIndex = new int[maxChannels];
         this.sequenceReadIndex = new int[maxChannels];
         this.sequenceWriteIndex = new int[maxChannels];
 
-        //noinspection unchecked
+        // Noinspection unchecked
         this.orderingHeaps = new FastBinaryMinHeap[maxChannels];
         for (int i = 0; i < maxChannels; i++) {
-            orderingHeaps[i] = new FastBinaryMinHeap<EncapsulatedPacket>(64);
+            orderingHeaps[i] = new FastBinaryMinHeap<>(64);
         }
 
-        this.outgoingPackets = new FastBinaryMinHeap<EncapsulatedPacket>(8);
-        this.sentDatagrams = new IntObjectHashMap<RakDatagramPacket>();
+        this.outgoingPackets = new FastBinaryMinHeap<>(8);
+        this.sentDatagrams = new IntObjectHashMap<>();
 
-        this.incomingAcks = new ArrayDeque<IntRange>();
-        this.incomingNaks = new ArrayDeque<IntRange>();
-        this.outgoingAcks = new ArrayDeque<IntRange>();
-        this.outgoingNaks = new ArrayDeque<IntRange>();
+        this.incomingAcks = new ArrayDeque<>();
+        this.incomingNaks = new ArrayDeque<>();
+        this.outgoingAcks = new ArrayDeque<>();
+        this.outgoingNaks = new ArrayDeque<>();
 
         this.reliableDatagramQueue = new BitQueue(512);
-
-        this.splitPackets = new RoundRobinArray<SplitPacketHelper>(256);
+        this.splitPackets = new RoundRobinArray<>(256);
     }
 
     @Override
