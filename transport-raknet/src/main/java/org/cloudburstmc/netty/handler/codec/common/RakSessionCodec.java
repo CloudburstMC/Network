@@ -23,7 +23,7 @@ import java.util.Queue;
 
 import static org.cloudburstmc.netty.RakNetConstants.*;
 
-public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPacket, RakMessage> {
+public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, RakMessage> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakSessionCodec.class);
     public static final String NAME = "rak-session-codec";
 
@@ -168,19 +168,11 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPack
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, RakCodecPacket packet, List<Object> list) throws Exception {
+    protected void decode(ChannelHandlerContext ctx, RakDatagramPacket packet, List<Object> list) throws Exception {
         if (this.state == null || RakState.INITIALIZED.compareTo(this.state) > 0) {
             return;
         }
 
-        if (packet instanceof RakDatagramPacket) {
-            this.handleDatagram(ctx, (RakDatagramPacket) packet);
-        } else if (packet instanceof AcknowledgedPacket) {
-            this.handleAcknowledged(ctx, (AcknowledgedPacket) packet);
-        }
-    }
-
-    private void handleDatagram(ChannelHandlerContext ctx, RakDatagramPacket datagram) {
         this.slidingWindow.onPacketReceived(datagram.sendTime);
 
         int prevSequenceIndex = datagramReadIndexUpdater.getAndAccumulate(this, datagram.sequenceIndex,
@@ -244,22 +236,6 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPack
             } else {
                 this.checkForOrdered(ctx, encapsulated);
             }
-        }
-    }
-
-    private void handleAcknowledged(ChannelHandlerContext ctx, AcknowledgedPacket packet) {
-        this.checkForClosed();
-
-        Queue<IntRange> queue = packet.isNack() ? this.incomingNaks : this.incomingAcks;
-        for (IntRange range : packet.getEntries()) {
-            if (range.start > range.end) {
-                if (log.isTraceEnabled()) {
-                    log.trace("{} sent an IntRange with a start value {} greater than an end value of {}", this.address, range.start, range.end);
-                }
-                this.disconnect(RakDisconnectReason.BAD_PACKET);
-                return;
-            }
-            queue.offer(range);
         }
     }
 
@@ -358,7 +334,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPack
     }
 
 
-    private final void onTick(long curTime) {
+    private void onTick(long curTime) {
         if (!this.closed) {
             this.tick(curTime);
         }
@@ -381,7 +357,6 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPack
         // Incoming queues
 
         if (!this.incomingAcks.isEmpty()) {
-
             IntRange range;
             while ((range = this.incomingAcks.poll()) != null) {
                 for (int i = range.start; i <= range.end; i++) {
@@ -415,18 +390,18 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPack
         final int mtu = this.adjustedMtu - RAKNET_DATAGRAM_HEADER_SIZE;
 
         while (!this.outgoingNaks.isEmpty()) {
-            AcknowledgedPacket packet = new AcknowledgedPacket();
-            packet.setNack(true);
-            packet.setEntries(RakNetUtils.createAckEntries(this.outgoingNaks, mtu));
-            this.channel.writeAndFlush(packet);
+            ByteBuf buffer = this.channel.alloc().ioBuffer(mtu);
+            buffer.writeByte(FLAG_VALID | FLAG_NACK);
+            RakNetUtils.writeAckEntries(buffer, this.outgoingNaks, mtu - 1);
+            this.channel.writeAndFlush(buffer);
         }
 
         if (this.slidingWindow.shouldSendAcks(curTime)) {
             while (!this.outgoingAcks.isEmpty()) {
-                AcknowledgedPacket packet = new AcknowledgedPacket();
-                packet.setNack(false);
-                packet.setEntries(RakNetUtils.createAckEntries(this.outgoingNaks, mtu));
-                this.channel.writeAndFlush(packet);
+                ByteBuf buffer = this.channel.alloc().ioBuffer(mtu);
+                buffer.writeByte(FLAG_VALID | FLAG_ACK);
+                RakNetUtils.writeAckEntries(buffer, this.outgoingAcks, mtu - 1);
+                this.channel.writeAndFlush(buffer);
                 this.slidingWindow.onSendAck();
             }
         }
@@ -664,6 +639,10 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakCodecPack
     private void touch() {
         this.checkForClosed();
         this.lastTouched = System.currentTimeMillis();
+    }
+
+    protected Queue<IntRange> getAcknowledgeQueue(boolean nack) {
+        return nack ? this.incomingNaks : this.incomingAcks;
     }
 
     public boolean isStale(long curTime) {

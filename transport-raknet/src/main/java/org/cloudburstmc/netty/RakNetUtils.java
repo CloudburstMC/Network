@@ -66,10 +66,12 @@ public class RakNetUtils {
         }
     }
 
-    public static IntRange[] createAckEntries(Queue<IntRange> ackQueue, int mtu) {
-        List<IntRange> entries = new ArrayList<>();
-        mtu -= 3; // Skip datagram header + entries size (short)
+    public static void writeAckEntries(ByteBuf buffer, Queue<IntRange> ackQueue, int mtu) {
+        int startIndex = buffer.writerIndex();
+        buffer.writeZero(2);
+        mtu -= 2; // Skip entries size (short)
 
+        int count = 0;
         IntRange ackRange;
         while ((ackRange = ackQueue.poll()) != null) {
             IntRange nextRange;
@@ -78,15 +80,26 @@ public class RakNetUtils {
                 ackRange.end = nextRange.end;
             }
 
-            int size = ackRange.start == ackRange.end ? 4 : 7;
+            boolean singleton = ackRange.start == ackRange.end;
+            int size = singleton ? 4 : 7;
             if (mtu < size) {
                 break;
             }
 
+            count++;
             mtu -= size;
-            entries.add(ackRange);
+
+            buffer.writeBoolean(singleton);
+            buffer.writeMediumLE(ackRange.start);
+            if (!singleton) {
+                buffer.writeMediumLE(ackRange.end);
+            }
         }
-        return entries.toArray(new IntRange[0]);
+
+        int finalIndex = buffer.writerIndex();
+        buffer.writerIndex(startIndex);
+        buffer.writeShort(count);
+        buffer.writerIndex(finalIndex);
     }
 
     public static int clamp(int value, int low, int high) {
