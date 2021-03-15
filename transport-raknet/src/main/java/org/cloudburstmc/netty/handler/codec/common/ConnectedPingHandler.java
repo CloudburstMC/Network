@@ -2,8 +2,8 @@ package org.cloudburstmc.netty.handler.codec.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
-import org.cloudburstmc.netty.EncapsulatedPacket;
-import org.cloudburstmc.netty.channel.raknet.RakMessage;
+import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
+import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;

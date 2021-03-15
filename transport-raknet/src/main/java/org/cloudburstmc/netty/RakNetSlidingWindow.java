@@ -1,5 +1,7 @@
 package org.cloudburstmc.netty;
 
+import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
+
 import static org.cloudburstmc.netty.RakNetConstants.*;
 
 public class RakNetSlidingWindow {

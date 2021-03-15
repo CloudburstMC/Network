@@ -4,9 +4,9 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramChannel;
 import org.cloudburstmc.netty.channel.ProxyChannel;
-import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
+import org.cloudburstmc.netty.channel.raknet.config.DefaultRakClientConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 import org.cloudburstmc.netty.handler.codec.client.RakClientPongHandler;
 import org.cloudburstmc.netty.handler.codec.client.RakClientRouteHandler;
 import org.cloudburstmc.netty.handler.codec.common.ConnectedPingHandler;
@@ -24,7 +24,7 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
 
     public RakClientChannel(DatagramChannel channel) {
         super(channel);
-        this.config = new DefaultRakSessionConfig(this);
+        this.config = new DefaultRakClientConfig(this);
         this.pipeline().addLast(RakClientRouteHandler.NAME, new RakClientRouteHandler(this));
         this.pipeline().addLast(RakClientPongHandler.NAME, RakClientPongHandler.INSTANCE);
 

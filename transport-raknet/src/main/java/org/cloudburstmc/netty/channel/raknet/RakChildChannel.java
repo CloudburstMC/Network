@@ -3,10 +3,7 @@ package org.cloudburstmc.netty.channel.raknet;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
-import org.cloudburstmc.netty.handler.codec.common.ConnectedPingHandler;
-import org.cloudburstmc.netty.handler.codec.common.ConnectedPongHandler;
-import org.cloudburstmc.netty.handler.codec.common.RakDatagramCodec;
+import org.cloudburstmc.netty.handler.codec.common.*;
 import org.cloudburstmc.netty.handler.codec.server.RakChildDatagramHandler;
 import org.cloudburstmc.netty.handler.codec.server.RakServerOnlineInitialHandler;
 
@@ -27,10 +24,11 @@ public class RakChildChannel extends AbstractChannel {
         this.remoteAddress = remoteAddress;
         this.config = new DefaultRakSessionConfig(this);
         this.pipeline().addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
-        this.pipeline().addLast(RakDatagramCodec.NAME, RakDatagramCodec.INSTANCE);
 
         // Setup session/online phase
         RakSessionCodec sessionCodec = null; // TODO: new session here
+        this.pipeline().addLast(RakDatagramCodec.NAME, new RakDatagramCodec());
+        this.pipeline().addLast(RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
         this.pipeline().addLast(RakSessionCodec.NAME, sessionCodec);
         this.pipeline().addLast(RakServerOnlineInitialHandler.NAME, RakServerOnlineInitialHandler.INSTANCE); // Will be removed
         this.pipeline().addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());

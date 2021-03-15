@@ -15,4 +15,8 @@ public interface RakChannelConfig extends ChannelConfig {
     int getProtocolVersion();
 
     RakChannelConfig setProtocolVersion(int protocolVersion);
+
+    int getOrderingChannels();
+
+    RakChannelConfig setOrderingChannels(int orderingChannels);
 }

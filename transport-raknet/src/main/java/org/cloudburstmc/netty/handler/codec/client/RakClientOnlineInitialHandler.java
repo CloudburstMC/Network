@@ -7,7 +7,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.SimpleChannelInboundHandler;
 import org.cloudburstmc.netty.RakNetUtils;
-import org.cloudburstmc.netty.channel.raknet.RakMessage;
+import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
@@ -41,7 +41,7 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<R
         // At this point connection is fully initialized.
         Channel channel = ctx.channel();
         channel.pipeline().remove(RakClientOfflineHandler.NAME);
-        channel.pipeline().remove(this);
+        channel.pipeline().remove(RakClientOnlineInitialHandler.NAME);
         this.successPromise.trySuccess();
     }
 

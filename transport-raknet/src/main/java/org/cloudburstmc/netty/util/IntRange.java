@@ -1,7 +1,5 @@
 package org.cloudburstmc.netty.util;
 
-import com.nukkitx.network.util.Preconditions;
-
 public class IntRange {
     public int start;
     public int end;
@@ -11,7 +9,6 @@ public class IntRange {
     }
 
     public IntRange(int start, int end) {
-        Preconditions.checkArgument(start <= end, "start is greater than end");
         this.start = start;
         this.end = end;
     }

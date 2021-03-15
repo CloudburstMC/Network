@@ -1,9 +1,12 @@
 package org.cloudburstmc.netty;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.util.internal.PlatformDependent;
 import org.cloudburstmc.netty.util.IntRange;
 
 import java.net.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 
 public class RakNetUtils {
@@ -63,44 +66,38 @@ public class RakNetUtils {
         }
     }
 
-    public static void writeIntRanges(ByteBuf buffer, Queue<IntRange> ackQueue, int mtu) {
-        int lengthIndex = buffer.writerIndex();
+    public static void writeAckEntries(ByteBuf buffer, Queue<IntRange> ackQueue, int mtu) {
+        int startIndex = buffer.writerIndex();
         buffer.writeZero(2);
-        mtu -= 2;
+        mtu -= 2; // Skip entries size (short)
 
         int count = 0;
         IntRange ackRange;
         while ((ackRange = ackQueue.poll()) != null) {
-
             IntRange nextRange;
             while ((nextRange = ackQueue.peek()) != null && (ackRange.end + 1) == nextRange.start) {
                 ackQueue.remove();
                 ackRange.end = nextRange.end;
             }
 
-            if (ackRange.start == ackRange.end) {
-                if (mtu < 4) {
-                    break;
-                }
-                mtu -= 4;
+            boolean singleton = ackRange.start == ackRange.end;
+            int size = singleton ? 4 : 7;
+            if (mtu < size) {
+                break;
+            }
 
-                buffer.writeBoolean(true);
-                buffer.writeMediumLE(ackRange.start);
-            } else {
-                if (mtu < 7) {
-                    break;
-                }
-                mtu -= 7;
+            count++;
+            mtu -= size;
 
-                buffer.writeBoolean(false);
-                buffer.writeMediumLE(ackRange.start);
+            buffer.writeBoolean(singleton);
+            buffer.writeMediumLE(ackRange.start);
+            if (!singleton) {
                 buffer.writeMediumLE(ackRange.end);
             }
-            count++;
         }
 
         int finalIndex = buffer.writerIndex();
-        buffer.writerIndex(lengthIndex);
+        buffer.writerIndex(startIndex);
         buffer.writeShort(count);
         buffer.writerIndex(finalIndex);
     }

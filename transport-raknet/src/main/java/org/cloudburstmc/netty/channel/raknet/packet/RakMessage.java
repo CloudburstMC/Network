@@ -1,7 +1,9 @@
-package org.cloudburstmc.netty.channel.raknet;
+package org.cloudburstmc.netty.channel.raknet.packet;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.DefaultByteBufHolder;
+import org.cloudburstmc.netty.channel.raknet.RakPriority;
+import org.cloudburstmc.netty.channel.raknet.RakReliability;
 
 /**
  * Representation of a RakNet Packet

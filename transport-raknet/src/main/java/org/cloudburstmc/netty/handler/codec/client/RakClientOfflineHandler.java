@@ -8,7 +8,8 @@ import io.netty.handler.codec.CorruptedFrameException;
 import org.cloudburstmc.netty.RakNetUtils;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.common.RakAcknowledgeHandler;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 import org.cloudburstmc.netty.handler.codec.common.RakDatagramCodec;
 
 import java.net.Inet6Address;
@@ -55,10 +56,11 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<Datagra
 
     private void onSuccess(ChannelHandlerContext ctx) {
         Channel channel = ctx.channel();
-        channel.pipeline().addLast(RakDatagramCodec.NAME, RakDatagramCodec.INSTANCE);
-
         // Create new session which decodes RakDatagramPacket to RakMessage
         RakSessionCodec sessionCodec = null; // TODO: create session here, consider RakClientChannel#createSession()
+
+        channel.pipeline().addLast(RakDatagramCodec.NAME, new RakDatagramCodec());
+        channel.pipeline().addLast(RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
         channel.pipeline().addLast(RakSessionCodec.NAME, sessionCodec);
         channel.pipeline().addLast(RakClientOnlineInitialHandler.NAME, new RakClientOnlineInitialHandler(this.successPromise));
     }

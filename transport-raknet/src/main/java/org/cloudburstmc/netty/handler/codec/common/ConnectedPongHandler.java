@@ -2,10 +2,9 @@ package org.cloudburstmc.netty.handler.codec.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
-import org.cloudburstmc.netty.EncapsulatedPacket;
+import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.RakNetConstants;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
 
 public class ConnectedPongHandler extends AdvancedChannelInboundHandler<EncapsulatedPacket> {
     public static final String NAME = "rak-connected-pong-handler";
@@ -31,8 +30,6 @@ public class ConnectedPongHandler extends AdvancedChannelInboundHandler<Encapsul
         ByteBuf buf = packet.buffer;
         buf.readUnsignedByte(); // Packet ID
         long pingTime = buf.readLong();
-
-        // TODO: notify session about pong received
-        // this.sessionCodec.recalculatePingTime();
+        this.sessionCodec.recalculatePongTime(pingTime);
     }
 }

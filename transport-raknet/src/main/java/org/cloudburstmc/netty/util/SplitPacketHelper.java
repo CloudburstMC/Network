@@ -5,8 +5,8 @@ import io.netty.buffer.ByteBuf;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
-import org.cloudburstmc.netty.EncapsulatedPacket;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
+import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 
 import javax.annotation.Nullable;
 

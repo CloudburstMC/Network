@@ -6,10 +6,16 @@ import io.netty.channel.ChannelOption;
 public class RakChannelOption<T> extends ChannelOption<T> {
 
     /**
-     * Maximum amount of channels each RakNet connection can have. (1-256)
+     * TODO: max amount of child channels per server
      */
     public static final ChannelOption<Integer> RAK_MAX_CHANNELS =
             valueOf(RakChannelOption.class, "RAK_MAX_CHANNELS");
+
+    /**
+     * Maximum amount of ordering channels each RakNet connection can have. (1-256)
+     */
+    public static final ChannelOption<Integer> RAK_ORDERING_CHANNELS =
+            valueOf(RakChannelOption.class, "RAK_ORDERING_CHANNELS");
 
     /**
      * MTU that the RakNet client will use when initially connecting.

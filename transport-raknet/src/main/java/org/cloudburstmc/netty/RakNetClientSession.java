@@ -8,7 +8,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.EventLoop;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
-import org.cloudburstmc.netty.handler.codec.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.Inet6Address;
