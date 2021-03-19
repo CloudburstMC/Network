@@ -5,7 +5,7 @@
     <parent>
         <artifactId>network-parent</artifactId>
         <groupId>com.nukkitx.network</groupId>
-        <version>1.6.25</version>
+        <version>1.6.26-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -22,6 +22,12 @@
             <groupId>io.netty</groupId>
             <artifactId>netty-handler</artifactId>
             <version>${netty.version}</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.jodah</groupId>
+            <artifactId>expiringmap</artifactId>
+            <version>0.5.9</version>
             <scope>compile</scope>
         </dependency>
     </dependencies>
