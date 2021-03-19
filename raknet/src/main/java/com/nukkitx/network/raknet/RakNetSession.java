@@ -557,7 +557,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void disconnect() {
-        disconnect(DisconnectReason.DISCONNECTED);
+        this.disconnect(DisconnectReason.DISCONNECTED);
     }
 
     @Override
@@ -565,8 +565,19 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         if (this.isClosed()) {
             return;
         }
-        this.sendDisconnectionNotification();
-        this.close(reason);
+
+        if (this.eventLoop.inEventLoop()) {
+            this.disconnect0(reason);
+        } else {
+            this.eventLoop.execute(() -> this.disconnect0(reason));
+        }
+    }
+
+    private void disconnect0(DisconnectReason reason) {
+        if (!this.isClosed()) {
+            this.sendDisconnectionNotification();
+            this.close0(reason);
+        }
     }
 
     @Override
@@ -576,13 +587,14 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     @Override
     public void close(DisconnectReason reason) {
-        if (closedUpdater.get(this) != 0) {
+        if (this.isClosed()) {
             return;
         }
+
         if (this.eventLoop.inEventLoop()) {
             this.close0(reason);
         } else {
-            this.eventLoop.execute(() -> close0(reason));
+            this.eventLoop.execute(() -> this.close0(reason));
         }
     }
 
@@ -597,7 +609,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         }
 
         this.deinitialize();
-
         if (this.listener != null) {
             this.listener.onDisconnect(reason);
         }
