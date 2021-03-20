@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.handler.codec.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.codec.MessageToMessageCodec;
@@ -15,7 +16,6 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.packet.*;
 import org.cloudburstmc.netty.util.*;
 
-import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -62,11 +62,6 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         this.channel = channel;
     }
 
-    private static int getAdjustedMtu(Channel channel) {
-        int mtu = channel.config().getOption(RakChannelOption.RAK_MTU);
-        return (mtu - UDP_HEADER_SIZE) - (((InetSocketAddress) channel.remoteAddress()).getAddress() instanceof Inet6Address ? 40 : 20);
-    }
-
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         super.channelActive(ctx);
@@ -80,8 +75,6 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         int maxChannels = ctx.channel().config().getOption(RakChannelOption.RAK_ORDERING_CHANNELS);
         this.orderReadIndex = new int[maxChannels];
         this.orderWriteIndex = new int[maxChannels];
-        this.sequenceReadIndex = new int[maxChannels];
-        this.sequenceWriteIndex = new int[maxChannels];
 
         // Noinspection unchecked
         this.orderingHeaps = new FastBinaryMinHeap[maxChannels];
@@ -99,11 +92,17 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
 
         this.reliableDatagramQueue = new BitQueue(512);
         this.splitPackets = new RoundRobinArray<>(256);
+
+        // TODO: start ticking
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
+        this.closed = true;
+        this.state = RakState.UNCONNECTED; // TODO: consider removing
+
+        // TODO: close tick future
 
         // Perform resource clean up.
         for (SplitPacketHelper helper : this.splitPackets) {
@@ -137,6 +136,10 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             }
             outgoingPackets.release();
         }
+
+        if (log.isTraceEnabled()) {
+            log.trace("RakNet Session ({} => {}) closed!", this.channel.localAddress(), this.getRemoteAddress());
+        }
     }
 
     private void initHeapWeights() {
@@ -168,6 +171,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             return;
         }
 
+        this.touch();
         this.slidingWindow.onPacketReceived(packet.getSendTime());
 
         int prevSequenceIndex = this.datagramReadIndex;
@@ -315,14 +319,11 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
 
     private void sendImmediate(EncapsulatedPacket[] packets) {
         long curTime = System.currentTimeMillis();
-
         for (EncapsulatedPacket packet : packets) {
             RakDatagramPacket datagram = RakDatagramPacket.newInstance();
             datagram.setSendTime(curTime);
-
-            if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
-                throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() +
-                        ", MTU: " + this.adjustedMtu + ")");
+            if (!datagram.tryAddPacket(packet, this.getMtu())) {
+                throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + this.getMtu() + ")");
             }
             this.sendDatagram(datagram, curTime);
         }
@@ -347,11 +348,12 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         }
 
         if (this.currentPingTime + 2000L < curTime) {
-            this.sendConnectedPing(curTime);
+            this.sendConnectedPing(curTime); // TODO:
         }
 
-        // Incoming queues
+        int mtuSize = this.getMtu();
 
+        // Incoming queues
         if (!this.incomingAcks.isEmpty()) {
             IntRange range;
             while ((range = this.incomingAcks.poll()) != null) {
@@ -373,7 +375,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
                     RakDatagramPacket datagram = this.sentDatagrams.remove(i);
                     if (datagram != null) {
                         if (log.isTraceEnabled()) {
-                            log.trace("NAK'ed datagram {} from {}", datagram.getSequenceIndex(), this.address);
+                            log.trace("NAK'ed datagram {} from {}", datagram.getSequenceIndex(), this.getRemoteAddress());
                         }
                         this.sendDatagram(datagram, curTime);
                     }
@@ -382,29 +384,26 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         }
 
         // Outgoing queues
-
-        final int mtu = this.adjustedMtu - RAKNET_DATAGRAM_HEADER_SIZE;
-
+        int ackMtu = mtuSize - RAKNET_DATAGRAM_HEADER_SIZE;
         while (!this.outgoingNaks.isEmpty()) {
-            ByteBuf buffer = this.channel.alloc().ioBuffer(mtu);
+            ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
-            RakNetUtils.writeAckEntries(buffer, this.outgoingNaks, mtu - 1);
+            RakNetUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
             this.channel.writeAndFlush(buffer);
         }
 
         if (this.slidingWindow.shouldSendAcks(curTime)) {
             while (!this.outgoingAcks.isEmpty()) {
-                ByteBuf buffer = this.channel.alloc().ioBuffer(mtu);
+                ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
                 buffer.writeByte(FLAG_VALID | FLAG_ACK);
-                RakNetUtils.writeAckEntries(buffer, this.outgoingAcks, mtu - 1);
+                RakNetUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
                 this.channel.writeAndFlush(buffer);
                 this.slidingWindow.onSendAck();
             }
         }
 
-        int transmissionBandwidth;
         // Send packets that are stale first
-
+        int transmissionBandwidth;
         if (!this.sentDatagrams.isEmpty()) {
             transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth();
             boolean hasResent = false;
@@ -421,8 +420,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
                         hasResent = true;
                     }
                     if (log.isTraceEnabled()) {
-                        log.trace("Stale datagram {} from {}", datagram.getSequenceIndex(),
-                                this.address);
+                        log.trace("Stale datagram {} from {}", datagram.getSequenceIndex(), this.getRemoteAddress());
                     }
                     this.sendDatagram(datagram, curTime);
                 }
@@ -445,19 +443,18 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
                 if (transmissionBandwidth < size) {
                     break;
                 }
-                transmissionBandwidth -= size;
 
+                transmissionBandwidth -= size;
                 this.outgoingPackets.remove();
 
-                if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
-                    // Send full datagram
+                // Send full datagram
+                if (!datagram.tryAddPacket(packet, mtuSize)) {
                     this.sendDatagram(datagram, curTime);
 
                     datagram = RakDatagramPacket.newInstance();
                     datagram.setSendTime(curTime);
-
-                    if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
-                        throw new IllegalArgumentException("Packet too large to fit in MTU (size: %s, MTU: %s)", packet.getSize(), this.adjustedMtu);
+                    if (!datagram.tryAddPacket(packet, mtuSize)) {
+                        throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + mtuSize +")");
                     }
                 }
             }
@@ -469,52 +466,8 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         this.channel.flush();
     }
 
-
-    @Override
-    public void disconnect() {
-        this.disconnect(RakDisconnectReason.DISCONNECTED);
-    }
-
-    @Override
-    public void disconnect(RakDisconnectReason reason) {
-        if (this.closed) {
-            return;
-        }
-        this.sendDisconnectionNotification();
-        this.close(reason);
-    }
-
-    @Override
-    public void close() {
-        this.close(RakDisconnectReason.DISCONNECTED);
-    }
-
-    @Override
-    public void close(RakDisconnectReason reason) {
-        this.sessionLock.writeLock().lock();
-        try {
-            if (this.closed) {
-                return;
-            }
-            this.closed = true;
-            this.state = RakState.UNCONNECTED;
-            this.onClose();
-            if (log.isTraceEnabled()) {
-                log.trace("RakNet Session ({} => {}) closed: {}", this.getRakNet().bindAddress, this.address, reason);
-            }
-
-            this.deinitialize();
-
-            if (this.listener != null) {
-                this.listener.onDisconnect(reason);
-            }
-        } finally {
-            this.sessionLock.writeLock().unlock();
-        }
-    }
-
     private EncapsulatedPacket[] createEncapsulated(RakMessage rakMessage) {
-        int maxLength = this.adjustedMtu - MAXIMUM_ENCAPSULATED_HEADER_SIZE - RAKNET_DATAGRAM_HEADER_SIZE;
+        int maxLength = this.getMtu() - MAXIMUM_ENCAPSULATED_HEADER_SIZE - RAKNET_DATAGRAM_HEADER_SIZE;
 
         ByteBuf[] buffers;
         int splitId = 0;
@@ -555,11 +508,8 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         }
 
         // Set meta
+        // TODO: sequencing
         int orderingIndex = 0;
-        /*int sequencingIndex = 0;
-        if (reliability.isSequenced()) {
-            sequencingIndex = this.sequenceWriteIndex.getAndIncrement(orderingChannel);
-        } todo: sequencing */
         if (reliability.isOrdered()) {
             orderingIndex = this.orderWriteIndex[orderingChannel]++;
         }
@@ -571,7 +521,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             packet.setBuffer(buffers[i]);
             packet.setOrderingChannel((short) orderingChannel);
             packet.setOrderingIndex(orderingIndex);
-            //packet.setSequenceIndex(sequencingIndex);
+            // packet.setSequenceIndex(sequencingIndex);
             packet.setReliability(reliability);
             packet.setPriority(rakMessage.priority());
             if (reliability.isReliable()) {
@@ -589,10 +539,6 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         }
         return packets;
     }
-
-    /*
-        Packet Handlers
-     */
 
     private void sendDatagram(RakDatagramPacket datagram, long time) {
         if (datagram.getPackets().isEmpty()) {
@@ -619,10 +565,44 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         this.channel.write(datagram);
     }
 
+    public void disconnect() {
+        this.disconnect(RakDisconnectReason.DISCONNECTED);
+    }
+
+    public void disconnect(RakDisconnectReason reason) {
+        // TODO: We don't want to send disconnect notif twice,
+        //  but we do not set 'this.closed = true' here because packet won't be sent
+        if (this.closed || !this.channel.closeFuture().isSuccess()) {
+            return;
+        }
+
+        if (log.isTraceEnabled()) {
+            log.trace("Disconnecting RakNet Session ({} => {}) due to {}", this.channel.localAddress(), this.getRemoteAddress(), reason);
+        }
+
+        ByteBuf buffer = this.channel.alloc().ioBuffer(1);
+        buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
+        RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE);
+
+        ChannelFuture future = this.channel.write(rakMessage);
+        future.addListener((ChannelFuture future1) -> future1.channel().close()); // TODO: verify this
+    }
+
+
+    public boolean isClosed() {
+        return this.closed;
+    }
+
+    private void checkForClosed() {
+        if (this.closed) {
+            throw new IllegalStateException("RakSession is closed!");
+        }
+    }
+
+    // TODO
     private void onDisconnectionNotification() {
         this.close(RakDisconnectReason.CLOSED_BY_REMOTE_PEER);
     }
-
 
     public void recalculatePongTime(long pingTime) {
         if (this.currentPingTime == pingTime) {
@@ -631,14 +611,9 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         }
     }
 
-
     private void touch() {
         this.checkForClosed();
         this.lastTouched = System.currentTimeMillis();
-    }
-
-    protected Queue<IntRange> getAcknowledgeQueue(boolean nack) {
-        return nack ? this.incomingNaks : this.incomingAcks;
     }
 
     public boolean isStale(long curTime) {
@@ -646,7 +621,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     }
     
     public boolean isStale() {
-        return isStale(System.currentTimeMillis());
+        return this.isStale(System.currentTimeMillis());
     }
 
     public boolean isTimedOut(long curTime) {
@@ -654,7 +629,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     }
 
     public boolean isTimedOut() {
-        return isTimedOut(System.currentTimeMillis());
+        return this.isTimedOut(System.currentTimeMillis());
     }
 
     public long getPing() {
@@ -663,5 +638,17 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
 
     public double getRTT() {
         return this.slidingWindow.getRTT();
+    }
+
+    public int getMtu() {
+        return this.channel.config().getOption(RakChannelOption.RAK_MTU);
+    }
+
+    public InetSocketAddress getRemoteAddress() {
+        return (InetSocketAddress) this.channel.remoteAddress();
+    }
+
+    protected Queue<IntRange> getAcknowledgeQueue(boolean nack) {
+        return nack ? this.incomingNaks : this.incomingAcks;
     }
 }
