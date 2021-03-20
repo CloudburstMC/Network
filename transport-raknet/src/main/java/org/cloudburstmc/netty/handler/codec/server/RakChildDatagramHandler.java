@@ -20,16 +20,17 @@ public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (!(msg instanceof ByteBuf)) {
+        boolean isDatagram = msg instanceof DatagramPacket;
+        if (!isDatagram && !(msg instanceof ByteBuf)) {
             ctx.write(msg, promise);
             return;
         }
 
         this.canFlush.set(true);
         promise.trySuccess();
+        DatagramPacket datagram = isDatagram ? (DatagramPacket) msg : new DatagramPacket((ByteBuf) msg, this.channel.remoteAddress());
 
-
-        ChannelFuture channelFuture = this.channel.parent().write(new DatagramPacket((ByteBuf) msg, this.channel.remoteAddress()));
+        ChannelFuture channelFuture = this.channel.parent().write(datagram);
         channelFuture.addListener((ChannelFuture future) -> {
             if (!future.isSuccess() && !(future.cause() instanceof ClosedChannelException)) {
                 future.channel().pipeline().fireExceptionCaught(future.cause());

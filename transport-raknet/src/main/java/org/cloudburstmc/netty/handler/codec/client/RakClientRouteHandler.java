@@ -29,22 +29,22 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
 
         // TODO: active check?
 
-        ChannelFuture clientFuture = this.channel.connect(remoteAddress, localAddress);
-        clientFuture.addListener(future -> {
+        ChannelFuture parentFuture = this.channel.parent().connect(remoteAddress, localAddress);
+        parentFuture.addListener(future -> {
            if (future.isSuccess()) {
                this.channel.pipeline().addLast(RakClientOfflineHandler.NAME, new RakClientOfflineHandler(this.channel.getConnectPromise()));
            }
         });
 
         PromiseCombiner combiner = new PromiseCombiner(this.channel.eventLoop());
-        combiner.add(clientFuture);
+        combiner.add(parentFuture);
         combiner.add((ChannelFuture) this.channel.getConnectPromise());
         combiner.finish(promise);
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        this.channel.write(msg, this.channel.correctPromise(promise));
+        this.channel.parent().write(msg, this.channel.correctPromise(promise));
     }
 
     @Override

@@ -18,16 +18,14 @@ public class RakServerRouteHandler extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (!(msg instanceof DatagramPacket) || ctx.channel() != this.parent) {
+        if (!(msg instanceof DatagramPacket)) {
             ctx.fireChannelRead(msg);
             return;
         }
-
-        RakServerChannel parent = (RakServerChannel) ctx.channel();
         DatagramPacket packet = (DatagramPacket) msg;
 
         try {
-            RakChildChannel channel = parent.getChildChannel(packet.sender());
+            RakChildChannel channel = this.parent.getChildChannel(packet.sender());
             if (channel == null) {
                 // Pass DatagramPacket which holds remote address and payload.
                 ctx.fireChannelRead(packet.retain());
