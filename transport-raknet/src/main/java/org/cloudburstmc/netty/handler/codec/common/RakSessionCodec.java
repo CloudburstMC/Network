@@ -34,15 +34,13 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakNetSlidingWindow slidingWindow;
-    private volatile int splitIndex;
-    private volatile int datagramReadIndex;
-    private volatile int datagramWriteIndex;
-    private volatile int reliabilityReadIndex;
-    private volatile int reliabilityWriteIndex;
+    private int splitIndex;
+    private int datagramReadIndex;
+    private int datagramWriteIndex;
+    private int reliabilityReadIndex;
+    private int reliabilityWriteIndex;
     private int[] orderReadIndex;
     private int[] orderWriteIndex;
-    private int[] sequenceReadIndex;
-    private int[] sequenceWriteIndex;
 
     private RoundRobinArray<SplitPacketHelper> splitPackets;
     private BitQueue reliableDatagramQueue;
@@ -170,21 +168,23 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             return;
         }
 
-        this.slidingWindow.onPacketReceived(datagram.sendTime);
+        this.slidingWindow.onPacketReceived(packet.getSendTime());
 
-        int prevSequenceIndex = datagramReadIndexUpdater.getAndAccumulate(this, datagram.sequenceIndex,
-                (prev, newIndex) -> prev <= newIndex ? newIndex + 1 : prev);
-        int missedDatagrams = datagram.sequenceIndex - prevSequenceIndex;
-
-        if (missedDatagrams > 0) {
-            this.outgoingNaks.offer(new IntRange(datagram.sequenceIndex - missedDatagrams, datagram.sequenceIndex));
+        int prevSequenceIndex = this.datagramReadIndex;
+        if (prevSequenceIndex <= packet.getSequenceIndex()) {
+            this.datagramReadIndex = packet.getSequenceIndex() + 1;
         }
 
-        this.outgoingAcks.offer(new IntRange(datagram.sequenceIndex, datagram.sequenceIndex));
+        int missedDatagrams = packet.getSequenceIndex() - prevSequenceIndex;
+        if (missedDatagrams > 0) {
+            this.outgoingNaks.offer(new IntRange(packet.getSequenceIndex() - missedDatagrams, packet.getSequenceIndex()));
+        }
 
-        for (final EncapsulatedPacket encapsulated : datagram.packets) {
-            if (encapsulated.reliability.isReliable()) {
-                int missed = encapsulated.reliabilityIndex - this.reliabilityReadIndex;
+        this.outgoingAcks.offer(new IntRange(packet.getSequenceIndex(), packet.getSequenceIndex()));
+
+        for (final EncapsulatedPacket encapsulated : packet.getPackets()) {
+            if (encapsulated.getReliability().isReliable()) {
+                int missed = encapsulated.getReliabilityIndex() - this.reliabilityReadIndex;
 
                 if (missed > 0) {
                     if (missed < this.reliableDatagramQueue.size()) {
@@ -219,7 +219,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             }
 
 
-            if (encapsulated.split) {
+            if (encapsulated.isSplit()) {
                 final EncapsulatedPacket reassembled = this.getReassembledPacket(encapsulated);
                 if (reassembled == null) {
                     // Not reassembled
@@ -237,7 +237,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     }
 
     private void checkForOrdered(ChannelHandlerContext ctx, EncapsulatedPacket packet) {
-        if (packet.reliability.isOrdered()) {
+        if (packet.getReliability().isOrdered()) {
             this.onOrderedReceived(ctx, packet);
         } else {
             ctx.fireChannelRead(packet);
@@ -245,28 +245,27 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     }
 
     private void onOrderedReceived(ChannelHandlerContext ctx, EncapsulatedPacket packet) {
-        FastBinaryMinHeap<EncapsulatedPacket> binaryHeap = this.orderingHeaps[packet.orderingChannel];
-
-        if (this.orderReadIndex[packet.orderingChannel] < packet.orderingIndex) {
+        FastBinaryMinHeap<EncapsulatedPacket> binaryHeap = this.orderingHeaps[packet.getOrderingChannel()];
+        if (this.orderReadIndex[packet.getOrderingChannel()] < packet.getOrderingIndex()) {
             // Not next in line so add to queue.
-            binaryHeap.insert(packet.orderingIndex, packet.retain());
+            binaryHeap.insert(packet.getOrderingIndex(), packet.retain());
             return;
-        } else if (this.orderReadIndex[packet.orderingChannel] > packet.orderingIndex) {
+        } else if (this.orderReadIndex[packet.getOrderingChannel()] > packet.getOrderingIndex()) {
             // We already have this
             return;
         }
-        this.orderReadIndex[packet.orderingChannel]++;
+        this.orderReadIndex[packet.getOrderingChannel()]++;
 
         // Can be handled
         ctx.fireChannelRead(packet);
 
         EncapsulatedPacket queuedPacket;
         while ((queuedPacket = binaryHeap.peek()) != null) {
-            if (queuedPacket.orderingIndex == this.orderReadIndex[packet.orderingChannel]) {
+            if (queuedPacket.getOrderingIndex() == this.orderReadIndex[packet.getOrderingChannel()]) {
                 try {
                     // We got the expected packet
                     binaryHeap.remove();
-                    this.orderReadIndex[packet.orderingChannel]++;
+                    this.orderReadIndex[packet.getOrderingChannel()]++;
                     ctx.fireChannelRead(queuedPacket);
                 } finally {
                     queuedPacket.release();
@@ -297,16 +296,16 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     private EncapsulatedPacket getReassembledPacket(EncapsulatedPacket splitPacket) {
         this.checkForClosed();
 
-        SplitPacketHelper helper = this.splitPackets.get(splitPacket.partId);
+        SplitPacketHelper helper = this.splitPackets.get(splitPacket.getPartId());
         if (helper == null) {
-            this.splitPackets.set(splitPacket.partId, helper = new SplitPacketHelper(splitPacket.partCount));
+            this.splitPackets.set(splitPacket.getPartId(), helper = new SplitPacketHelper(splitPacket.getPartCount()));
         }
 
         // Try reassembling the packet.
         EncapsulatedPacket result = helper.add(splitPacket, this);
         if (result != null) {
             // Packet reassembled. Remove the helper
-            if (this.splitPackets.remove(splitPacket.partId, helper)) {
+            if (this.splitPackets.remove(splitPacket.getPartId(), helper)) {
                 helper.release();
             }
         }
@@ -319,7 +318,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
 
         for (EncapsulatedPacket packet : packets) {
             RakDatagramPacket datagram = RakDatagramPacket.newInstance();
-            datagram.sendTime = curTime;
+            datagram.setSendTime(curTime);
 
             if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
                 throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() +
@@ -374,7 +373,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
                     RakDatagramPacket datagram = this.sentDatagrams.remove(i);
                     if (datagram != null) {
                         if (log.isTraceEnabled()) {
-                            log.trace("NAK'ed datagram {} from {}", datagram.sequenceIndex, this.address);
+                            log.trace("NAK'ed datagram {} from {}", datagram.getSequenceIndex(), this.address);
                         }
                         this.sendDatagram(datagram, curTime);
                     }
@@ -411,7 +410,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             boolean hasResent = false;
 
             for (RakDatagramPacket datagram : this.sentDatagrams.values()) {
-                if (datagram.nextSend <= curTime) {
+                if (datagram.getSendTime() <= curTime) {
                     int size = datagram.getSize();
                     if (transmissionBandwidth < size) {
                         break;
@@ -422,7 +421,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
                         hasResent = true;
                     }
                     if (log.isTraceEnabled()) {
-                        log.trace("Stale datagram {} from {}", datagram.sequenceIndex,
+                        log.trace("Stale datagram {} from {}", datagram.getSequenceIndex(),
                                 this.address);
                     }
                     this.sendDatagram(datagram, curTime);
@@ -438,7 +437,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         if (!this.outgoingPackets.isEmpty()) {
             transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth();
             RakDatagramPacket datagram = RakDatagramPacket.newInstance();
-            datagram.sendTime = curTime;
+            datagram.setSendTime(curTime);
             EncapsulatedPacket packet;
 
             while ((packet = this.outgoingPackets.peek()) != null) {
@@ -455,15 +454,15 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
                     this.sendDatagram(datagram, curTime);
 
                     datagram = RakDatagramPacket.newInstance();
-                    datagram.sendTime = curTime;
+                    datagram.setSendTime(curTime);
 
-                    Preconditions.checkArgument(datagram.tryAddPacket(packet, this.adjustedMtu),
-                            "Packet too large to fit in MTU (size: %s, MTU: %s)",
-                            packet.getSize(), this.adjustedMtu);
+                    if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
+                        throw new IllegalArgumentException("Packet too large to fit in MTU (size: %s, MTU: %s)", packet.getSize(), this.adjustedMtu);
+                    }
                 }
             }
 
-            if (!datagram.packets.isEmpty()) {
+            if (!datagram.getPackets().isEmpty()) {
                 this.sendDatagram(datagram, curTime);
             }
         }
@@ -562,28 +561,28 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             sequencingIndex = this.sequenceWriteIndex.getAndIncrement(orderingChannel);
         } todo: sequencing */
         if (reliability.isOrdered()) {
-            orderingIndex = this.orderWriteIndex.getAndIncrement(orderingChannel);
+            orderingIndex = this.orderWriteIndex[orderingChannel]++;
         }
 
         // Now create the packets.
         EncapsulatedPacket[] packets = new EncapsulatedPacket[buffers.length];
         for (int i = 0, parts = buffers.length; i < parts; i++) {
             EncapsulatedPacket packet = EncapsulatedPacket.newInstance();
-            packet.buffer = buffers[i];
-            packet.orderingChannel = (short) orderingChannel;
-            packet.orderingIndex = orderingIndex;
+            packet.setBuffer(buffers[i]);
+            packet.setOrderingChannel((short) orderingChannel);
+            packet.setOrderingIndex(orderingIndex);
             //packet.setSequenceIndex(sequencingIndex);
-            packet.reliability = reliability;
-            packet.priority = priority;
+            packet.setReliability(reliability);
+            packet.setPriority(rakMessage.priority());
             if (reliability.isReliable()) {
-                packet.reliabilityIndex = reliabilityWriteIndexUpdater.getAndIncrement(this);
+                packet.setReliabilityIndex(this.reliabilityWriteIndex++);
             }
 
             if (parts > 1) {
-                packet.split = true;
-                packet.partIndex = i;
-                packet.partCount = parts;
-                packet.partId = splitId;
+                packet.setSplit(true);
+                packet.setPartIndex(i);;
+                packet.setPartCount(parts);
+                packet.setPartId(splitId);
             }
 
             packets[i] = packet;
@@ -596,24 +595,24 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
      */
 
     private void sendDatagram(RakDatagramPacket datagram, long time) {
-        if (datagram.packets.isEmpty()) {
+        if (datagram.getPackets().isEmpty()) {
             throw new IllegalArgumentException("RakNetDatagram with no packets");
         }
 
-        int oldIndex = datagram.sequenceIndex;
-        datagram.sequenceIndex = datagramWriteIndexUpdater.getAndIncrement(this);
+        int oldIndex = datagram.getSequenceIndex();
+        datagram.setSequenceIndex(this.datagramWriteIndex++);
 
-        for (EncapsulatedPacket packet : datagram.packets) {
-            // check if packet is reliable so it can be resent later if a NAK is received.
-            if (packet.reliability != RakReliability.UNRELIABLE &&
-                    packet.reliability != RakReliability.UNRELIABLE_SEQUENCED) {
-                datagram.nextSend = time + this.slidingWindow.getRtoForRetransmission();
+        for (EncapsulatedPacket packet : datagram.getPackets()) {
+            // Check if packet is reliable so it can be resent later if a NAK is received.
+            if (packet.getReliability() != RakReliability.UNRELIABLE &&
+                    packet.getReliability() != RakReliability.UNRELIABLE_SEQUENCED) {
+                datagram.setNextSend(time + this.slidingWindow.getRtoForRetransmission());
                 if (oldIndex == -1) {
                     this.slidingWindow.onReliableSend(datagram);
                 } else {
                     this.sentDatagrams.remove(oldIndex, datagram);
                 }
-                this.sentDatagrams.put(datagram.sequenceIndex, datagram.retain()); // Keep for resending
+                this.sentDatagrams.put(datagram.getSequenceIndex(), datagram.retain()); // Keep for resending
                 break;
             }
         }

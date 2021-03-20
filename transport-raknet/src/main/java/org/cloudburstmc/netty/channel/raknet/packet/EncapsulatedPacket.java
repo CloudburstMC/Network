@@ -13,17 +13,17 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     private static final ObjectPool<EncapsulatedPacket> RECYCLER = ObjectPool.newPool(EncapsulatedPacket::new);
 
     private final ObjectPool.Handle<EncapsulatedPacket> handle;
-    public RakReliability reliability;
-    public RakPriority priority;
-    public int reliabilityIndex;
-    public int sequenceIndex;
-    public int orderingIndex;
-    public short orderingChannel;
-    public boolean split;
-    public int partCount;
-    public int partId;
-    public int partIndex;
-    public ByteBuf buffer;
+    private RakReliability reliability;
+    private RakPriority priority;
+    private int reliabilityIndex;
+    private int sequenceIndex;
+    private int orderingIndex;
+    private short orderingChannel;
+    private boolean split;
+    private int partCount;
+    private int partId;
+    private int partIndex;
+    private ByteBuf buffer;
 
     public static EncapsulatedPacket newInstance() {
         return RECYCLER.get();
@@ -127,6 +127,94 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     @Override
     public EncapsulatedPacket retain() {
         return (EncapsulatedPacket) super.retain();
+    }
+
+    public RakReliability getReliability() {
+        return reliability;
+    }
+
+    public void setReliability(RakReliability reliability) {
+        this.reliability = reliability;
+    }
+
+    public RakPriority getPriority() {
+        return this.priority;
+    }
+
+    public void setPriority(RakPriority priority) {
+        this.priority = priority;
+    }
+
+    public int getReliabilityIndex() {
+        return this.reliabilityIndex;
+    }
+
+    public void setReliabilityIndex(int reliabilityIndex) {
+        this.reliabilityIndex = reliabilityIndex;
+    }
+
+    public int getSequenceIndex() {
+        return this.sequenceIndex;
+    }
+
+    public void setSequenceIndex(int sequenceIndex) {
+        this.sequenceIndex = sequenceIndex;
+    }
+
+    public int getOrderingIndex() {
+        return this.orderingIndex;
+    }
+
+    public void setOrderingIndex(int orderingIndex) {
+        this.orderingIndex = orderingIndex;
+    }
+
+    public short getOrderingChannel() {
+        return this.orderingChannel;
+    }
+
+    public void setOrderingChannel(short orderingChannel) {
+        this.orderingChannel = orderingChannel;
+    }
+
+    public boolean isSplit() {
+        return this.split;
+    }
+
+    public void setSplit(boolean split) {
+        this.split = split;
+    }
+
+    public int getPartCount() {
+        return this.partCount;
+    }
+
+    public void setPartCount(int partCount) {
+        this.partCount = partCount;
+    }
+
+    public int getPartId() {
+        return this.partId;
+    }
+
+    public void setPartId(int partId) {
+        this.partId = partId;
+    }
+
+    public int getPartIndex() {
+        return this.partIndex;
+    }
+
+    public void setPartIndex(int partIndex) {
+        this.partIndex = partIndex;
+    }
+
+    public ByteBuf getBuffer() {
+        return this.buffer;
+    }
+
+    public void setBuffer(ByteBuf buffer) {
+        this.buffer = buffer;
     }
 }
 
