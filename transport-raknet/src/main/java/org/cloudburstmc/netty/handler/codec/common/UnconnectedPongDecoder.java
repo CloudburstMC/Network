@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.handler.codec.client;
+package org.cloudburstmc.netty.handler.codec.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -9,14 +9,12 @@ import org.cloudburstmc.netty.channel.raknet.RakPong;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
 
-
 import static org.cloudburstmc.netty.RakNetConstants.*;
 
 @Sharable
-public class RakClientPongHandler extends AdvancedChannelInboundHandler<DatagramPacket> {
-
-    public static final String NAME = "rak-client-pong-handler";
-    public static final RakClientPongHandler INSTANCE = new RakClientPongHandler();
+public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<DatagramPacket> {
+    public static final UnconnectedPongDecoder INSTANCE = new UnconnectedPongDecoder();
+    public static final String NAME = "rak-unconnected-pong-deencoder";
 
     @Override
     protected boolean acceptInboundMessage(ChannelHandlerContext ctx, Object msg) throws Exception {
@@ -44,12 +42,12 @@ public class RakClientPongHandler extends AdvancedChannelInboundHandler<Datagram
         }
 
         byte[] pongData = null;
-        if (buf.isReadable(2)) { // length
+        if (buf.isReadable(2)) { // Length
             pongData = new byte[buf.readUnsignedShort()];
             buf.readBytes(pongData);
         }
 
         long pongTime = System.currentTimeMillis();
-        ctx.fireChannelRead(new RakPong(pingTime, pongTime, guid,pongData, packet.sender()));
+        ctx.fireChannelRead(new RakPong(pingTime, pongTime, guid, pongData, packet.sender()));
     }
 }

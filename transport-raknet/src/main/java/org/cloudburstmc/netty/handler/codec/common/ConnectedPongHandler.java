@@ -21,13 +21,13 @@ public class ConnectedPongHandler extends AdvancedChannelInboundHandler<Encapsul
             return false;
         }
 
-        ByteBuf buf = ((EncapsulatedPacket) msg).buffer;
+        ByteBuf buf = ((EncapsulatedPacket) msg).getBuffer();
         return buf.getUnsignedByte(buf.readerIndex()) == RakNetConstants.ID_CONNECTED_PONG;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, EncapsulatedPacket packet) throws Exception {
-        ByteBuf buf = packet.buffer;
+        ByteBuf buf = packet.getBuffer();
         buf.readUnsignedByte(); // Packet ID
         long pingTime = buf.readLong();
         this.sessionCodec.recalculatePongTime(pingTime);

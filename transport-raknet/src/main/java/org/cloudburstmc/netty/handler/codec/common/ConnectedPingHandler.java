@@ -19,13 +19,13 @@ public class ConnectedPingHandler extends AdvancedChannelInboundHandler<Encapsul
             return false;
         }
 
-        ByteBuf buf = ((EncapsulatedPacket) msg).buffer;
+        ByteBuf buf = ((EncapsulatedPacket) msg).getBuffer();
         return buf.getUnsignedByte(buf.readerIndex()) == ID_CONNECTED_PING;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, EncapsulatedPacket packet) throws Exception {
-        ByteBuf buf = packet.buffer;
+        ByteBuf buf = packet.getBuffer();
         buf.readUnsignedByte(); // Packet ID
         long pingTime = buf.readLong();
 
