@@ -223,34 +223,37 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         return result;
     }
 
-    void onDatagram(ByteBuf buffer) {
-        if (this.isClosed()) {
-            return;
-        }
-
-        this.touch();
-
-        byte potentialFlags = buffer.readByte();
-
-        boolean rakNetDatagram = (potentialFlags & FLAG_VALID) != 0;
-
-        // Potential RakNet datagram
-        if (rakNetDatagram) {
-            // Block RakNet datagrams if we haven't initialized the session yet.
-            if (this.state.ordinal() >= RakNetState.INITIALIZED.ordinal()) {
-                if ((potentialFlags & FLAG_ACK) != 0) {
-                    this.onAcknowledge(buffer, this.incomingAcks);
-                } else if ((potentialFlags & FLAG_NACK) != 0) {
-                    this.onAcknowledge(buffer, this.incomingNaks);
-                } else {
-                    buffer.readerIndex(0);
-                    this.onRakNetDatagram(buffer);
-                }
+    public void onDatagram(ByteBuf buffer) {
+        try {
+            if (this.isClosed()) {
+                return;
             }
-        } else {
-            // Direct packet
-            buffer.readerIndex(0);
-            this.onPacketInternal(buffer);
+
+            this.touch();
+
+            byte potentialFlags = buffer.readByte();
+            boolean rakNetDatagram = (potentialFlags & FLAG_VALID) != 0;
+
+            // Potential RakNet datagram
+            if (rakNetDatagram) {
+                // Block RakNet datagrams if we haven't initialized the session yet.
+                if (this.state.ordinal() >= RakNetState.INITIALIZED.ordinal()) {
+                    if ((potentialFlags & FLAG_ACK) != 0) {
+                        this.onAcknowledge(buffer, this.incomingAcks);
+                    } else if ((potentialFlags & FLAG_NACK) != 0) {
+                        this.onAcknowledge(buffer, this.incomingNaks);
+                    } else {
+                        buffer.readerIndex(0);
+                        this.onRakNetDatagram(buffer);
+                    }
+                }
+            } else {
+                // Direct packet
+                buffer.readerIndex(0);
+                this.onPacketInternal(buffer);
+            }
+        } finally {
+            buffer.release();
         }
     }
 

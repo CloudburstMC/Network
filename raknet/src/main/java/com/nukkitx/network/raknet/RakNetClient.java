@@ -1,5 +1,7 @@
 package com.nukkitx.network.raknet;
 
+import com.nukkitx.network.raknet.pipeline.ClientMessageHandler;
+import com.nukkitx.network.raknet.pipeline.RakOutboundHandler;
 import com.nukkitx.network.util.EventLoops;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
@@ -24,7 +26,7 @@ import static com.nukkitx.network.raknet.RakNetConstants.*;
 @ParametersAreNonnullByDefault
 public class RakNetClient extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
-    private final ClientDatagramHandler handler = new ClientDatagramHandler();
+
     private final Queue<PongEntry> inboundPongs = PlatformDependent.newMpscQueue();
     private final Map<InetSocketAddress, PingEntry> pings = new HashMap<>();
     private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
@@ -44,12 +46,12 @@ public class RakNetClient extends RakNet {
     public RakNetClient(@Nullable InetSocketAddress bindAddress, EventLoopGroup eventLoopGroup) {
         super(eventLoopGroup);
         this.bindAddress = bindAddress;
-        this.exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet (Client)", t));
+        this.exceptionHandlers.put("DEFAULT", (t) -> log.error("An exception occurred in RakNet Client, address="+bindAddress, t));
     }
 
     @Override
     protected CompletableFuture<Void> bindInternal() {
-        this.bootstrap.handler(this.handler);
+        this.bootstrap.handler(new ClientChannelInitializer());
         ChannelFuture channelFuture = this.bindAddress == null? this.bootstrap.bind() : this.bootstrap.bind(this.bindAddress);
 
         CompletableFuture<Void> future = new CompletableFuture<>();
@@ -74,7 +76,7 @@ public class RakNetClient extends RakNet {
         if (!this.isRunning()) {
             throw new IllegalStateException("RakNet has not been started");
         }
-        if (session != null) {
+        if (this.session != null) {
             throw new IllegalStateException("Session has already been created");
         }
 
@@ -102,29 +104,6 @@ public class RakNetClient extends RakNet {
         this.sendUnconnectedPing(address);
 
         return pongFuture;
-    }
-
-    public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
-        Objects.requireNonNull(handlerId, "handlerId is empty (client)");
-        Objects.requireNonNull(handler, "clientExceptionHandler (handler is null)");
-        this.exceptionHandlers.put(handlerId, handler);
-    }
-
-    public void removeExceptionHandler(String handlerId) {
-        this.exceptionHandlers.remove(handlerId);
-    }
-
-    public void clearExceptionHandlers() {
-        this.exceptionHandlers.clear();
-    }
-
-    public Collection<Consumer<Throwable>> getExceptionHandlers() {
-        return this.exceptionHandlers.values();
-    }
-
-    @Override
-    public InetSocketAddress getBindAddress() {
-        return this.bindAddress;
     }
 
     @Override
@@ -155,6 +134,10 @@ public class RakNetClient extends RakNet {
         }
     }
 
+    public void onUnconnectedPong(PongEntry entry) {
+        this.inboundPongs.offer(entry);
+    }
+
     @Override
     public void close(boolean force) {
         super.close(force);
@@ -168,23 +151,6 @@ public class RakNetClient extends RakNet {
         }
     }
 
-    private void onUnconnectedPong(DatagramPacket packet) {
-        ByteBuf content = packet.content();
-        long pingTime = content.readLong();
-        long guid = content.readLong();
-        if (!RakNetUtils.verifyUnconnectedMagic(content)) {
-            return;
-        }
-
-        byte[] userData = null;
-        if (content.isReadable()) {
-            userData = new byte[content.readUnsignedShort()];
-            content.readBytes(userData);
-        }
-
-        this.inboundPongs.offer(new PongEntry(packet.sender(), pingTime, guid, userData));
-    }
-
     private void sendUnconnectedPing(InetSocketAddress recipient) {
         ByteBuf buffer = this.channel.alloc().ioBuffer(23);
         buffer.writeByte(ID_UNCONNECTED_PING);
@@ -195,60 +161,55 @@ public class RakNetClient extends RakNet {
         this.channel.writeAndFlush(new DatagramPacket(buffer, recipient));
     }
 
+    public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
+        Objects.requireNonNull(handlerId, "handlerId is empty (client)");
+        Objects.requireNonNull(handler, "clientExceptionHandler (handler is null)");
+        this.exceptionHandlers.put(handlerId, handler);
+    }
+
+    public void removeExceptionHandler(String handlerId) {
+        this.exceptionHandlers.remove(handlerId);
+    }
+
+    public void clearExceptionHandlers() {
+        this.exceptionHandlers.clear();
+    }
+
+    public Collection<Consumer<Throwable>> getExceptionHandlers() {
+        return this.exceptionHandlers.values();
+    }
+
+    @Override
+    public InetSocketAddress getBindAddress() {
+        return this.bindAddress;
+    }
+
+    public RakNetClientSession getSession() {
+        return this.session;
+    }
+
     @RequiredArgsConstructor
-    private static class PingEntry {
+    public static class PingEntry {
         private final CompletableFuture<RakNetPong> future;
         private final long timeout;
     }
 
     @RequiredArgsConstructor
-    private static class PongEntry {
+    public static class PongEntry {
         private final InetSocketAddress address;
         private final long pingTime;
         private final long guid;
         private final byte[] userData;
     }
 
-    private class ClientDatagramHandler extends ChannelInboundHandlerAdapter {
+    private class ClientChannelInitializer extends ChannelInitializer<Channel> {
 
         @Override
-        public void channelRead(ChannelHandlerContext ctx, Object msg) {
-            if (!(msg instanceof DatagramPacket)) {
-                return;
-            }
-
-            DatagramPacket packet = (DatagramPacket) msg;
-            try {
-                ByteBuf content = packet.content();
-                int packetId = content.readUnsignedByte();
-
-                if (packetId == ID_UNCONNECTED_PONG) {
-                    RakNetClient.this.onUnconnectedPong(packet);
-                } else if (session != null && session.address.equals(packet.sender())) {
-                    content.readerIndex(0);
-                    if (session.eventLoop.inEventLoop()) {
-                        session.onDatagram(content);
-                    } else {
-                        session.eventLoop.execute(() -> session.onDatagram(content));
-                    }
-                }
-            } finally {
-                packet.release();
-            }
-        }
-
-        @Override
-        public void handlerAdded(ChannelHandlerContext ctx) {
-            if (ctx.channel().isRegistered()) {
-                RakNetClient.this.channel = ctx.channel();
-            }
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            for (Consumer<Throwable> handler : RakNetClient.this.getExceptionHandlers()) {
-                handler.accept(cause);
-            }
+        protected void initChannel(Channel channel) throws Exception {
+            ChannelPipeline pipeline = channel.pipeline();
+            pipeline.addLast(RakOutboundHandler.NAME, new RakOutboundHandler(RakNetClient.this));
+            pipeline.addLast(ClientMessageHandler.NAME, new ClientMessageHandler(RakNetClient.this));
+            RakNetClient.this.channel = channel;
         }
     }
 }

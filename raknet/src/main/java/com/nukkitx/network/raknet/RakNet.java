@@ -27,15 +27,12 @@ public abstract class RakNet implements AutoCloseable {
     private ScheduledFuture<?> tickFuture;
     protected int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
     protected final AtomicBoolean closed = new AtomicBoolean(false);
+    protected RakMetrics metrics;
 
     RakNet(EventLoopGroup eventLoopGroup) {
         this.bootstrap = new Bootstrap().option(ChannelOption.ALLOCATOR, ByteBufAllocator.DEFAULT);
         this.bootstrap.group(eventLoopGroup);
         Bootstraps.setupBootstrap(this.bootstrap, true);
-    }
-
-    static void send(ChannelHandlerContext ctx, InetSocketAddress recipient, ByteBuf buffer) {
-        ctx.writeAndFlush(new DatagramPacket(buffer, recipient), ctx.voidPromise());
     }
 
     public CompletableFuture<Void> bind() {
@@ -99,5 +96,13 @@ public abstract class RakNet implements AutoCloseable {
 
     protected EventLoopGroup getEventLoopGroup() {
         return this.bootstrap.config().group();
+    }
+
+    public void setMetrics(RakMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public RakMetrics getMetrics() {
+        return this.metrics;
     }
 }
