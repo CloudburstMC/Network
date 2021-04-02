@@ -528,8 +528,9 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             return;
         }
 
-        int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
         boolean hasResent = false;
+        int resendCount = 0;
+        int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
 
         for (RakNetDatagram datagram : this.sentDatagrams.values()) {
             if (datagram.getNextSend() <= curTime) {
@@ -542,12 +543,18 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 if (!hasResent) {
                     hasResent = true;
                 }
+                resendCount++;
                 this.sendDatagram(datagram, curTime);
             }
         }
 
         if (hasResent) {
             this.slidingWindow.onResend(curTime);
+        }
+
+        RakMetrics metrics = this.getRakNet().getMetrics();
+        if (metrics != null) {
+            metrics.rakStaleDatagrams(resendCount);
         }
     }
 
