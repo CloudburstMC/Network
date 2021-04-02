@@ -228,29 +228,29 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             if (this.isClosed()) {
                 return;
             }
-
             this.touch();
 
             byte potentialFlags = buffer.readByte();
             boolean rakNetDatagram = (potentialFlags & FLAG_VALID) != 0;
-
-            // Potential RakNet datagram
-            if (rakNetDatagram) {
-                // Block RakNet datagrams if we haven't initialized the session yet.
-                if (this.state.ordinal() >= RakNetState.INITIALIZED.ordinal()) {
-                    if ((potentialFlags & FLAG_ACK) != 0) {
-                        this.onAcknowledge(buffer, this.incomingAcks);
-                    } else if ((potentialFlags & FLAG_NACK) != 0) {
-                        this.onAcknowledge(buffer, this.incomingNaks);
-                    } else {
-                        buffer.readerIndex(0);
-                        this.onRakNetDatagram(buffer);
-                    }
-                }
-            } else {
-                // Direct packet
+            if (!rakNetDatagram) {
+                // Received non-datagram packet
                 buffer.readerIndex(0);
                 this.onPacketInternal(buffer);
+                return;
+            }
+
+            if (this.state.ordinal() < RakNetState.INITIALIZED.ordinal()) {
+                // Block RakNet datagrams if we haven't initialized the session yet.
+                return;
+            }
+
+            // Check if we have received acknowledge datagram
+            boolean ack = (potentialFlags & FLAG_ACK) != 0;
+            if (ack || (potentialFlags & FLAG_NACK) != 0) {
+                this.onAcknowledge(buffer, !ack);
+            } else {
+                buffer.readerIndex(0);
+                this.onRakNetDatagram(buffer);
             }
         } finally {
             buffer.release();
@@ -302,6 +302,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     private void onRakNetDatagram(ByteBuf buffer) {
         if (this.state == null || RakNetState.INITIALIZED.compareTo(this.state) > 0) {
             return;
+        }
+
+        if (this.getRakNet().getMetrics() != null) {
+            this.getRakNet().getMetrics().rakDatagramsIn(1);
         }
 
         RakNetDatagram datagram = new RakNetDatagram(System.currentTimeMillis());
@@ -766,6 +770,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     private void sendDatagram(RakNetDatagram datagram, long time) {
         Preconditions.checkArgument(!datagram.packets.isEmpty(), "RakNetDatagram with no packets");
+        if (this.getRakNet().getMetrics() != null) {
+            this.getRakNet().getMetrics().rakDatagramsOut(1);
+        }
+
         try {
             int oldIndex = datagram.sequenceIndex;
             datagram.sequenceIndex = this.datagramWriteIndex++;
@@ -807,11 +815,12 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     /*
-        Packet Handlers
+     * Packet Handlers
      */
 
-    private void onAcknowledge(ByteBuf buffer, Queue<IntRange> queue) {
+    private void onAcknowledge(ByteBuf buffer, boolean nack) {
         this.checkForClosed();
+        Queue<IntRange> queue = nack ? this.incomingNaks : this.incomingAcks;
 
         int size = buffer.readUnsignedShort();
         for (int i = 0; i < size; i++) {
@@ -829,17 +838,24 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             }
             queue.offer(new IntRange(start, end));
         }
+
+        RakMetrics metrics = this.getRakNet().getMetrics();
+        if (metrics != null) {
+            if (nack) {
+                metrics.nackIn(size);
+            } else {
+                metrics.ackIn(size);
+            }
+        }
     }
 
     private void onConnectedPing(ByteBuf buffer) {
         long pingTime = buffer.readLong();
-
         this.sendConnectedPong(pingTime);
     }
 
     private void onConnectedPong(ByteBuf buffer) {
         long pingTime = buffer.readLong();
-
         if (this.currentPingTime == pingTime) {
             this.lastPingTime = this.currentPingTime;
             this.lastPongTime = System.currentTimeMillis();
@@ -856,37 +872,29 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
     private void sendConnectedPing(long pingTime) {
         ByteBuf buffer = this.allocateBuffer(9);
-
         buffer.writeByte(ID_CONNECTED_PING);
         buffer.writeLong(pingTime);
-
         this.send(buffer, RakNetPriority.IMMEDIATE, RakNetReliability.RELIABLE);
-
         this.currentPingTime = pingTime;
     }
 
     private void sendConnectedPong(long pingTime) {
         ByteBuf buffer = this.allocateBuffer(17);
-
         buffer.writeByte(ID_CONNECTED_PONG);
         buffer.writeLong(pingTime);
         buffer.writeLong(System.currentTimeMillis());
-
         this.send(buffer, RakNetPriority.IMMEDIATE, RakNetReliability.RELIABLE);
     }
 
     private void sendDisconnectionNotification() {
         ByteBuf buffer = this.allocateBuffer(1);
-
         buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
-
         this.send(buffer, RakNetPriority.IMMEDIATE, RakNetReliability.RELIABLE_ORDERED);
     }
 
     private void sendDetectLostConnection() {
         ByteBuf buffer = this.allocateBuffer(1);
         buffer.writeByte(ID_DETECT_LOST_CONNECTION);
-
         this.send(buffer, RakNetPriority.IMMEDIATE);
     }
 

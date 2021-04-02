@@ -3,12 +3,9 @@ package com.nukkitx.network.raknet;
 import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.Preconditions;
 import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
-import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.socket.DatagramPacket;
 
 import javax.annotation.Nonnegative;
 import javax.annotation.ParametersAreNonnullByDefault;
