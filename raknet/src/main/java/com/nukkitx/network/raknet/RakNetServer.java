@@ -47,7 +47,6 @@ public class RakNetServer extends RakNet {
     private final Set<Channel> channels = new HashSet<>();
     private final Iterator<Channel> channelIterator = new RoundRobinIterator<>(channels);
 
-    private final RakOutboundHandler rakOutboundHandler = new RakOutboundHandler(this);
     private final ServerChannelInitializer initializer = new ServerChannelInitializer();
     private final ServerMessageHandler messageHandler = new ServerMessageHandler(this);
     private final ProxyServerHandler proxyServerHandler;
@@ -294,7 +293,7 @@ public class RakNetServer extends RakNet {
         @Override
         protected void initChannel(Channel channel) throws Exception {
             ChannelPipeline pipeline = channel.pipeline();
-            pipeline.addLast(RakOutboundHandler.NAME, RakNetServer.this.rakOutboundHandler);
+            pipeline.addLast(RakOutboundHandler.NAME, new RakOutboundHandler(RakNetServer.this));
             pipeline.addLast(ServerMessageHandler.NAME, RakNetServer.this.messageHandler);
             if (RakNetServer.this.useProxyProtocol()) {
                 pipeline.addLast(ProxyServerHandler.NAME, RakNetServer.this.proxyServerHandler);
