@@ -245,9 +245,10 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             }
 
             // Check if we have received acknowledge datagram
-            boolean ack = (potentialFlags & FLAG_ACK) != 0;
-            if (ack || (potentialFlags & FLAG_NACK) != 0) {
-                this.onAcknowledge(buffer, !ack);
+            if ((potentialFlags & FLAG_ACK) != 0 ) {
+                this.onAcknowledge(buffer, this.incomingAcks, false);
+            } else if((potentialFlags & FLAG_NACK) != 0) {
+                this.onAcknowledge(buffer, this.incomingNaks, true);
             } else {
                 buffer.readerIndex(0);
                 this.onRakNetDatagram(buffer);
@@ -444,122 +445,144 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             this.sendConnectedPing(curTime);
         }
 
-        // Incoming queues
+        this.handleIncomingAcknowledge(curTime, this.incomingAcks, false);
+        this.handleIncomingAcknowledge(curTime, this.incomingNaks, true);
 
-        if (!this.incomingAcks.isEmpty()) {
-
-            IntRange range;
-            while ((range = this.incomingAcks.poll()) != null) {
-                for (int i = range.start; i <= range.end; i++) {
-                    RakNetDatagram datagram = this.sentDatagrams.remove(i);
-                    if (datagram != null) {
-                        datagram.release();
-                        this.unackedBytes -= datagram.getSize();
-                        this.slidingWindow.onAck(curTime - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
-                    }
-                }
-            }
-        }
-
-        if (!this.incomingNaks.isEmpty()) {
-            this.slidingWindow.onNak();
-            IntRange range;
-            while ((range = this.incomingNaks.poll()) != null) {
-                for (int i = range.start; i <= range.end; i++) {
-                    RakNetDatagram datagram = this.sentDatagrams.remove(i);
-                    if (datagram != null) {
-                        if (log.isTraceEnabled()) {
-                            log.trace("NAK'ed datagram {} from {}", datagram.sequenceIndex, this.address);
-                        }
-                        this.sendDatagram(datagram, curTime);
-                    }
-                }
-            }
-        }
-
-        // Outgoing queues
-
+        // Send known outgoing acknowledge packets.
+        RakMetrics metrics = this.getRakNet().getMetrics();
         final int mtu = this.adjustedMtu - RAKNET_DATAGRAM_HEADER_SIZE;
-
+        int writtenNacks = 0;
         while (!this.outgoingNaks.isEmpty()) {
             ByteBuf buffer = this.allocateBuffer(mtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
-            RakNetUtils.writeIntRanges(buffer, this.outgoingNaks, mtu - 1);
-
+            writtenNacks += RakNetUtils.writeIntRanges(buffer, this.outgoingNaks, mtu - 1);
             this.sendDirect(buffer);
         }
 
+        if (metrics != null) {
+            metrics.nackOut(writtenNacks);
+        }
+
         if (this.slidingWindow.shouldSendAcks(curTime)) {
+            int writtenAcks = 0;
             while (!this.outgoingAcks.isEmpty()) {
                 ByteBuf buffer = this.allocateBuffer(mtu);
                 buffer.writeByte(FLAG_VALID | FLAG_ACK);
-                RakNetUtils.writeIntRanges(buffer, this.outgoingAcks, mtu - 1);
-
+                writtenAcks += RakNetUtils.writeIntRanges(buffer, this.outgoingAcks, mtu - 1);
                 this.sendDirect(buffer);
-
                 this.slidingWindow.onSendAck();
             }
+
+            if (metrics != null) {
+                metrics.ackOut(writtenAcks);
+            }
         }
 
-        int transmissionBandwidth;
         // Send packets that are stale first
+        this.sendStaleDatagrams(curTime);
+        // Now send usual packets
+        this.sendDatagrams(curTime);
+        // Finally flush channel
+        this.channel.flush();
+    }
 
-        if (!this.sentDatagrams.isEmpty()) {
-            transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
-            boolean hasResent = false;
+    private void handleIncomingAcknowledge(long curTime, Queue<IntRange> queue, boolean nack) {
+        if (queue.isEmpty()) {
+            return;
+        }
 
-            for (RakNetDatagram datagram : this.sentDatagrams.values()) {
-                if (datagram.nextSend <= curTime) {
-                    int size = datagram.getSize();
-                    if (transmissionBandwidth < size) {
-                        break;
+        if (nack) {
+            this.slidingWindow.onNak();
+        }
+
+        IntRange range;
+        while ((range = queue.poll()) != null) {
+            for (int i = range.start; i <= range.end; i++) {
+                RakNetDatagram datagram = this.sentDatagrams.remove(i);
+                if (datagram != null) {
+                    if (nack) {
+                        this.onIncomingNack(datagram, curTime);
+                    } else {
+                        this.onIncomingAck(datagram, curTime);
                     }
-                    transmissionBandwidth -= size;
-
-                    if (!hasResent) {
-                        hasResent = true;
-                    }
-                    this.sendDatagram(datagram, curTime);
                 }
             }
+        }
+    }
 
-            if (hasResent) {
-                this.slidingWindow.onResend(curTime);
-            }
+    private void onIncomingAck(RakNetDatagram datagram, long curTime) {
+        datagram.release();
+        this.unackedBytes -= datagram.getSize();
+        this.slidingWindow.onAck(curTime - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
+    }
+
+    private void onIncomingNack(RakNetDatagram datagram, long curTime) {
+        if (log.isTraceEnabled()) {
+            log.trace("NAK'ed datagram {} from {}", datagram.sequenceIndex, this.address);
+        }
+        this.sendDatagram(datagram, curTime);
+    }
+
+    private void sendStaleDatagrams(long curTime) {
+        if (this.sentDatagrams.isEmpty()) {
+            return;
         }
 
-        // Now send usual packets
-        if (!this.outgoingPackets.isEmpty()) {
-            transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth(this.unackedBytes);
-            RakNetDatagram datagram = new RakNetDatagram(curTime);
-            EncapsulatedPacket packet;
+        int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth(this.unackedBytes);
+        boolean hasResent = false;
 
-            while ((packet = this.outgoingPackets.peek()) != null) {
-                int size = packet.getSize();
+        for (RakNetDatagram datagram : this.sentDatagrams.values()) {
+            if (datagram.getNextSend() <= curTime) {
+                int size = datagram.getSize();
                 if (transmissionBandwidth < size) {
                     break;
                 }
                 transmissionBandwidth -= size;
 
-                this.outgoingPackets.remove();
-
-                if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
-                    // Send full datagram
-                    this.sendDatagram(datagram, curTime);
-
-                    datagram = new RakNetDatagram(curTime);
-
-                    Preconditions.checkArgument(datagram.tryAddPacket(packet, this.adjustedMtu),
-                            "Packet too large to fit in MTU (size: %s, MTU: %s)",
-                            packet.getSize(), this.adjustedMtu);
+                if (!hasResent) {
+                    hasResent = true;
                 }
-            }
-
-            if (!datagram.packets.isEmpty()) {
                 this.sendDatagram(datagram, curTime);
             }
         }
-        this.channel.flush();
+
+        if (hasResent) {
+            this.slidingWindow.onResend(curTime);
+        }
+    }
+
+    private void sendDatagrams(long curTime) {
+        if (this.outgoingPackets.isEmpty()) {
+            return;
+        }
+
+        int transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth(this.unackedBytes);
+        RakNetDatagram datagram = new RakNetDatagram(curTime);
+        EncapsulatedPacket packet;
+
+        while ((packet = this.outgoingPackets.peek()) != null) {
+            int size = packet.getSize();
+            if (transmissionBandwidth < size) {
+                break;
+            }
+
+            transmissionBandwidth -= size;
+            this.outgoingPackets.remove();
+
+            // Send full datagram
+            if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
+                this.sendDatagram(datagram, curTime);
+
+                datagram = new RakNetDatagram(curTime);
+                if (!datagram.tryAddPacket(packet, this.adjustedMtu)) {
+                    throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + this.adjustedMtu +")");
+                }
+            }
+        }
+
+        if (!datagram.getPackets().isEmpty()) {
+            this.sendDatagram(datagram, curTime);
+        }
     }
 
     @Override
@@ -818,10 +841,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
      * Packet Handlers
      */
 
-    private void onAcknowledge(ByteBuf buffer, boolean nack) {
+    private void onAcknowledge(ByteBuf buffer, Queue<IntRange> queue, boolean nack) {
         this.checkForClosed();
-        Queue<IntRange> queue = nack ? this.incomingNaks : this.incomingAcks;
-
         int size = buffer.readUnsignedShort();
         for (int i = 0; i < size; i++) {
             boolean singleton = buffer.readBoolean();
