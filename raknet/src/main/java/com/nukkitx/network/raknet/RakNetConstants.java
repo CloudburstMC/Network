@@ -34,6 +34,10 @@ public class RakNetConstants {
      * Time after {@link RakNetSession} is refreshed due to no activity.
      */
     public static final int SESSION_STALE_MS = 5000;
+    /**
+     * Time in millis after unconnected ping is resent till pong is not received.
+     */
+    public static final int RAKNET_PING_INTERVAL = 1000;
 
     /*
         Flags

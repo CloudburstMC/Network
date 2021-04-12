@@ -6,7 +6,6 @@ import com.nukkitx.network.util.EventLoops;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +16,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
@@ -27,13 +27,13 @@ import static com.nukkitx.network.raknet.RakNetConstants.*;
 public class RakNetClient extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
 
-    private final Queue<PongEntry> inboundPongs = PlatformDependent.newMpscQueue();
-    private final Map<InetSocketAddress, PingEntry> pings = new HashMap<>();
+    private final Map<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
     private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
 
     protected InetSocketAddress bindAddress;
     protected RakNetClientSession session;
     private Channel channel;
+    private EventLoop tickingEventLoop;
 
     public RakNetClient() {
         this(null, EventLoops.commonGroup());
@@ -97,12 +97,13 @@ public class RakNetClient extends RakNet {
             return this.pings.get(address).future;
         }
 
+        long curTime = System.currentTimeMillis();
         CompletableFuture<RakNetPong> pongFuture = new CompletableFuture<>();
 
-        PingEntry entry = new PingEntry(pongFuture, System.currentTimeMillis() + unit.toMillis(timeout));
+        PingEntry entry = new PingEntry(pongFuture, curTime + unit.toMillis(timeout));
+        entry.sendTime = curTime;
         this.pings.put(address, entry);
         this.sendUnconnectedPing(address);
-
         return pongFuture;
     }
 
@@ -114,28 +115,36 @@ public class RakNetClient extends RakNet {
             session.eventLoop.execute(() -> session.onTick(curTime));
         }
 
-        PongEntry pong;
-        while ((pong = this.inboundPongs.poll()) != null) {
-            PingEntry ping = this.pings.remove(pong.address);
-            if (ping == null) {
-                continue;
-            }
-
-            ping.future.complete(new RakNetPong(pong.pingTime, curTime, pong.guid, pong.userData));
-        }
-
-        Iterator<PingEntry> iterator = this.pings.values().iterator();
+        Iterator<Map.Entry<InetSocketAddress, PingEntry>> iterator = this.pings.entrySet().iterator();
         while (iterator.hasNext()) {
-            PingEntry entry = iterator.next();
-            if (curTime >= entry.timeout) {
-                entry.future.completeExceptionally(new TimeoutException());
+            Map.Entry<InetSocketAddress, PingEntry> entry = iterator.next();
+            PingEntry ping = entry.getValue();
+            if (curTime >= ping.timeout) {
+                ping.future.completeExceptionally(new TimeoutException());
                 iterator.remove();
+            } else if ((curTime - ping.sendTime) >= RAKNET_PING_INTERVAL) {
+                ping.sendTime = curTime;
+                this.sendUnconnectedPing(entry.getKey());
             }
         }
     }
 
     public void onUnconnectedPong(PongEntry entry) {
-        this.inboundPongs.offer(entry);
+        EventLoop eventLoop = this.nextEventLoop();
+        if (eventLoop.inEventLoop()) {
+            this.onUnconnectedPong0(entry);
+        } else {
+            eventLoop.execute(() -> this.onUnconnectedPong0(entry));
+        }
+    }
+
+    private void onUnconnectedPong0(PongEntry pong) {
+        PingEntry ping = this.pings.remove(pong.address);
+        if (ping == null) {
+            log.debug("Received unexcepted pong from "+pong.address);
+        } else {
+            ping.future.complete(new RakNetPong(pong.pingTime, System.currentTimeMillis(), pong.guid, pong.userData));
+        }
     }
 
     @Override
@@ -188,10 +197,19 @@ public class RakNetClient extends RakNet {
         return this.session;
     }
 
+    @Override
+    protected EventLoop nextEventLoop() {
+        if (this.tickingEventLoop == null) {
+            this.tickingEventLoop = super.nextEventLoop();
+        }
+        return this.tickingEventLoop;
+    }
+
     @RequiredArgsConstructor
     public static class PingEntry {
         private final CompletableFuture<RakNetPong> future;
         private final long timeout;
+        private long sendTime;
     }
 
     @RequiredArgsConstructor

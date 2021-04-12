@@ -5,6 +5,7 @@ import com.nukkitx.network.util.Preconditions;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
 
 import javax.annotation.Nonnegative;
@@ -44,7 +45,7 @@ public abstract class RakNet implements AutoCloseable {
             }
 
             this.closed.set(false);
-            this.tickFuture = this.getEventLoopGroup().next().scheduleAtFixedRate(this::onTick, 0, 10, TimeUnit.MILLISECONDS);
+            this.tickFuture = this.nextEventLoop().scheduleAtFixedRate(this::onTick, 0, 10, TimeUnit.MILLISECONDS);
         });
         return future;
     }
@@ -93,6 +94,10 @@ public abstract class RakNet implements AutoCloseable {
 
     protected EventLoopGroup getEventLoopGroup() {
         return this.bootstrap.config().group();
+    }
+
+    protected EventLoop nextEventLoop() {
+        return this.getEventLoopGroup().next();
     }
 
     public void setMetrics(RakMetrics metrics) {
