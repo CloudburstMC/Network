@@ -1,6 +1,7 @@
 package com.nukkitx.network.raknet;
 
 import com.nukkitx.network.raknet.pipeline.ClientMessageHandler;
+import com.nukkitx.network.raknet.pipeline.RakExceptionHandler;
 import com.nukkitx.network.raknet.pipeline.RakOutboundHandler;
 import com.nukkitx.network.util.EventLoops;
 import io.netty.buffer.ByteBuf;
@@ -19,16 +20,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Consumer;
 
 import static com.nukkitx.network.raknet.RakNetConstants.*;
 
 @ParametersAreNonnullByDefault
 public class RakNetClient extends RakNet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakNetClient.class);
-
     private final Map<InetSocketAddress, PingEntry> pings = new ConcurrentHashMap<>();
-    private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
 
     protected InetSocketAddress bindAddress;
     protected RakNetClientSession session;
@@ -170,24 +168,6 @@ public class RakNetClient extends RakNet {
         this.channel.writeAndFlush(new DatagramPacket(buffer, recipient));
     }
 
-    public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
-        Objects.requireNonNull(handlerId, "handlerId is empty (client)");
-        Objects.requireNonNull(handler, "clientExceptionHandler (handler is null)");
-        this.exceptionHandlers.put(handlerId, handler);
-    }
-
-    public void removeExceptionHandler(String handlerId) {
-        this.exceptionHandlers.remove(handlerId);
-    }
-
-    public void clearExceptionHandlers() {
-        this.exceptionHandlers.clear();
-    }
-
-    public Collection<Consumer<Throwable>> getExceptionHandlers() {
-        return this.exceptionHandlers.values();
-    }
-
     @Override
     public InetSocketAddress getBindAddress() {
         return this.bindAddress;
@@ -227,6 +207,7 @@ public class RakNetClient extends RakNet {
             ChannelPipeline pipeline = channel.pipeline();
             pipeline.addLast(RakOutboundHandler.NAME, new RakOutboundHandler(RakNetClient.this));
             pipeline.addLast(ClientMessageHandler.NAME, new ClientMessageHandler(RakNetClient.this));
+            pipeline.addLast(RakExceptionHandler.NAME, new RakExceptionHandler(RakNetClient.this));
             RakNetClient.this.channel = channel;
         }
     }

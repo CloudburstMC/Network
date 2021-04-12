@@ -6,13 +6,9 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.internal.logging.InternalLogger;
-import io.netty.util.internal.logging.InternalLoggerFactory;
 
 public class RakOutboundHandler extends ChannelOutboundHandlerAdapter {
-    private static final InternalLogger log = InternalLoggerFactory.getInstance(ClientMessageHandler.class);
     public static final String NAME = "rak-outbound-handler";
-
     private final RakNet rakNet;
 
     public RakOutboundHandler(RakNet rakNet) {

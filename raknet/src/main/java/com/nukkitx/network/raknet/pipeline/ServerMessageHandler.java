@@ -6,17 +6,10 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.internal.logging.InternalLogger;
-import io.netty.util.internal.logging.InternalLoggerFactory;
-
-import java.util.function.Consumer;
 
 @ChannelHandler.Sharable
 public class ServerMessageHandler extends SimpleChannelInboundHandler<DatagramPacket> {
-
-    private static final InternalLogger log = InternalLoggerFactory.getInstance(ServerMessageHandler.class);
     public static final String NAME = "rak-server-message-handler";
-
     private final RakNetServer server;
 
     public ServerMessageHandler(RakNetServer server) {
@@ -45,12 +38,5 @@ public class ServerMessageHandler extends SimpleChannelInboundHandler<DatagramPa
             this.server.getMetrics().bytesIn(buffer.readableBytes());
         }
         ctx.fireChannelRead(packet.retain());
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        for (Consumer<Throwable> handler : this.server.getExceptionHandlers()) {
-            handler.accept(cause);
-        }
     }
 }

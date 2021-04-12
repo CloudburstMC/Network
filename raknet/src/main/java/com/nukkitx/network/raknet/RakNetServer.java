@@ -1,9 +1,6 @@
 package com.nukkitx.network.raknet;
 
-import com.nukkitx.network.raknet.pipeline.ProxyServerHandler;
-import com.nukkitx.network.raknet.pipeline.RakOutboundHandler;
-import com.nukkitx.network.raknet.pipeline.ServerDatagramHandler;
-import com.nukkitx.network.raknet.pipeline.ServerMessageHandler;
+import com.nukkitx.network.raknet.pipeline.*;
 import com.nukkitx.network.raknet.util.RoundRobinIterator;
 import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.DisconnectReason;
@@ -51,9 +48,9 @@ public class RakNetServer extends RakNet {
     private final ServerMessageHandler messageHandler = new ServerMessageHandler(this);
     private final ProxyServerHandler proxyServerHandler;
     private final ServerDatagramHandler serverDatagramHandler = new ServerDatagramHandler(this);
+    private final RakExceptionHandler exceptionHandler = new RakExceptionHandler(this);
 
     private volatile RakNetServerListener listener = null;
-    private final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
 
     public RakNetServer(InetSocketAddress bindAddress) {
         this(bindAddress, 1);
@@ -232,24 +229,6 @@ public class RakNetServer extends RakNet {
         return this.useProxyProtocol;
     }
 
-    public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
-        Objects.requireNonNull(handlerId, "handlerId is null (server)");
-        Objects.requireNonNull(handler, "exceptionHandler");
-        this.exceptionHandlers.put(handlerId, handler);
-    }
-
-    public void removeExceptionHandler(String handlerId) {
-        this.exceptionHandlers.remove(handlerId);
-    }
-
-    public void clearExceptionHandlers() {
-        this.exceptionHandlers.clear();
-    }
-
-    public Collection<Consumer<Throwable>> getExceptionHandlers() {
-        return this.exceptionHandlers.values();
-    }
-
     /*
      * Packet Dispatchers
      */
@@ -299,6 +278,7 @@ public class RakNetServer extends RakNet {
                 pipeline.addLast(ProxyServerHandler.NAME, RakNetServer.this.proxyServerHandler);
             }
             pipeline.addLast(ServerDatagramHandler.NAME, RakNetServer.this.serverDatagramHandler);
+            pipeline.addLast(RakExceptionHandler.NAME, RakNetServer.this.exceptionHandler);
             RakNetServer.this.channels.add(channel);
         }
     }

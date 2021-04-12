@@ -7,16 +7,10 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.internal.logging.InternalLogger;
-import io.netty.util.internal.logging.InternalLoggerFactory;
-
-import java.util.function.Consumer;
 
 import static com.nukkitx.network.raknet.RakNetConstants.ID_UNCONNECTED_PONG;
 
 public class ClientMessageHandler extends SimpleChannelInboundHandler<DatagramPacket> {
-
-    private static final InternalLogger log = InternalLoggerFactory.getInstance(ClientMessageHandler.class);
     public static final String NAME = "rak-client-message-handler";
 
     private final RakNetClient client;
@@ -69,12 +63,5 @@ public class ClientMessageHandler extends SimpleChannelInboundHandler<DatagramPa
             content.readBytes(userData);
         }
         this.client.onUnconnectedPong(new RakNetClient.PongEntry(packet.sender(), pingTime, guid, userData));
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        for (Consumer<Throwable> handler : this.client.getExceptionHandlers()) {
-            handler.accept(cause);
-        }
     }
 }

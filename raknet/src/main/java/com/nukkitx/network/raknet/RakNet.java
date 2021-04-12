@@ -11,20 +11,28 @@ import io.netty.channel.EventLoopGroup;
 import javax.annotation.Nonnegative;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.net.InetSocketAddress;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 @ParametersAreNonnullByDefault
 public abstract class RakNet implements AutoCloseable {
     protected final long guid = ThreadLocalRandom.current().nextLong();
-    protected final Bootstrap bootstrap;
-    private final AtomicBoolean running = new AtomicBoolean(false);
-    private ScheduledFuture<?> tickFuture;
     protected int protocolVersion = RakNetConstants.RAKNET_PROTOCOL_VERSION;
+
+    private final AtomicBoolean running = new AtomicBoolean(false);
     protected final AtomicBoolean closed = new AtomicBoolean(false);
+    protected final Bootstrap bootstrap;
+    private ScheduledFuture<?> tickFuture;
+
+    protected final Map<String, Consumer<Throwable>> exceptionHandlers = new HashMap<>();
     protected RakMetrics metrics;
 
     RakNet(EventLoopGroup eventLoopGroup) {
@@ -106,5 +114,23 @@ public abstract class RakNet implements AutoCloseable {
 
     public RakMetrics getMetrics() {
         return this.metrics;
+    }
+
+    public void addExceptionHandler(String handlerId, Consumer<Throwable> handler) {
+        Objects.requireNonNull(handlerId, "handlerId is empty");
+        Objects.requireNonNull(handler, "clientExceptionHandler (handler is null)");
+        this.exceptionHandlers.put(handlerId, handler);
+    }
+
+    public void removeExceptionHandler(String handlerId) {
+        this.exceptionHandlers.remove(handlerId);
+    }
+
+    public void clearExceptionHandlers() {
+        this.exceptionHandlers.clear();
+    }
+
+    public Collection<Consumer<Throwable>> getExceptionHandlers() {
+        return this.exceptionHandlers.values();
     }
 }

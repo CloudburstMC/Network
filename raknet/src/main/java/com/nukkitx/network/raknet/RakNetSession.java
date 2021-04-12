@@ -511,9 +511,12 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
     }
 
     private void onIncomingAck(RakNetDatagram datagram, long curTime) {
-        datagram.release();
-        this.unackedBytes -= datagram.getSize();
-        this.slidingWindow.onAck(curTime - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
+        try {
+            this.unackedBytes -= datagram.getSize();
+            this.slidingWindow.onAck(curTime - datagram.sendTime, datagram.sequenceIndex, this.datagramReadIndex);
+        } finally {
+            datagram.release();
+        }
     }
 
     private void onIncomingNack(RakNetDatagram datagram, long curTime) {

@@ -1,6 +1,5 @@
 package com.nukkitx.network.raknet.pipeline;
 
-import com.nukkitx.network.raknet.RakNet;
 import com.nukkitx.network.raknet.RakNetServer;
 import com.nukkitx.network.raknet.RakNetServerSession;
 import com.nukkitx.network.raknet.RakNetUtils;
@@ -9,16 +8,12 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.internal.logging.InternalLogger;
-import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import static com.nukkitx.network.raknet.RakNetConstants.*;
 
 @ChannelHandler.Sharable
 public class ServerDatagramHandler extends SimpleChannelInboundHandler<DatagramPacket> {
-    private static final InternalLogger log = InternalLoggerFactory.getInstance(ServerDatagramHandler.class);
     public static final String NAME = "rak-server-datagram-handler";
-
     private final RakNetServer server;
 
     public ServerDatagramHandler(RakNetServer server) {
