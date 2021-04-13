@@ -17,18 +17,12 @@ public class ServerMessageHandler extends SimpleChannelInboundHandler<DatagramPa
     }
 
     @Override
-    public boolean acceptInboundMessage(Object msg) throws Exception {
-        if (!super.acceptInboundMessage(msg)) {
-            return false;
+    protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) throws Exception {
+        if (this.server.isBlocked(packet.sender().getAddress())) {
+            // Drop incoming traffic from blocked address
+            return;
         }
 
-        // Drop incoming traffic from blocked address
-        DatagramPacket packet = (DatagramPacket) msg;
-        return !this.server.isBlocked(packet.sender().getAddress());
-    }
-
-    @Override
-    protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) throws Exception {
         ByteBuf buffer = packet.content();
         if (!buffer.isReadable()) {
             return;
