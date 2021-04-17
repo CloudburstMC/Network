@@ -40,9 +40,10 @@
             <artifactId>netty-transport</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>net.jodah</groupId>
+            <artifactId>expiringmap</artifactId>
+            <version>0.5.9</version>
+        </dependency>
     </dependencies>
-
-    <build>
-
-    </build>
 </project>
