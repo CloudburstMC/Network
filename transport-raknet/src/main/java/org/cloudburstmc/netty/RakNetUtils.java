@@ -66,7 +66,7 @@ public class RakNetUtils {
         }
     }
 
-    public static void writeAckEntries(ByteBuf buffer, Queue<IntRange> ackQueue, int mtu) {
+    public static int writeAckEntries(ByteBuf buffer, Queue<IntRange> ackQueue, int mtu) {
         int startIndex = buffer.writerIndex();
         buffer.writeZero(2);
         mtu -= 2; // Skip entries size (short)
@@ -100,6 +100,7 @@ public class RakNetUtils {
         buffer.writerIndex(startIndex);
         buffer.writeShort(count);
         buffer.writerIndex(finalIndex);
+        return count;
     }
 
     public static int clamp(int value, int low, int high) {

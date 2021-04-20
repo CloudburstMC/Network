@@ -6,6 +6,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
+import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
 import org.cloudburstmc.netty.util.IntRange;
 
 import java.util.Queue;
@@ -60,6 +61,15 @@ public class RakAcknowledgeHandler extends SimpleChannelInboundHandler<ByteBuf> 
             }
             this.sessionCodec.disconnect(RakDisconnectReason.BAD_PACKET);
             return;
+        }
+
+        RakMetrics metrics = this.sessionCodec.getMetrics();
+        if (metrics != null) {
+            if (nack) {
+                metrics.nackIn(entriesCount);
+            } else {
+                metrics.ackIn(entriesCount);
+            }
         }
     }
 }

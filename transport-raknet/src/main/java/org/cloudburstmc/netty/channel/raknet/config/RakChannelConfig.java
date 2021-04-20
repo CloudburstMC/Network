@@ -19,4 +19,8 @@ public interface RakChannelConfig extends ChannelConfig {
     int getOrderingChannels();
 
     RakChannelConfig setOrderingChannels(int orderingChannels);
+
+    RakMetrics getMetrics();
+
+    RakChannelConfig setMetrics(RakMetrics metrics);
 }
