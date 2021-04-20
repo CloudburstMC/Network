@@ -138,10 +138,13 @@ public class RakNetClient extends RakNet {
 
     private void onUnconnectedPong0(PongEntry pong) {
         PingEntry ping = this.pings.remove(pong.address);
-        if (ping == null) {
-            log.debug("Received unexcepted pong from "+pong.address);
-        } else {
+        if (ping != null) {
             ping.future.complete(new RakNetPong(pong.pingTime, System.currentTimeMillis(), pong.guid, pong.userData));
+            return;
+        }
+
+        if (log.isDebugEnabled()) {
+            log.debug("Received unexcepted pong from " + pong.address);
         }
     }
 
