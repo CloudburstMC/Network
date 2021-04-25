@@ -6,6 +6,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
+import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
 
 public class RakServerRouteHandler extends ChannelDuplexHandler {
 
@@ -18,20 +19,23 @@ public class RakServerRouteHandler extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (!(msg instanceof DatagramPacket) || ctx.channel() != this.parent) {
+        if (!(msg instanceof DatagramPacket)) {
             ctx.fireChannelRead(msg);
             return;
         }
-
-        RakServerChannel parent = (RakServerChannel) ctx.channel();
         DatagramPacket packet = (DatagramPacket) msg;
 
         try {
-            RakChildChannel channel = parent.getChildChannel(packet.sender());
+            RakChildChannel channel = this.parent.getChildChannel(packet.sender());
             if (channel == null) {
                 // Pass DatagramPacket which holds remote address and payload.
                 ctx.fireChannelRead(packet.retain());
                 return;
+            }
+
+            RakMetrics metrics = channel.config().getMetrics();
+            if (metrics != null) {
+                metrics.bytesIn(packet.content().readableBytes());
             }
 
             // In this case remote address is already known from ChannelHandlerContext

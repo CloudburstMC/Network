@@ -15,6 +15,7 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
     private volatile int mtu;
     private volatile int protocolVersion;
     private volatile int orderingChannels;
+    private volatile RakMetrics metrics;
 
     public DefaultRakSessionConfig(Channel channel) {
         super(channel);
@@ -43,6 +44,9 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         if (option == RakChannelOption.RAK_ORDERING_CHANNELS) {
             return (T) Integer.valueOf(this.getOrderingChannels());
         }
+        if (option == RakChannelOption.RAK_METRICS) {
+            return (T) this.getMetrics();
+        }
         return super.getOption(option);
     }
 
@@ -58,6 +62,8 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
             this.setProtocolVersion((Integer) value);
         } else if (option == RakChannelOption.RAK_ORDERING_CHANNELS) {
             this.setOrderingChannels((Integer) value);
+        } else if (option == RakChannelOption.RAK_METRICS) {
+            this.setMetrics((RakMetrics) value);
         } else {
             return super.setOption(option, value);
         }
@@ -106,6 +112,17 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
     @Override
     public RakChannelConfig setOrderingChannels(int orderingChannels) {
         this.orderingChannels = orderingChannels;
+        return this;
+    }
+
+    @Override
+    public RakMetrics getMetrics() {
+        return this.metrics;
+    }
+
+    @Override
+    public RakChannelConfig setMetrics(RakMetrics metrics) {
+        this.metrics = metrics;
         return this;
     }
 }

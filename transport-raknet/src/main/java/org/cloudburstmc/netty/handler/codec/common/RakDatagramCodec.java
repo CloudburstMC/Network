@@ -20,14 +20,14 @@ public class RakDatagramCodec extends ByteToMessageCodec<RakDatagramPacket> {
     @Override
     protected void encode(ChannelHandlerContext ctx, RakDatagramPacket packet, ByteBuf buf) throws Exception {
         ByteBuf header = ctx.alloc().ioBuffer(4);
-        header.writeByte(packet.flags);
-        header.writeMediumLE(packet.sequenceIndex);
+        header.writeByte(packet.getFlags());
+        header.writeMediumLE(packet.getSequenceIndex());
 
         // Use a composite buffer so we don't have to do any memory copying.
-        CompositeByteBuf composite = ctx.alloc().compositeBuffer((packet.packets.size() * 2) + 1);
+        CompositeByteBuf composite = ctx.alloc().compositeBuffer((packet.getPackets().size() * 2) + 1);
         composite.addComponent(header);
 
-        for (EncapsulatedPacket encapsulated : packet.packets) {
+        for (EncapsulatedPacket encapsulated : packet.getPackets()) {
             encapsulated.encode(composite);
         }
         buf.writeBytes(composite);
@@ -49,12 +49,12 @@ public class RakDatagramCodec extends ByteToMessageCodec<RakDatagramPacket> {
         }
 
         RakDatagramPacket packet = RakDatagramPacket.newInstance();
-        packet.flags = buffer.readByte();
-        packet.sequenceIndex = buffer.readUnsignedMediumLE();
+        packet.setFlags(buffer.readByte());
+        packet.setSequenceIndex(buffer.readUnsignedMediumLE());
         while (buffer.isReadable()) {
             EncapsulatedPacket encapsulated = EncapsulatedPacket.newInstance();
             encapsulated.decode(buffer);
-            packet.packets.add(encapsulated);
+            packet.getPackets().add(encapsulated);
         }
         list.add(packet);
     }

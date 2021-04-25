@@ -29,12 +29,12 @@ public class ProxyOutboundRouter implements ChannelOutboundHandler {
 
     @Override
     public void bind(ChannelHandlerContext ctx, SocketAddress address, ChannelPromise promise) throws Exception {
-        this.proxiedChannel.bind(address, this.proxiedChannel.correctPromise(promise));
+        this.proxiedChannel.parent().bind(address, this.proxiedChannel.correctPromise(promise));
     }
 
     @Override
     public void connect(ChannelHandlerContext ctx, SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) throws Exception {
-        this.proxiedChannel.connect(remoteAddress, localAddress, this.proxiedChannel.correctPromise(promise));
+        this.proxiedChannel.parent().connect(remoteAddress, localAddress, this.proxiedChannel.correctPromise(promise));
     }
 
     @Override
@@ -44,12 +44,12 @@ public class ProxyOutboundRouter implements ChannelOutboundHandler {
 
     @Override
     public void disconnect(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-        this.proxiedChannel.disconnect(this.proxiedChannel.correctPromise(promise));
+        this.proxiedChannel.parent().disconnect(this.proxiedChannel.correctPromise(promise));
     }
 
     @Override
     public void deregister(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-        this.proxiedChannel.deregister(this.proxiedChannel.correctPromise(promise));
+        this.proxiedChannel.parent().deregister(this.proxiedChannel.correctPromise(promise));
     }
 
     @Override
@@ -59,12 +59,12 @@ public class ProxyOutboundRouter implements ChannelOutboundHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        this.proxiedChannel.write(msg, this.proxiedChannel.correctPromise(promise));
+        this.proxiedChannel.parent().write(msg, this.proxiedChannel.correctPromise(promise));
     }
 
     @Override
     public void flush(ChannelHandlerContext ctx) throws Exception {
-        this.proxiedChannel.flush();
+        this.proxiedChannel.parent().flush();
     }
 
     @Override

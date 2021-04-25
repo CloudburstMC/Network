@@ -60,7 +60,7 @@ public class RakNetSlidingWindow {
     }
 
     public void onAck(long curTime, RakDatagramPacket datagram, long curSequenceIndex) {
-        long rtt = curTime - datagram.sendTime;
+        long rtt = curTime - datagram.getSendTime();
         this.lastRTT = rtt;
         this.unackedBytes -= datagram.getSize();
 
@@ -73,7 +73,7 @@ public class RakNetSlidingWindow {
             this.deviationRTT += 0.5 * (Math.abs(difference) - this.deviationRTT);
         }
 
-        boolean isNewCongestionControlPeriod = datagram.sequenceIndex > this.nextCongestionControlBlock;
+        boolean isNewCongestionControlPeriod = datagram.getSequenceIndex() > this.nextCongestionControlBlock;
 
         if (isNewCongestionControlPeriod) {
             this.backoffThisBlock = false;

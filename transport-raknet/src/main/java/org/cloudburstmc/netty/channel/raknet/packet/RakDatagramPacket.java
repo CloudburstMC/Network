@@ -2,9 +2,6 @@ package org.cloudburstmc.netty.channel.raknet.packet;
 
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.internal.ObjectPool;
-import io.netty.util.internal.logging.InternalLogger;
-import io.netty.util.internal.logging.InternalLoggerFactory;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -12,15 +9,14 @@ import static org.cloudburstmc.netty.RakNetConstants.*;
 
 public class RakDatagramPacket extends AbstractReferenceCounted {
 
-    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakDatagramPacket.class);
     private static final ObjectPool<RakDatagramPacket> RECYCLER = ObjectPool.newPool(RakDatagramPacket::new);
 
     private final ObjectPool.Handle<RakDatagramPacket> handle;
-    public final List<EncapsulatedPacket> packets = new ArrayList<EncapsulatedPacket>();
-    public byte flags;
-    public long sendTime;
-    public long nextSend;
-    public int sequenceIndex = -1;
+    private final List<EncapsulatedPacket> packets = new ArrayList<>();
+    private byte flags;
+    private long sendTime;
+    private long nextSend;
+    private int sequenceIndex = -1;
 
     public static RakDatagramPacket newInstance() {
         return RECYCLER.get();
@@ -56,7 +52,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         }
 
         this.packets.add(packet);
-        if (packet.split) {
+        if (packet.isSplit()) {
             flags |= FLAG_CONTINUOUS_SEND;
         }
         return true;
@@ -82,5 +78,41 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
             size += packet.getSize();
         }
         return size;
+    }
+
+    public List<EncapsulatedPacket> getPackets() {
+        return this.packets;
+    }
+
+    public byte getFlags() {
+        return this.flags;
+    }
+
+    public void setFlags(byte flags) {
+        this.flags = flags;
+    }
+
+    public long getSendTime() {
+        return sendTime;
+    }
+
+    public void setSendTime(long sendTime) {
+        this.sendTime = sendTime;
+    }
+
+    public long getNextSend() {
+        return this.nextSend;
+    }
+
+    public void setNextSend(long nextSend) {
+        this.nextSend = nextSend;
+    }
+
+    public int getSequenceIndex() {
+        return this.sequenceIndex;
+    }
+
+    public void setSequenceIndex(int sequenceIndex) {
+        this.sequenceIndex = sequenceIndex;
     }
 }

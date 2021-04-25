@@ -9,7 +9,6 @@ import org.cloudburstmc.netty.handler.codec.server.RakServerOnlineInitialHandler
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RakChildChannel extends AbstractChannel {
 
@@ -17,7 +16,7 @@ public class RakChildChannel extends AbstractChannel {
 
     private final RakChannelConfig config;
     private final InetSocketAddress remoteAddress;
-    private final AtomicBoolean open = new AtomicBoolean(true);
+    private volatile boolean open = true;
 
     public RakChildChannel(InetSocketAddress remoteAddress, RakServerChannel parent) {
         super(parent);
@@ -87,7 +86,7 @@ public class RakChildChannel extends AbstractChannel {
 
     @Override
     protected void doClose() throws Exception {
-        this.open.set(false);
+        this.open = false;
     }
 
     @Override
@@ -97,7 +96,7 @@ public class RakChildChannel extends AbstractChannel {
 
     @Override
     public boolean isOpen() {
-        return this.open.get();
+        return this.open;
     }
 
     @Override

@@ -59,6 +59,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<Long> RAK_CONNECT_TIMEOUT =
             valueOf(RakChannelOption.class, "RAK_CONNECT_TIMEOUT");
 
+    /**
+     * RakMetrics instance used for session
+     */
+    public static final ChannelOption<RakMetrics> RAK_METRICS =
+            valueOf(RakChannelOption.class, "RAK_METRICS");
+
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {
         super(null);

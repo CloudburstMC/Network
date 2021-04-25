@@ -33,4 +33,8 @@ public class RakPong {
     public byte[] getPongData() {
         return this.pongData;
     }
+
+    public InetSocketAddress getSender() {
+        return this.sender;
+    }
 }

@@ -6,11 +6,9 @@ import io.netty.channel.socket.DatagramChannel;
 import org.cloudburstmc.netty.channel.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakClientConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
-import org.cloudburstmc.netty.handler.codec.client.RakClientPongHandler;
+import org.cloudburstmc.netty.handler.codec.common.*;
+import org.cloudburstmc.netty.handler.codec.common.UnconnectedPongDecoder;
 import org.cloudburstmc.netty.handler.codec.client.RakClientRouteHandler;
-import org.cloudburstmc.netty.handler.codec.common.ConnectedPingHandler;
-import org.cloudburstmc.netty.handler.codec.common.ConnectedPongHandler;
 
 public class RakClientChannel extends ProxyChannel<DatagramChannel> implements Channel {
 
@@ -26,7 +24,10 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
         super(channel);
         this.config = new DefaultRakClientConfig(this);
         this.pipeline().addLast(RakClientRouteHandler.NAME, new RakClientRouteHandler(this));
-        this.pipeline().addLast(RakClientPongHandler.NAME, RakClientPongHandler.INSTANCE);
+        // Encodes to buffer and sends RakPing.
+        this.pipeline.addLast(UnconnectedPingEncoder.NAME, UnconnectedPingEncoder.INSTANCE);
+        // Decodes received unconnected pong to RakPong.
+        this.pipeline().addLast(UnconnectedPongDecoder.NAME, UnconnectedPongDecoder.INSTANCE);
 
         this.connectPromise = this.newPromise();
         this.connectPromise.addListener(future -> {
