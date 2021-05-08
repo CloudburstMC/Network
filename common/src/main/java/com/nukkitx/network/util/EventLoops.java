@@ -10,6 +10,11 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.incubator.channel.uring.IOUring;
+import io.netty.incubator.channel.uring.IOUringDatagramChannel;
+import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
+import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
+import io.netty.incubator.channel.uring.IOUringSocketChannel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.UtilityClass;
 
@@ -25,8 +30,11 @@ public final class EventLoops {
 
     static {
         boolean disableNative = System.getProperties().contains("disableNativeEventLoop");
+        boolean enableUring = System.getProperties().contains("enableIoUringEventLoop");
 
-        if (!disableNative && Epoll.isAvailable()) {
+        if (!disableNative && enableUring && IOUring.isAvailable()) {
+            CHANNEL_TYPE = ChannelType.IOURING;
+        } else if (!disableNative && Epoll.isAvailable()) {
             CHANNEL_TYPE = ChannelType.EPOLL;
         } else if (!disableNative && KQueue.isAvailable()) {
             CHANNEL_TYPE = ChannelType.KQUEUE;
@@ -50,6 +58,8 @@ public final class EventLoops {
 
     @RequiredArgsConstructor
     public enum ChannelType {
+        IOURING(IOUringDatagramChannel.class, IOUringSocketChannel.class, IOUringServerSocketChannel.class,
+                threads -> new IOUringEventLoopGroup(threads, EVENT_LOOP_FACTORY)),
         EPOLL(EpollDatagramChannel.class, EpollSocketChannel.class, EpollServerSocketChannel.class,
                 threads -> new EpollEventLoopGroup(threads, EVENT_LOOP_FACTORY)),
         KQUEUE(KQueueDatagramChannel.class, KQueueSocketChannel.class, KQueueServerSocketChannel.class,
