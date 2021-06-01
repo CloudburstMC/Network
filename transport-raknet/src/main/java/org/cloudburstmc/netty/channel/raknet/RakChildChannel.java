@@ -25,13 +25,15 @@ public class RakChildChannel extends AbstractChannel {
         this.pipeline().addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
 
         // Setup session/online phase
-        RakSessionCodec sessionCodec = null; // TODO: new session here
+        RakSessionCodec sessionCodec = new RakSessionCodec(this);
         this.pipeline().addLast(RakDatagramCodec.NAME, new RakDatagramCodec());
         this.pipeline().addLast(RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
         this.pipeline().addLast(RakSessionCodec.NAME, sessionCodec);
-        this.pipeline().addLast(RakServerOnlineInitialHandler.NAME, RakServerOnlineInitialHandler.INSTANCE); // Will be removed
+        // This handler auto-removes once ConnectionRequest is received
+        this.pipeline().addLast(RakServerOnlineInitialHandler.NAME, RakServerOnlineInitialHandler.INSTANCE);
         this.pipeline().addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());
         this.pipeline().addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
+        this.pipeline().addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
     }
 
     @Override

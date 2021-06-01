@@ -1,10 +1,10 @@
-package org.cloudburstmc.netty;
+package org.cloudburstmc.netty.channel.raknet;
 
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
-public class RakNetSlidingWindow {
+public class RakSlidingWindow {
     private final int mtu;
     private double cwnd;
     private double ssThresh;
@@ -16,7 +16,7 @@ public class RakNetSlidingWindow {
     private boolean backoffThisBlock;
     private int unackedBytes;
 
-    public RakNetSlidingWindow(int mtu) {
+    public RakSlidingWindow(int mtu) {
         this.mtu = mtu;
         this.cwnd = mtu;
     }

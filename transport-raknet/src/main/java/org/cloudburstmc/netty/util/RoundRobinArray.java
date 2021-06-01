@@ -1,7 +1,6 @@
 package org.cloudburstmc.netty.util;
 
 import io.netty.util.ReferenceCountUtil;
-import org.cloudburstmc.netty.RakNetUtils;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -14,7 +13,7 @@ public class RoundRobinArray<E> implements Collection<E> {
     private final int mask;
 
     public RoundRobinArray(int fixedCapacity) {
-        fixedCapacity = RakNetUtils.powerOfTwoCeiling(fixedCapacity);
+        fixedCapacity = RakUtils.powerOfTwoCeiling(fixedCapacity);
 
         this.elements = new Object[fixedCapacity];
         this.mask = fixedCapacity - 1;

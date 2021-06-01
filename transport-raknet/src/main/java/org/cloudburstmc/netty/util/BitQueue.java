@@ -1,7 +1,5 @@
 package org.cloudburstmc.netty.util;
 
-import org.cloudburstmc.netty.RakNetUtils;
-
 public class BitQueue {
 
     private byte[] queue;
@@ -9,7 +7,7 @@ public class BitQueue {
     private int tail;
 
     public BitQueue(int capacity) {
-        capacity = RakNetUtils.powerOfTwoCeiling(capacity);
+        capacity = RakUtils.powerOfTwoCeiling(capacity);
         if (capacity <= 0) {
             capacity = 8;
         }

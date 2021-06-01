@@ -30,6 +30,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_GUID");
 
     /**
+     * Unique ID of the remote RakNet peer sent. Usually used in client implementation.
+     */
+    public static final ChannelOption<Long> RAK_REMOTE_GUID =
+            valueOf(RakChannelOption.class, "RAK_REMOTE_GUID");
+
+    /**
      * Maximum allowed connections to the RakNet server. Subsequent connections will be denied.
      */
     public static final ChannelOption<Integer> RAK_MAX_CONNECTIONS =

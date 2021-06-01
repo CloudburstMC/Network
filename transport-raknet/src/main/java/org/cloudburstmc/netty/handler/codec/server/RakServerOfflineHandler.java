@@ -8,11 +8,8 @@ import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
 import net.jodah.expiringmap.ExpirationPolicy;
 import net.jodah.expiringmap.ExpiringMap;
-import org.cloudburstmc.netty.RakNetUtils;
-import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
-import org.cloudburstmc.netty.channel.raknet.RakPendingConnection;
-import org.cloudburstmc.netty.channel.raknet.RakPing;
-import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
+import org.cloudburstmc.netty.channel.raknet.*;
+import org.cloudburstmc.netty.util.RakUtils;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
 
@@ -21,13 +18,14 @@ import java.net.InetSocketAddress;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 @Sharable
 public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<DatagramPacket> {
 
     public static final String NAME = "rak-offline-handler";
     public static final RakServerOfflineHandler INSTANCE = new RakServerOfflineHandler();
+
     private final ExpiringMap<InetSocketAddress, RakPendingConnection> pendingConnections = ExpiringMap.builder()
             .expiration(30, TimeUnit.SECONDS)
             .expirationPolicy(ExpirationPolicy.CREATED)
@@ -112,20 +110,24 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             return;
         }
 
-        RakPendingConnection pendingConnection = pendingConnections.compute(sender, (addr, oldValue)
-                -> oldValue != null ? null : RakPendingConnection.newInstance(protocolVersion));
-        if (pendingConnection == null) {
-            // Already connected
+        // TODO: banned address check?
+        // TODO: max connections check?
+
+        RakPendingConnection pendingConnection = this.pendingConnections.get(sender);
+        if (pendingConnection != null) {
+            // Already received onOpenConnectionRequest2
             this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
             return;
         }
+
+        this.pendingConnections.put(sender, RakPendingConnection.newInstance(protocolVersion));
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(28, 28);
         replyBuffer.writeByte(ID_OPEN_CONNECTION_REPLY_1);
         replyBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         replyBuffer.writeLong(guid);
         replyBuffer.writeBoolean(false); // Security
-        replyBuffer.writeShort(RakNetUtils.clamp(mtu, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE));
+        replyBuffer.writeShort(RakUtils.clamp(mtu, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE));
         ctx.writeAndFlush(new DatagramPacket(replyBuffer, sender));
     }
 
@@ -135,15 +137,14 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
 
-        RakPendingConnection pendingConnection = pendingConnections.remove(sender);
+        RakPendingConnection pendingConnection = this.pendingConnections.remove(sender);
         if (pendingConnection == null) {
-            // No incoming connection?
-            // TODO: kick?
+            // No incoming connection, ignore
             return;
         }
 
-        // TODO: Verify address matches?
-        InetSocketAddress serverAddress = RakNetUtils.readAddress(buffer);
+        // TODO: Verify serveAddress matches?
+        InetSocketAddress serverAddress = RakUtils.readAddress(buffer);
         int mtu = buffer.readUnsignedShort();
         long clientGuid = buffer.readLong();
 
@@ -163,7 +164,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         replyBuffer.writeByte(ID_OPEN_CONNECTION_REPLY_2);
         replyBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         replyBuffer.writeLong(guid);
-        RakNetUtils.writeAddress(replyBuffer, packet.recipient());
+        RakUtils.writeAddress(replyBuffer, packet.recipient());
         replyBuffer.writeShort(mtu);
         replyBuffer.writeBoolean(false); // Security
         channel.writeAndFlush(replyBuffer); // Send first packet thought child channel

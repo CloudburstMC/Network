@@ -9,7 +9,7 @@ import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import java.util.Arrays;
 import java.util.Map;
 
-import static org.cloudburstmc.netty.RakNetConstants.DEFAULT_UNCONNECTED_MAGIC;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.DEFAULT_UNCONNECTED_MAGIC;
 
 /**
  * The default {@link RakServerChannelConfig} implementation for RakNet server.

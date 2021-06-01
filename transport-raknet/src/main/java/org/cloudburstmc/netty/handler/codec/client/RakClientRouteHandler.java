@@ -29,7 +29,9 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
             return;
         }
 
-        // TODO: active check?
+        if (this.channel.parent().isActive()) {
+            throw new IllegalStateException("Channel is already bound!");
+        }
 
         ChannelFuture parentFuture = this.channel.parent().connect(remoteAddress, localAddress);
         parentFuture.addListener(future -> {

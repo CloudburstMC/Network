@@ -10,7 +10,6 @@ import io.netty.util.collection.IntObjectMap;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.cloudburstmc.netty.*;
 import org.cloudburstmc.netty.channel.raknet.*;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
@@ -23,23 +22,21 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
-public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, RakMessage> {
+public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, RakMessage> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakSessionCodec.class);
     public static final String NAME = "rak-session-codec";
 
     private final Channel channel;
     private ScheduledFuture<?> tickFuture;
 
-    // TODO: consider removing this
     private volatile RakState state = RakState.UNCONNECTED;
 
     private volatile long lastTouched = System.currentTimeMillis();
-    private volatile boolean closed = false;
 
     // Reliability, Ordering, Sequencing and datagram indexes
-    private RakNetSlidingWindow slidingWindow;
+    private RakSlidingWindow slidingWindow;
     private int splitIndex;
     private int datagramReadIndex;
     private int datagramWriteIndex;
@@ -64,16 +61,17 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     private Queue<IntRange> outgoingNaks;
     private long lastMinWeight;
 
-    RakSessionCodec(Channel channel) {
+    public RakSessionCodec(Channel channel) {
         this.channel = channel;
     }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         super.channelActive(ctx);
+        this.state = RakState.CONNECTED;
         int mtu = ctx.channel().config().getOption(RakChannelOption.RAK_MTU);
 
-        this.slidingWindow = new RakNetSlidingWindow(mtu);
+        this.slidingWindow = new RakSlidingWindow(mtu);
 
         this.outgoingPacketNextWeights = new long[4];
         this.initHeapWeights();
@@ -106,8 +104,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
-        this.closed = true;
-        this.state = RakState.UNCONNECTED; // TODO: consider removing
+        this.state = RakState.UNCONNECTED;
         this.tickFuture.cancel(false);
 
         // Perform resource clean up.
@@ -157,7 +154,6 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     @Override
     protected void encode(ChannelHandlerContext ctx, RakMessage rakMessage, List<Object> list) throws Exception {
         EncapsulatedPacket[] packets = this.createEncapsulated(rakMessage);
-
         if (rakMessage.priority() == RakPriority.IMMEDIATE) {
             this.sendImmediate(packets);
             return;
@@ -173,7 +169,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
 
     @Override
     protected void decode(ChannelHandlerContext ctx, RakDatagramPacket packet, List<Object> list) throws Exception {
-        if (this.state == null || RakState.INITIALIZED.compareTo(this.state) > 0) {
+        if (RakState.UNCONNECTED.compareTo(this.state) >= 0) {
             return;
         }
 
@@ -313,17 +309,13 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     }
 
     private void onTick() {
-        if (this.closed) {
+        if (RakState.UNCONNECTED.compareTo(this.state) >= 0) {
             return;
         }
 
         long curTime = System.currentTimeMillis();
         if (this.isTimedOut(curTime)) {
             this.disconnect(RakDisconnectReason.TIMED_OUT);
-            return;
-        }
-
-        if (this.state == null || this.state.ordinal() < RakState.INITIALIZED.ordinal()) {
             return;
         }
 
@@ -344,7 +336,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         while (!this.outgoingNaks.isEmpty()) {
             ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
-            writtenNacks += RakNetUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
+            writtenNacks += RakUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
             this.channel.writeAndFlush(buffer);
         }
 
@@ -354,7 +346,7 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
             while (!this.outgoingAcks.isEmpty()) {
                 ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
                 buffer.writeByte(FLAG_VALID | FLAG_ACK);
-                writtenAcks += RakNetUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
+                writtenAcks += RakUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
                 this.channel.writeAndFlush(buffer);
                 this.slidingWindow.onSendAck();
             }
@@ -625,11 +617,10 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
     }
 
     public void disconnect(RakDisconnectReason reason) {
-        // TODO: We don't want to send disconnect notif twice,
-        //  but we do not set 'this.closed = true' here because packet won't be sent
-        if (this.closed || !this.tickFuture.isCancelled()) {
+        if (this.state == RakState.UNCONNECTED || this.state == RakState.DISCONNECTING) {
             return;
         }
+        this.state = RakState.DISCONNECTING;
 
         if (log.isTraceEnabled()) {
             log.trace("Disconnecting RakNet Session ({} => {}) due to {}", this.channel.localAddress(), this.getRemoteAddress(), reason);
@@ -640,26 +631,18 @@ public abstract class RakSessionCodec extends MessageToMessageCodec<RakDatagramP
         RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE);
 
         ChannelFuture future = this.channel.writeAndFlush(rakMessage);
-        future.addListener((ChannelFuture future1) -> future1.channel().close()); // TODO: verify this
+        future.addListener((ChannelFuture future1) ->
+                future1.channel().pipeline().fireChannelRead(reason).close());
     }
 
-
     public boolean isClosed() {
-        return this.closed;
+        return this.state == RakState.UNCONNECTED;
     }
 
     private void checkForClosed() {
-        if (this.closed) {
+        if (this.state == RakState.UNCONNECTED) {
             throw new IllegalStateException("RakSession is closed!");
         }
-    }
-
-    // TODO: handle
-    private void onDisconnectionNotification() {
-        if (log.isTraceEnabled()) {
-            log.trace("RakNet Session ({} => {}) by remote peer!", this.channel.localAddress(), this.getRemoteAddress());
-        }
-        this.channel.close();
     }
 
     public void recalculatePongTime(long pingTime) {

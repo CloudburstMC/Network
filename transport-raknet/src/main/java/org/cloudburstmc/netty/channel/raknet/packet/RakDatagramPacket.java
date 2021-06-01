@@ -5,7 +5,7 @@ import io.netty.util.internal.ObjectPool;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 public class RakDatagramPacket extends AbstractReferenceCounted {
 

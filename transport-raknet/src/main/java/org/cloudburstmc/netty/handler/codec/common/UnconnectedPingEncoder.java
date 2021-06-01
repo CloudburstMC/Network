@@ -9,7 +9,7 @@ import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 
-import static org.cloudburstmc.netty.RakNetConstants.ID_UNCONNECTED_PING;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_UNCONNECTED_PING;
 
 @ChannelHandler.Sharable
 public class UnconnectedPingEncoder extends ChannelOutboundHandlerAdapter {

@@ -25,7 +25,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         super(channel);
         this.config = new DefaultRakServerConfig(this);
         this.pipeline().addLast(RakServerRouteHandler.NAME, new RakServerRouteHandler(this));
-        // In case of proxied connections (fe. HAProxy) customized handler should be injected before.
+        // In case of proxied connections (fe. HAProxy) customized handler should be injected before RakServerOfflineHandler.
         // Default common handler of offline phase. Handles only raknet packets, forwards rest.
         this.pipeline.addLast(RakServerOfflineHandler.NAME, RakServerOfflineHandler.INSTANCE);
         // Encodes RakPong to buffer which is reply to RakPing and sends to correct sender.
@@ -44,8 +44,8 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
 
        RakChildChannel channel = new RakChildChannel(address, this);
        channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
-
-       // Register channel to event loop and fully initialize channel
+       // Fire channel thought ServerBootstrap,
+       // register to eventLoop, assign default options and attributes
        this.pipeline().fireChannelRead(channel).fireChannelReadComplete();
        this.childChannelMap.put(address, channel);
        return channel;

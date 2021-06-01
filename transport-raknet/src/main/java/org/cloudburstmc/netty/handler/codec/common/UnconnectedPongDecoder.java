@@ -9,7 +9,7 @@ import org.cloudburstmc.netty.channel.raknet.RakPong;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 @Sharable
 public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<DatagramPacket> {

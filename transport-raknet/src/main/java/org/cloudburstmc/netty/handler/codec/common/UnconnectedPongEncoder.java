@@ -9,7 +9,7 @@ import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakPong;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 
-import static org.cloudburstmc.netty.RakNetConstants.ID_UNCONNECTED_PONG;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_UNCONNECTED_PONG;
 
 @ChannelHandler.Sharable
 public class UnconnectedPongEncoder extends ChannelOutboundHandlerAdapter {

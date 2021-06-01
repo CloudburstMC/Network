@@ -7,7 +7,7 @@ import io.netty.channel.ChannelOption;
 
 import java.util.Map;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 /**
  * The extended implementation of {@link RakChannelConfig} based on {@link DefaultRakSessionConfig} used by client.
@@ -16,6 +16,7 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
 
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
     private volatile long connectTimeout = SESSION_TIMEOUT_MS;
+    private volatile long serverGuid;
 
     public DefaultRakClientConfig(Channel channel) {
         super(channel);
@@ -33,6 +34,8 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
             return (T) this.getUnconnectedMagic();
         } else if (option == RakChannelOption.RAK_CONNECT_TIMEOUT) {
             return (T) Long.valueOf(this.getConnectTimeout());
+        } else if (option == RakChannelOption.RAK_REMOTE_GUID) {
+            return (T) Long.valueOf(this.getServerGuid());
         }
         return super.getOption(option);
     }
@@ -46,6 +49,9 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
             return true;
         } else if (option == RakChannelOption.RAK_CONNECT_TIMEOUT) {
             this.setConnectTimeout((long) value);
+            return true;
+        } else if (option == RakChannelOption.RAK_REMOTE_GUID) {
+            this.setServerGuid((long) value);
             return true;
         }
         return super.setOption(option, value);
@@ -67,7 +73,17 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
         return this.connectTimeout;
     }
 
-    public void setConnectTimeout(long connectTimeout) {
+    public DefaultRakClientConfig setConnectTimeout(long connectTimeout) {
         this.connectTimeout = connectTimeout;
+        return this;
+    }
+
+    public long getServerGuid() {
+        return this.serverGuid;
+    }
+
+    public DefaultRakClientConfig setServerGuid(long serverGuid) {
+        this.serverGuid = serverGuid;
+        return this;
     }
 }

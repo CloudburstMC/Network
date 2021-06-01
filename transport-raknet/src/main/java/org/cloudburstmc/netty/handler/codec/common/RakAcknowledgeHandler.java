@@ -11,7 +11,7 @@ import org.cloudburstmc.netty.util.IntRange;
 
 import java.util.Queue;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 public class RakAcknowledgeHandler extends SimpleChannelInboundHandler<ByteBuf> {
 

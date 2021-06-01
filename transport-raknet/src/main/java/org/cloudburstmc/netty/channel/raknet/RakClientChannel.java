@@ -14,7 +14,6 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
 
     /**
      * Implementation of simple RakClient which is able to connect to only one server during lifetime.
-     * See RakPoolClientChannel if you are looking for multi session client.
      */
 
     private final RakChannelConfig config;
@@ -46,6 +45,7 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
         RakSessionCodec sessionCodec = this.pipeline().get(RakSessionCodec.class);
         this.pipeline().addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());
         this.pipeline().addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
+        this.pipeline().addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
     }
 
     @Override

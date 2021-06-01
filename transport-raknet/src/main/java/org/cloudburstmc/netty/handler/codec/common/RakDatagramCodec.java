@@ -9,7 +9,7 @@ import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 
 import java.util.List;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 public class RakDatagramCodec extends ByteToMessageCodec<RakDatagramPacket> {
     public static final String NAME = "rak-datagram-codec";

@@ -8,7 +8,7 @@ import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 public class ConnectedPingHandler extends AdvancedChannelInboundHandler<EncapsulatedPacket> {
     public static final String NAME = "rak-connected-ping-handler";

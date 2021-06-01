@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty;
+package org.cloudburstmc.netty.util;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.util.internal.PlatformDependent;
@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 
-public class RakNetUtils {
+public class RakUtils {
 
     private static final int AF_INET6 = 23;
 

@@ -7,13 +7,12 @@ import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
 
 import java.nio.channels.ClosedChannelException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
 
     public static final String NAME = "rak-child-datagram-handler";
     private final RakChildChannel channel;
-    private final AtomicBoolean canFlush = new AtomicBoolean(false);
+    private volatile boolean canFlush = false;
 
     public RakChildDatagramHandler(RakChildChannel channel) {
         this.channel = channel;
@@ -27,7 +26,7 @@ public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
             return;
         }
 
-        this.canFlush.set(true);
+        this.canFlush = true;
         promise.trySuccess();
         DatagramPacket datagram = isDatagram ? (DatagramPacket) msg : new DatagramPacket((ByteBuf) msg, this.channel.remoteAddress());
 
@@ -47,7 +46,8 @@ public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
 
     @Override
     public void flush(ChannelHandlerContext ctx) throws Exception {
-        if (this.canFlush.compareAndSet(true, false)) {
+        if (this.canFlush) {
+            this.canFlush = false;
             this.channel.parent().flush();
         }
     }

@@ -6,7 +6,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.SimpleChannelInboundHandler;
-import org.cloudburstmc.netty.RakNetUtils;
+import org.cloudburstmc.netty.util.RakUtils;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
@@ -14,7 +14,7 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 
 import java.net.InetSocketAddress;
 
-import static org.cloudburstmc.netty.RakNetConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<RakMessage> {
 
@@ -62,7 +62,7 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<R
     }
 
     private void onConnectionRequestAccepted(ChannelHandlerContext ctx, ByteBuf buf) {
-        RakNetUtils.readAddress(buf); // Client address
+        RakUtils.readAddress(buf); // Client address
         buf.readUnsignedShort(); // System index
 
         // Address + 2 * Long - Minimum amount of data
@@ -71,7 +71,7 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<R
         long pingTime = 0;
         try {
             while (buf.isReadable(required)) {
-                RakNetUtils.readAddress(buf);
+                RakUtils.readAddress(buf);
                 count++;
             }
             pingTime = buf.readLong();
@@ -82,9 +82,9 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<R
 
         ByteBuf buffer = ctx.alloc().ioBuffer();
         buffer.writeByte(ID_NEW_INCOMING_CONNECTION);
-        RakNetUtils.writeAddress(buffer, (InetSocketAddress) ctx.channel().remoteAddress());
+        RakUtils.writeAddress(buffer, (InetSocketAddress) ctx.channel().remoteAddress());
         for (int i = 0; i < count; i++) {
-            RakNetUtils.writeAddress(buffer, LOCAL_ADDRESS);
+            RakUtils.writeAddress(buffer, LOCAL_ADDRESS);
         }
         buffer.writeLong(pingTime);
         buffer.writeLong(System.currentTimeMillis());

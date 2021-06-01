@@ -3,7 +3,6 @@ package org.cloudburstmc.netty.util;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.internal.ObjectPool;
 import io.netty.util.internal.ObjectUtil;
-import org.cloudburstmc.netty.RakNetUtils;
 
 import java.util.Arrays;
 import java.util.NoSuchElementException;
@@ -59,7 +58,7 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
     private void ensureCapacity(int size) {
         // +1 for infimum
         if (size + 1 >= this.heap.length) {
-            this.resize(RakNetUtils.powerOfTwoCeiling(size + 1));
+            this.resize(RakUtils.powerOfTwoCeiling(size + 1));
         }
     }
 

@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty;
+package org.cloudburstmc.netty.channel.raknet;
 
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
@@ -7,7 +7,7 @@ import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 
-public class RakNetConstants {
+public class RakConstants {
 
     public static final byte RAKNET_PROTOCOL_VERSION = 10; // Mojang's version.
     public static final short MINIMUM_MTU_SIZE = 576;
@@ -36,7 +36,7 @@ public class RakNetConstants {
     public static final int SESSION_STALE_MS = 5000;
 
     /*
-        Flags
+     * Flags
      */
     public static final byte FLAG_VALID = (byte) 0b10000000;
     public static final byte FLAG_ACK = (byte) 0b01000000;
@@ -47,7 +47,7 @@ public class RakNetConstants {
     public static final byte FLAG_NEEDS_B_AND_AS = (byte) 0b00000100;
 
     /*
-        Packet IDs
+     * Packet IDs
      */
     public static final short ID_CONNECTED_PING = 0x00;
     public static final short ID_UNCONNECTED_PING = 0x01;
@@ -82,7 +82,7 @@ public class RakNetConstants {
     };
 
     /*
-        Congestion Control related constants
+     * Congestion Control related constants
      */
     public static final long CC_MAXIMUM_THRESHOLD = 2000;
     public static final long CC_ADDITIONAL_VARIANCE = 30;
@@ -90,7 +90,7 @@ public class RakNetConstants {
 
 
     /*
-        IP constants
+     * IP constants
      */
     public static final int IPV4_MESSAGE_SIZE = 7;
     public static final int IPV6_MESSAGE_SIZE = 29;

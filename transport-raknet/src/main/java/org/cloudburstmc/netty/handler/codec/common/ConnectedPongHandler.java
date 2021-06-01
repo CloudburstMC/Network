@@ -3,7 +3,7 @@ package org.cloudburstmc.netty.handler.codec.common;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
-import org.cloudburstmc.netty.RakNetConstants;
+import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
 
 public class ConnectedPongHandler extends AdvancedChannelInboundHandler<EncapsulatedPacket> {
@@ -22,7 +22,7 @@ public class ConnectedPongHandler extends AdvancedChannelInboundHandler<Encapsul
         }
 
         ByteBuf buf = ((EncapsulatedPacket) msg).getBuffer();
-        return buf.getUnsignedByte(buf.readerIndex()) == RakNetConstants.ID_CONNECTED_PONG;
+        return buf.getUnsignedByte(buf.readerIndex()) == RakConstants.ID_CONNECTED_PONG;
     }
 
     @Override
