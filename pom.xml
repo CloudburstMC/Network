@@ -16,6 +16,7 @@
     <url>https://github.com/CloudburstMC/Network</url>
 
     <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
     </properties>
@@ -29,7 +30,7 @@
     <licenses>
         <license>
             <name>The Apache Software License, Version 2.0</name>
-            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
             <distribution>repo</distribution>
         </license>
     </licenses>
@@ -41,13 +42,13 @@
 
     <ciManagement>
         <system>Jenkins</system>
-        <url>https://ci.nukkitx.com/job/Network/</url>
+        <url>https://ci.opencollab.dev/job/NukkitX/job/Network/</url>
     </ciManagement>
 
     <scm>
-        <connection>scm:git:https://github.com/NukkitX/Network.git</connection>
-        <developerConnection>scm:git:ssh://github.com:NukkitX/Network.git</developerConnection>
-        <url>https://github.com/NukkitX/Network</url>
+        <connection>scm:git:https://github.com/CloudburstMC/Network.git</connection>
+        <developerConnection>scm:git:ssh://github.com:CloudburstMC/Network.git</developerConnection>
+        <url>https://github.com/CloudburstMC/Network</url>
     </scm>
 
     <distributionManagement>
@@ -56,20 +57,20 @@
         </relocation>
         <repository>
             <id>releases</id>
-            <name>nukkitx-releases</name>
-            <url>https://repo.nukkitx.com/release</url>
+            <name>opencollab-releases</name>
+            <url>https://repo.opencollab.dev/maven-releases</url>
         </repository>
         <snapshotRepository>
             <id>snapshots</id>
-            <name>nukkitx-snapshots</name>
-            <url>https://repo.nukkitx.com/snapshot</url>
+            <name>opencollab-snapshots</name>
+            <url>https://repo.opencollab.dev/maven-snapshots</url>
         </snapshotRepository>
     </distributionManagement>
 
     <repositories>
         <repository>
-            <id>nukkitx-repo-release</id>
-            <url>https://repo.nukkitx.com/release/</url>
+            <id>opencollab-repo-release</id>
+            <url>https://repo.opencollab.dev/release/</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -78,8 +79,8 @@
             </snapshots>
         </repository>
         <repository>
-            <id>nukkitx-repo-snapshot</id>
-            <url>https://repo.nukkitx.com/snapshot/</url>
+            <id>opencollab-repo-snapshot</id>
+            <url>https://repo.opencollab.dev/snapshot/</url>
             <releases>
                 <enabled>false</enabled>
             </releases>
