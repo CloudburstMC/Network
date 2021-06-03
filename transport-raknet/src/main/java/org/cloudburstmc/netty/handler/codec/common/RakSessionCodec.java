@@ -632,7 +632,11 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
 
         ChannelFuture future = this.channel.writeAndFlush(rakMessage);
         future.addListener((ChannelFuture future1) ->
-                future1.channel().pipeline().fireChannelRead(reason).close());
+                future1.channel().pipeline().fireUserEventTriggered(reason).close());
+    }
+
+    public void close(RakDisconnectReason reason) {
+        this.channel.pipeline().fireUserEventTriggered(reason).close();
     }
 
     public boolean isClosed() {

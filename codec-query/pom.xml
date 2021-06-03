@@ -3,9 +3,9 @@
          xmlns="http://maven.apache.org/POM/4.0.0"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>network-parent</artifactId>
-        <groupId>com.nukkitx.network</groupId>
-        <version>2.0.0-SNAPSHOT</version>
+        <artifactId>cloudburstmc-netty-parent</artifactId>
+        <groupId>io.netty</groupId>
+        <version>4.1.51.Final</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 

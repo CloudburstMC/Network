@@ -24,7 +24,7 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
         this.config = new DefaultRakClientConfig(this);
         this.pipeline().addLast(RakClientRouteHandler.NAME, new RakClientRouteHandler(this));
         // Encodes to buffer and sends RakPing.
-        this.pipeline.addLast(UnconnectedPingEncoder.NAME, UnconnectedPingEncoder.INSTANCE);
+        this.pipeline().addLast(UnconnectedPingEncoder.NAME, UnconnectedPingEncoder.INSTANCE);
         // Decodes received unconnected pong to RakPong.
         this.pipeline().addLast(UnconnectedPongDecoder.NAME, UnconnectedPongDecoder.INSTANCE);
 
@@ -46,6 +46,7 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
         this.pipeline().addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());
         this.pipeline().addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
         this.pipeline().addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
+        this.pipeline().fireChannelActive();
     }
 
     @Override
@@ -55,5 +56,10 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
 
     public ChannelPromise getConnectPromise() {
         return this.connectPromise;
+    }
+
+    @Override
+    public boolean isActive() {
+        return super.isActive() && this.connectPromise.isSuccess();
     }
 }
