@@ -1,8 +1,6 @@
-package com.nukkitx.network.query;
+package org.cloudburstmc.netty.handler.codec.query;
 
 import com.nukkitx.network.NetworkListener;
-import com.nukkitx.network.query.codec.QueryPacketCodec;
-import com.nukkitx.network.query.handler.QueryPacketHandler;
 import com.nukkitx.network.util.Bootstraps;
 import com.nukkitx.network.util.EventLoops;
 import com.nukkitx.network.util.Preconditions;
@@ -12,6 +10,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.socket.DatagramChannel;
+import org.cloudburstmc.netty.handler.codec.query.codec.QueryPacketCodec;
+import org.cloudburstmc.netty.handler.codec.query.handler.QueryPacketHandler;
 
 import java.net.InetSocketAddress;
 

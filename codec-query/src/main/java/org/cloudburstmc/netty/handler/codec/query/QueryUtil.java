@@ -1,4 +1,4 @@
-package com.nukkitx.network.query;
+package org.cloudburstmc.netty.handler.codec.query;
 
 import io.netty.buffer.ByteBuf;
 import lombok.experimental.UtilityClass;

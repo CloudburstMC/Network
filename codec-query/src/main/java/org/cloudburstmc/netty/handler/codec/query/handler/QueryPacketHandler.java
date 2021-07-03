@@ -1,11 +1,11 @@
-package com.nukkitx.network.query.handler;
+package org.cloudburstmc.netty.handler.codec.query.handler;
 
-import com.nukkitx.network.query.QueryEventListener;
-import com.nukkitx.network.query.enveloped.DirectAddressedQueryPacket;
-import com.nukkitx.network.query.packet.HandshakePacket;
-import com.nukkitx.network.query.packet.StatisticsPacket;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import org.cloudburstmc.netty.handler.codec.query.QueryEventListener;
+import org.cloudburstmc.netty.handler.codec.query.enveloped.DirectAddressedQueryPacket;
+import org.cloudburstmc.netty.handler.codec.query.packet.HandshakePacket;
+import org.cloudburstmc.netty.handler.codec.query.packet.StatisticsPacket;
 
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;

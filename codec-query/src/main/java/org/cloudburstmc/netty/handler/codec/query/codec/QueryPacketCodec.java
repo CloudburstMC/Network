@@ -1,14 +1,14 @@
-package com.nukkitx.network.query.codec;
+package org.cloudburstmc.netty.handler.codec.query.codec;
 
-import com.nukkitx.network.query.QueryPacket;
-import com.nukkitx.network.query.enveloped.DirectAddressedQueryPacket;
-import com.nukkitx.network.query.packet.HandshakePacket;
-import com.nukkitx.network.query.packet.StatisticsPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.codec.MessageToMessageCodec;
+import org.cloudburstmc.netty.handler.codec.query.QueryPacket;
+import org.cloudburstmc.netty.handler.codec.query.enveloped.DirectAddressedQueryPacket;
+import org.cloudburstmc.netty.handler.codec.query.packet.HandshakePacket;
+import org.cloudburstmc.netty.handler.codec.query.packet.StatisticsPacket;
 
 import java.util.Arrays;
 import java.util.List;

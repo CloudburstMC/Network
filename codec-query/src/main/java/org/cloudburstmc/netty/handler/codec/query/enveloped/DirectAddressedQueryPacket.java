@@ -1,7 +1,7 @@
-package com.nukkitx.network.query.enveloped;
+package org.cloudburstmc.netty.handler.codec.query.enveloped;
 
-import com.nukkitx.network.query.QueryPacket;
 import io.netty.channel.DefaultAddressedEnvelope;
+import org.cloudburstmc.netty.handler.codec.query.QueryPacket;
 
 import java.net.InetSocketAddress;
 

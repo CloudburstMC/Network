@@ -1,11 +1,9 @@
-package com.nukkitx.network.query.packet;
+package org.cloudburstmc.netty.handler.codec.query.packet;
 
-import com.nukkitx.network.query.QueryPacket;
-import com.nukkitx.network.query.QueryUtil;
 import io.netty.buffer.ByteBuf;
-import lombok.Data;
+import org.cloudburstmc.netty.handler.codec.query.QueryPacket;
+import org.cloudburstmc.netty.handler.codec.query.QueryUtil;
 
-@Data
 public class HandshakePacket implements QueryPacket {
     private static final short ID = 0x09;
     // Both
@@ -27,5 +25,23 @@ public class HandshakePacket implements QueryPacket {
     @Override
     public short getId() {
         return ID;
+    }
+
+    @Override
+    public int getSessionId() {
+        return sessionId;
+    }
+
+    @Override
+    public void setSessionId(int sessionId) {
+        this.sessionId = sessionId;
+    }
+
+    public String getToken() {
+        return token;
+    }
+
+    public void setToken(String token) {
+        this.token = token;
     }
 }
