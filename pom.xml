@@ -51,22 +51,6 @@
         <url>https://github.com/CloudburstMC/Network</url>
     </scm>
 
-    <distributionManagement>
-        <relocation>
-            <groupId>org.cloudburstmc.netty</groupId>
-        </relocation>
-        <repository>
-            <id>releases</id>
-            <name>opencollab-releases</name>
-            <url>https://repo.opencollab.dev/maven-releases</url>
-        </repository>
-        <snapshotRepository>
-            <id>snapshots</id>
-            <name>opencollab-snapshots</name>
-            <url>https://repo.opencollab.dev/maven-snapshots</url>
-        </snapshotRepository>
-    </distributionManagement>
-
     <repositories>
         <repository>
             <id>opencollab-repo-release</id>

@@ -10,6 +10,7 @@
         <version>4.1.51.Final</version>
     </parent>
 
+    <groupId>org.cloudburst.netty</groupId>
     <artifactId>netty-codec-rcon</artifactId>
 
     <dependencies>
