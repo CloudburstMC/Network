@@ -7,7 +7,7 @@
     <parent>
         <artifactId>cloudburstmc-netty-parent</artifactId>
         <groupId>org.cloudburstmc.netty</groupId>
-        <version>1.0.0.Final</version>
+        <version>1.0.0.Final-SNAPSHOT</version>
     </parent>
 
     <artifactId>netty-transport-raknet</artifactId>

@@ -11,7 +11,7 @@
 
     <groupId>org.cloudburstmc.netty</groupId>
     <artifactId>cloudburstmc-netty-parent</artifactId>
-    <version>1.0.0.Final</version>
+    <version>1.0.0.Final-SNAPSHOT</version>
     <name>CloudburstMC Netty</name>
     <packaging>pom</packaging>
     <inceptionYear>2018</inceptionYear>
