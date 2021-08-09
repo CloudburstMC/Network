@@ -4,13 +4,15 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <artifactId>netty-parent</artifactId>
-        <groupId>io.netty</groupId>
-        <version>4.1.51.Final</version>
+        <groupId>org.sonatype.oss</groupId>
+        <artifactId>oss-parent</artifactId>
+        <version>9</version>
     </parent>
 
-    <name>CloudburstMC Netty</name>
+    <groupId>org.cloudburstmc.netty</groupId>
     <artifactId>cloudburstmc-netty-parent</artifactId>
+    <version>1.0.0.Final</version>
+    <name>CloudburstMC Netty</name>
     <packaging>pom</packaging>
     <inceptionYear>2018</inceptionYear>
     <url>https://github.com/CloudburstMC/Network</url>
@@ -19,6 +21,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
+        <netty.version>4.1.65.Final</netty.version>
     </properties>
 
     <modules>
@@ -50,27 +53,4 @@
         <developerConnection>scm:git:ssh://github.com:CloudburstMC/Network.git</developerConnection>
         <url>https://github.com/CloudburstMC/Network</url>
     </scm>
-
-    <repositories>
-        <repository>
-            <id>opencollab-repo-release</id>
-            <url>https://repo.opencollab.dev/release/</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </repository>
-        <repository>
-            <id>opencollab-repo-snapshot</id>
-            <url>https://repo.opencollab.dev/snapshot/</url>
-            <releases>
-                <enabled>false</enabled>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-    </repositories>
 </project>

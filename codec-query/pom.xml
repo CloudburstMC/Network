@@ -4,29 +4,29 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>cloudburstmc-netty-parent</artifactId>
-        <groupId>io.netty</groupId>
-        <version>4.1.51.Final</version>
+        <groupId>org.cloudburstmc.netty</groupId>
+        <version>1.0.0.Final</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.cloudburst.netty</groupId>
-    <artifactId>query</artifactId>
+    <artifactId>netty-codec-query</artifactId>
+    <name>Netty/Codec/Query</name>
 
     <dependencies>
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-common</artifactId>
-            <version>${project.version}</version>
+            <version>${netty.version}</version>
         </dependency>
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-buffer</artifactId>
-            <version>${project.version}</version>
+            <version>${netty.version}</version>
         </dependency>
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-codec</artifactId>
-            <version>${project.version}</version>
+            <version>${netty.version}</version>
         </dependency>
     </dependencies>
 </project>

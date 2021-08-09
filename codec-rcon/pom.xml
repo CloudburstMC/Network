@@ -6,19 +6,18 @@
     <version>4.1.51.Final</version>
     <parent>
         <artifactId>cloudburstmc-netty-parent</artifactId>
-        <groupId>io.netty</groupId>
-        <version>4.1.51.Final</version>
+        <groupId>org.cloudburstmc.netty</groupId>
+        <version>1.0.0.Final</version>
     </parent>
 
-    <groupId>org.cloudburst.netty</groupId>
     <artifactId>netty-codec-rcon</artifactId>
+    <name>Netty/Codec/RCON</name>
 
     <dependencies>
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-handler</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
+            <version>${netty.version}</version>
         </dependency>
     </dependencies>
 </project>
