@@ -476,10 +476,11 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         }
 
         // Send packets that are stale first. This function returns whether or not to continue
-        // send the rest of the datagram, as it might close the client due to too many stale packets
+        // send the rest of the datagrams, as it might close the client due to too many stale packets
         if (!this.sendStaleDatagrams(curTime)) {
             return;
         }
+
         // Now send usual packets
         this.sendDatagrams(curTime);
         // Finally flush channel
