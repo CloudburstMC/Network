@@ -475,8 +475,11 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
             }
         }
 
-        // Send packets that are stale first
-        this.sendStaleDatagrams(curTime);
+        // Send packets that are stale first. This function returns whether or not to continue
+        // send the rest of the datagram, as it might close the client due to too many stale packets
+        if (!this.sendStaleDatagrams(curTime)) {
+            return;
+        }
         // Now send usual packets
         this.sendDatagrams(curTime);
         // Finally flush channel
@@ -523,9 +526,16 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         this.sendDatagram(datagram, curTime);
     }
 
-    private void sendStaleDatagrams(long curTime) {
+    private boolean sendStaleDatagrams(long curTime) {
         if (this.sentDatagrams.isEmpty()) {
-            return;
+            return true;
+        }
+        if (this.sentDatagrams.size() > MAXIMUM_STALE_DATAGRAMS) {
+            this.close(DisconnectReason.TIMED_OUT);
+            if (log.isTraceEnabled()) {
+                log.trace("Too many Slate datagrams for {}. Disconnected", this.address);
+            }
+            return false;
         }
 
         boolean hasResent = false;
@@ -556,6 +566,8 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         if (metrics != null) {
             metrics.rakStaleDatagrams(resendCount);
         }
+
+        return true;
     }
 
     private void sendDatagrams(long curTime) {
