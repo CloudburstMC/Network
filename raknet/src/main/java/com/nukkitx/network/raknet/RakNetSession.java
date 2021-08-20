@@ -531,13 +531,6 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         if (this.sentDatagrams.isEmpty()) {
             return true;
         }
-        if (this.sentDatagrams.size() > MAXIMUM_STALE_DATAGRAMS) {
-            this.close(DisconnectReason.TIMED_OUT);
-            if (log.isTraceEnabled()) {
-                log.trace("Too many Slate datagrams for {}. Disconnected", this.address);
-            }
-            return false;
-        }
 
         boolean hasResent = false;
         int resendCount = 0;
@@ -557,6 +550,14 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
                 resendCount++;
                 this.sendDatagram(datagram, curTime);
             }
+        }
+
+        if (resendCount > MAXIMUM_STALE_DATAGRAMS) {
+            this.close(DisconnectReason.TIMED_OUT);
+            if (log.isTraceEnabled()) {
+                log.trace("Too many Slate datagrams for {}. Disconnected", this.address);
+            }
+            return false;
         }
 
         if (hasResent) {
