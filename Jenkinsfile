@@ -39,8 +39,8 @@ pipeline {
                         rtMavenResolver(
                                 id: "maven-resolver",
                                 serverId: "opencollab-artifactory",
-                                releaseRepo: "release",
-                                snapshotRepo: "snapshot"
+                                releaseRepo: "maven-deploy-release",
+                                snapshotRepo: "maven-deploy-snapshot"
                         )
                     }
                 }
