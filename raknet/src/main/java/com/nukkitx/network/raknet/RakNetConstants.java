@@ -38,6 +38,11 @@ public class RakNetConstants {
      * Time in millis after unconnected ping is resent till pong is not received.
      */
     public static final int RAKNET_PING_INTERVAL = 1000;
+    /**
+     * How many Stale Datagrams a {@link RakNetSession} can hold before been
+     * forcefully closed
+     */
+    public static final int MAXIMUM_STALE_DATAGRAMS = 256;
 
     /*
         Flags
