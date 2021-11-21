@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.experimental.UtilityClass;
 
 import java.util.concurrent.ThreadFactory;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 @UtilityClass
@@ -44,7 +45,7 @@ public final class EventLoops {
     }
 
     public static EventLoopGroup newEventLoopGroup(int threads) {
-        return CHANNEL_TYPE.eventLoopGroupFactory.apply(threads);
+        return CHANNEL_TYPE.newEventLoopGroup(threads, EVENT_LOOP_FACTORY);
     }
 
     public static ChannelType getChannelType() {
@@ -55,16 +56,20 @@ public final class EventLoops {
     @RequiredArgsConstructor
     public enum ChannelType {
         EPOLL(EpollDatagramChannel.class, EpollSocketChannel.class, EpollServerSocketChannel.class,
-                threads -> new EpollEventLoopGroup(threads, EVENT_LOOP_FACTORY), Epoll.isAvailable()),
+                (threads, factory) -> new EpollEventLoopGroup(threads, factory), Epoll.isAvailable()),
         KQUEUE(KQueueDatagramChannel.class, KQueueSocketChannel.class, KQueueServerSocketChannel.class,
-                threads -> new KQueueEventLoopGroup(threads, EVENT_LOOP_FACTORY), KQueue.isAvailable()),
+                (threads, factory) -> new KQueueEventLoopGroup(threads, factory), KQueue.isAvailable()),
         NIO(NioDatagramChannel.class, NioSocketChannel.class, NioServerSocketChannel.class,
-                threads -> new NioEventLoopGroup(threads, EVENT_LOOP_FACTORY), true);
+                (threads, factory) -> new NioEventLoopGroup(threads, factory), true);
 
         private final Class<? extends DatagramChannel> datagramChannel;
         private final Class<? extends SocketChannel> socketChannel;
         private final Class<? extends ServerSocketChannel> serverSocketChannel;
-        private final Function<Integer, EventLoopGroup> eventLoopGroupFactory;
+        private final BiFunction<Integer, ThreadFactory, EventLoopGroup> eventLoopGroupFactory;
         private final boolean available;
+
+        public EventLoopGroup newEventLoopGroup(int threads, ThreadFactory factory) {
+            return this.eventLoopGroupFactory.apply(threads, factory);
+        }
     }
 }
