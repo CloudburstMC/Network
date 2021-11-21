@@ -13,7 +13,7 @@ import lombok.experimental.UtilityClass;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.nukkitx.network.util.EventLoops.CHANNEL_TYPE;
+import static com.nukkitx.network.util.EventLoops.getChannelType;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 @UtilityClass
@@ -52,14 +52,14 @@ public final class Bootstraps {
     }
 
     public static void setupBootstrap(Bootstrap bootstrap, boolean datagram) {
-        Class<? extends Channel> channel = datagram ? CHANNEL_TYPE.datagramChannel : CHANNEL_TYPE.socketChannel;
+        Class<? extends Channel> channel = datagram ? getChannelType().getDatagramChannel() : getChannelType().getSocketChannel();
         bootstrap.channel(channel);
 
         setupAbstractBootstrap(bootstrap);
     }
 
     public static void setupServerBootstrap(ServerBootstrap bootstrap) {
-        Class<? extends ServerSocketChannel> channel = CHANNEL_TYPE.serverSocketChannel;
+        Class<? extends ServerSocketChannel> channel = getChannelType().getServerSocketChannel();
         bootstrap.channel(channel);
 
         setupAbstractBootstrap(bootstrap);
