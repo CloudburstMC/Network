@@ -448,7 +448,19 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         // Send known outgoing acknowledge packets.
         RakMetrics metrics = this.getRakNet().getMetrics();
         final int mtu = this.adjustedMtu - RAKNET_DATAGRAM_HEADER_SIZE;
+        int writtenAcks = 0;
         int writtenNacks = 0;
+
+        if (this.slidingWindow.shouldSendAcks(curTime)) {
+            while (!this.outgoingAcks.isEmpty()) {
+                ByteBuf buffer = this.allocateBuffer(mtu);
+                buffer.writeByte(FLAG_VALID | FLAG_ACK);
+                writtenAcks += RakNetUtils.writeIntRanges(buffer, this.outgoingAcks, mtu - 1);
+                this.sendDirect(buffer);
+                this.slidingWindow.onSendAck();
+            }
+        }
+
         while (!this.outgoingNaks.isEmpty()) {
             ByteBuf buffer = this.allocateBuffer(mtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
@@ -458,21 +470,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
 
         if (metrics != null) {
             metrics.nackOut(writtenNacks);
-        }
-
-        if (this.slidingWindow.shouldSendAcks(curTime)) {
-            int writtenAcks = 0;
-            while (!this.outgoingAcks.isEmpty()) {
-                ByteBuf buffer = this.allocateBuffer(mtu);
-                buffer.writeByte(FLAG_VALID | FLAG_ACK);
-                writtenAcks += RakNetUtils.writeIntRanges(buffer, this.outgoingAcks, mtu - 1);
-                this.sendDirect(buffer);
-                this.slidingWindow.onSendAck();
-            }
-
-            if (metrics != null) {
-                metrics.ackOut(writtenAcks);
-            }
+            metrics.ackOut(writtenAcks);
         }
 
         // Send packets that are stale first. This function returns whether or not to continue
