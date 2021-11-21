@@ -319,7 +319,7 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         int missedDatagrams = datagram.sequenceIndex - prevSequenceIndex;
 
         if (missedDatagrams > 0) {
-            this.outgoingNaks.offer(new IntRange(datagram.sequenceIndex - missedDatagrams, datagram.sequenceIndex));
+            this.outgoingNaks.offer(new IntRange(datagram.sequenceIndex - missedDatagrams, datagram.sequenceIndex - 1));
         }
 
         this.outgoingAcks.offer(new IntRange(datagram.sequenceIndex, datagram.sequenceIndex));
