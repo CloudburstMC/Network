@@ -272,11 +272,11 @@ public class RakNetServer extends RakNet {
         @Override
         protected void initChannel(Channel channel) throws Exception {
             ChannelPipeline pipeline = channel.pipeline();
-            pipeline.addLast(RakOutboundHandler.NAME, new RakOutboundHandler(RakNetServer.this));
-            pipeline.addLast(ServerMessageHandler.NAME, RakNetServer.this.messageHandler);
             if (RakNetServer.this.useProxyProtocol()) {
                 pipeline.addLast(ProxyServerHandler.NAME, RakNetServer.this.proxyServerHandler);
             }
+            pipeline.addLast(RakOutboundHandler.NAME, new RakOutboundHandler(RakNetServer.this));
+            pipeline.addLast(ServerMessageHandler.NAME, RakNetServer.this.messageHandler);
             pipeline.addLast(ServerDatagramHandler.NAME, RakNetServer.this.serverDatagramHandler);
             pipeline.addLast(RakExceptionHandler.NAME, RakNetServer.this.exceptionHandler);
             RakNetServer.this.channels.add(channel);
