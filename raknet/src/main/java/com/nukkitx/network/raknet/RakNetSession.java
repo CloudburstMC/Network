@@ -451,14 +451,15 @@ public abstract class RakNetSession implements SessionConnection<ByteBuf> {
         int writtenAcks = 0;
         int writtenNacks = 0;
 
-        if (this.slidingWindow.shouldSendAcks(curTime)) {
-            while (!this.outgoingAcks.isEmpty()) {
-                ByteBuf buffer = this.allocateBuffer(mtu);
-                buffer.writeByte(FLAG_VALID | FLAG_ACK);
-                writtenAcks += RakNetUtils.writeIntRanges(buffer, this.outgoingAcks, mtu - 1);
-                this.sendDirect(buffer);
-                this.slidingWindow.onSendAck();
-            }
+        // if (this.slidingWindow.shouldSendAcks(curTime)) {
+        // }
+
+        while (!this.outgoingAcks.isEmpty()) {
+            ByteBuf buffer = this.allocateBuffer(mtu);
+            buffer.writeByte(FLAG_VALID | FLAG_ACK);
+            writtenAcks += RakNetUtils.writeIntRanges(buffer, this.outgoingAcks, mtu - 1);
+            this.sendDirect(buffer);
+            this.slidingWindow.onSendAck();
         }
 
         while (!this.outgoingNaks.isEmpty()) {
