@@ -20,11 +20,15 @@ public class EncapsulatedPacket implements ReferenceCounted {
     int partId;
     int partIndex;
     ByteBuf buffer;
+    boolean needsBAS;
 
     public void encode(ByteBuf buf) {
         int flags = reliability.ordinal() << 5;
         if (split) {
-            flags |= 0b00010000;
+            flags |= RakNetConstants.FLAG_PACKET_PAIR;
+        }
+        if (needsBAS){
+            flags |= RakNetConstants.FLAG_NEEDS_B_AND_AS;
         }
         buf.writeByte(flags); // flags
         buf.writeShort(buffer.readableBytes() << 3); // size
@@ -55,7 +59,8 @@ public class EncapsulatedPacket implements ReferenceCounted {
     public void decode(ByteBuf buf) {
         byte flags = buf.readByte();
         reliability = RakNetReliability.fromId((flags & 0b11100000) >> 5);
-        split = (flags & 0b00010000) != 0;
+        split = (flags & RakNetConstants.FLAG_PACKET_PAIR) != 0;
+        needsBAS = (flags & RakNetConstants.FLAG_NEEDS_B_AND_AS) != 0;
         int size = (buf.readUnsignedShort() + 7) >> 3;
 
         if (reliability.isReliable()) {
