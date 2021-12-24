@@ -31,7 +31,7 @@ public class ProxyServerHandler extends SimpleChannelInboundHandler<DatagramPack
     protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) throws Exception {
         ByteBuf content = packet.content();
         RakNetSession session = this.server.getSession(packet.sender());
-        int detectedVersion = session != null ? ProxyProtocolDecoder.findVersion(content) : -1;
+        int detectedVersion = session != null ? -1 : ProxyProtocolDecoder.findVersion(content);
         InetSocketAddress presentAddress = this.server.getProxiedAddress(packet.sender());
 
         if (presentAddress == null && detectedVersion == -1) {
