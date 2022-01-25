@@ -17,14 +17,7 @@ public class RakNetUtils {
 
         int count = 0;
         IntRange ackRange;
-        while ((ackRange = ackQueue.poll()) != null) {
-
-            IntRange nextRange;
-            while ((nextRange = ackQueue.peek()) != null && (ackRange.end + 1) == nextRange.start) {
-                ackQueue.remove();
-                ackRange.end = nextRange.end;
-            }
-
+        while ((ackRange = ackQueue.peek()) != null) {
             if (ackRange.start == ackRange.end) {
                 if (mtu < 4) {
                     break;
@@ -43,6 +36,7 @@ public class RakNetUtils {
                 buffer.writeMediumLE(ackRange.start);
                 buffer.writeMediumLE(ackRange.end);
             }
+            ackQueue.remove();
             count++;
         }
 
