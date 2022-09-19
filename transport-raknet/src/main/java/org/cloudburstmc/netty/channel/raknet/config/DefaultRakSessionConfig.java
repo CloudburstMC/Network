@@ -14,7 +14,7 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
     private volatile long guid;
     private volatile int mtu;
     private volatile int protocolVersion;
-    private volatile int orderingChannels;
+    private volatile int orderingChannels = 16;
     private volatile RakMetrics metrics;
 
     public DefaultRakSessionConfig(Channel channel) {

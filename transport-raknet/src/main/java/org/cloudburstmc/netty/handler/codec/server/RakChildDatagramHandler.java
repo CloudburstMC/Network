@@ -1,7 +1,10 @@
 package org.cloudburstmc.netty.handler.codec.server;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.*;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
@@ -35,11 +38,10 @@ public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
             metrics.bytesOut(datagram.content().readableBytes());
         }
 
-        ChannelFuture channelFuture = this.channel.parent().write(datagram);
-        channelFuture.addListener((ChannelFuture future) -> {
+        this.channel.parent().parent().write(datagram).addListener((ChannelFuture future) -> {
             if (!future.isSuccess() && !(future.cause() instanceof ClosedChannelException)) {
-                future.channel().pipeline().fireExceptionCaught(future.cause());
-                future.channel().close();
+                this.channel.pipeline().fireExceptionCaught(future.cause());
+                this.channel.close();
             }
         });
     }
@@ -48,12 +50,7 @@ public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
     public void flush(ChannelHandlerContext ctx) throws Exception {
         if (this.canFlush) {
             this.canFlush = false;
-            this.channel.parent().flush();
+            ctx.flush();
         }
-    }
-
-    @Override
-    public void read(ChannelHandlerContext ctx) throws Exception {
-        // Ignore
     }
 }

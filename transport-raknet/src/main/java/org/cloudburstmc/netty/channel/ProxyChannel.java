@@ -7,6 +7,7 @@ import io.netty.util.AttributeKey;
 import io.netty.util.internal.ObjectUtil;
 import org.cloudburstmc.netty.handler.codec.ProxyInboundRouter;
 import org.cloudburstmc.netty.handler.codec.ProxyOutboundRouter;
+import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -16,15 +17,14 @@ public abstract class ProxyChannel<T extends Channel> implements Channel {
     /**
      * TODO: consider config mixing with parent
      */
-
     protected final T channel;
     protected final ChannelPipeline pipeline;
 
     protected ProxyChannel(T parent) {
         ObjectUtil.checkNotNull(parent, "parent");
         this.channel = parent;
-        this.pipeline = new DefaultChannelPipeline(this){};
-        this.pipeline.addLast(ProxyInboundRouter.NAME, new ProxyInboundRouter(this));
+        this.pipeline = this.newChannelPipeline();
+        parent.pipeline().addLast(ProxyInboundRouter.NAME, new ProxyInboundRouter(this));
         this.pipeline.addLast(ProxyOutboundRouter.NAME, new ProxyOutboundRouter(this));
     }
 
@@ -35,13 +35,21 @@ public abstract class ProxyChannel<T extends Channel> implements Channel {
     public ChannelPromise correctPromise(ChannelPromise remotePromise) {
         ChannelPromise localPromise = this.channel.newPromise();
         localPromise.addListener(future -> {
-           if (future.isSuccess()) {
-               remotePromise.trySuccess();
-           } else {
-               remotePromise.tryFailure(future.cause());
-           }
+            if (future.isSuccess()) {
+                remotePromise.trySuccess();
+            } else {
+                remotePromise.tryFailure(future.cause());
+            }
         });
         return localPromise;
+    }
+
+    protected DefaultChannelPipeline newChannelPipeline() {
+        return RakUtils.newChannelPipeline(this);
+    }
+
+    protected final ChannelPipeline internalPipeline() {
+        return this.channel.pipeline();
     }
 
     @Override
@@ -191,7 +199,8 @@ public abstract class ProxyChannel<T extends Channel> implements Channel {
 
     @Override
     public Channel read() {
-        return this.channel.read();
+        this.pipeline.read();
+        return this;
     }
 
     @Override

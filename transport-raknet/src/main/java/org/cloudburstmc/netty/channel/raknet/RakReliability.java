@@ -7,8 +7,10 @@ public enum RakReliability {
     RELIABLE_ORDERED(true, true, false, false),
     RELIABLE_SEQUENCED(true, false, true, false),
     UNRELIABLE_WITH_ACK_RECEIPT(false, false, false, true),
+    UNRELIABLE_SEQUENCED_WITH_ACK_RECEIPT(false, false, true, true),
     RELIABLE_WITH_ACK_RECEIPT(true, false, false, true),
-    RELIABLE_ORDERED_WITH_ACK_RECEIPT(true, true, false, true);
+    RELIABLE_ORDERED_WITH_ACK_RECEIPT(true, true, false, true),
+    RELIABLE_SEQUENCED_WITH_ACK_RECEIPT(true, false, true, true);
 
     private static final RakReliability[] VALUES = values();
 

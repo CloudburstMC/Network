@@ -11,11 +11,7 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
 
     private static final Entry INFIMUM = new Entry(Long.MAX_VALUE);
     private static final Entry SUPREMUM = new Entry(Long.MIN_VALUE);
-    private static final ObjectPool<Entry> RECYCLER = ObjectPool.newPool(new ObjectPool.ObjectCreator<Entry>() {
-        public Entry newObject(ObjectPool.Handle<Entry> handle) {
-            return new Entry(handle);
-        }
-    });
+    private static final ObjectPool<Entry> RECYCLER = ObjectPool.newPool(Entry::new);
     private int size;
 
     public FastBinaryMinHeap() {
@@ -64,7 +60,8 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
 
     @SuppressWarnings("unchecked")
     public E peek() {
-        return (E) this.heap[1];
+        Entry entry = this.heap[1];
+        return entry != null ? (E) entry.element : null;
     }
 
     private void insert0(long weight, E element) {
@@ -209,6 +206,8 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
         @Override
         protected void deallocate() {
             if (handle == null) return;
+            this.element = null;
+            this.weight = 0;
             this.handle.recycle(this);
         }
 

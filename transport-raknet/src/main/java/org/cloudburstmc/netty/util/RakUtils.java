@@ -1,15 +1,35 @@
 package org.cloudburstmc.netty.util;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.util.internal.PlatformDependent;
-import org.cloudburstmc.netty.util.IntRange;
+import io.netty.channel.Channel;
+import io.netty.channel.DefaultChannelPipeline;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.net.*;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Queue;
 
 public class RakUtils {
+
+    private static final Constructor<DefaultChannelPipeline> DEFAULT_CHANNEL_PIPELINE_CONSTRUCTOR;
+
+    static {
+        try {
+            Constructor<DefaultChannelPipeline> constructor = DefaultChannelPipeline.class.getDeclaredConstructor(Channel.class);
+            constructor.setAccessible(true);
+            DEFAULT_CHANNEL_PIPELINE_CONSTRUCTOR = constructor;
+        } catch (NoSuchMethodException e) {
+            throw new AssertionError("Unable to find DefaultChannelPipeline(Channel) constructor", e);
+        }
+    }
+
+    public static DefaultChannelPipeline newChannelPipeline(Channel channel) {
+        try {
+            return DEFAULT_CHANNEL_PIPELINE_CONSTRUCTOR.newInstance(channel);
+        } catch (InvocationTargetException | InstantiationException | IllegalAccessException e) {
+            throw new IllegalStateException("Unable to instantiate DefaultChannelPipeline", e);
+        }
+    }
 
     private static final int AF_INET6 = 23;
 

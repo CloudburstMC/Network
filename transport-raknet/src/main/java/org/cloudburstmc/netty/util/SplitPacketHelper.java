@@ -1,32 +1,31 @@
 package org.cloudburstmc.netty.util;
 
-import com.nukkitx.network.util.Preconditions;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.util.AbstractReferenceCounted;
+import io.netty.util.IllegalReferenceCountException;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
+import io.netty.util.internal.ObjectUtil;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
-import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 
-import javax.annotation.Nullable;
 
 public class SplitPacketHelper extends AbstractReferenceCounted {
     private final EncapsulatedPacket[] packets;
     private final long created = System.currentTimeMillis();
 
     public SplitPacketHelper(long expectedLength) {
-        Preconditions.checkArgument(expectedLength >= 1, "expectedLength is less than 1 (%s)", expectedLength);
+        ObjectUtil.checkPositive(expectedLength, "expectedLength");
         this.packets = new EncapsulatedPacket[(int) expectedLength];
     }
 
-    @Nullable
-    public EncapsulatedPacket add(EncapsulatedPacket packet, RakSessionCodec session) {
-        Preconditions.checkNotNull(packet, "packet");
-        Preconditions.checkArgument(packet.isSplit(), "packet is not split");
-        Preconditions.checkState(this.refCnt() > 0, "packet has been released");
-        Preconditions.checkElementIndex((int) packet.getPartIndex(), this.packets.length);
+    public EncapsulatedPacket add(EncapsulatedPacket packet, ByteBufAllocator alloc) {
+        ObjectUtil.checkNotNull(packet, "packet cannot be null");
+        if (!packet.isSplit()) throw new IllegalArgumentException("Packet is not split");
+        if (this.refCnt() <= 0) throw new IllegalReferenceCountException(this.refCnt());
+        ObjectUtil.checkInRange(packet.getPartIndex(), 0, this.packets.length - 1, "part index");
 
-        int partIndex = (int) packet.getPartIndex();
+        int partIndex = packet.getPartIndex();
         if (this.packets[partIndex] != null) {
             // Duplicate
             return null;
@@ -44,7 +43,7 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
         }
 
         // We can't use a composite buffer as the native code will choke on it
-        ByteBuf reassembled = session.allocateBuffer(sz);
+        ByteBuf reassembled = alloc.ioBuffer(sz);
         for (EncapsulatedPacket netPacket : this.packets) {
             ByteBuf buf = netPacket.getBuffer();
             reassembled.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
@@ -56,7 +55,7 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
     public boolean expired() {
         // If we're waiting on a split packet for more than 30 seconds, the client on the other end is either severely
         // lagging, or has died.
-        Preconditions.checkState(this.refCnt() > 0, "packet has been released");
+        if (this.refCnt() <= 0) throw new IllegalReferenceCountException(this.refCnt());
         return System.currentTimeMillis() - created >= 30000;
     }
 

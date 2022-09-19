@@ -5,13 +5,14 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.codec.CorruptedFrameException;
-import org.cloudburstmc.netty.channel.raknet.RakOfflineState;
-import org.cloudburstmc.netty.util.RakUtils;
+import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
+import org.cloudburstmc.netty.channel.raknet.RakOfflineState;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.common.RakAcknowledgeHandler;
-import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
 import org.cloudburstmc.netty.handler.codec.common.RakDatagramCodec;
+import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
+import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
@@ -66,7 +67,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<Datagra
 
     private void onSuccess(ChannelHandlerContext ctx) {
         // Create new session which decodes RakDatagramPacket to RakMessage
-        Channel channel = ctx.channel();
+        RakChannel channel = (RakChannel) ctx.channel();
         RakSessionCodec sessionCodec = new RakSessionCodec(channel);
         channel.pipeline().addLast(RakDatagramCodec.NAME, new RakDatagramCodec());
         channel.pipeline().addLast(RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));

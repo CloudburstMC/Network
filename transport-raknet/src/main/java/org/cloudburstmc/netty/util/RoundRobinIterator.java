@@ -12,7 +12,6 @@ public class RoundRobinIterator<E> implements Iterator<E> {
         this.iterator = this.collection.iterator();
     }
 
-
     @Override
     public synchronized boolean hasNext() {
         return !collection.isEmpty();

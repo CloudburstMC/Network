@@ -21,6 +21,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile int[] supportedProtocols;
     private volatile int maxConnections;
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
+    private volatile ByteBuf advertisement;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -31,7 +32,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         return getOptions(
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MAX_CONNECTIONS,
-                RakChannelOption.RAK_SUPPORTED_PROTOCOLS, RakChannelOption.RAK_UNCONNECTED_MAGIC);
+                RakChannelOption.RAK_SUPPORTED_PROTOCOLS, RakChannelOption.RAK_UNCONNECTED_MAGIC, RakChannelOption.RAK_ADVERTISEMENT);
     }
 
     @SuppressWarnings("unchecked")
@@ -52,6 +53,9 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_UNCONNECTED_MAGIC) {
             return (T) this.getUnconnectedMagic();
         }
+        if (option == RakChannelOption.RAK_ADVERTISEMENT) {
+            return (T) this.getAdvertisement();
+        }
         return super.getOption(option);
     }
 
@@ -69,6 +73,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setSupportedProtocols((int[]) value);
         } else if (option == RakChannelOption.RAK_UNCONNECTED_MAGIC) {
             this.setUnconnectedMagic((ByteBuf) value);
+        } else if (option == RakChannelOption.RAK_ADVERTISEMENT) {
+            this.setAdvertisement((ByteBuf) value);
         } else {
             return super.setOption(option, value);
         }
@@ -108,8 +114,12 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
 
     @Override
     public RakServerChannelConfig setSupportedProtocols(int[] supportedProtocols) {
-        this.supportedProtocols = Arrays.copyOf(supportedProtocols, supportedProtocols.length);
-        Arrays.sort(this.supportedProtocols);
+        if (supportedProtocols == null) {
+            this.supportedProtocols = null;
+        } else {
+            this.supportedProtocols = Arrays.copyOf(supportedProtocols, supportedProtocols.length);
+            Arrays.sort(this.supportedProtocols);
+        }
         return this;
     }
 
@@ -132,9 +142,19 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     @Override
     public RakServerChannelConfig setUnconnectedMagic(ByteBuf unconnectedMagic) {
         if (unconnectedMagic.readableBytes() < 16) {
-            throw new IllegalArgumentException("Unconnect magic must at least be 16 bytes");
+            throw new IllegalArgumentException("Unconnected magic must at least be 16 bytes");
         }
         this.unconnectedMagic = unconnectedMagic.copy().asReadOnly();
-        return null;
+        return this;
+    }
+
+    public ByteBuf getAdvertisement() {
+        return this.advertisement;
+    }
+
+    @Override
+    public RakServerChannelConfig setAdvertisement(ByteBuf advertisement) {
+        this.advertisement = advertisement.copy().asReadOnly();
+        return this;
     }
 }

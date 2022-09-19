@@ -1,21 +1,19 @@
 package org.cloudburstmc.netty.channel.raknet;
 
-import io.netty.channel.Channel;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramChannel;
 import org.cloudburstmc.netty.channel.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakClientConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.common.*;
-import org.cloudburstmc.netty.handler.codec.common.UnconnectedPongDecoder;
 import org.cloudburstmc.netty.handler.codec.client.RakClientRouteHandler;
+import org.cloudburstmc.netty.handler.codec.common.*;
 
-public class RakClientChannel extends ProxyChannel<DatagramChannel> implements Channel {
+public class RakClientChannel extends ProxyChannel<DatagramChannel> implements RakChannel {
 
     /**
      * Implementation of simple RakClient which is able to connect to only one server during lifetime.
      */
-
     private final RakChannelConfig config;
     private final ChannelPromise connectPromise;
 
@@ -61,5 +59,10 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements C
     @Override
     public boolean isActive() {
         return super.isActive() && this.connectPromise.isSuccess();
+    }
+
+    @Override
+    public ChannelPipeline rakPipeline() {
+        return null;
     }
 }

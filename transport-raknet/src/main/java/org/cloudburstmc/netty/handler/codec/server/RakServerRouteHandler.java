@@ -41,14 +41,9 @@ public class RakServerRouteHandler extends ChannelDuplexHandler {
             // In this case remote address is already known from ChannelHandlerContext
             // so we can pass only payload.
             ByteBuf buffer = packet.content().retain();
-            if (channel.eventLoop().inEventLoop()) {
-                channel.pipeline().fireChannelRead(buffer).fireChannelReadComplete();
-            } else {
-                channel.eventLoop().execute(() -> channel.pipeline().fireChannelRead(buffer).fireChannelReadComplete());
-            }
+            channel.rakPipeline().fireChannelRead(buffer).fireChannelReadComplete();
         } finally {
             packet.release();
         }
-
     }
 }

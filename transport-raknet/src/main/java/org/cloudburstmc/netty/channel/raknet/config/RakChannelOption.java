@@ -49,6 +49,8 @@ public class RakChannelOption<T> extends ChannelOption<T> {
 
     /**
      * Versions supported by the RakNet server.
+     * <p>
+     * By default, all protocol versions will be supported.
      */
     public static final ChannelOption<int[]> RAK_SUPPORTED_PROTOCOLS =
             valueOf(RakChannelOption.class, "RAK_SUPPORTED_PROTOCOLS");
@@ -70,6 +72,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<RakMetrics> RAK_METRICS =
             valueOf(RakChannelOption.class, "RAK_METRICS");
+
+    /**
+     * The advertisement sent to clients pinging a server.
+     */
+    public static final ChannelOption<ByteBuf> RAK_ADVERTISEMENT =
+            valueOf(RakChannelOption.class, "RAK_ADVERTISEMENT");
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {
