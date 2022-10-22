@@ -26,8 +26,8 @@
 
     <modules>
         <module>transport-raknet</module>
-        <module>codec-query</module>
-        <module>codec-rcon</module>
+<!--        <module>codec-query</module>-->
+<!--        <module>codec-rcon</module>-->
     </modules>
 
     <licenses>
