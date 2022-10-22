@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.channel.raknet.packet;
 
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.internal.ObjectPool;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,7 +14,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
 
     private final ObjectPool.Handle<RakDatagramPacket> handle;
     private final List<EncapsulatedPacket> packets = new ArrayList<>();
-    private byte flags;
+    private byte flags = FLAG_VALID | FLAG_NEEDS_B_AND_AS;
     private long sendTime;
     private long nextSend;
     private int sequenceIndex = -1;
@@ -69,6 +70,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
             packet.release();
         }
         this.packets.clear();
+        setRefCnt(1);
         this.handle.recycle(this);
     }
 
@@ -114,5 +116,17 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
 
     public void setSequenceIndex(int sequenceIndex) {
         this.sequenceIndex = sequenceIndex;
+    }
+
+    @Override
+    public String toString() {
+        return "RakDatagramPacket{" +
+                "handle=" + handle +
+                ", packets=" + packets +
+                ", flags=" + flags +
+                ", sendTime=" + sendTime +
+                ", nextSend=" + nextSend +
+                ", sequenceIndex=" + sequenceIndex +
+                '}';
     }
 }

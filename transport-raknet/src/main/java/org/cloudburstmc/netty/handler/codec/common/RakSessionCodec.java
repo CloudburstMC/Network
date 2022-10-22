@@ -1,10 +1,8 @@
 package org.cloudburstmc.netty.handler.codec.common;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.MessageToMessageCodec;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.*;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -13,22 +11,23 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.*;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
-import org.cloudburstmc.netty.channel.raknet.packet.*;
+import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
+import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
+import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.util.*;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
-import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
-public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, RakMessage> {
+public class RakSessionCodec extends ChannelDuplexHandler {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakSessionCodec.class);
     public static final String NAME = "rak-session-codec";
 
-    private final Channel channel;
+    private final RakChannel channel;
     private ScheduledFuture<?> tickFuture;
 
     private volatile RakState state = RakState.UNCONNECTED;
@@ -61,7 +60,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
     private Queue<IntRange> outgoingNaks;
     private long lastMinWeight;
 
-    public RakSessionCodec(Channel channel) {
+    public RakSessionCodec(RakChannel channel) {
         this.channel = channel;
     }
 
@@ -69,14 +68,14 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         super.channelActive(ctx);
         this.state = RakState.CONNECTED;
-        int mtu = ctx.channel().config().getOption(RakChannelOption.RAK_MTU);
+        int mtu = this.getMtu();
 
         this.slidingWindow = new RakSlidingWindow(mtu);
 
         this.outgoingPacketNextWeights = new long[4];
         this.initHeapWeights();
 
-        int maxChannels = ctx.channel().config().getOption(RakChannelOption.RAK_ORDERING_CHANNELS);
+        int maxChannels = this.channel.config().getOption(RakChannelOption.RAK_ORDERING_CHANNELS);
         this.orderReadIndex = new int[maxChannels];
         this.orderWriteIndex = new int[maxChannels];
 
@@ -152,14 +151,28 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
     }
 
     @Override
-    protected void encode(ChannelHandlerContext ctx, RakMessage rakMessage, List<Object> list) throws Exception {
-        EncapsulatedPacket[] packets = this.createEncapsulated(rakMessage);
-        if (rakMessage.priority() == RakPriority.IMMEDIATE) {
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        if (msg instanceof ByteBuf) {
+            msg = new RakMessage((ByteBuf) msg);
+        } else if (!(msg instanceof RakMessage)) {
+            super.write(ctx, msg, promise);
+            return;
+        }
+        RakMessage message = (RakMessage) msg;
+
+        if (message.content().getUnsignedByte(message.content().readerIndex()) == 0xc0) {
+            throw new IllegalArgumentException();
+        }
+
+        System.out.println("Out 0x" + Integer.toHexString(message.content().getUnsignedByte(message.content().readerIndex())));
+
+        EncapsulatedPacket[] packets = this.createEncapsulated(message);
+        if (message.priority() == RakPriority.IMMEDIATE) {
             this.sendImmediate(packets);
             return;
         }
 
-        long weight = this.getNextWeight(rakMessage.priority());
+        long weight = this.getNextWeight(message.priority());
         if (packets.length == 1) {
             this.outgoingPackets.insert(weight, packets[0]);
         } else {
@@ -168,7 +181,12 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, RakDatagramPacket packet, List<Object> list) throws Exception {
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        if (!(msg instanceof RakDatagramPacket)) {
+            // We don't want to let anything through that isn't RakNet related.
+            return;
+        }
+        RakDatagramPacket packet = (RakDatagramPacket) msg;
         if (RakState.UNCONNECTED.compareTo(this.state) >= 0) {
             return;
         }
@@ -196,13 +214,13 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
         for (final EncapsulatedPacket encapsulated : packet.getPackets()) {
             if (encapsulated.getReliability().isReliable()) {
                 int missed = encapsulated.getReliabilityIndex() - this.reliabilityReadIndex;
-
                 if (missed > 0) {
                     if (missed < this.reliableDatagramQueue.size()) {
                         if (this.reliableDatagramQueue.get(missed)) {
                             this.reliableDatagramQueue.set(missed, false);
                         } else {
                             // Duplicate packet
+                            System.out.println("Duplicate");
                             continue;
                         }
                     } else {
@@ -219,6 +237,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
                         this.reliableDatagramQueue.poll();
                     }
                 } else {
+                    System.out.println("Duplicate 2");
                     // Duplicate packet
                     continue;
                 }
@@ -229,9 +248,8 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
                 }
             }
 
-
             if (encapsulated.isSplit()) {
-                final EncapsulatedPacket reassembled = this.getReassembledPacket(encapsulated);
+                final EncapsulatedPacket reassembled = this.getReassembledPacket(encapsulated, ctx.alloc());
                 if (reassembled == null) {
                     // Not reassembled
                     continue;
@@ -251,7 +269,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
         if (packet.getReliability().isOrdered()) {
             this.onOrderedReceived(ctx, packet);
         } else {
-            ctx.fireChannelRead(packet.retain());
+            ctx.fireChannelRead(packet);
         }
     }
 
@@ -268,7 +286,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
         this.orderReadIndex[packet.getOrderingChannel()]++;
 
         // Can be handled
-        ctx.fireChannelRead(packet.retain());
+        ctx.fireChannelRead(packet);
 
         EncapsulatedPacket queuedPacket;
         while ((queuedPacket = binaryHeap.peek()) != null) {
@@ -277,7 +295,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
                     // We got the expected packet
                     binaryHeap.remove();
                     this.orderReadIndex[packet.getOrderingChannel()]++;
-                    ctx.fireChannelRead(queuedPacket.retain());
+                    ctx.fireChannelRead(queuedPacket);
                 } finally {
                     queuedPacket.release();
                 }
@@ -288,7 +306,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
         }
     }
 
-    private EncapsulatedPacket getReassembledPacket(EncapsulatedPacket splitPacket) {
+    private EncapsulatedPacket getReassembledPacket(EncapsulatedPacket splitPacket, ByteBufAllocator alloc) {
         this.checkForClosed();
 
         SplitPacketHelper helper = this.splitPackets.get(splitPacket.getPartId());
@@ -297,7 +315,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
         }
 
         // Try reassembling the packet.
-        EncapsulatedPacket result = helper.add(splitPacket, this);
+        EncapsulatedPacket result = helper.add(splitPacket, alloc);
         if (result != null) {
             // Packet reassembled. Remove the helper
             if (this.splitPackets.remove(splitPacket.getPartId(), helper)) {
@@ -319,12 +337,12 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
             return;
         }
 
-        if (this.currentPingTime + 2000L < curTime) {
-            ByteBuf buffer = this.channel.alloc().ioBuffer(9);
-            buffer.writeByte(ID_CONNECTED_PING);
-            buffer.writeLong(curTime);
-            this.channel.writeAndFlush(new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
-        }
+//        if (this.currentPingTime + 2000L < curTime) {
+//            ByteBuf buffer = this.channel.alloc().ioBuffer(9);
+//            buffer.writeByte(ID_CONNECTED_PING);
+//            buffer.writeLong(curTime);
+//            this.channel.rakPipeline().writeAndFlush(new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
+//        }
 
         this.handleIncomingAcknowledge(curTime, this.incomingAcks, false);
         this.handleIncomingAcknowledge(curTime, this.incomingNaks, true);
@@ -337,7 +355,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
             ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
             writtenNacks += RakUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
-            this.channel.writeAndFlush(buffer);
+            this.channel.rakPipeline().writeAndFlush(buffer);
         }
 
 
@@ -347,7 +365,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
                 ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
                 buffer.writeByte(FLAG_VALID | FLAG_ACK);
                 writtenAcks += RakUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
-                this.channel.writeAndFlush(buffer);
+                this.channel.rakPipeline().writeAndFlush(buffer);
                 this.slidingWindow.onSendAck();
             }
         }
@@ -357,7 +375,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
         // Now send usual packets
         this.sendDatagrams(curTime, mtuSize);
         // Finally flush channel
-        this.channel.flush();
+        this.channel.rakPipeline().flush();
 
         RakMetrics metrics = this.getMetrics();
         if (metrics != null) {
@@ -489,7 +507,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
             }
             this.sendDatagram(datagram, curTime);
         }
-        this.channel.flush();
+        this.channel.rakPipeline().flush();
     }
 
     private void sendDatagram(RakDatagramPacket datagram, long time) {
@@ -519,7 +537,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
                 break;
             }
         }
-        this.channel.write(datagram);
+        this.channel.rakPipeline().write(datagram);
     }
 
     private EncapsulatedPacket[] createEncapsulated(RakMessage rakMessage) {
@@ -579,7 +597,6 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
             packet.setOrderingIndex(orderingIndex);
             // packet.setSequenceIndex(sequencingIndex);
             packet.setReliability(reliability);
-            packet.setPriority(rakMessage.priority());
             if (reliability.isReliable()) {
                 packet.setReliabilityIndex(this.reliabilityWriteIndex++);
             }
@@ -630,7 +647,7 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
         buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
         RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE);
 
-        ChannelFuture future = this.channel.writeAndFlush(rakMessage);
+        ChannelFuture future = this.channel.rakPipeline().writeAndFlush(rakMessage);
         future.addListener((ChannelFuture future1) ->
                 future1.channel().pipeline().fireUserEventTriggered(reason).close());
     }
@@ -699,5 +716,9 @@ public class RakSessionCodec extends MessageToMessageCodec<RakDatagramPacket, Ra
 
     protected Queue<IntRange> getAcknowledgeQueue(boolean nack) {
         return nack ? this.incomingNaks : this.incomingAcks;
+    }
+
+    public Channel getChannel() {
+        return channel;
     }
 }

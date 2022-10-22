@@ -1,11 +1,10 @@
 package org.cloudburstmc.netty.channel.raknet.packet;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.util.AbstractReferenceCounted;
-import io.netty.util.ReferenceCounted;
 import io.netty.util.internal.ObjectPool;
-import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 
 public class EncapsulatedPacket extends AbstractReferenceCounted {
@@ -14,7 +13,6 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
 
     private final ObjectPool.Handle<EncapsulatedPacket> handle;
     private RakReliability reliability;
-    private RakPriority priority;
     private int reliabilityIndex;
     private int sequenceIndex;
     private int orderingIndex;
@@ -93,7 +91,7 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
         }
 
         // Slice the buffer to use less memory
-        this.buffer = buf.readSlice(size);
+        this.buffer = buf.readRetainedSlice(size);
     }
 
     public int getSize() {
@@ -116,12 +114,14 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     @Override
     protected void deallocate() {
         this.buffer.release();
+        setRefCnt(1);
         this.handle.recycle(this);
     }
 
     @Override
-    public ReferenceCounted touch(Object o) {
-        return this.buffer.touch();
+    public EncapsulatedPacket touch(Object o) {
+        this.buffer.touch();
+        return this;
     }
 
     @Override
@@ -135,14 +135,6 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
 
     public void setReliability(RakReliability reliability) {
         this.reliability = reliability;
-    }
-
-    public RakPriority getPriority() {
-        return this.priority;
-    }
-
-    public void setPriority(RakPriority priority) {
-        this.priority = priority;
     }
 
     public int getReliabilityIndex() {
@@ -215,6 +207,27 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
 
     public void setBuffer(ByteBuf buffer) {
         this.buffer = buffer;
+    }
+
+    public RakMessage toMessage() {
+        return new RakMessage(buffer.retain(), reliability);
+    }
+
+    @Override
+    public String toString() {
+        return "EncapsulatedPacket{" +
+                "handle=" + handle +
+                ", reliability=" + reliability +
+                ", reliabilityIndex=" + reliabilityIndex +
+                ", sequenceIndex=" + sequenceIndex +
+                ", orderingIndex=" + orderingIndex +
+                ", orderingChannel=" + orderingChannel +
+                ", split=" + split +
+                ", partCount=" + partCount +
+                ", partId=" + partId +
+                ", partIndex=" + partIndex +
+                ", buffer=" + ByteBufUtil.hexDump(buffer) +
+                '}';
     }
 }
 

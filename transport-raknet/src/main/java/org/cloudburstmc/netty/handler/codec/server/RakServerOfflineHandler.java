@@ -8,10 +8,12 @@ import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
 import net.jodah.expiringmap.ExpirationPolicy;
 import net.jodah.expiringmap.ExpiringMap;
-import org.cloudburstmc.netty.channel.raknet.*;
-import org.cloudburstmc.netty.util.RakUtils;
+import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
+import org.cloudburstmc.netty.channel.raknet.RakPendingConnection;
+import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
+import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
@@ -69,8 +71,8 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         ByteBuf buf = packet.content();
         short packetId = buf.readUnsignedByte();
 
-        ByteBuf magicBuf =  ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
-        long guid =  ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
+        ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+        long guid = ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
 
         switch (packetId) {
             case ID_UNCONNECTED_PING:
@@ -88,9 +90,21 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
     private void onUnconnectedPong(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
         long pingTime = packet.content().readLong();
 
-        // We have already verified this
-        packet.content().skipBytes(magicBuf.readableBytes());
-        ctx.fireChannelRead(RakPing.newInstance(pingTime, packet.sender()));
+        ByteBuf advertisement = ctx.channel().config().getOption(RakChannelOption.RAK_ADVERTISEMENT);
+
+        int packetLength = 35 + (advertisement != null ? advertisement.readableBytes() : -2);
+
+        ByteBuf out = ctx.alloc().ioBuffer(packetLength);
+        out.writeByte(ID_UNCONNECTED_PONG);
+        out.writeLong(pingTime);
+        out.writeLong(guid);
+        out.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
+        if (advertisement != null) {
+            out.writeShort(advertisement.readableBytes());
+            out.writeBytes(advertisement, advertisement.readerIndex(), advertisement.readableBytes());
+        }
+
+        ctx.writeAndFlush(new DatagramPacket(out, packet.sender()));
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
@@ -101,11 +115,11 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         buffer.skipBytes(magicBuf.readableBytes());
         int protocolVersion = buffer.readUnsignedByte();
 
-        // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header)
-        int mtu = buffer.readableBytes() + 1 + 16 + 1 + (sender.getAddress() instanceof Inet6Address ? 40 : 20) + UDP_HEADER_SIZE;
+        // 1 (Packet ID), (Magic), 1 (Protocol Version), 20/40 (IP Header)
+        int mtu = buffer.readableBytes() + 1 + magicBuf.readableBytes() + 1 + (sender.getAddress() instanceof Inet6Address ? 40 : 20) + UDP_HEADER_SIZE;
 
         int[] supportedProtocols = ctx.channel().config().getOption(RakChannelOption.RAK_SUPPORTED_PROTOCOLS);
-        if (Arrays.binarySearch(supportedProtocols, protocolVersion) < 0) {
+        if (supportedProtocols != null && Arrays.binarySearch(supportedProtocols, protocolVersion) < 0) {
             this.sendIncompatibleVersion(ctx, packet.sender(), protocolVersion, magicBuf, guid);
             return;
         }
@@ -164,10 +178,10 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         replyBuffer.writeByte(ID_OPEN_CONNECTION_REPLY_2);
         replyBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         replyBuffer.writeLong(guid);
-        RakUtils.writeAddress(replyBuffer, packet.recipient());
+        RakUtils.writeAddress(replyBuffer, packet.sender());
         replyBuffer.writeShort(mtu);
         replyBuffer.writeBoolean(false); // Security
-        channel.writeAndFlush(replyBuffer); // Send first packet thought child channel
+        ctx.writeAndFlush(new DatagramPacket(replyBuffer, packet.sender()));
     }
 
     private void sendIncompatibleVersion(ChannelHandlerContext ctx, InetSocketAddress sender, int protocolVersion, ByteBuf magicBuf, long guid) {

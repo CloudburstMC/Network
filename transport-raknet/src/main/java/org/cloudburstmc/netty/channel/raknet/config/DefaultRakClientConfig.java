@@ -7,7 +7,8 @@ import io.netty.channel.ChannelOption;
 
 import java.util.Map;
 
-import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.DEFAULT_UNCONNECTED_MAGIC;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.SESSION_TIMEOUT_MS;
 
 /**
  * The extended implementation of {@link RakChannelConfig} based on {@link DefaultRakSessionConfig} used by client.
@@ -48,10 +49,10 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
             this.setUnconnectedMagic((ByteBuf) value);
             return true;
         } else if (option == RakChannelOption.RAK_CONNECT_TIMEOUT) {
-            this.setConnectTimeout((long) value);
+            this.setConnectTimeout((Long) value);
             return true;
         } else if (option == RakChannelOption.RAK_REMOTE_GUID) {
-            this.setServerGuid((long) value);
+            this.setServerGuid((Long) value);
             return true;
         }
         return super.setOption(option, value);

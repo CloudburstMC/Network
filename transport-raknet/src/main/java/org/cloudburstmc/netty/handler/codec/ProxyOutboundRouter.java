@@ -54,7 +54,7 @@ public class ProxyOutboundRouter implements ChannelOutboundHandler {
 
     @Override
     public void read(ChannelHandlerContext ctx) throws Exception {
-        // We do not read here
+        this.proxiedChannel.parent().read();
     }
 
     @Override

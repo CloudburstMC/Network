@@ -1,13 +1,14 @@
 package org.cloudburstmc.netty.channel.raknet;
 
-import io.netty.channel.*;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelPromise;
+import io.netty.channel.ServerChannel;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.PromiseCombiner;
 import org.cloudburstmc.netty.channel.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakServerConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
-import org.cloudburstmc.netty.handler.codec.common.UnconnectedPongEncoder;
 import org.cloudburstmc.netty.handler.codec.server.RakServerOfflineHandler;
 import org.cloudburstmc.netty.handler.codec.server.RakServerRouteHandler;
 
@@ -28,8 +29,6 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         // In case of proxied connections (fe. HAProxy) customized handler should be injected before RakServerOfflineHandler.
         // Default common handler of offline phase. Handles only raknet packets, forwards rest.
         this.pipeline.addLast(RakServerOfflineHandler.NAME, RakServerOfflineHandler.INSTANCE);
-        // Encodes RakPong to buffer which is reply to RakPing and sends to correct sender.
-        this.pipeline.addLast(UnconnectedPongEncoder.NAME, UnconnectedPongEncoder.INSTANCE);
     }
 
     /**
@@ -56,7 +55,9 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     }
 
     private void onChildClosed(ChannelFuture channelFuture) {
-        Channel channel = channelFuture.channel();
+        RakChildChannel channel = (RakChildChannel) channelFuture.channel();
+        channel.rakPipeline().fireChannelInactive();
+        channel.rakPipeline().fireChannelUnregistered();
         this.childChannelMap.remove(channel.remoteAddress());
     }
 

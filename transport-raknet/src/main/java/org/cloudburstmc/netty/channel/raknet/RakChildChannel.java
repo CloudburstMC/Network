@@ -5,35 +5,50 @@ import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.handler.codec.common.*;
 import org.cloudburstmc.netty.handler.codec.server.RakChildDatagramHandler;
+import org.cloudburstmc.netty.handler.codec.server.RakChildTailHandler;
 import org.cloudburstmc.netty.handler.codec.server.RakServerOnlineInitialHandler;
+import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 
-public class RakChildChannel extends AbstractChannel {
+public class RakChildChannel extends AbstractChannel implements RakChannel {
 
     private static final ChannelMetadata metadata = new ChannelMetadata(false);
 
     private final RakChannelConfig config;
     private final InetSocketAddress remoteAddress;
+    private final DefaultChannelPipeline rakPipeline;
     private volatile boolean open = true;
 
     public RakChildChannel(InetSocketAddress remoteAddress, RakServerChannel parent) {
         super(parent);
         this.remoteAddress = remoteAddress;
         this.config = new DefaultRakSessionConfig(this);
-        this.pipeline().addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
+        // Create an internal pipeline for RakNet session logic to take place. We use the parent channel to ensure
+        // this all occurs on the parent event loop so the connection is not slowed down by any user code.
+        // (compression, encryption, etc.)
+        this.rakPipeline = RakUtils.newChannelPipeline(parent);
+        this.rakPipeline.addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
 
         // Setup session/online phase
         RakSessionCodec sessionCodec = new RakSessionCodec(this);
-        this.pipeline().addLast(RakDatagramCodec.NAME, new RakDatagramCodec());
-        this.pipeline().addLast(RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
-        this.pipeline().addLast(RakSessionCodec.NAME, sessionCodec);
+        this.rakPipeline.addLast(RakDatagramCodec.NAME, new RakDatagramCodec());
+        this.rakPipeline.addLast(RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
+        this.rakPipeline.addLast(RakSessionCodec.NAME, sessionCodec);
         // This handler auto-removes once ConnectionRequest is received
-        this.pipeline().addLast(RakServerOnlineInitialHandler.NAME, RakServerOnlineInitialHandler.INSTANCE);
-        this.pipeline().addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());
-        this.pipeline().addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
-        this.pipeline().addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
+        this.rakPipeline.addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());
+        this.rakPipeline.addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
+        this.rakPipeline.addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
+        this.rakPipeline.addLast(RakServerOnlineInitialHandler.NAME, new RakServerOnlineInitialHandler(this));
+        this.rakPipeline.addLast(RakChildTailHandler.NAME, new RakChildTailHandler(this));
+        this.rakPipeline.fireChannelRegistered();
+        this.rakPipeline.fireChannelActive();
+    }
+
+    @Override
+    public ChannelPipeline rakPipeline() {
+        return rakPipeline;
     }
 
     @Override

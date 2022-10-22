@@ -24,4 +24,8 @@ public interface RakServerChannelConfig extends ChannelConfig {
     ByteBuf getUnconnectedMagic();
 
     RakServerChannelConfig setUnconnectedMagic(ByteBuf unconnectedMagic);
+
+    ByteBuf getAdvertisement();
+
+    RakServerChannelConfig setAdvertisement(ByteBuf advertisement);
 }
