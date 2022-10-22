@@ -55,7 +55,7 @@ public class ProxyOutboundRouter implements ChannelOutboundHandler {
 
     @Override
     public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-       this.proxiedChannel.onCloseTriggered(promise);
+        this.proxiedChannel.onCloseTriggered(promise);
     }
 
     @Override

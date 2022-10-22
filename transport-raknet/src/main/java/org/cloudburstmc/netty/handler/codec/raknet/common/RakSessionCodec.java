@@ -499,7 +499,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 datagram = RakDatagramPacket.newInstance();
                 datagram.setSendTime(curTime);
                 if (!datagram.tryAddPacket(packet, mtuSize)) {
-                    throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + mtuSize +")");
+                    throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + mtuSize + ")");
                 }
             }
         }
@@ -615,7 +615,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
             if (parts > 1) {
                 packet.setSplit(true);
-                packet.setPartIndex(i);;
+                packet.setPartIndex(i);
+                ;
                 packet.setPartCount(parts);
                 packet.setPartId(splitId);
             }
@@ -693,7 +694,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     public boolean isStale(long curTime) {
         return curTime - this.lastTouched >= SESSION_STALE_MS;
     }
-    
+
     public boolean isStale() {
         return this.isStale(System.currentTimeMillis());
     }

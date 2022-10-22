@@ -1,3 +1,19 @@
+/*
+ * Copyright 2022 CloudburstMC
+ *
+ * CloudburstMC licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
+ *
+ *   https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ */
+
 package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.channel.ChannelFuture;
@@ -33,21 +49,22 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
 
     /**
      * Create new child channel assigned to remote address.
+     *
      * @param address remote address of new connection.
      * @return RakChildChannel instance of new channel.
      */
     public RakChildChannel createChildChannel(InetSocketAddress address) {
-       if (this.childChannelMap.containsKey(address)) {
-           return null;
-       }
+        if (this.childChannelMap.containsKey(address)) {
+            return null;
+        }
 
-       RakChildChannel channel = new RakChildChannel(address, this);
-       channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
-       // Fire channel thought ServerBootstrap,
-       // register to eventLoop, assign default options and attributes
-       this.pipeline().fireChannelRead(channel).fireChannelReadComplete();
-       this.childChannelMap.put(address, channel);
-       return channel;
+        RakChildChannel channel = new RakChildChannel(address, this);
+        channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
+        // Fire channel thought ServerBootstrap,
+        // register to eventLoop, assign default options and attributes
+        this.pipeline().fireChannelRead(channel).fireChannelReadComplete();
+        this.childChannelMap.put(address, channel);
+        return channel;
     }
 
     public RakChildChannel getChildChannel(SocketAddress address) {

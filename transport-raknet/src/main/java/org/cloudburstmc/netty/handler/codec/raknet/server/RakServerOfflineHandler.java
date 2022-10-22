@@ -209,7 +209,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         ctx.writeAndFlush(new DatagramPacket(buffer, sender));
     }
 
-    private void sendAlreadyConnected(ChannelHandlerContext ctx, InetSocketAddress sender,  ByteBuf magicBuf, long guid) {
+    private void sendAlreadyConnected(ChannelHandlerContext ctx, InetSocketAddress sender, ByteBuf magicBuf, long guid) {
         ByteBuf buffer = ctx.alloc().ioBuffer(25, 25);
         buffer.writeByte(ID_ALREADY_CONNECTED);
         buffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
