@@ -353,7 +353,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             ByteBuf buffer = this.channel.alloc().ioBuffer(9);
             buffer.writeByte(ID_CONNECTED_PING);
             buffer.writeLong(curTime);
-            this.channel.rakPipeline().writeAndFlush(new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
+            this.channel.rakPipeline().write(new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
         }
 
         this.handleIncomingAcknowledge(curTime, this.incomingAcks, false);

@@ -19,7 +19,6 @@
          xmlns="http://maven.apache.org/POM/4.0.0"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <version>4.1.51.Final</version>
     <parent>
         <artifactId>cloudburstmc-netty-parent</artifactId>
         <groupId>org.cloudburstmc.netty</groupId>
@@ -28,6 +27,7 @@
 
     <artifactId>netty-transport-raknet</artifactId>
     <name>Netty/Transport/RakNet</name>
+    <version>0.0.1.Final-SNAPSHOT</version>
 
     <properties>
         <javaModuleName>org.cloudburstmc.netty.transport.raknet</javaModuleName>

@@ -78,7 +78,7 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
         }
 
         buffer.addComponent(true, header);
-        buffer.addComponent(true, this.buffer);
+        buffer.addComponent(true, this.buffer.retain());
     }
 
     public void decode(ByteBuf buf) {

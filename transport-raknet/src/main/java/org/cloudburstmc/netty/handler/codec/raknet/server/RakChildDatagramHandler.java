@@ -53,7 +53,7 @@ public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
 
         Channel parent = this.channel.parent().parent();
 
-        parent.write(datagram.retain()).addListener((ChannelFuture future) -> {
+        parent.write(datagram).addListener((ChannelFuture future) -> {
             if (!future.isSuccess() && !(future.cause() instanceof ClosedChannelException)) {
                 this.channel.pipeline().fireExceptionCaught(future.cause());
                 this.channel.close();
