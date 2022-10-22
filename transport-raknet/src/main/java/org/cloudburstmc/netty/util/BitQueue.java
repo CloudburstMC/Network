@@ -55,14 +55,14 @@ public class BitQueue {
             int tailBits = (this.tail & 63);
             int tailIdx = this.tail >> 6;
             int by2 = (tailIdx + 1) & (this.queue.length - 1);
-            int mask;
+            long mask;
             long bit1;
             long bit2;
 
             int cursor = 0;
             while (cursor < size) {
-                mask = ((1 << tailBits) - 1) & 0xFF;
-                bit1 = ((this.queue[tailIdx] & (~mask & 0xFF)) >>> tailBits);
+                mask = ((1L << tailBits) - 1);
+                bit1 = ((this.queue[tailIdx] & ~mask) >>> tailBits);
                 bit2 = (this.queue[by2] << (64 - tailBits));
                 newQueue[cursor >> 6] = (bit1 | bit2);
 
