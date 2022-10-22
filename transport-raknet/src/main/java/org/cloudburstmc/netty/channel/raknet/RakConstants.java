@@ -1,7 +1,7 @@
 package org.cloudburstmc.netty.channel.raknet;
 
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
-import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;
@@ -95,20 +95,20 @@ public class RakConstants {
     public static final int IPV4_MESSAGE_SIZE = 7;
     public static final int IPV6_MESSAGE_SIZE = 29;
 
-    public static final InetSocketAddress LOOPBACK_V4 = new InetSocketAddress(Inet4Address.getLoopbackAddress(), 19132);
-    public static final InetSocketAddress LOOPBACK_V6 = new InetSocketAddress(Inet6Address.getLoopbackAddress(), 19132);
+    public static final InetSocketAddress LOOPBACK_V4 = new InetSocketAddress(Inet4Address.getLoopbackAddress(), 0);
+    public static final InetSocketAddress LOOPBACK_V6 = new InetSocketAddress(Inet6Address.getLoopbackAddress(), 0);
     public static final InetSocketAddress LOCAL_ADDRESS = new InetSocketAddress(0);
-    public static final InetSocketAddress[] LOCAL_IP_ADDRESSES_V4 = new InetSocketAddress[20];
-    public static final InetSocketAddress[] LOCAL_IP_ADDRESSES_V6 = new InetSocketAddress[20];
+    public static final InetSocketAddress[] LOCAL_IP_ADDRESSES_V4 = new InetSocketAddress[10];
+    public static final InetSocketAddress[] LOCAL_IP_ADDRESSES_V6 = new InetSocketAddress[10];
 
 
     static {
         LOCAL_IP_ADDRESSES_V4[0] = LOOPBACK_V4;
         LOCAL_IP_ADDRESSES_V6[0] = LOOPBACK_V6;
 
-        for (int i = 1; i < 20; i++) {
-            LOCAL_IP_ADDRESSES_V4[i] = new InetSocketAddress("0.0.0.0", 19132);
-            LOCAL_IP_ADDRESSES_V6[i] = new InetSocketAddress("::0", 19132);
+        for (int i = 1; i < 10; i++) {
+            LOCAL_IP_ADDRESSES_V4[i] = new InetSocketAddress("0.0.0.0", 0);
+            LOCAL_IP_ADDRESSES_V6[i] = new InetSocketAddress("::0", 0);
         }
     }
 }

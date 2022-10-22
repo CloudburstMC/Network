@@ -1,10 +1,23 @@
-package org.cloudburstmc.netty.handler.codec.server;
+/*
+ * Copyright 2022 CloudburstMC
+ *
+ * CloudburstMC licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
+ *
+ *   https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.cloudburstmc.netty.handler.codec.raknet.server;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelOutboundHandlerAdapter;
-import io.netty.channel.ChannelPromise;
+import io.netty.channel.*;
 import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
@@ -38,7 +51,9 @@ public class RakChildDatagramHandler extends ChannelOutboundHandlerAdapter {
             metrics.bytesOut(datagram.content().readableBytes());
         }
 
-        this.channel.parent().parent().write(datagram).addListener((ChannelFuture future) -> {
+        Channel parent = this.channel.parent().parent();
+
+        parent.write(datagram.retain()).addListener((ChannelFuture future) -> {
             if (!future.isSuccess() && !(future.cause() instanceof ClosedChannelException)) {
                 this.channel.pipeline().fireExceptionCaught(future.cause());
                 this.channel.close();

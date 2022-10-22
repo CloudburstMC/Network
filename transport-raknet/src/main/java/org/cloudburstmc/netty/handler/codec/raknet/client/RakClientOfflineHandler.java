@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.handler.codec.client;
+package org.cloudburstmc.netty.handler.codec.raknet.client;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -9,9 +9,9 @@ import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.RakOfflineState;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
-import org.cloudburstmc.netty.handler.codec.common.RakAcknowledgeHandler;
-import org.cloudburstmc.netty.handler.codec.common.RakDatagramCodec;
-import org.cloudburstmc.netty.handler.codec.common.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakAcknowledgeHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakDatagramCodec;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
 import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.Inet6Address;

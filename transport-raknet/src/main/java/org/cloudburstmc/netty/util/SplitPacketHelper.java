@@ -9,7 +9,6 @@ import io.netty.util.ReferenceCounted;
 import io.netty.util.internal.ObjectUtil;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
-
 public class SplitPacketHelper extends AbstractReferenceCounted {
     private final EncapsulatedPacket[] packets;
     private final long created = System.currentTimeMillis();

@@ -3,10 +3,10 @@ package org.cloudburstmc.netty.channel.raknet;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.common.*;
-import org.cloudburstmc.netty.handler.codec.server.RakChildDatagramHandler;
-import org.cloudburstmc.netty.handler.codec.server.RakChildTailHandler;
-import org.cloudburstmc.netty.handler.codec.server.RakServerOnlineInitialHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.common.*;
+import org.cloudburstmc.netty.handler.codec.raknet.server.RakChildDatagramHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.server.RakChildTailHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOnlineInitialHandler;
 import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;

@@ -21,7 +21,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
-        <netty.version>4.1.65.Final</netty.version>
+        <netty.version>4.1.83.Final</netty.version>
     </properties>
 
     <modules>

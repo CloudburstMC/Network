@@ -1,4 +1,20 @@
-package org.cloudburstmc.netty.handler.codec.server;
+/*
+ * Copyright 2022 CloudburstMC
+ *
+ * CloudburstMC licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
+ *
+ *   https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.cloudburstmc.netty.handler.codec.raknet.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
@@ -41,12 +57,9 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
                 break;
             case ID_NEW_INCOMING_CONNECTION:
                 buf.skipBytes(1);
-                System.out.println("Received new incoming connection");
                 // We have connected and no longer need this handler
                 ctx.pipeline().remove(this);
                 channel.pipeline().fireChannelActive();
-//                ctx.fireChannelActive();
-//                ctx.fireUserEventTriggered(RakEvent.NEW_INCOMING_CONNECTION);
                 break;
             default:
                 ctx.fireChannelRead(message);
@@ -56,7 +69,6 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
 
     private void onConnectionRequest(ChannelHandlerContext ctx, ByteBuf buffer) {
         buffer.skipBytes(1);
-        System.out.println("Received connection request");
         long guid = ((RakChannelConfig) this.channel.config()).getGuid();
         long serverGuid = buffer.readLong();
         long timestamp = buffer.readLong();
@@ -64,10 +76,8 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
 
         if (serverGuid != guid || security) {
             this.sendConnectionRequestFailed(ctx, guid);
-            System.out.println("Sending connection request failed");
         } else {
             this.sendConnectionRequestAccepted(ctx, timestamp);
-            System.out.println("Sending connection request accepted");
         }
     }
 
@@ -78,7 +88,6 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
 
         outBuf.writeByte(ID_CONNECTION_REQUEST_ACCEPTED);
         RakUtils.writeAddress(outBuf, address);
-        System.out.println("Address: " + address);
         outBuf.writeShort(0); // System index
         for (InetSocketAddress socketAddress : ipv6 ? LOCAL_IP_ADDRESSES_V6 : LOCAL_IP_ADDRESSES_V4) {
             RakUtils.writeAddress(outBuf, socketAddress);

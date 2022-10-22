@@ -6,11 +6,11 @@ import io.netty.channel.ServerChannel;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.PromiseCombiner;
-import org.cloudburstmc.netty.channel.ProxyChannel;
+import org.cloudburstmc.netty.channel.proxy.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakServerConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
-import org.cloudburstmc.netty.handler.codec.server.RakServerOfflineHandler;
-import org.cloudburstmc.netty.handler.codec.server.RakServerRouteHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOfflineHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRouteHandler;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;

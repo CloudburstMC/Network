@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.handler.codec.server;
+package org.cloudburstmc.netty.handler.codec.raknet.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelDuplexHandler;

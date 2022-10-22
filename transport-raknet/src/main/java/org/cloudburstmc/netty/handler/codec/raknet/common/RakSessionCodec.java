@@ -1,4 +1,20 @@
-package org.cloudburstmc.netty.handler.codec.common;
+/*
+ * Copyright 2022 CloudburstMC
+ *
+ * CloudburstMC licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
+ *
+ *   https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.cloudburstmc.netty.handler.codec.raknet.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
@@ -164,8 +180,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             throw new IllegalArgumentException();
         }
 
-        System.out.println("Out 0x" + Integer.toHexString(message.content().getUnsignedByte(message.content().readerIndex())));
-
         EncapsulatedPacket[] packets = this.createEncapsulated(message);
         if (message.priority() == RakPriority.IMMEDIATE) {
             this.sendImmediate(packets);
@@ -220,7 +234,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                             this.reliableDatagramQueue.set(missed, false);
                         } else {
                             // Duplicate packet
-                            System.out.println("Duplicate");
                             continue;
                         }
                     } else {
@@ -237,7 +250,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                         this.reliableDatagramQueue.poll();
                     }
                 } else {
-                    System.out.println("Duplicate 2");
                     // Duplicate packet
                     continue;
                 }
@@ -337,12 +349,12 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             return;
         }
 
-//        if (this.currentPingTime + 2000L < curTime) {
-//            ByteBuf buffer = this.channel.alloc().ioBuffer(9);
-//            buffer.writeByte(ID_CONNECTED_PING);
-//            buffer.writeLong(curTime);
-//            this.channel.rakPipeline().writeAndFlush(new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
-//        }
+        if (this.currentPingTime + 2000L < curTime) {
+            ByteBuf buffer = this.channel.alloc().ioBuffer(9);
+            buffer.writeByte(ID_CONNECTED_PING);
+            buffer.writeLong(curTime);
+            this.channel.rakPipeline().writeAndFlush(new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
+        }
 
         this.handleIncomingAcknowledge(curTime, this.incomingAcks, false);
         this.handleIncomingAcknowledge(curTime, this.incomingNaks, true);
@@ -355,7 +367,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
             writtenNacks += RakUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
-            this.channel.rakPipeline().writeAndFlush(buffer);
+            this.channel.rakPipeline().write(buffer);
         }
 
 
@@ -365,7 +377,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
                 buffer.writeByte(FLAG_VALID | FLAG_ACK);
                 writtenAcks += RakUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
-                this.channel.rakPipeline().writeAndFlush(buffer);
+                this.channel.rakPipeline().write(buffer);
                 this.slidingWindow.onSendAck();
             }
         }

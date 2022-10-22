@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.handler.codec.common;
+package org.cloudburstmc.netty.handler.codec.raknet.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -7,9 +7,9 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.RakPong;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
-import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler;
 
-import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_UNCONNECTED_PONG;
 
 @Sharable
 public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<DatagramPacket> {

@@ -3,11 +3,11 @@ package org.cloudburstmc.netty.channel.raknet;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramChannel;
-import org.cloudburstmc.netty.channel.ProxyChannel;
+import org.cloudburstmc.netty.channel.proxy.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakClientConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.handler.codec.client.RakClientRouteHandler;
-import org.cloudburstmc.netty.handler.codec.common.*;
+import org.cloudburstmc.netty.handler.codec.raknet.client.RakClientRouteHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.common.*;
 
 public class RakClientChannel extends ProxyChannel<DatagramChannel> implements RakChannel {
 

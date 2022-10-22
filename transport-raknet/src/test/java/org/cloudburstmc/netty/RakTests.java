@@ -39,7 +39,7 @@ public class RakTests {
         Channel channel = new ServerBootstrap()
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel.class))
                 .group(new NioEventLoopGroup())
-                .option(RakChannelOption.RAK_SUPPORTED_PROTOCOLS, new int[]{10})
+                .option(RakChannelOption.RAK_SUPPORTED_PROTOCOLS, new int[]{11})
                 .option(RakChannelOption.RAK_MAX_CONNECTIONS, 1)
                 .childOption(RakChannelOption.RAK_ORDERING_CHANNELS, 1)
                 .option(RakChannelOption.RAK_GUID, ThreadLocalRandom.current().nextLong())

@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.handler.codec.client;
+package org.cloudburstmc.netty.handler.codec.raknet.client;
 
 
 import io.netty.buffer.ByteBuf;
@@ -6,11 +6,11 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.SimpleChannelInboundHandler;
-import org.cloudburstmc.netty.util.RakUtils;
-import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
+import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
+import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;
 

@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.handler.codec.common;
+package org.cloudburstmc.netty.handler.codec.raknet.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
@@ -8,7 +8,7 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
-import org.cloudburstmc.netty.handler.codec.AdvancedChannelInboundHandler;
+import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler;
 
 @ChannelHandler.Sharable
 public class DisconnectNotificationHandler extends AdvancedChannelInboundHandler<EncapsulatedPacket> {
