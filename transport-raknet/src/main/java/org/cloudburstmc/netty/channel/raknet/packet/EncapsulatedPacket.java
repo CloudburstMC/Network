@@ -130,6 +130,16 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     @Override
     protected void deallocate() {
         this.buffer.release();
+        this.reliability = null;
+        this.reliabilityIndex = 0;
+        this.sequenceIndex = 0;
+        this.orderingIndex = 0;
+        this.orderingChannel = 0;
+        this.split = false;
+        this.partCount = 0;
+        this.partId = 0;
+        this.partIndex = 0;
+        this.buffer = null;
         setRefCnt(1);
         this.handle.recycle(this);
     }

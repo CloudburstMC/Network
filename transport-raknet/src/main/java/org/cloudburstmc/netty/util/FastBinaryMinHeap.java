@@ -221,6 +221,7 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
 
         @Override
         protected void deallocate() {
+            setRefCnt(1);
             if (handle == null) return;
             this.element = null;
             this.weight = 0;
