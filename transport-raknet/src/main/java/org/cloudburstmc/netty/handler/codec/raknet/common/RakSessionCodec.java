@@ -567,7 +567,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private ChannelHandlerContext ctx() {
-        return this.channel.rakPipeline().context(RakDatagramCodec.NAME);
+        return this.channel.rakPipeline().context(RakSessionCodec.NAME);
     }
 
     private EncapsulatedPacket[] createEncapsulated(RakMessage rakMessage) {

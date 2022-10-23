@@ -41,10 +41,13 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
     private volatile boolean open = true;
     private volatile boolean active;
 
-    public RakChildChannel(InetSocketAddress remoteAddress, RakServerChannel parent) {
+    public RakChildChannel(InetSocketAddress remoteAddress, RakServerChannel parent, long guid, int version, int mtu) {
         super(parent);
         this.remoteAddress = remoteAddress;
         this.config = new DefaultRakSessionConfig(this);
+        this.config.setGuid(guid);
+        this.config.setProtocolVersion(version);
+        this.config.setMtu(mtu);
         // Create an internal pipeline for RakNet session logic to take place. We use the parent channel to ensure
         // this all occurs on the parent event loop so the connection is not slowed down by any user code.
         // (compression, encryption, etc.)

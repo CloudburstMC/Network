@@ -86,6 +86,10 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
             packet.release();
         }
         this.packets.clear();
+        this.flags = FLAG_VALID | FLAG_NEEDS_B_AND_AS;
+        this.sendTime = 0;
+        this.nextSend = 0;
+        this.sequenceIndex = -1;
         setRefCnt(1);
         this.handle.recycle(this);
     }

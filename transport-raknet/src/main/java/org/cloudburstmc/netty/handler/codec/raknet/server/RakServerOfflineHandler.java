@@ -178,17 +178,19 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         int mtu = buffer.readUnsignedShort();
         long clientGuid = buffer.readLong();
 
+        if (mtu < MINIMUM_MTU_SIZE || mtu > MAXIMUM_MTU_SIZE) {
+            // The client should have already negotiated a valid MTU
+            this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
+            return;
+        }
+
         RakServerChannel serverChannel = (RakServerChannel) ctx.channel();
-        RakChildChannel channel = serverChannel.createChildChannel(sender);
+        RakChildChannel channel = serverChannel.createChildChannel(sender, clientGuid, pendingConnection.getProtocolVersion(), mtu);
         if (channel == null) {
             // Already connected
             this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
             return;
         }
-
-        channel.config().setMtu(mtu);
-        channel.config().setGuid(clientGuid);
-        channel.config().setProtocolVersion(pendingConnection.getProtocolVersion());
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(31);
         replyBuffer.writeByte(ID_OPEN_CONNECTION_REPLY_2);

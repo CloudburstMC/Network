@@ -28,6 +28,7 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
 import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.Inet6Address;
@@ -107,7 +108,12 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
         reply.writeByte(ID_CONNECTION_REQUEST_FAILED);
         reply.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         reply.writeLong(guid);
-        ctx.writeAndFlush(reply);
+
+        sendRaw(ctx, reply);
         ctx.fireUserEventTriggered(RakDisconnectReason.CONNECTION_REQUEST_FAILED).close();
+    }
+
+    private void sendRaw(ChannelHandlerContext ctx, ByteBuf buf) {
+        ctx.pipeline().context(RakSessionCodec.NAME).writeAndFlush(buf);
     }
 }

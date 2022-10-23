@@ -53,12 +53,13 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
      * @param address remote address of new connection.
      * @return RakChildChannel instance of new channel.
      */
-    public RakChildChannel createChildChannel(InetSocketAddress address) {
+    public RakChildChannel createChildChannel(InetSocketAddress address, long clientGuid, int protocolVersion, int mtu) {
         if (this.childChannelMap.containsKey(address)) {
             return null;
         }
 
-        RakChildChannel channel = new RakChildChannel(address, this);
+        RakChildChannel channel = new RakChildChannel(address, this, clientGuid, protocolVersion, mtu);
+
         channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
         // Fire channel thought ServerBootstrap,
         // register to eventLoop, assign default options and attributes
