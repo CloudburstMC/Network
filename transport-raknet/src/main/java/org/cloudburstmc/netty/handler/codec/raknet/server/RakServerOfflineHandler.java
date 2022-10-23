@@ -18,7 +18,6 @@ package org.cloudburstmc.netty.handler.codec.raknet.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
-import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
@@ -38,11 +37,8 @@ import java.util.concurrent.TimeUnit;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
-@Sharable
 public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<DatagramPacket> {
-
     public static final String NAME = "rak-offline-handler";
-    public static final RakServerOfflineHandler INSTANCE = new RakServerOfflineHandler();
 
     private final ExpiringMap<InetSocketAddress, RakPendingConnection> pendingConnections = ExpiringMap.builder()
             .expiration(30, TimeUnit.SECONDS)

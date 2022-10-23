@@ -79,6 +79,6 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
 
     @Override
     public ChannelPipeline rakPipeline() {
-        return null;
+        return this.pipeline();
     }
 }

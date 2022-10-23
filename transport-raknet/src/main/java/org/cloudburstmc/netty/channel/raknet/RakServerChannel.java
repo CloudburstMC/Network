@@ -44,7 +44,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         this.pipeline().addLast(RakServerRouteHandler.NAME, new RakServerRouteHandler(this));
         // In case of proxied connections (fe. HAProxy) customized handler should be injected before RakServerOfflineHandler.
         // Default common handler of offline phase. Handles only raknet packets, forwards rest.
-        this.pipeline.addLast(RakServerOfflineHandler.NAME, RakServerOfflineHandler.INSTANCE);
+        this.pipeline.addLast(RakServerOfflineHandler.NAME, new RakServerOfflineHandler());
     }
 
     /**
