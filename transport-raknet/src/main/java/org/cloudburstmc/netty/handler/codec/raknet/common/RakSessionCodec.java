@@ -83,7 +83,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        super.channelActive(ctx);
+        // Don't call super.channelActive() because we don't want to fire it up to the user pipeline yet.
         this.state = RakState.CONNECTED;
         int mtu = this.getMtu();
 
@@ -125,7 +125,9 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         // Perform resource clean up.
         for (SplitPacketHelper helper : this.splitPackets) {
-            helper.release();
+            if (helper != null) {
+                helper.release();
+            }
         }
         this.splitPackets = null;
 

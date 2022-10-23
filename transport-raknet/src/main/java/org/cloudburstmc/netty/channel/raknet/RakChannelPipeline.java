@@ -20,14 +20,29 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.DefaultChannelPipeline;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
 public class RakChannelPipeline extends DefaultChannelPipeline {
+
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakChannelPipeline.class);
+
     private final RakChannel child;
 
     protected RakChannelPipeline(Channel parent, RakChannel child) {
         super(parent);
         this.child = child;
+    }
+
+    @Override
+    protected void onUnhandledInboundChannelActive() {
+        this.child.pipeline().fireChannelActive();
+    }
+
+    @Override
+    protected void onUnhandledInboundChannelInactive() {
+        this.child.pipeline().fireChannelInactive();
     }
 
     @Override
@@ -47,5 +62,10 @@ public class RakChannelPipeline extends DefaultChannelPipeline {
     @Override
     protected void onUnhandledInboundUserEventTriggered(Object evt) {
         this.child.pipeline().fireUserEventTriggered(evt);
+    }
+
+    @Override
+    protected void onUnhandledInboundException(Throwable cause) {
+        log.error("Exception thrown in RakNet pipeline", cause);
     }
 }
