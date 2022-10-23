@@ -16,13 +16,14 @@
 
 package org.cloudburstmc.netty.handler.codec.raknet.server;
 
+import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.util.ReferenceCountUtil;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
-public class RakChildTailHandler extends ChannelInboundHandlerAdapter {
+public class RakChildTailHandler extends ChannelDuplexHandler {
 
     public static final String NAME = "rak-child-tail-handler";
 
@@ -34,11 +35,20 @@ public class RakChildTailHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        final Object message = msg instanceof EncapsulatedPacket ? ((EncapsulatedPacket) msg).toMessage() : ReferenceCountUtil.retain(msg);
-        if (this.channel.eventLoop().inEventLoop()) {
-            this.channel.pipeline().fireChannelRead(message).fireChannelReadComplete();
-        } else {
-            this.channel.eventLoop().execute(() -> this.channel.pipeline().fireChannelRead(message).fireChannelReadComplete());
+        try {
+            final Object message = msg instanceof EncapsulatedPacket ? ((EncapsulatedPacket) msg).toMessage() : ReferenceCountUtil.retain(msg);
+            if (this.channel.eventLoop().inEventLoop()) {
+                this.channel.pipeline().fireChannelRead(message).fireChannelReadComplete();
+            } else {
+                this.channel.eventLoop().execute(() -> this.channel.pipeline().fireChannelRead(message).fireChannelReadComplete());
+            }
+        } finally {
+            ReferenceCountUtil.release(msg);
         }
+    }
+
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        super.write(ctx, msg, promise);
     }
 }

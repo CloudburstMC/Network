@@ -45,9 +45,8 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
             // Duplicate
             return null;
         }
-        this.packets[partIndex] = packet;
         // Retain the packet so it can be reassembled later.
-        packet.retain();
+        this.packets[partIndex] = packet.retain();
 
         int sz = 0;
         for (EncapsulatedPacket netPacket : this.packets) {

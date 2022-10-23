@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.handler.codec.raknet.common;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.*;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -167,22 +168,45 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
         if (msg instanceof ByteBuf) {
             msg = new RakMessage((ByteBuf) msg);
         } else if (!(msg instanceof RakMessage)) {
-            super.write(ctx, msg, promise);
-            return;
+            throw new IllegalArgumentException("Message must be a ByteBuf or RakMessage");
         }
-        RakMessage message = (RakMessage) msg;
 
+        try {
+            this.send(ctx, (RakMessage) msg);
+        } finally {
+            ReferenceCountUtil.release(msg);
+        }
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        try {
+            if (!(msg instanceof RakDatagramPacket)) {
+                // We don't want to let anything through that isn't RakNet related.
+                return;
+            }
+            RakDatagramPacket packet = (RakDatagramPacket) msg;
+            if (this.state == RakState.UNCONNECTED) {
+                return;
+            }
+            handleDatagram(ctx, packet);
+        } finally {
+            ReferenceCountUtil.release(msg);
+        }
+    }
+
+    private void send(ChannelHandlerContext ctx, RakMessage message) {
         if (message.content().getUnsignedByte(message.content().readerIndex()) == 0xc0) {
             throw new IllegalArgumentException();
         }
 
         EncapsulatedPacket[] packets = this.createEncapsulated(message);
         if (message.priority() == RakPriority.IMMEDIATE) {
-            this.sendImmediate(packets);
+            this.sendImmediate(ctx, packets);
             return;
         }
 
@@ -194,17 +218,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
     }
 
-    @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (!(msg instanceof RakDatagramPacket)) {
-            // We don't want to let anything through that isn't RakNet related.
-            return;
-        }
-        RakDatagramPacket packet = (RakDatagramPacket) msg;
-        if (RakState.UNCONNECTED.compareTo(this.state) >= 0) {
-            return;
-        }
-
+    private void handleDatagram(ChannelHandlerContext ctx, RakDatagramPacket packet) {
         this.touch();
         RakMetrics metrics = this.getMetrics();
         if (metrics != null) {
@@ -281,7 +295,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         if (packet.getReliability().isOrdered()) {
             this.onOrderedReceived(ctx, packet);
         } else {
-            ctx.fireChannelRead(packet);
+            ctx.fireChannelRead(packet.retain());
         }
     }
 
@@ -298,7 +312,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.orderReadIndex[packet.getOrderingChannel()]++;
 
         // Can be handled
-        ctx.fireChannelRead(packet);
+        ctx.fireChannelRead(packet.retain());
 
         EncapsulatedPacket queuedPacket;
         while ((queuedPacket = binaryHeap.peek()) != null) {
@@ -307,7 +321,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                     // We got the expected packet
                     binaryHeap.remove();
                     this.orderReadIndex[packet.getOrderingChannel()]++;
-                    ctx.fireChannelRead(queuedPacket);
+                    ctx.fireChannelRead(queuedPacket.retain());
                 } finally {
                     queuedPacket.release();
                 }
@@ -330,16 +344,14 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         EncapsulatedPacket result = helper.add(splitPacket, alloc);
         if (result != null) {
             // Packet reassembled. Remove the helper
-            if (this.splitPackets.remove(splitPacket.getPartId(), helper)) {
-                helper.release();
-            }
+            this.splitPackets.remove(splitPacket.getPartId(), helper);
         }
 
         return result;
     }
 
     private void onTick() {
-        if (RakState.UNCONNECTED.compareTo(this.state) >= 0) {
+        if (this.state == RakState.UNCONNECTED) {
             return;
         }
 
@@ -349,45 +361,47 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             return;
         }
 
+        ChannelHandlerContext ctx = ctx();
+
         if (this.currentPingTime + 2000L < curTime) {
-            ByteBuf buffer = this.channel.alloc().ioBuffer(9);
+            ByteBuf buffer = ctx.alloc().ioBuffer(9);
             buffer.writeByte(ID_CONNECTED_PING);
             buffer.writeLong(curTime);
-            this.channel.rakPipeline().write(new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE));
+            write(ctx, new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
         }
 
-        this.handleIncomingAcknowledge(curTime, this.incomingAcks, false);
-        this.handleIncomingAcknowledge(curTime, this.incomingNaks, true);
+        this.handleIncomingAcknowledge(ctx, curTime, this.incomingAcks, false);
+        this.handleIncomingAcknowledge(ctx, curTime, this.incomingNaks, true);
 
         // Send our know outgoing acknowledge packets.
         int mtuSize = this.getMtu();
         int ackMtu = mtuSize - RAKNET_DATAGRAM_HEADER_SIZE;
         int writtenNacks = 0;
         while (!this.outgoingNaks.isEmpty()) {
-            ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
+            ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
             writtenNacks += RakUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
-            this.channel.rakPipeline().write(buffer);
+            ctx.write(buffer);
         }
 
 
         int writtenAcks = 0;
         if (this.slidingWindow.shouldSendAcks(curTime)) {
             while (!this.outgoingAcks.isEmpty()) {
-                ByteBuf buffer = this.channel.alloc().ioBuffer(ackMtu);
+                ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
                 buffer.writeByte(FLAG_VALID | FLAG_ACK);
                 writtenAcks += RakUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
-                this.channel.rakPipeline().write(buffer);
+                ctx.write(buffer);
                 this.slidingWindow.onSendAck();
             }
         }
 
         // Send packets that are stale first
-        int resendCount = this.sendStaleDatagrams(curTime);
+        int resendCount = this.sendStaleDatagrams(ctx, curTime);
         // Now send usual packets
-        this.sendDatagrams(curTime, mtuSize);
+        this.sendDatagrams(ctx, curTime, mtuSize);
         // Finally flush channel
-        this.channel.rakPipeline().flush();
+        ctx.flush();
 
         RakMetrics metrics = this.getMetrics();
         if (metrics != null) {
@@ -397,14 +411,14 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
     }
 
-    private void handleIncomingAcknowledge(long curTime, Queue<IntRange> queue, boolean nack) {
+    private void handleIncomingAcknowledge(ChannelHandlerContext ctx, long curTime, Queue<IntRange> queue, boolean nack) {
         if (queue.isEmpty()) {
             return;
         }
 
-        /*if (nack) {
-            this.slidingWindow.onNak();
-        }*/
+//        if (nack) {
+//            this.slidingWindow.onNak();
+//        }
 
         IntRange range;
         while ((range = queue.poll()) != null) {
@@ -412,7 +426,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 RakDatagramPacket datagram = this.sentDatagrams.remove(i);
                 if (datagram != null) {
                     if (nack) {
-                        this.onIncomingNack(datagram, curTime);
+                        this.onIncomingNack(ctx, datagram, curTime);
                     } else {
                         this.onIncomingAck(datagram, curTime);
                     }
@@ -429,16 +443,16 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
     }
 
-    private void onIncomingNack(RakDatagramPacket datagram, long curTime) {
+    private void onIncomingNack(ChannelHandlerContext ctx, RakDatagramPacket datagram, long curTime) {
         if (log.isTraceEnabled()) {
             log.trace("NAK'ed datagram {} from {}", datagram.getSequenceIndex(), this.getRemoteAddress());
         }
 
         this.slidingWindow.onNak(); // TODO: verify this
-        this.sendDatagram(datagram, curTime);
+        this.sendDatagram(ctx, datagram, curTime);
     }
 
-    private int sendStaleDatagrams(long curTime) {
+    private int sendStaleDatagrams(ChannelHandlerContext ctx, long curTime) {
         if (this.sentDatagrams.isEmpty()) {
             return 0;
         }
@@ -462,7 +476,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                     log.trace("Stale datagram {} from {}", datagram.getSequenceIndex(), this.getRemoteAddress());
                 }
                 resendCount++;
-                this.sendDatagram(datagram, curTime);
+                this.sendDatagram(ctx, datagram, curTime);
             }
         }
 
@@ -473,7 +487,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         return resendCount;
     }
 
-    private void sendDatagrams(long curTime, int mtuSize) {
+    private void sendDatagrams(ChannelHandlerContext ctx, long curTime, int mtuSize) {
         if (this.outgoingPackets.isEmpty()) {
             return;
         }
@@ -494,7 +508,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
             // Send full datagram
             if (!datagram.tryAddPacket(packet, mtuSize)) {
-                this.sendDatagram(datagram, curTime);
+                this.sendDatagram(ctx, datagram, curTime);
 
                 datagram = RakDatagramPacket.newInstance();
                 datagram.setSendTime(curTime);
@@ -505,11 +519,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
         if (!datagram.getPackets().isEmpty()) {
-            this.sendDatagram(datagram, curTime);
+            this.sendDatagram(ctx, datagram, curTime);
         }
     }
 
-    private void sendImmediate(EncapsulatedPacket[] packets) {
+    private void sendImmediate(ChannelHandlerContext ctx, EncapsulatedPacket[] packets) {
         long curTime = System.currentTimeMillis();
         for (EncapsulatedPacket packet : packets) {
             RakDatagramPacket datagram = RakDatagramPacket.newInstance();
@@ -517,12 +531,12 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             if (!datagram.tryAddPacket(packet, this.getMtu())) {
                 throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + this.getMtu() + ")");
             }
-            this.sendDatagram(datagram, curTime);
+            this.sendDatagram(ctx, datagram, curTime);
         }
-        this.channel.rakPipeline().flush();
+        ctx.flush();
     }
 
-    private void sendDatagram(RakDatagramPacket datagram, long time) {
+    private void sendDatagram(ChannelHandlerContext ctx, RakDatagramPacket datagram, long time) {
         if (datagram.getPackets().isEmpty()) {
             throw new IllegalArgumentException("RakNetDatagram with no packets");
         }
@@ -549,7 +563,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 break;
             }
         }
-        this.channel.rakPipeline().write(datagram);
+        ctx.write(datagram);
+    }
+
+    private ChannelHandlerContext ctx() {
+        return this.channel.rakPipeline().context(RakDatagramCodec.NAME);
     }
 
     private EncapsulatedPacket[] createEncapsulated(RakMessage rakMessage) {
@@ -616,7 +634,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             if (parts > 1) {
                 packet.setSplit(true);
                 packet.setPartIndex(i);
-                ;
                 packet.setPartCount(parts);
                 packet.setPartId(splitId);
             }
@@ -632,13 +649,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         if (!this.outgoingPackets.isEmpty()) {
             if (next >= this.lastMinWeight) {
-                next = this.lastMinWeight + (1 << priorityLevel) * priorityLevel + priorityLevel;
-                this.outgoingPacketNextWeights[priorityLevel] = next + (1 << priorityLevel) * (priorityLevel + 1) + priorityLevel;
+                next = this.lastMinWeight + (1L << priorityLevel) * priorityLevel + priorityLevel;
+                this.outgoingPacketNextWeights[priorityLevel] = next + (1L << priorityLevel) * (priorityLevel + 1) + priorityLevel;
             }
         } else {
             this.initHeapWeights();
         }
-        this.lastMinWeight = next - (1 << priorityLevel) * priorityLevel + priorityLevel;
+        this.lastMinWeight = next - (1L << priorityLevel) * priorityLevel + priorityLevel;
         return next;
     }
 
@@ -656,13 +673,17 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             log.trace("Disconnecting RakNet Session ({} => {}) due to {}", this.channel.localAddress(), this.getRemoteAddress(), reason);
         }
 
-        ByteBuf buffer = this.channel.alloc().ioBuffer(1);
+        ChannelHandlerContext ctx = this.ctx();
+
+        ByteBuf buffer = ctx.alloc().ioBuffer(1);
         buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
         RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE);
 
-        ChannelFuture future = this.channel.rakPipeline().writeAndFlush(rakMessage);
-        future.addListener((ChannelFuture future1) ->
-                future1.channel().pipeline().fireUserEventTriggered(reason).close());
+        ChannelPromise promise = ctx.newPromise();
+        promise.addListener((ChannelFuture future) ->
+                future.channel().pipeline().fireUserEventTriggered(reason).close());
+
+        write(ctx, rakMessage, promise);
     }
 
     public void close(RakDisconnectReason reason) {

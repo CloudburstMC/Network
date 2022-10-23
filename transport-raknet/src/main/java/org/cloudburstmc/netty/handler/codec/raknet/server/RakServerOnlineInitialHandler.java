@@ -17,10 +17,10 @@
 package org.cloudburstmc.netty.handler.codec.raknet.server;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
@@ -40,9 +40,9 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
 
     public static final String NAME = "rak-server-online-initial-handler";
 
-    private final Channel channel;
+    private final RakChildChannel channel;
 
-    public RakServerOnlineInitialHandler(Channel channel) {
+    public RakServerOnlineInitialHandler(RakChildChannel channel) {
         this.channel = channel;
     }
 
@@ -59,6 +59,7 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
                 buf.skipBytes(1);
                 // We have connected and no longer need this handler
                 ctx.pipeline().remove(this);
+                channel.setActive();
                 channel.pipeline().fireChannelActive();
                 break;
             default:

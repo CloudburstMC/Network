@@ -48,14 +48,13 @@ public class RoundRobinArray<E> implements Collection<E> {
         ReferenceCountUtil.release(element);
     }
 
-    public boolean remove(int index, E expected) {
+    public void remove(int index, E expected) {
         int idx = index & this.mask;
         Object element = this.elements[idx];
-        if (element != expected) {
-            return false;
-        } else {
+        if (element == expected) {
             this.elements[idx] = null;
-            return true;
+            // Make sure to release the element on removal.
+            ReferenceCountUtil.release(element);
         }
     }
 

@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.channel.*;
+import io.netty.util.ReferenceCountUtil;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
@@ -27,6 +28,8 @@ import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.channels.ClosedChannelException;
+import java.nio.channels.NonWritableChannelException;
 
 public class RakChildChannel extends AbstractChannel implements RakChannel {
 
@@ -36,6 +39,7 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
     private final InetSocketAddress remoteAddress;
     private final DefaultChannelPipeline rakPipeline;
     private volatile boolean open = true;
+    private volatile boolean active;
 
     public RakChildChannel(InetSocketAddress remoteAddress, RakServerChannel parent) {
         super(parent);
@@ -108,8 +112,37 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
     }
 
     @Override
-    protected void doWrite(ChannelOutboundBuffer channelOutboundBuffer) throws Exception {
-        throw new UnsupportedOperationException("Can not write on child channel! This should be forwarded to parent!");
+    protected void doWrite(ChannelOutboundBuffer in) throws Exception {
+        if (!this.open) {
+            throw new ClosedChannelException();
+        } else if (!active) {
+            throw new NonWritableChannelException();
+        }
+        ClosedChannelException exception = null;
+        for (; ; ) {
+            Object msg = in.current();
+            if (msg == null) {
+                break;
+            }
+            try {
+                if (this.parent().isOpen()) {
+                    this.rakPipeline.write(ReferenceCountUtil.retain(msg));
+                    in.remove();
+                } else {
+                    if (exception == null) {
+                        exception = new ClosedChannelException();
+                    }
+                    in.remove(exception);
+                }
+            } catch (Throwable cause) {
+                in.remove(cause);
+            }
+        }
+        this.rakPipeline.flush();
+    }
+
+    public void setActive() {
+        this.active = true;
     }
 
     @Override
@@ -124,7 +157,7 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
 
     @Override
     public boolean isActive() {
-        return this.isOpen() && this.parent().isActive();
+        return this.isOpen() && this.active;
     }
 
     @Override
