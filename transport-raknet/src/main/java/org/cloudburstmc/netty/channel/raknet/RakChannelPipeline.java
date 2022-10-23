@@ -62,6 +62,9 @@ public class RakChannelPipeline extends DefaultChannelPipeline {
     @Override
     protected void onUnhandledInboundUserEventTriggered(Object evt) {
         this.child.pipeline().fireUserEventTriggered(evt);
+        if (evt instanceof RakDisconnectReason) {
+            this.child.close();
+        }
     }
 
     @Override

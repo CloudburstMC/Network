@@ -50,7 +50,7 @@ public class DisconnectNotificationHandler extends AdvancedChannelInboundHandler
         if (log.isTraceEnabled()) {
             log.trace("RakNet Session ({} => {}) by remote peer!", ctx.channel().localAddress(), ctx.channel().remoteAddress());
         }
-        ctx.fireUserEventTriggered(RakDisconnectReason.CLOSED_BY_REMOTE_PEER).close();
+        ctx.fireUserEventTriggered(RakDisconnectReason.CLOSED_BY_REMOTE_PEER);
         ctx.fireChannelInactive();
     }
 }
