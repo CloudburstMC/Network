@@ -14,33 +14,30 @@
  * under the License.
  */
 
-package org.cloudburstmc.netty.handler.codec.raknet.server;
+package org.cloudburstmc.netty.channel.raknet;
 
-import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPromise;
+import io.netty.channel.DefaultChannelPipeline;
 import io.netty.util.ReferenceCountUtil;
-import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
-public class RakChildTailHandler extends ChannelDuplexHandler {
+public class RakChannelPipeline extends DefaultChannelPipeline {
+    private final RakChannel child;
 
-    public static final String NAME = "rak-child-tail-handler";
-
-    private final RakChildChannel channel;
-
-    public RakChildTailHandler(RakChildChannel channel) {
-        this.channel = channel;
+    protected RakChannelPipeline(Channel parent, RakChannel child) {
+        super(parent);
+        this.child = child;
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+    protected void onUnhandledInboundMessage(ChannelHandlerContext ctx, Object msg) {
         try {
             final Object message = msg instanceof EncapsulatedPacket ? ((EncapsulatedPacket) msg).toMessage() : ReferenceCountUtil.retain(msg);
-            if (this.channel.eventLoop().inEventLoop()) {
-                this.channel.pipeline().fireChannelRead(message).fireChannelReadComplete();
+            if (this.child.eventLoop().inEventLoop()) {
+                this.child.pipeline().fireChannelRead(message).fireChannelReadComplete();
             } else {
-                this.channel.eventLoop().execute(() -> this.channel.pipeline().fireChannelRead(message).fireChannelReadComplete());
+                this.child.eventLoop().execute(() -> this.child.pipeline().fireChannelRead(message).fireChannelReadComplete());
             }
         } finally {
             ReferenceCountUtil.release(msg);
@@ -48,7 +45,7 @@ public class RakChildTailHandler extends ChannelDuplexHandler {
     }
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        super.write(ctx, msg, promise);
+    protected void onUnhandledInboundUserEventTriggered(Object evt) {
+        this.child.pipeline().fireUserEventTriggered(evt);
     }
 }

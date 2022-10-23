@@ -22,9 +22,7 @@ import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakChildDatagramHandler;
-import org.cloudburstmc.netty.handler.codec.raknet.server.RakChildTailHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOnlineInitialHandler;
-import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -51,7 +49,7 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         // Create an internal pipeline for RakNet session logic to take place. We use the parent channel to ensure
         // this all occurs on the parent event loop so the connection is not slowed down by any user code.
         // (compression, encryption, etc.)
-        this.rakPipeline = RakUtils.newChannelPipeline(parent);
+        this.rakPipeline = new RakChannelPipeline(parent, this);
         this.rakPipeline.addLast(RakChildDatagramHandler.NAME, new RakChildDatagramHandler(this));
 
         // Setup session/online phase
@@ -64,7 +62,6 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         this.rakPipeline.addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
         this.rakPipeline.addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
         this.rakPipeline.addLast(RakServerOnlineInitialHandler.NAME, new RakServerOnlineInitialHandler(this));
-        this.rakPipeline.addLast(RakChildTailHandler.NAME, new RakChildTailHandler(this));
         this.rakPipeline.fireChannelRegistered();
         this.rakPipeline.fireChannelActive();
     }
