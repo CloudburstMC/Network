@@ -28,31 +28,38 @@ public class RakChannelPipeline extends DefaultChannelPipeline {
 
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakChannelPipeline.class);
 
-    private final RakChannel child;
+    private final RakChildChannel child;
 
-    protected RakChannelPipeline(Channel parent, RakChannel child) {
+    protected RakChannelPipeline(Channel parent, RakChildChannel child) {
         super(parent);
         this.child = child;
     }
 
     @Override
     protected void onUnhandledInboundChannelActive() {
-        this.child.pipeline().fireChannelActive();
     }
 
     @Override
     protected void onUnhandledInboundChannelInactive() {
-        this.child.pipeline().fireChannelInactive();
+        if (this.child.isActive()) {
+            this.child.setActive(false);
+            this.child.pipeline().fireChannelInactive();
+        }
     }
 
     @Override
     protected void onUnhandledInboundMessage(ChannelHandlerContext ctx, Object msg) {
         try {
-            final Object message = msg instanceof EncapsulatedPacket ? ((EncapsulatedPacket) msg).toMessage() : ReferenceCountUtil.retain(msg);
+            final Object message = msg instanceof EncapsulatedPacket ? ((EncapsulatedPacket) msg).toMessage() : msg;
+            ReferenceCountUtil.retain(message);
             if (this.child.eventLoop().inEventLoop()) {
                 this.child.pipeline().fireChannelRead(message).fireChannelReadComplete();
             } else {
-                this.child.eventLoop().execute(() -> this.child.pipeline().fireChannelRead(message).fireChannelReadComplete());
+                this.child.eventLoop().execute(() -> {
+                    this.child.pipeline()
+                            .fireChannelRead(message)
+                            .fireChannelReadComplete();
+                });
             }
         } finally {
             ReferenceCountUtil.release(msg);

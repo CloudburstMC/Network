@@ -141,8 +141,8 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         this.rakPipeline.flush();
     }
 
-    public void setActive() {
-        this.active = true;
+    public void setActive(boolean active) {
+        this.active = active;
     }
 
     @Override

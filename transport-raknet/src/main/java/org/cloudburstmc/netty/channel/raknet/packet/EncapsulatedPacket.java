@@ -236,7 +236,7 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     }
 
     public RakMessage toMessage() {
-        return new RakMessage(buffer.retain(), reliability);
+        return new RakMessage(buffer, reliability);
     }
 
     @Override
