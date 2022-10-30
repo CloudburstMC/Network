@@ -16,33 +16,18 @@
 
 package org.cloudburstmc.netty.channel.raknet;
 
-import io.netty.util.AbstractReferenceCounted;
-import io.netty.util.Recycler;
-import io.netty.util.ReferenceCounted;
+import io.netty.buffer.ByteBuf;
 
 import java.net.InetSocketAddress;
 
-public class RakPing extends AbstractReferenceCounted {
+public class RakPing {
 
-    private static final Recycler<RakPing> RECYCLER = new Recycler<RakPing>() {
-        public RakPing newObject(Recycler.Handle<RakPing> handle) {
-            return new RakPing(handle);
-        }
-    };
+    private final long pingTime;
+    private final InetSocketAddress sender;
 
-    private final Recycler.Handle<RakPing> handle;
-    private long pingTime;
-    private InetSocketAddress sender;
-
-    private RakPing(Recycler.Handle<RakPing> handle) {
-        this.handle = handle;
-    }
-
-    public static RakPing newInstance(long pingTime, InetSocketAddress sender) {
-        RakPing ping = RECYCLER.get();
-        ping.pingTime = pingTime;
-        ping.sender = sender;
-        return ping;
+    public RakPing(long pingTime, InetSocketAddress sender) {
+        this.pingTime = pingTime;
+        this.sender = sender;
     }
 
     public long getPingTime() {
@@ -54,14 +39,7 @@ public class RakPing extends AbstractReferenceCounted {
         return this.sender;
     }
 
-    @Override
-    protected void deallocate() {
-        this.setRefCnt(1);
-        this.handle.recycle(this);
-    }
-
-    @Override
-    public ReferenceCounted touch(Object hint) {
-        return null;
+    public RakPong reply(long guid, ByteBuf pongData) {
+        return new RakPong(this.pingTime, guid, pongData, this.sender);
     }
 }

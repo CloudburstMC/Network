@@ -95,6 +95,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<ByteBuf> RAK_ADVERTISEMENT =
             valueOf(RakChannelOption.class, "RAK_ADVERTISEMENT");
 
+    /**
+     * Enables custom handling for RakNet packets in the server implementation.
+     */
+    public static final ChannelOption<Boolean> RAK_HANDLE_PING =
+            valueOf(RakChannelOption.class, "RAK_HANDLE_PING");
+
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {
         super(null);

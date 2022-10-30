@@ -44,4 +44,8 @@ public interface RakServerChannelConfig extends ChannelConfig {
     ByteBuf getAdvertisement();
 
     RakServerChannelConfig setAdvertisement(ByteBuf advertisement);
+
+    boolean getHandlePing();
+
+    RakServerChannelConfig setHandlePing(boolean handlePing);
 }

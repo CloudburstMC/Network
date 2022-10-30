@@ -38,6 +38,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile int maxConnections;
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
     private volatile ByteBuf advertisement;
+    private volatile boolean handlePing;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -72,6 +73,9 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_ADVERTISEMENT) {
             return (T) this.getAdvertisement();
         }
+        if (option == RakChannelOption.RAK_HANDLE_PING) {
+            return (T) Boolean.valueOf(this.getHandlePing());
+        }
         return super.getOption(option);
     }
 
@@ -91,6 +95,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setUnconnectedMagic((ByteBuf) value);
         } else if (option == RakChannelOption.RAK_ADVERTISEMENT) {
             this.setAdvertisement((ByteBuf) value);
+        } else if (option == RakChannelOption.RAK_HANDLE_PING) {
+            this.setHandlePing((Boolean) value);
         } else {
             return super.setOption(option, value);
         }
@@ -164,6 +170,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         return this;
     }
 
+    @Override
     public ByteBuf getAdvertisement() {
         return this.advertisement;
     }
@@ -171,6 +178,17 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     @Override
     public RakServerChannelConfig setAdvertisement(ByteBuf advertisement) {
         this.advertisement = advertisement.copy().asReadOnly();
+        return this;
+    }
+
+    @Override
+    public boolean getHandlePing() {
+        return this.handlePing;
+    }
+
+    @Override
+    public RakServerChannelConfig setHandlePing(boolean handlePing) {
+        this.handlePing = handlePing;
         return this;
     }
 }

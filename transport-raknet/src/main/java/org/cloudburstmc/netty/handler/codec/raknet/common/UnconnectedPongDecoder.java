@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.handler.codec.raknet.common;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
@@ -57,13 +58,10 @@ public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<Datagr
             return;
         }
 
-        byte[] pongData = null;
+        ByteBuf pongData = Unpooled.EMPTY_BUFFER;
         if (buf.isReadable(2)) { // Length
-            pongData = new byte[buf.readUnsignedShort()];
-            buf.readBytes(pongData);
+            pongData = buf.readRetainedSlice(buf.readUnsignedShort());
         }
-
-        long pongTime = System.currentTimeMillis();
-        ctx.fireChannelRead(new RakPong(pingTime, pongTime, guid, pongData, packet.sender()));
+        ctx.fireChannelRead(new RakPong(pingTime, guid, pongData, packet.sender()));
     }
 }

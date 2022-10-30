@@ -25,6 +25,7 @@ import net.jodah.expiringmap.ExpirationPolicy;
 import net.jodah.expiringmap.ExpiringMap;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPendingConnection;
+import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler;
@@ -88,7 +89,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
         switch (packetId) {
             case ID_UNCONNECTED_PING:
-                this.onUnconnectedPong(ctx, packet, magicBuf, guid);
+                this.onUnconnectedPing(ctx, packet, magicBuf, guid);
                 break;
             case ID_OPEN_CONNECTION_REQUEST_1:
                 this.onOpenConnectionRequest1(ctx, packet, magicBuf, guid);
@@ -99,8 +100,14 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         }
     }
 
-    private void onUnconnectedPong(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
+    private void onUnconnectedPing(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
         long pingTime = packet.content().readLong();
+
+        boolean handlePing = ctx.channel().config().getOption(RakChannelOption.RAK_HANDLE_PING);
+        if (handlePing) {
+            ctx.fireChannelRead(new RakPing(pingTime, packet.sender()));
+            return;
+        }
 
         ByteBuf advertisement = ctx.channel().config().getOption(RakChannelOption.RAK_ADVERTISEMENT);
 

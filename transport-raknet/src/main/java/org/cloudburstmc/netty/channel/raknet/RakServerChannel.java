@@ -25,6 +25,7 @@ import io.netty.util.concurrent.PromiseCombiner;
 import org.cloudburstmc.netty.channel.proxy.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakServerConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
+import org.cloudburstmc.netty.handler.codec.raknet.common.UnconnectedPongEncoder;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOfflineHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRouteHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerTailHandler;
@@ -43,6 +44,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         super(channel);
         this.config = new DefaultRakServerConfig(this);
         // Default common handler of offline phase. Handles only raknet packets, forwards rest.
+        this.pipeline.addLast(UnconnectedPongEncoder.NAME, UnconnectedPongEncoder.INSTANCE);
         this.pipeline.addLast(RakServerOfflineHandler.NAME, new RakServerOfflineHandler());
         this.pipeline().addLast(RakServerRouteHandler.NAME, new RakServerRouteHandler(this));
         this.pipeline().addLast(RakServerTailHandler.NAME, RakServerTailHandler.INSTANCE);
