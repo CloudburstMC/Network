@@ -109,7 +109,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             return;
         }
 
-        ByteBuf advertisement = this.getAdvertisement(ctx, packet.sender());
+        ByteBuf advertisement = ctx.channel().config().getOption(RakChannelOption.RAK_ADVERTISEMENT);
 
         int packetLength = 35 + (advertisement != null ? advertisement.readableBytes() : -2);
 
@@ -124,10 +124,6 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         }
 
         ctx.writeAndFlush(new DatagramPacket(out, packet.sender()));
-    }
-
-    protected ByteBuf getAdvertisement(ChannelHandlerContext ctx, InetSocketAddress address) {
-        return ctx.channel().config().getOption(RakChannelOption.RAK_ADVERTISEMENT);
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
