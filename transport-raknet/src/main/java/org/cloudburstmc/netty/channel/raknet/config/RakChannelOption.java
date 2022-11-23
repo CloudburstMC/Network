@@ -40,6 +40,18 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_MTU");
 
     /**
+     * Maximum allowed MTU that the RakNet server connection can use
+     */
+    public static final ChannelOption<Integer> RAK_MAX_MTU =
+            valueOf(RakChannelOption.class, "RAK_MAX_MTU");
+
+    /**
+     * Minimum allowed MTU that the RakNet server connection can use
+     */
+    public static final ChannelOption<Integer> RAK_MIN_MTU =
+            valueOf(RakChannelOption.class, "RAK_MIN_MTU");
+
+    /**
      * Unique ID of the RakNet peer sent.
      */
     public static final ChannelOption<Long> RAK_GUID =

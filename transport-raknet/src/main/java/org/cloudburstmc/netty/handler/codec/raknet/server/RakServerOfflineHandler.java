@@ -160,7 +160,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         replyBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         replyBuffer.writeLong(guid);
         replyBuffer.writeBoolean(false); // Security
-        replyBuffer.writeShort(RakUtils.clamp(mtu, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE));
+        replyBuffer.writeShort(RakUtils.clamp(mtu, ctx.channel().config().getOption(RakChannelOption.RAK_MIN_MTU), ctx.channel().config().getOption(RakChannelOption.RAK_MAX_MTU)));
         ctx.writeAndFlush(new DatagramPacket(replyBuffer, sender));
     }
 
@@ -181,7 +181,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         int mtu = buffer.readUnsignedShort();
         long clientGuid = buffer.readLong();
 
-        if (mtu < MINIMUM_MTU_SIZE || mtu > MAXIMUM_MTU_SIZE) {
+        if (mtu < ctx.channel().config().getOption(RakChannelOption.RAK_MIN_MTU) || mtu > ctx.channel().config().getOption(RakChannelOption.RAK_MAX_MTU)) {
             // The client should have already negotiated a valid MTU
             this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
             return;

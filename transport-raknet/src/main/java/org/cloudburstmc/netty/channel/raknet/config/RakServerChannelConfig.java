@@ -48,4 +48,12 @@ public interface RakServerChannelConfig extends ChannelConfig {
     boolean getHandlePing();
 
     RakServerChannelConfig setHandlePing(boolean handlePing);
+
+    int getMaxMtu();
+
+    RakServerChannelConfig setMaxMtu(int mtu);
+
+    int getMinMtu();
+
+    RakServerChannelConfig setMinMtu(int mtu);
 }

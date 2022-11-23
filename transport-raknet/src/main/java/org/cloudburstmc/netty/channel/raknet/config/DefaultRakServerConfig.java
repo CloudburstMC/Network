@@ -20,6 +20,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.DefaultChannelConfig;
+import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 
 import java.util.Arrays;
@@ -39,6 +40,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
     private volatile ByteBuf advertisement;
     private volatile boolean handlePing;
+    private volatile int maxMtu = RakConstants.MAXIMUM_MTU_SIZE;
+    private volatile int minMtu = RakConstants.MINIMUM_MTU_SIZE;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -55,6 +58,12 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     @SuppressWarnings("unchecked")
     @Override
     public <T> T getOption(ChannelOption<T> option) {
+        if (option == RakChannelOption.RAK_MAX_MTU) {
+            return (T) Integer.valueOf(this.getMaxMtu());
+        }
+        if (option == RakChannelOption.RAK_MIN_MTU) {
+            return (T) Integer.valueOf(this.getMinMtu());
+        }
         if (option == RakChannelOption.RAK_GUID) {
             return (T) Long.valueOf(this.getGuid());
         }
@@ -97,6 +106,10 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setAdvertisement((ByteBuf) value);
         } else if (option == RakChannelOption.RAK_HANDLE_PING) {
             this.setHandlePing((Boolean) value);
+        } else if (option == RakChannelOption.RAK_MAX_MTU) {
+            this.setMaxMtu((Integer) value);
+        } else if (option == RakChannelOption.RAK_MIN_MTU) {
+            this.setMinMtu((Integer) value);
         } else {
             return super.setOption(option, value);
         }
@@ -190,5 +203,27 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     public RakServerChannelConfig setHandlePing(boolean handlePing) {
         this.handlePing = handlePing;
         return this;
+    }
+
+    @Override
+    public RakServerChannelConfig setMaxMtu(int maxMtu) {
+        this.maxMtu = maxMtu;
+        return this;
+    }
+
+    @Override
+    public int getMaxMtu() {
+        return this.maxMtu;
+    }
+
+    @Override
+    public RakServerChannelConfig setMinMtu(int minMtu) {
+        this.minMtu = minMtu;
+        return this;
+    }
+
+    @Override
+    public int getMinMtu() {
+        return this.minMtu;
     }
 }
