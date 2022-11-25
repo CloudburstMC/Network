@@ -56,7 +56,7 @@ public class RakSlidingWindow {
     }
 
     public void onResend(long curSequenceIndex) {
-        if (!this.backoffThisBlock && this.cwnd > this.mtu * 2) {
+        if (!this.backoffThisBlock && this.cwnd > this.mtu * 2D) {
             this.ssThresh = this.cwnd * 0.5D;
 
             if (this.ssThresh < this.mtu) {
@@ -84,9 +84,10 @@ public class RakSlidingWindow {
             this.estimatedRTT = rtt;
             this.deviationRTT = rtt;
         } else {
+            double d = 0.05D;
             double difference = rtt - this.estimatedRTT;
-            this.estimatedRTT += 0.5D * difference;
-            this.deviationRTT += 0.5D * (Math.abs(difference) - this.deviationRTT);
+            this.estimatedRTT += d * difference;
+            this.deviationRTT += d * (Math.abs(difference) - this.deviationRTT);
         }
 
         boolean isNewCongestionControlPeriod = datagram.getSequenceIndex() > this.nextCongestionControlBlock;

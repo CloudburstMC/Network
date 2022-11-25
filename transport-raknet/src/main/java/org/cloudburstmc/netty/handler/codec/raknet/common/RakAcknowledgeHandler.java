@@ -65,7 +65,7 @@ public class RakAcknowledgeHandler extends SimpleChannelInboundHandler<ByteBuf> 
             boolean singleton = buffer.readBoolean();
             int start = buffer.readUnsignedMediumLE();
             // We don't need the upper limit if it's a singleton
-            int end = singleton ? start : buffer.readMediumLE();
+            int end = singleton ? start : buffer.readUnsignedMediumLE();
 
             if (start <= end) {
                 queue.offer(new IntRange(start, end));

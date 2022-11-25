@@ -21,6 +21,7 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.internal.ObjectPool;
+import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 
 public class EncapsulatedPacket extends AbstractReferenceCounted {
@@ -38,6 +39,7 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     private int partId;
     private int partIndex;
     private ByteBuf buffer;
+    private boolean needsBAS;
 
     public static EncapsulatedPacket newInstance() {
         return RECYCLER.get();
@@ -53,7 +55,10 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
 
         int flags = this.reliability.ordinal() << 5;
         if (this.split) {
-            flags |= 0x10;
+            flags |= RakConstants.FLAG_PACKET_PAIR;
+        }
+        if (needsBAS){
+            flags |= RakConstants.FLAG_NEEDS_B_AND_AS;
         }
         header.writeByte(flags);
         header.writeShort(this.buffer.readableBytes() << 3); // size
@@ -84,7 +89,8 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
     public void decode(ByteBuf buf) {
         byte flags = buf.readByte();
         this.reliability = RakReliability.fromId(flags >>> 5);
-        this.split = (flags & 0x10) != 0;
+        this.split = (flags & RakConstants.FLAG_PACKET_PAIR) != 0;
+        this.needsBAS = (flags & RakConstants.FLAG_NEEDS_B_AND_AS) != 0;
         int size = (buf.readUnsignedShort() + 7) >> 3;
 
         if (this.reliability.isReliable()) {
@@ -233,6 +239,14 @@ public class EncapsulatedPacket extends AbstractReferenceCounted {
 
     public void setBuffer(ByteBuf buffer) {
         this.buffer = buffer;
+    }
+
+    public boolean isNeedsBAS() {
+        return this.needsBAS;
+    }
+
+    public void setNeedsBAS(boolean needsBAS) {
+        this.needsBAS = needsBAS;
     }
 
     public RakMessage toMessage() {

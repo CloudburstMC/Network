@@ -109,13 +109,7 @@ public class RakUtils {
 
         int count = 0;
         IntRange ackRange;
-        while ((ackRange = ackQueue.poll()) != null) {
-            IntRange nextRange;
-            while ((nextRange = ackQueue.peek()) != null && (ackRange.end + 1) == nextRange.start) {
-                ackQueue.remove();
-                ackRange.end = nextRange.end;
-            }
-
+        while ((ackRange = ackQueue.peek()) != null) {
             boolean singleton = ackRange.start == ackRange.end;
             int size = singleton ? 4 : 7;
             if (mtu < size) {
@@ -130,6 +124,7 @@ public class RakUtils {
             if (!singleton) {
                 buffer.writeMediumLE(ackRange.end);
             }
+            ackQueue.remove();
         }
 
         int finalIndex = buffer.writerIndex();

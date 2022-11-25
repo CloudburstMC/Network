@@ -236,7 +236,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         int missedDatagrams = packet.getSequenceIndex() - prevSequenceIndex;
         if (missedDatagrams > 0) {
-            this.outgoingNaks.offer(new IntRange(packet.getSequenceIndex() - missedDatagrams, packet.getSequenceIndex()));
+            this.outgoingNaks.offer(new IntRange(packet.getSequenceIndex() - missedDatagrams, packet.getSequenceIndex() - 1));
         }
 
         this.outgoingAcks.offer(new IntRange(packet.getSequenceIndex(), packet.getSequenceIndex()));
@@ -369,7 +369,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             ByteBuf buffer = ctx.alloc().ioBuffer(9);
             buffer.writeByte(ID_CONNECTED_PING);
             buffer.writeLong(curTime);
-            write(ctx, new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
+            write(ctx, new RakMessage(buffer, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
         }
 
         this.handleIncomingAcknowledge(ctx, curTime, this.incomingAcks, false);
@@ -378,17 +378,10 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         // Send our know outgoing acknowledge packets.
         int mtuSize = this.getMtu();
         int ackMtu = mtuSize - RAKNET_DATAGRAM_HEADER_SIZE;
-        int writtenNacks = 0;
-        while (!this.outgoingNaks.isEmpty()) {
-            ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
-            buffer.writeByte(FLAG_VALID | FLAG_NACK);
-            writtenNacks += RakUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
-            ctx.write(buffer);
-        }
-
-
         int writtenAcks = 0;
-        if (this.slidingWindow.shouldSendAcks(curTime)) {
+        int writtenNacks = 0;
+
+        // if (this.slidingWindow.shouldSendAcks(curTime)) {
             while (!this.outgoingAcks.isEmpty()) {
                 ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
                 buffer.writeByte(FLAG_VALID | FLAG_ACK);
@@ -396,6 +389,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 ctx.write(buffer);
                 this.slidingWindow.onSendAck();
             }
+        // }
+
+        while (!this.outgoingNaks.isEmpty()) {
+            ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
+            buffer.writeByte(FLAG_VALID | FLAG_NACK);
+            writtenNacks += RakUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
+            ctx.write(buffer);
         }
 
         // Send packets that are stale first
@@ -553,8 +553,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         for (EncapsulatedPacket packet : datagram.getPackets()) {
             // Check if packet is reliable so it can be resent later if a NAK is received.
-            if (packet.getReliability() != RakReliability.UNRELIABLE &&
-                    packet.getReliability() != RakReliability.UNRELIABLE_SEQUENCED) {
+            if (packet.getReliability().isReliable()) {
                 datagram.setNextSend(time + this.slidingWindow.getRtoForRetransmission());
                 if (oldIndex == -1) {
                     this.slidingWindow.onReliableSend(datagram);
@@ -625,6 +624,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         for (int i = 0, parts = buffers.length; i < parts; i++) {
             EncapsulatedPacket packet = EncapsulatedPacket.newInstance();
             packet.setBuffer(buffers[i]);
+            packet.setNeedsBAS(true);
             packet.setOrderingChannel((short) orderingChannel);
             packet.setOrderingIndex(orderingIndex);
             // packet.setSequenceIndex(sequencingIndex);
