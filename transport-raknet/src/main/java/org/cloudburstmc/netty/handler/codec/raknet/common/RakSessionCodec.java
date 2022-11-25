@@ -179,6 +179,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         try {
             this.send(ctx, (RakMessage) msg);
+            promise.setSuccess(null);
         } finally {
             ReferenceCountUtil.release(msg);
         }
