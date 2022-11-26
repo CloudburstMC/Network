@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty;
 
+import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -24,6 +25,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
+import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.junit.jupiter.api.Test;
@@ -51,7 +53,7 @@ public class RakTests {
             .toString().getBytes(StandardCharsets.UTF_8);
 
     @Test
-    public void test() {
+    public void testServer() {
         Channel channel = new ServerBootstrap()
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel.class))
                 .group(new NioEventLoopGroup())
@@ -74,6 +76,32 @@ public class RakTests {
                 })
                 .bind(new InetSocketAddress("127.0.0.1", 19132))
                 .awaitUninterruptibly().channel();
+
+        Object o = new Object();
+        synchronized (o) {
+            try {
+                o.wait();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    @Test
+    public void testClient() {
+        Channel channel = new Bootstrap()
+                .channelFactory(RakChannelFactory.client(NioDatagramChannel.class))
+                .group(new NioEventLoopGroup())
+                .option(RakChannelOption.RAK_PROTOCOL_VERSION, 11)
+                .handler(new ChannelInitializer<RakClientChannel>() {
+                    @Override
+                    protected void initChannel(RakClientChannel ch) throws Exception {
+                        System.out.println("Initialised");
+                    }
+                })
+                .connect(new InetSocketAddress("127.0.0.1", 19132))
+                .awaitUninterruptibly()
+                .channel();
 
         Object o = new Object();
         synchronized (o) {
