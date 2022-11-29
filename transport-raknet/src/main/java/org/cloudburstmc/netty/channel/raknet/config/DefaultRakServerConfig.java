@@ -85,7 +85,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_HANDLE_PING) {
             return (T) Boolean.valueOf(this.getHandlePing());
         }
-        return super.getOption(option);
+        return this.channel.parent().config().getOption(option);
     }
 
     @Override
@@ -111,9 +111,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         } else if (option == RakChannelOption.RAK_MIN_MTU) {
             this.setMinMtu((Integer) value);
         } else {
-            return super.setOption(option, value);
+            return this.channel.parent().config().setOption(option, value);
         }
-
         return true;
     }
 
