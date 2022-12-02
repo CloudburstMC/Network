@@ -40,7 +40,7 @@ public abstract class RakNet implements AutoCloseable {
         this.bootstrap.group(eventLoopGroup);
         Bootstraps.setupBootstrap(this.bootstrap, true);
         try {
-            this.bootstrap.option(RakNetChannelOption.IP_DONT_FRAG, 1);
+            this.bootstrap.option(RakNetChannelOption.IP_DONT_FRAG, 2 /* IP_PMTUDISC_DO */);
         } catch (Throwable ignored) {
         }
     }

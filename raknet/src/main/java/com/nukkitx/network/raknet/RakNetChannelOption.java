@@ -21,5 +21,5 @@ import io.netty.channel.unix.IntegerUnixChannelOption;
 
 class RakNetChannelOption {
 
-    public static final ChannelOption<Integer> IP_DONT_FRAG = new IntegerUnixChannelOption("IP_DONTFRAG", 0 /* IPPROTO_IP */, 0x4000 /* IP_DF */);
+    public static final ChannelOption<Integer> IP_DONT_FRAG = new IntegerUnixChannelOption("IP_DONTFRAG", 0 /* IPPROTO_IP */, 10 /* IP_MTU_DISCOVER */);
 }
