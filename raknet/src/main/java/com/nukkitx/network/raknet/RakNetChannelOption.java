@@ -19,7 +19,7 @@ package com.nukkitx.network.raknet;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.unix.IntegerUnixChannelOption;
 
-class RakNetChannelOption {
+public class RakNetChannelOption {
 
     public static final ChannelOption<Integer> IP_DONT_FRAG = new IntegerUnixChannelOption("IP_DONTFRAG", 0 /* IPPROTO_IP */, 10 /* IP_MTU_DISCOVER */);
 }
