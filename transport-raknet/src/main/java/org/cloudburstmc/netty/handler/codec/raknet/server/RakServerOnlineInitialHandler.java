@@ -64,7 +64,7 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
                 channel.pipeline().fireChannelActive();
                 break;
             default:
-                ctx.fireChannelRead(message);
+                ctx.fireChannelRead(message.retain());
                 break;
         }
     }

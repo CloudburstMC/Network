@@ -16,6 +16,8 @@
 
 package org.cloudburstmc.netty.channel.raknet;
 
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramChannel;
@@ -24,6 +26,8 @@ import org.cloudburstmc.netty.channel.raknet.config.DefaultRakClientConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.handler.codec.raknet.client.RakClientRouteHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
+
+import java.util.concurrent.TimeUnit;
 
 public class RakClientChannel extends ProxyChannel<DatagramChannel> implements RakChannel {
 
@@ -57,10 +61,13 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
      */
     private void onConnectionEstablished() {
         RakSessionCodec sessionCodec = this.pipeline().get(RakSessionCodec.class);
-        this.pipeline().addLast(ConnectedPingHandler.NAME, new ConnectedPingHandler());
-        this.pipeline().addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
-        this.pipeline().addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
-        this.pipeline().fireChannelActive();
+        this.pipeline().addAfter(RakSessionCodec.NAME, ConnectedPingHandler.NAME, new ConnectedPingHandler());
+        this.pipeline().addAfter(ConnectedPingHandler.NAME, ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
+        this.pipeline().addAfter(ConnectedPongHandler.NAME, DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
+        // Replicate server behavior, and transform unhandled encapsulated packets to rakMessage
+        this.pipeline().addAfter(DisconnectNotificationHandler.NAME, EncapsulatedToMessageHandler.NAME, EncapsulatedToMessageHandler.INSTANCE);
+        // Send fireChannelActive() to user pipeline
+        this.pipeline().context(EncapsulatedToMessageHandler.NAME).fireChannelActive();
     }
 
     @Override

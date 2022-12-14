@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.raknet.config;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.DefaultChannelConfig;
+import org.cloudburstmc.netty.channel.raknet.RakConstants;
 
 import java.util.Map;
 
@@ -28,7 +29,7 @@ import java.util.Map;
 public class DefaultRakSessionConfig extends DefaultChannelConfig implements RakChannelConfig {
 
     private volatile long guid;
-    private volatile int mtu;
+    private volatile int mtu = RakConstants.MAXIMUM_MTU_SIZE;
     private volatile int protocolVersion;
     private volatile int orderingChannels = 16;
     private volatile RakMetrics metrics;
@@ -63,7 +64,7 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         if (option == RakChannelOption.RAK_METRICS) {
             return (T) this.getMetrics();
         }
-        return super.getOption(option);
+        return this.channel.parent().config().getOption(option);
     }
 
     @Override
@@ -81,7 +82,7 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         } else if (option == RakChannelOption.RAK_METRICS) {
             this.setMetrics((RakMetrics) value);
         } else {
-            return super.setOption(option, value);
+            return this.channel.parent().config().setOption(option, value);
         }
 
         return true;

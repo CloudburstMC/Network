@@ -25,15 +25,16 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
+import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.TimeUnit;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
-public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<RakMessage> {
-
+public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<EncapsulatedPacket> {
     public static final String NAME = "rak-client-online-initial-handler";
     private final ChannelPromise successPromise;
 
@@ -43,6 +44,12 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<R
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        // This wants delay, because RakSessionCodec has not been initialized yet
+        // Could probably fix this by calling fireChannelActive() right after RakSessionCodec is added to pipeline
+        ctx.channel().eventLoop().schedule(() -> this.sendConnectionRequest(ctx), 1, TimeUnit.MILLISECONDS);
+    }
+
+    private void sendConnectionRequest(ChannelHandlerContext ctx) {
         long guid = ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
 
         ByteBuf buffer = ctx.alloc().ioBuffer(18);
@@ -62,9 +69,9 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<R
     }
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, RakMessage msg) throws Exception {
-        ByteBuf buf = msg.content();
-        int packetId = buf.readUnsignedByte();
+    protected void channelRead0(ChannelHandlerContext ctx, EncapsulatedPacket message) throws Exception {
+        ByteBuf buf = message.getBuffer();
+        int packetId = buf.getUnsignedByte(buf.readerIndex());
 
         switch (packetId) {
             case ID_CONNECTION_REQUEST_ACCEPTED:
@@ -74,10 +81,14 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<R
             case ID_CONNECTION_REQUEST_FAILED:
                 this.successPromise.tryFailure(new IllegalStateException("Connection denied"));
                 break;
+            default:
+                ctx.fireChannelRead(message.retain());
+                break;
         }
     }
 
     private void onConnectionRequestAccepted(ChannelHandlerContext ctx, ByteBuf buf) {
+        buf.skipBytes(1);
         RakUtils.readAddress(buf); // Client address
         buf.readUnsignedShort(); // System index
 

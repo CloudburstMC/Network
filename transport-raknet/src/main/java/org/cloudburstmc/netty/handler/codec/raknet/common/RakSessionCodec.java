@@ -120,8 +120,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
+        if (this.state == RakState.UNCONNECTED && this.tickFuture == null) {
+            // Already deinitialized
+            return;
+        }
         this.state = RakState.UNCONNECTED;
         this.tickFuture.cancel(false);
+        this.tickFuture = null;
 
         // Perform resource clean up.
         for (SplitPacketHelper helper : this.splitPackets) {

@@ -25,6 +25,7 @@ import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.concurrent.PromiseCombiner;
 import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
+import org.cloudburstmc.netty.handler.codec.raknet.common.UnconnectedPongDecoder;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -52,7 +53,8 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
         ChannelFuture parentFuture = this.channel.parent().connect(remoteAddress, localAddress);
         parentFuture.addListener(future -> {
             if (future.isSuccess()) {
-                this.channel.pipeline().addLast(RakClientOfflineHandler.NAME, new RakClientOfflineHandler(this.channel.getConnectPromise()));
+                this.channel.pipeline().addAfter(UnconnectedPongDecoder.NAME,
+                        RakClientOfflineHandler.NAME, new RakClientOfflineHandler(this.channel.getConnectPromise()));
             }
         });
 
@@ -92,12 +94,15 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
             metrics.bytesIn(packet.content().readableBytes());
         }
 
+        DatagramPacket datagram = packet.retain();
         try {
-            if (packet.sender() == null || packet.sender() == this.channel.remoteAddress()) {
-                ctx.fireChannelRead(packet.content().retain());
+            if (packet.sender() == null || packet.sender().equals(this.channel.remoteAddress())) {
+                ctx.fireChannelRead(datagram.content());
+            } else {
+                ctx.fireChannelRead(datagram);
             }
         } finally {
-            packet.release();
+            datagram.release();
         }
     }
 

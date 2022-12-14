@@ -170,7 +170,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
 
     @Override
     public ByteBuf getUnconnectedMagic() {
-        return this.unconnectedMagic;
+        return this.unconnectedMagic.slice();
     }
 
     @Override

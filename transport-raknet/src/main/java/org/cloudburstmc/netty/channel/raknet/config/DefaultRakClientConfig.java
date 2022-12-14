@@ -54,7 +54,7 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
         } else if (option == RakChannelOption.RAK_REMOTE_GUID) {
             return (T) Long.valueOf(this.getServerGuid());
         }
-        return this.channel.parent().config().getOption(option);
+        return super.getOption(option);
     }
 
     @Override
@@ -71,11 +71,11 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
             this.setServerGuid((Long) value);
             return true;
         }
-        return this.channel.parent().config().setOption(option, value);
+        return super.setOption(option, value);
     }
 
     public ByteBuf getUnconnectedMagic() {
-        return this.unconnectedMagic;
+        return this.unconnectedMagic.slice();
     }
 
     public RakServerChannelConfig setUnconnectedMagic(ByteBuf unconnectedMagic) {
