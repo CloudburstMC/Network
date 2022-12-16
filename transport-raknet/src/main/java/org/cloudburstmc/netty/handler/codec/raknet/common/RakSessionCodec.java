@@ -33,6 +33,7 @@ import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.util.*;
 
+import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
 import java.util.Queue;
@@ -745,7 +746,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     public int getMtu() {
-        return this.channel.config().getOption(RakChannelOption.RAK_MTU);
+        return this.channel.config().getOption(RakChannelOption.RAK_MTU) - UDP_HEADER_SIZE - (this.getRemoteAddress().getAddress() instanceof Inet6Address ? 40 : 20);
     }
 
     public RakMetrics getMetrics() {

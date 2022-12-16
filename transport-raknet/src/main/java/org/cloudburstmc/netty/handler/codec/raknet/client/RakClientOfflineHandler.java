@@ -182,7 +182,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         request.writeBytes(magicBuf.slice(), magicBuf.readableBytes());
         request.writeByte(rakVersion);
         // 1 (Packet ID), 16 (Magic), 1 (Protocol Version), 20/40 (IP Header));
-        request.writeZero(mtuSize - 1 - 16 - 1 - (address.getAddress() instanceof Inet6Address ? 40 : 20) - UDP_HEADER_SIZE);
+        request.writeZero(mtuSize - 1 - magicBuf.readableBytes() - 1 - (address.getAddress() instanceof Inet6Address ? 40 : 20) - UDP_HEADER_SIZE);
         channel.writeAndFlush(request);
     }
 
