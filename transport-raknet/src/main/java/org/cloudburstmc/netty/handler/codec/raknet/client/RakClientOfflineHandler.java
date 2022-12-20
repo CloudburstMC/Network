@@ -44,6 +44,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     private ScheduledFuture<?> retryFuture;
 
     private RakOfflineState state = RakOfflineState.HANDSHAKE_1;
+    private int connectionAttempts;
 
     public RakClientOfflineHandler(ChannelPromise promise) {
         this.successPromise = promise;
@@ -75,6 +76,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         switch (this.state) {
             case HANDSHAKE_1:
                 this.sendOpenConnectionRequest1(channel);
+                this.connectionAttempts++;
                 break;
             case HANDSHAKE_2:
                 this.sendOpenConnectionRequest2(channel);
@@ -172,7 +174,12 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     }
 
     private void sendOpenConnectionRequest1(Channel channel) {
-        int mtuSize = channel.config().getOption(RakChannelOption.RAK_MTU);
+        int mtuDiff = (MAXIMUM_MTU_SIZE - MINIMUM_MTU_SIZE) / 9;
+        int mtuSize = channel.config().getOption(RakChannelOption.RAK_MTU) - (this.connectionAttempts * mtuDiff);
+        if (mtuSize < MINIMUM_MTU_SIZE) {
+            mtuSize = MINIMUM_MTU_SIZE;
+        }
+
         ByteBuf magicBuf = channel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
         int rakVersion = channel.config().getOption(RakChannelOption.RAK_PROTOCOL_VERSION);
         InetSocketAddress address = (InetSocketAddress) channel.remoteAddress();
