@@ -48,10 +48,8 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<E
     }
 
     @Override
-    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
-        // This wants delay, because RakSessionCodec has not been initialized yet
-        // Could probably fix this by calling fireChannelActive() right after RakSessionCodec is added to pipeline
-        ctx.channel().eventLoop().schedule(() -> this.sendConnectionRequest(ctx), 1, TimeUnit.MILLISECONDS);
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        this.sendConnectionRequest(ctx);
     }
 
     private void sendConnectionRequest(ChannelHandlerContext ctx) {

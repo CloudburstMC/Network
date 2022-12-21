@@ -84,7 +84,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        // Don't call super.channelActive() because we don't want to fire it up to the user pipeline yet.
         this.state = RakState.CONNECTED;
         int mtu = this.getMtu();
 
@@ -116,6 +115,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         // After session is fully initialized, start ticking.
         this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::onTick, 0, 10, TimeUnit.MILLISECONDS);
+
+        ctx.fireChannelActive(); // fire channel active on rakPipeline()
     }
 
     @Override
@@ -376,7 +377,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             ByteBuf buffer = ctx.alloc().ioBuffer(9);
             buffer.writeByte(ID_CONNECTED_PING);
             buffer.writeLong(curTime);
-            write(ctx, new RakMessage(buffer, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
+            this.currentPingTime = curTime;
+            this.write(ctx, new RakMessage(buffer, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
         }
 
         this.handleIncomingAcknowledge(ctx, curTime, this.incomingAcks, false);
