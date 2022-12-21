@@ -16,18 +16,16 @@
 
 package org.cloudburstmc.netty.channel.raknet;
 
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramChannel;
 import org.cloudburstmc.netty.channel.proxy.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakClientConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
+import org.cloudburstmc.netty.handler.codec.raknet.ProxyInboundRouter;
+import org.cloudburstmc.netty.handler.codec.raknet.client.RakClientProxyRouteHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.client.RakClientRouteHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
-
-import java.util.concurrent.TimeUnit;
 
 public class RakClientChannel extends ProxyChannel<DatagramChannel> implements RakChannel {
 
@@ -41,10 +39,12 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
         super(channel);
         this.config = new DefaultRakClientConfig(this);
         this.pipeline().addLast(RakClientRouteHandler.NAME, new RakClientRouteHandler(this));
+        // Transforms DatagramPacket to ByteBuf if channel has been already connected
+        this.rakPipeline().addFirst(RakClientProxyRouteHandler.NAME, new RakClientProxyRouteHandler(this));
         // Encodes to buffer and sends RakPing.
-        this.pipeline().addLast(UnconnectedPingEncoder.NAME, UnconnectedPingEncoder.INSTANCE);
+        this.rakPipeline().addBefore(ProxyInboundRouter.NAME, UnconnectedPingEncoder.NAME, UnconnectedPingEncoder.INSTANCE);
         // Decodes received unconnected pong to RakPong.
-        this.pipeline().addLast(UnconnectedPongDecoder.NAME, UnconnectedPongDecoder.INSTANCE);
+        this.rakPipeline().addAfter(UnconnectedPingEncoder.NAME, UnconnectedPongDecoder.NAME, UnconnectedPongDecoder.INSTANCE);
 
         this.connectPromise = this.newPromise();
         this.connectPromise.addListener(future -> {
@@ -60,14 +60,14 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
      * Setup online phase handlers
      */
     private void onConnectionEstablished() {
-        RakSessionCodec sessionCodec = this.pipeline().get(RakSessionCodec.class);
-        this.pipeline().addAfter(RakSessionCodec.NAME, ConnectedPingHandler.NAME, new ConnectedPingHandler());
-        this.pipeline().addAfter(ConnectedPingHandler.NAME, ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
-        this.pipeline().addAfter(ConnectedPongHandler.NAME, DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
+        RakSessionCodec sessionCodec = this.rakPipeline().get(RakSessionCodec.class);
+        this.rakPipeline().addAfter(RakSessionCodec.NAME, ConnectedPingHandler.NAME, new ConnectedPingHandler());
+        this.rakPipeline().addAfter(ConnectedPingHandler.NAME, ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
+        this.rakPipeline().addAfter(ConnectedPongHandler.NAME, DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
         // Replicate server behavior, and transform unhandled encapsulated packets to rakMessage
-        this.pipeline().addAfter(DisconnectNotificationHandler.NAME, EncapsulatedToMessageHandler.NAME, EncapsulatedToMessageHandler.INSTANCE);
+        this.rakPipeline().addAfter(DisconnectNotificationHandler.NAME, EncapsulatedToMessageHandler.NAME, EncapsulatedToMessageHandler.INSTANCE);
         // Send fireChannelActive() to user pipeline
-        this.pipeline().context(EncapsulatedToMessageHandler.NAME).fireChannelActive();
+        this.pipeline().fireChannelActive();
     }
 
     @Override
@@ -86,6 +86,6 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
 
     @Override
     public ChannelPipeline rakPipeline() {
-        return this.pipeline();
+        return this.parent().pipeline();
     }
 }

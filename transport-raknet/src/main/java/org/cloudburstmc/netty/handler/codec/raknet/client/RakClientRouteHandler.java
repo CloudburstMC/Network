@@ -16,15 +16,9 @@
 
 package org.cloudburstmc.netty.handler.codec.raknet.client;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.ChannelDuplexHandler;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPromise;
-import io.netty.channel.socket.DatagramPacket;
+import io.netty.channel.*;
 import io.netty.util.concurrent.PromiseCombiner;
 import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
-import org.cloudburstmc.netty.channel.raknet.config.RakMetrics;
 import org.cloudburstmc.netty.handler.codec.raknet.common.UnconnectedPongDecoder;
 
 import java.net.InetSocketAddress;
@@ -53,8 +47,8 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
         ChannelFuture parentFuture = this.channel.parent().connect(remoteAddress, localAddress);
         parentFuture.addListener(future -> {
             if (future.isSuccess()) {
-                this.channel.pipeline().addAfter(UnconnectedPongDecoder.NAME,
-                        RakClientOfflineHandler.NAME, new RakClientOfflineHandler(this.channel.getConnectPromise()));
+                this.channel.rakPipeline().addAfter(UnconnectedPongDecoder.NAME,
+                        RakClientOfflineHandler.NAME, new RakClientOfflineHandler(channel, this.channel.getConnectPromise()));
             }
         });
 
@@ -62,48 +56,6 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
         combiner.add(parentFuture);
         combiner.add((ChannelFuture) this.channel.getConnectPromise());
         combiner.finish(promise);
-    }
-
-    @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        boolean isDatagram = msg instanceof DatagramPacket;
-        if (!isDatagram && !(msg instanceof ByteBuf)) {
-            this.channel.parent().write(msg, this.channel.correctPromise(promise));
-            return;
-        }
-
-        DatagramPacket datagram = isDatagram ? (DatagramPacket) msg : new DatagramPacket((ByteBuf) msg, this.channel.remoteAddress());
-        RakMetrics metrics = this.channel.config().getMetrics();
-        if (metrics != null) {
-            metrics.bytesOut(datagram.content().readableBytes());
-        }
-
-        this.channel.parent().write(datagram, this.channel.correctPromise(promise));
-    }
-
-    @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (!(msg instanceof DatagramPacket)) {
-            ctx.fireChannelRead(msg);
-            return;
-        }
-
-        DatagramPacket packet = (DatagramPacket) msg;
-        RakMetrics metrics = this.channel.config().getMetrics();
-        if (metrics != null) {
-            metrics.bytesIn(packet.content().readableBytes());
-        }
-
-        DatagramPacket datagram = packet.retain();
-        try {
-            if (packet.sender() == null || packet.sender().equals(this.channel.remoteAddress())) {
-                ctx.fireChannelRead(datagram.content());
-            } else {
-                ctx.fireChannelRead(datagram);
-            }
-        } finally {
-            datagram.release();
-        }
     }
 
     @Override

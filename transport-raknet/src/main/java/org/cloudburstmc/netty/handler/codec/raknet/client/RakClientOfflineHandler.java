@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.handler.codec.raknet.client;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.*;
+import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.codec.CorruptedFrameException;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.channel.raknet.RakChannel;
@@ -39,6 +40,7 @@ import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf> {
     public static final String NAME = "rak-client-handler";
 
+    private final RakChannel rakChannel;
     private final ChannelPromise successPromise;
     private ScheduledFuture<?> timeoutFuture;
     private ScheduledFuture<?> retryFuture;
@@ -46,14 +48,15 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     private RakOfflineState state = RakOfflineState.HANDSHAKE_1;
     private int connectionAttempts;
 
-    public RakClientOfflineHandler(ChannelPromise promise) {
+    public RakClientOfflineHandler(RakChannel rakChannel, ChannelPromise promise) {
+        this.rakChannel = rakChannel;
         this.successPromise = promise;
     }
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
         Channel channel = ctx.channel();
-        long timeout = channel.config().getOption(RakChannelOption.RAK_CONNECT_TIMEOUT);
+        long timeout = this.rakChannel.config().getOption(RakChannelOption.RAK_CONNECT_TIMEOUT);
         this.timeoutFuture = channel.eventLoop().schedule(this::onTimeout, timeout, TimeUnit.MILLISECONDS);
         this.retryFuture = channel.eventLoop().scheduleAtFixedRate(() -> this.onRetryAttempt(channel), 0, 1, TimeUnit.SECONDS);
         this.successPromise.addListener(future -> safeCancel(this.timeoutFuture, channel));
@@ -91,13 +94,12 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     private void onSuccess(ChannelHandlerContext ctx) {
         // Create new session which decodes RakDatagramPacket to RakMessage
         // We use addAfter() here, because user could have already added own handlers to the pipeline end
-        RakChannel channel = (RakChannel) ctx.channel();
-        RakSessionCodec sessionCodec = new RakSessionCodec(channel);
-        channel.pipeline().addAfter(NAME, RakDatagramCodec.NAME, new RakDatagramCodec());
-        channel.pipeline().addAfter(RakDatagramCodec.NAME, RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
-        channel.pipeline().addAfter(RakAcknowledgeHandler.NAME, RakSessionCodec.NAME, sessionCodec);
-        channel.pipeline().addAfter(RakSessionCodec.NAME, RakClientOnlineInitialHandler.NAME, new RakClientOnlineInitialHandler(this.successPromise));
-        channel.pipeline().fireChannelActive();
+        RakSessionCodec sessionCodec = new RakSessionCodec(this.rakChannel);
+        this.rakChannel.rakPipeline().addAfter(NAME, RakDatagramCodec.NAME, new RakDatagramCodec());
+        this.rakChannel.rakPipeline().addAfter(RakDatagramCodec.NAME, RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
+        this.rakChannel.rakPipeline().addAfter(RakAcknowledgeHandler.NAME, RakSessionCodec.NAME, sessionCodec);
+        this.rakChannel.rakPipeline().addAfter(RakSessionCodec.NAME, RakClientOnlineInitialHandler.NAME, new RakClientOnlineInitialHandler(this.rakChannel, this.successPromise));
+        this.rakChannel.rakPipeline().fireChannelActive();
     }
 
     @Override
@@ -113,8 +115,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         }
 
         short packetId = buf.readUnsignedByte();
-
-        ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+        ByteBuf magicBuf = this.rakChannel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
         if (!buf.isReadable(magicBuf.readableBytes()) || !ByteBufUtil.equals(buf.readSlice(magicBuf.readableBytes()), magicBuf)) {
             this.successPromise.tryFailure(new CorruptedFrameException("RakMagic does not match"));
             return;
@@ -129,19 +130,19 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
                 this.onSuccess(ctx);
                 return;
             case ID_INCOMPATIBLE_PROTOCOL_VERSION:
-                ctx.fireUserEventTriggered(RakDisconnectReason.INCOMPATIBLE_PROTOCOL_VERSION);
+                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.INCOMPATIBLE_PROTOCOL_VERSION);
                 this.successPromise.tryFailure(new IllegalStateException("Incompatible raknet version"));
                 return;
             case ID_ALREADY_CONNECTED:
-                ctx.fireUserEventTriggered(RakDisconnectReason.ALREADY_CONNECTED);
+                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.ALREADY_CONNECTED);
                 this.successPromise.tryFailure(new ChannelException("Already connected"));
                 return;
             case ID_NO_FREE_INCOMING_CONNECTIONS:
-                ctx.fireUserEventTriggered(RakDisconnectReason.NO_FREE_INCOMING_CONNECTIONS);
+                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.NO_FREE_INCOMING_CONNECTIONS);
                 this.successPromise.tryFailure(new ChannelException("No free incoming connections"));
                 return;
             case ID_IP_RECENTLY_CONNECTED:
-                ctx.fireUserEventTriggered(RakDisconnectReason.IP_RECENTLY_CONNECTED);
+                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.IP_RECENTLY_CONNECTED);
                 this.successPromise.tryFailure(new ChannelException("Address recently connected"));
                 return;
         }
@@ -156,8 +157,8 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
             return;
         }
 
-        ctx.channel().config().setOption(RakChannelOption.RAK_MTU, mtu);
-        ctx.channel().config().setOption(RakChannelOption.RAK_REMOTE_GUID, serverGuid);
+        this.rakChannel.config().setOption(RakChannelOption.RAK_MTU, mtu);
+        this.rakChannel.config().setOption(RakChannelOption.RAK_REMOTE_GUID, serverGuid);
 
         this.state = RakOfflineState.HANDSHAKE_2;
         this.sendOpenConnectionRequest2(ctx.channel());
@@ -169,20 +170,20 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         int mtu = buffer.readShort();
         buffer.readBoolean(); // security
 
-        ctx.channel().config().setOption(RakChannelOption.RAK_MTU, mtu);
+        this.rakChannel.config().setOption(RakChannelOption.RAK_MTU, mtu);
         this.state = RakOfflineState.HANDSHAKE_COMPLETED;
     }
 
     private void sendOpenConnectionRequest1(Channel channel) {
         int mtuDiff = (MAXIMUM_MTU_SIZE - MINIMUM_MTU_SIZE) / 9;
-        int mtuSize = channel.config().getOption(RakChannelOption.RAK_MTU) - (this.connectionAttempts * mtuDiff);
+        int mtuSize = this.rakChannel.config().getOption(RakChannelOption.RAK_MTU) - (this.connectionAttempts * mtuDiff);
         if (mtuSize < MINIMUM_MTU_SIZE) {
             mtuSize = MINIMUM_MTU_SIZE;
         }
 
-        ByteBuf magicBuf = channel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
-        int rakVersion = channel.config().getOption(RakChannelOption.RAK_PROTOCOL_VERSION);
-        InetSocketAddress address = (InetSocketAddress) channel.remoteAddress();
+        ByteBuf magicBuf = this.rakChannel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+        int rakVersion = this.rakChannel.config().getOption(RakChannelOption.RAK_PROTOCOL_VERSION);
+        InetSocketAddress address = (InetSocketAddress) this.rakChannel.remoteAddress();
 
         ByteBuf request = channel.alloc().ioBuffer(mtuSize);
         request.writeByte(ID_OPEN_CONNECTION_REQUEST_1);
@@ -194,15 +195,15 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     }
 
     private void sendOpenConnectionRequest2(Channel channel) {
-        int mtuSize = channel.config().getOption(RakChannelOption.RAK_MTU);
-        ByteBuf magicBuf = channel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+        int mtuSize = this.rakChannel.config().getOption(RakChannelOption.RAK_MTU);
+        ByteBuf magicBuf = this.rakChannel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
 
         ByteBuf request = channel.alloc().ioBuffer(34);
         request.writeByte(ID_OPEN_CONNECTION_REQUEST_2);
         request.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         RakUtils.writeAddress(request, (InetSocketAddress) channel.remoteAddress());
         request.writeShort(mtuSize);
-        request.writeLong(channel.config().getOption(RakChannelOption.RAK_GUID));
+        request.writeLong(this.rakChannel.config().getOption(RakChannelOption.RAK_GUID));
         channel.writeAndFlush(request);
     }
 

@@ -18,10 +18,12 @@ package org.cloudburstmc.netty.handler.codec.raknet.client;
 
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.SimpleChannelInboundHandler;
+import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
@@ -36,9 +38,12 @@ import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<EncapsulatedPacket> {
     public static final String NAME = "rak-client-online-initial-handler";
+
+    private final RakChannel rakChannel;
     private final ChannelPromise successPromise;
 
-    public RakClientOnlineInitialHandler(ChannelPromise promise) {
+    public RakClientOnlineInitialHandler(RakChannel rakChannel, ChannelPromise promise) {
+        this.rakChannel = rakChannel;
         this.successPromise = promise;
     }
 
@@ -50,7 +55,7 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<E
     }
 
     private void sendConnectionRequest(ChannelHandlerContext ctx) {
-        long guid = ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
+        long guid = this.rakChannel.config().getOption(RakChannelOption.RAK_GUID);
 
         ByteBuf buffer = ctx.alloc().ioBuffer(18);
         buffer.writeByte(ID_CONNECTION_REQUEST);
