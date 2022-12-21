@@ -60,8 +60,10 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
                 buf.skipBytes(1);
                 // We have connected and no longer need this handler
                 ctx.pipeline().remove(this);
-                channel.setActive(true);
-                channel.pipeline().fireChannelActive();
+                channel.eventLoop().execute(() -> {
+                    channel.setActive(true); // make sure this is set on same thread
+                    channel.pipeline().fireChannelActive();
+                });
                 break;
             default:
                 ctx.fireChannelRead(message.retain());
