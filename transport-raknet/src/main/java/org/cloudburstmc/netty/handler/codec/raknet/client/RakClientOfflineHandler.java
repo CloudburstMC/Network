@@ -26,9 +26,7 @@ import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.RakOfflineState;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
-import org.cloudburstmc.netty.handler.codec.raknet.common.RakAcknowledgeHandler;
-import org.cloudburstmc.netty.handler.codec.raknet.common.RakDatagramCodec;
-import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
+import org.cloudburstmc.netty.handler.codec.raknet.common.*;
 import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.Inet6Address;
@@ -93,13 +91,17 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
 
     private void onSuccess(ChannelHandlerContext ctx) {
         // Create new session which decodes RakDatagramPacket to RakMessage
-        // We use addAfter() here, because user could have already added own handlers to the pipeline end
         RakSessionCodec sessionCodec = new RakSessionCodec(this.rakChannel);
-        this.rakChannel.rakPipeline().addAfter(NAME, RakDatagramCodec.NAME, new RakDatagramCodec());
-        this.rakChannel.rakPipeline().addAfter(RakDatagramCodec.NAME, RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
-        this.rakChannel.rakPipeline().addAfter(RakAcknowledgeHandler.NAME, RakSessionCodec.NAME, sessionCodec);
-        this.rakChannel.rakPipeline().addAfter(RakSessionCodec.NAME, RakClientOnlineInitialHandler.NAME, new RakClientOnlineInitialHandler(this.rakChannel, this.successPromise));
-        this.rakChannel.rakPipeline().fireChannelActive();
+        ctx.pipeline().addAfter(NAME, RakDatagramCodec.NAME, new RakDatagramCodec());
+        ctx.pipeline().addAfter(RakDatagramCodec.NAME, RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
+        ctx.pipeline().addAfter(RakAcknowledgeHandler.NAME, RakSessionCodec.NAME, sessionCodec);
+        ctx.pipeline().addAfter(RakSessionCodec.NAME, ConnectedPingHandler.NAME, new ConnectedPingHandler());
+        ctx.pipeline().addAfter(ConnectedPingHandler.NAME, ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
+        ctx.pipeline().addAfter(ConnectedPongHandler.NAME, DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
+        // Replicate server behavior, and transform unhandled encapsulated packets to rakMessage
+        ctx.pipeline().addAfter(DisconnectNotificationHandler.NAME, EncapsulatedToMessageHandler.NAME, EncapsulatedToMessageHandler.INSTANCE);
+        ctx.pipeline().addAfter(DisconnectNotificationHandler.NAME, RakClientOnlineInitialHandler.NAME, new RakClientOnlineInitialHandler(this.rakChannel, this.successPromise));
+        ctx.pipeline().fireChannelActive();
     }
 
     @Override

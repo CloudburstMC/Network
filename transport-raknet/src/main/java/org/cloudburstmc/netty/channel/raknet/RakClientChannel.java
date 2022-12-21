@@ -60,12 +60,6 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
      * Setup online phase handlers
      */
     private void onConnectionEstablished() {
-        RakSessionCodec sessionCodec = this.rakPipeline().get(RakSessionCodec.class);
-        this.rakPipeline().addAfter(RakSessionCodec.NAME, ConnectedPingHandler.NAME, new ConnectedPingHandler());
-        this.rakPipeline().addAfter(ConnectedPingHandler.NAME, ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
-        this.rakPipeline().addAfter(ConnectedPongHandler.NAME, DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
-        // Replicate server behavior, and transform unhandled encapsulated packets to rakMessage
-        this.rakPipeline().addAfter(DisconnectNotificationHandler.NAME, EncapsulatedToMessageHandler.NAME, EncapsulatedToMessageHandler.INSTANCE);
         // Send fireChannelActive() to user pipeline
         this.pipeline().fireChannelActive();
     }
