@@ -23,16 +23,20 @@ import org.cloudburstmc.netty.channel.raknet.RakConstants;
 
 import java.util.Map;
 
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.MAXIMUM_MTU_SIZE;
+import static org.cloudburstmc.netty.channel.raknet.RakConstants.SESSION_TIMEOUT_MS;
+
 /**
  * The default {@link RakChannelConfig} implementation for RakNet server child channel or client channel.
  */
 public class DefaultRakSessionConfig extends DefaultChannelConfig implements RakChannelConfig {
 
     private volatile long guid;
-    private volatile int mtu = RakConstants.MAXIMUM_MTU_SIZE;
+    private volatile int mtu = MAXIMUM_MTU_SIZE;
     private volatile int protocolVersion;
     private volatile int orderingChannels = 16;
     private volatile RakMetrics metrics;
+    private volatile long sessionTimeout = SESSION_TIMEOUT_MS;
 
     public DefaultRakSessionConfig(Channel channel) {
         super(channel);
@@ -64,6 +68,9 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         if (option == RakChannelOption.RAK_METRICS) {
             return (T) this.getMetrics();
         }
+        if (option == RakChannelOption.RAK_SESSION_TIMEOUT) {
+            return (T) Long.valueOf(this.getSessionTimeout());
+        }
         return this.channel.parent().config().getOption(option);
     }
 
@@ -81,6 +88,9 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
             this.setOrderingChannels((Integer) value);
         } else if (option == RakChannelOption.RAK_METRICS) {
             this.setMetrics((RakMetrics) value);
+        } else if (option == RakChannelOption.RAK_SESSION_TIMEOUT) {
+            this.setSessionTimeout((Long) value);
+            return true;
         } else {
             return this.channel.parent().config().setOption(option, value);
         }
@@ -141,5 +151,16 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
     public RakChannelConfig setMetrics(RakMetrics metrics) {
         this.metrics = metrics;
         return this;
+    }
+
+    @Override
+    public RakChannelConfig setSessionTimeout(long timeout) {
+        this.sessionTimeout = timeout;
+        return this;
+    }
+
+    @Override
+    public long getSessionTimeout() {
+        return this.sessionTimeout;
     }
 }

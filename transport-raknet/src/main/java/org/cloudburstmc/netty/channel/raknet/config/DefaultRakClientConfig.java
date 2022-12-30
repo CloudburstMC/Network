@@ -33,6 +33,7 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
 
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
     private volatile long connectTimeout = SESSION_TIMEOUT_MS;
+    private volatile long sessionTimeout = SESSION_TIMEOUT_MS;
     private volatile long serverGuid;
 
     public DefaultRakClientConfig(Channel channel) {
@@ -53,6 +54,8 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
             return (T) Long.valueOf(this.getConnectTimeout());
         } else if (option == RakChannelOption.RAK_REMOTE_GUID) {
             return (T) Long.valueOf(this.getServerGuid());
+        } else if (option == RakChannelOption.RAK_SESSION_TIMEOUT) {
+            return (T) Long.valueOf(this.getSessionTimeout());
         }
         return super.getOption(option);
     }
@@ -69,6 +72,9 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
             return true;
         } else if (option == RakChannelOption.RAK_REMOTE_GUID) {
             this.setServerGuid((Long) value);
+            return true;
+        } else if (option == RakChannelOption.RAK_SESSION_TIMEOUT) {
+            this.setSessionTimeout((Long) value);
             return true;
         }
         return super.setOption(option, value);
@@ -102,5 +108,16 @@ public class DefaultRakClientConfig extends DefaultRakSessionConfig {
     public DefaultRakClientConfig setServerGuid(long serverGuid) {
         this.serverGuid = serverGuid;
         return this;
+    }
+
+    @Override
+    public RakChannelConfig setSessionTimeout(long timeout) {
+        this.sessionTimeout = timeout;
+        return this;
+    }
+
+    @Override
+    public long getSessionTimeout() {
+        return this.sessionTimeout;
     }
 }

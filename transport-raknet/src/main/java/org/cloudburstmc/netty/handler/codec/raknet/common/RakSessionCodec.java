@@ -201,15 +201,20 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             }
             RakDatagramPacket packet = (RakDatagramPacket) msg;
             if (this.state == RakState.UNCONNECTED) {
-                return;
+                log.debug("{} received message from inactive channel: {}", this.getRemoteAddress(), packet);
+            } else {
+                this.handleDatagram(ctx, packet);
             }
-            handleDatagram(ctx, packet);
         } finally {
             ReferenceCountUtil.release(msg);
         }
     }
 
     private void send(ChannelHandlerContext ctx, RakMessage message) {
+        if (this.state == RakState.UNCONNECTED) {
+            throw new IllegalStateException("Can not send RakMessage to inactive channel");
+        }
+
         if (message.content().getUnsignedByte(message.content().readerIndex()) == 0xc0) {
             throw new IllegalArgumentException();
         }
@@ -732,7 +737,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     public boolean isTimedOut(long curTime) {
-        return curTime - this.lastTouched >= SESSION_TIMEOUT_MS;
+        return curTime - this.lastTouched >= this.channel.config().getOption(RakChannelOption.RAK_SESSION_TIMEOUT);
     }
 
     public boolean isTimedOut() {

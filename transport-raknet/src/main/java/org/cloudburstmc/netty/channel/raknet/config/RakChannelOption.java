@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.channel.raknet.config;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelOption;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
 
 public class RakChannelOption<T> extends ChannelOption<T> {
 
@@ -112,6 +113,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<Boolean> RAK_HANDLE_PING =
             valueOf(RakChannelOption.class, "RAK_HANDLE_PING");
+
+    /**
+     * Time after session is closed due to no activity.
+     */
+    public static final ChannelOption<Long> RAK_SESSION_TIMEOUT =
+            valueOf(RakChannelOption.class, "RAK_SESSION_TIMEOUT");
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {

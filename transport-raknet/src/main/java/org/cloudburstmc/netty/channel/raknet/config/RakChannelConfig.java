@@ -39,4 +39,8 @@ public interface RakChannelConfig extends ChannelConfig {
     RakMetrics getMetrics();
 
     RakChannelConfig setMetrics(RakMetrics metrics);
+
+    long getSessionTimeout();
+
+    RakChannelConfig setSessionTimeout(long timeout);
 }
