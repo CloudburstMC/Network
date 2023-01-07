@@ -39,7 +39,7 @@ public class RakServerTailHandler extends ChannelInboundHandlerAdapter {
             super.channelRead(ctx, msg);
         } else {
             ReferenceCountUtil.release(msg);
-            log.debug("Received unexpected message in server channel: {}", msg);
+            log.trace("Received unexpected message in server channel: {}", msg);
         }
     }
 }
