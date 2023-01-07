@@ -685,8 +685,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
         this.state = RakState.DISCONNECTING;
 
-        if (log.isTraceEnabled()) {
-            log.trace("Disconnecting RakNet Session ({} => {}) due to {}", this.channel.localAddress(), this.getRemoteAddress(), reason);
+        if (log.isDebugEnabled()) {
+            log.debug("Disconnecting RakNet Session ({} => {}) due to {}", this.channel.localAddress(), this.getRemoteAddress(), reason);
         }
 
         ChannelHandlerContext ctx = this.ctx();
@@ -696,9 +696,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE);
 
         ChannelPromise promise = ctx.newPromise();
-        promise.addListener((ChannelFuture future) ->
-                future.channel().pipeline().fireUserEventTriggered(reason).close());
-
+        promise.addListener((ChannelFuture future) -> // The channel provided in ChannelFuture is parent channel,
+                this.channel.pipeline().fireUserEventTriggered(reason).close()); // but we want RakChannel instead
         write(ctx, rakMessage, promise);
     }
 
