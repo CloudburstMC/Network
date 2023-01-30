@@ -114,7 +114,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.splitPackets = new RoundRobinArray<>(256);
 
         // After session is fully initialized, start ticking.
-        this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::onTick, 0, 10, TimeUnit.MILLISECONDS);
+        this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::tryTick, 0, 10, TimeUnit.MILLISECONDS);
 
         ctx.fireChannelActive(); // fire channel active on rakPipeline()
     }
@@ -363,6 +363,15 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
         return result;
+    }
+
+    private void tryTick() {
+        try {
+            this.onTick();
+        } catch (Throwable t) {
+            log.error("[{}] Error while ticking RakSessionCodec", this.getRemoteAddress(), t);
+            this.channel.close();
+        }
     }
 
     private void onTick() {
