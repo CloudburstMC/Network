@@ -696,6 +696,15 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     public void disconnect(RakDisconnectReason reason) {
+        // Ensure we disconnect on the right thread
+        if (this.channel.parent().eventLoop().inEventLoop()) {
+            this.disconnect0(reason);
+        } else {
+            this.channel.parent().eventLoop().execute(() -> this.disconnect0(reason));
+        }
+    }
+
+    private void disconnect0(RakDisconnectReason reason) {
         if (this.state == RakState.UNCONNECTED || this.state == RakState.DISCONNECTING) {
             return;
         }
@@ -714,7 +723,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         ChannelPromise promise = ctx.newPromise();
         promise.addListener((ChannelFuture future) -> // The channel provided in ChannelFuture is parent channel,
                 this.channel.pipeline().fireUserEventTriggered(reason).close()); // but we want RakChannel instead
-        write(ctx, rakMessage, promise);
+        this.write(ctx, rakMessage, promise);
     }
 
     public void close(RakDisconnectReason reason) {
