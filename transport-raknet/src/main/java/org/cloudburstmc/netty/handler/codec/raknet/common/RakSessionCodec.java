@@ -562,6 +562,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void sendDatagram(ChannelHandlerContext ctx, RakDatagramPacket datagram, long time) {
+        if (!this.channel.parent().eventLoop().inEventLoop()) {
+            // Make sure this runs on correct thread
+            log.error("Tried to send datagrams from wrong thread: {}", Thread.currentThread().getName(), new Throwable());
+            this.channel.parent().eventLoop().execute(() -> this.sendDatagram(ctx, datagram, time));
+            return;
+        }
+
         if (datagram.getPackets().isEmpty()) {
             throw new IllegalArgumentException("RakNetDatagram with no packets");
         }
