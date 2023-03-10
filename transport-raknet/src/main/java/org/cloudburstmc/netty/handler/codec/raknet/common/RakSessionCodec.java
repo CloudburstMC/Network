@@ -22,6 +22,7 @@ import io.netty.channel.*;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
+import io.netty.util.concurrent.PromiseCombiner;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -208,6 +209,17 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         } finally {
             ReferenceCountUtil.release(msg);
         }
+    }
+
+    @Override
+    public void disconnect(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+        this.disconnect0(RakDisconnectReason.DISCONNECTED).addListener(future -> {
+            if (future.cause() == null) {
+                promise.trySuccess();
+            } else {
+                promise.tryFailure(future.cause());
+            }
+        });
     }
 
     private void send(ChannelHandlerContext ctx, RakMessage message) {
@@ -704,9 +716,9 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
     }
 
-    private void disconnect0(RakDisconnectReason reason) {
+    private ChannelPromise disconnect0(RakDisconnectReason reason) {
         if (this.state == RakState.UNCONNECTED || this.state == RakState.DISCONNECTING) {
-            return;
+            return this.channel.voidPromise();
         }
         this.state = RakState.DISCONNECTING;
 
@@ -724,6 +736,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         promise.addListener((ChannelFuture future) -> // The channel provided in ChannelFuture is parent channel,
                 this.channel.pipeline().fireUserEventTriggered(reason).close()); // but we want RakChannel instead
         this.write(ctx, rakMessage, promise);
+        return promise;
     }
 
     public void close(RakDisconnectReason reason) {

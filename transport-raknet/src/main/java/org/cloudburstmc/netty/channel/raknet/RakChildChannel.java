@@ -31,7 +31,7 @@ import java.nio.channels.NonWritableChannelException;
 
 public class RakChildChannel extends AbstractChannel implements RakChannel {
 
-    private static final ChannelMetadata metadata = new ChannelMetadata(false);
+    private static final ChannelMetadata metadata = new ChannelMetadata(true);
 
     private final RakChannelConfig config;
     private final InetSocketAddress remoteAddress;

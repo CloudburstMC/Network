@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.channel.raknet;
 
+import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramChannel;
@@ -28,6 +29,8 @@ import org.cloudburstmc.netty.handler.codec.raknet.client.RakClientRouteHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
 
 public class RakClientChannel extends ProxyChannel<DatagramChannel> implements RakChannel {
+
+    private static final ChannelMetadata metadata = new ChannelMetadata(true);
 
     /**
      * Implementation of simple RakClient which is able to connect to only one server during lifetime.
@@ -81,5 +84,10 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
     @Override
     public ChannelPipeline rakPipeline() {
         return this.parent().pipeline();
+    }
+
+    @Override
+    public ChannelMetadata metadata() {
+        return metadata;
     }
 }
