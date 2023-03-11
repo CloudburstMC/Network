@@ -2,42 +2,55 @@
 
 ### Introduction
 
-Network components used within NukkitX.
+Network components used within Cloudburst projects.
+
+### Components
+
+- [`netty-transport-raknet`](transport-raknet/README.md) - A RakNet implementation based on Netty patterns
 
 ### Maven
 
 ##### Repository:
 
-```xml
-    <repositories>
-        <repository>
-            <id>nukkitx-repo-snapshot</id>
-            <url>https://repo.nukkitx.com/snapshot/</url>
-        </repository>
-    </repositories>
+For releases, use Maven Central.
+Snapshots can be found in the repository below.
+
+<details open>
+<summary>Gradle (Kotlin DSL)</summary>
+
+```kotlin
+    repositories {
+    maven("https://repo.opencollab.dev/maven-snapshots/")
+}
 ```
 
-##### Dependencies:
+</details>
+<br>
+<details>
+<summary>Gradle</summary>
+
+```groovy
+    repositories {
+    maven {
+        url 'https://repo.opencollab.dev/maven-snapshots/'
+    }
+}
+```
+
+</details>
+<br>
+<details>
+<summary>Maven</summary>
 
 ```xml
-    <dependencies>
-        <dependency>
-            <groupId>com.nukkitx.network</groupId>
-            <artifactId>query</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.nukkitx.network</groupId>
-            <artifactId>raknet</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.nukkitx.network</groupId>
-            <artifactId>rcon</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
-            <scope>compile</scope>
-        </dependency>
-    </dependencies>
+
+<repositories>
+  <repository>
+    <id>nukkitx-repo-snapshot</id>
+    <url>https://repo.nukkitx.com/snapshot/</url>
+  </repository>
+</repositories>
 ```
+
+</details>
+
