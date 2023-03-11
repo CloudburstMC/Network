@@ -6,7 +6,7 @@ on:
 
 jobs:
   deploy:
-    uses: CloudburstMC/Network/.github/workflows/deploy.yml@3.0
+    uses: CloudburstMC/Network/.github/workflows/deploy.yml@develop
     with:
       deploy-url: "https://repo.opencollab.dev/maven-snapshots/"
     secrets:

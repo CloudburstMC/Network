@@ -6,7 +6,7 @@ on:
 
 jobs:
   deploy:
-    uses: CloudburstMC/Network/.github/workflows/deploy.yml@3.0
+    uses: CloudburstMC/Network/.github/workflows/deploy.yml@develop
     with:
       deploy-url: "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
     secrets:
