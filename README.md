@@ -41,10 +41,11 @@ repositories {
 <summary>Maven</summary>
 
 ```xml
+
 <repositories>
   <repository>
-    <id>nukkitx-repo-snapshot</id>
-    <url>https://repo.nukkitx.com/snapshot/</url>
+    <id>opencollab-snapshots</id>
+    <url>https://repo.opencollab.dev/maven-snapshots/</url>
   </repository>
 </repositories>
 ```
