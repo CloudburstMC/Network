@@ -19,18 +19,17 @@ Snapshots can be found in the repository below.
 <summary>Gradle (Kotlin DSL)</summary>
 
 ```kotlin
-    repositories {
+repositories {
     maven("https://repo.opencollab.dev/maven-snapshots/")
 }
 ```
 
 </details>
-<br>
 <details>
 <summary>Gradle</summary>
 
 ```groovy
-    repositories {
+repositories {
     maven {
         url 'https://repo.opencollab.dev/maven-snapshots/'
     }
@@ -38,12 +37,10 @@ Snapshots can be found in the repository below.
 ```
 
 </details>
-<br>
 <details>
 <summary>Maven</summary>
 
 ```xml
-
 <repositories>
   <repository>
     <id>nukkitx-repo-snapshot</id>
