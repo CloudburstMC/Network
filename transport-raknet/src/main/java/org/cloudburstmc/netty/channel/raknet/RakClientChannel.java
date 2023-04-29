@@ -45,9 +45,9 @@ public class RakClientChannel extends ProxyChannel<DatagramChannel> implements R
         // Transforms DatagramPacket to ByteBuf if channel has been already connected
         this.rakPipeline().addFirst(RakClientProxyRouteHandler.NAME, new RakClientProxyRouteHandler(this));
         // Encodes to buffer and sends RakPing.
-        this.rakPipeline().addBefore(ProxyInboundRouter.NAME, UnconnectedPingEncoder.NAME, UnconnectedPingEncoder.INSTANCE);
+        this.rakPipeline().addBefore(ProxyInboundRouter.NAME, UnconnectedPingEncoder.NAME, new UnconnectedPingEncoder(this));
         // Decodes received unconnected pong to RakPong.
-        this.rakPipeline().addAfter(UnconnectedPingEncoder.NAME, UnconnectedPongDecoder.NAME, UnconnectedPongDecoder.INSTANCE);
+        this.rakPipeline().addAfter(UnconnectedPingEncoder.NAME, UnconnectedPongDecoder.NAME, new UnconnectedPongDecoder(this));
 
         this.connectPromise = this.newPromise();
         this.connectPromise.addListener(future -> {

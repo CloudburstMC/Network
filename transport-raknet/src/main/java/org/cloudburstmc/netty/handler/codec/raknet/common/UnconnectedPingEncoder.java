@@ -17,22 +17,23 @@
 package org.cloudburstmc.netty.handler.codec.raknet.common;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramPacket;
+import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_UNCONNECTED_PING;
 
-@ChannelHandler.Sharable
 public class UnconnectedPingEncoder extends ChannelOutboundHandlerAdapter {
-    public static final UnconnectedPingEncoder INSTANCE = new UnconnectedPingEncoder();
     public static final String NAME = "rak-unconnected-ping-encoder";
 
-    public UnconnectedPingEncoder() {
+    private final RakClientChannel channel;
+
+    public UnconnectedPingEncoder(RakClientChannel channel) {
+        this.channel = channel;
     }
 
     @Override
@@ -43,14 +44,14 @@ public class UnconnectedPingEncoder extends ChannelOutboundHandlerAdapter {
         }
 
         RakPing ping = (RakPing) msg;
-        ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
-        long guid = ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
+        ByteBuf magicBuf = this.channel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+        long guid = this.channel.config().getOption(RakChannelOption.RAK_GUID);
 
         ByteBuf pingBuffer = ctx.alloc().ioBuffer(magicBuf.readableBytes() + 17);
         pingBuffer.writeByte(ID_UNCONNECTED_PING);
         pingBuffer.writeLong(ping.getPingTime());
         pingBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         pingBuffer.writeLong(guid);
-        ctx.write(new DatagramPacket(pingBuffer, ping.getSender()));
+        ctx.write(new DatagramPacket(pingBuffer, ping.getSender()), promise);
     }
 }

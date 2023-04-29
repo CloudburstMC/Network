@@ -19,19 +19,23 @@ package org.cloudburstmc.netty.handler.codec.raknet.common;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
+import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPong;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_UNCONNECTED_PONG;
 
-@Sharable
 public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<DatagramPacket> {
-    public static final UnconnectedPongDecoder INSTANCE = new UnconnectedPongDecoder();
     public static final String NAME = "rak-unconnected-pong-deencoder";
+
+    private final RakClientChannel channel;
+
+    public UnconnectedPongDecoder(RakClientChannel channel) {
+        this.channel = channel;
+    }
 
     @Override
     protected boolean acceptInboundMessage(ChannelHandlerContext ctx, Object msg) throws Exception {
@@ -52,7 +56,7 @@ public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<Datagr
         long pingTime = buf.readLong();
         long guid = buf.readLong();
 
-        ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
+        ByteBuf magicBuf = this.channel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
         if (!buf.isReadable(magicBuf.readableBytes()) || !ByteBufUtil.equals(buf.readSlice(magicBuf.readableBytes()), magicBuf)) {
             // Magic does not match
             return;
