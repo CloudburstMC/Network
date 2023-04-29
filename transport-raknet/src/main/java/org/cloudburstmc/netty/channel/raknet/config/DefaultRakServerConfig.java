@@ -25,6 +25,7 @@ import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 
 import java.util.Arrays;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.DEFAULT_UNCONNECTED_MAGIC;
 
@@ -34,7 +35,7 @@ import static org.cloudburstmc.netty.channel.raknet.RakConstants.DEFAULT_UNCONNE
 public class DefaultRakServerConfig extends DefaultChannelConfig implements RakServerChannelConfig {
 
     private volatile int maxChannels;
-    private volatile long guid;
+    private volatile long guid = ThreadLocalRandom.current().nextLong();
     private volatile int[] supportedProtocols;
     private volatile int maxConnections;
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
