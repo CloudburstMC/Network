@@ -381,7 +381,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         try {
             this.onTick();
         } catch (Throwable t) {
-            log.error("[{}] Error while ticking RakSessionCodec", this.getRemoteAddress(), t);
+            log.error("[{}] Error while ticking RakSessionCodec state={} channelActive={}", this.getRemoteAddress(), this.state, this.channel.isActive(), t);
             this.channel.close();
         }
     }
