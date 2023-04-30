@@ -20,13 +20,13 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.*;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
-import io.netty.util.internal.ObjectUtil;
 import org.cloudburstmc.netty.handler.codec.raknet.ProxyInboundRouter;
 import org.cloudburstmc.netty.handler.codec.raknet.ProxyOutboundRouter;
 import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.Objects;
 
 public abstract class ProxyChannel<T extends Channel> implements Channel {
 
@@ -37,7 +37,7 @@ public abstract class ProxyChannel<T extends Channel> implements Channel {
     protected final ChannelPipeline pipeline;
 
     protected ProxyChannel(T parent) {
-        ObjectUtil.checkNotNull(parent, "parent");
+        Objects.requireNonNull(parent, "parent");
         this.channel = parent;
         this.pipeline = this.newChannelPipeline();
         parent.pipeline().addLast(ProxyInboundRouter.NAME, new ProxyInboundRouter(this));

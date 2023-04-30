@@ -20,10 +20,10 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelFactory;
 import io.netty.channel.socket.DatagramChannel;
-import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.StringUtil;
 
 import java.lang.reflect.Constructor;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 public class RakChannelFactory<T extends Channel> implements ChannelFactory<T> {
@@ -33,8 +33,8 @@ public class RakChannelFactory<T extends Channel> implements ChannelFactory<T> {
     private final Consumer<DatagramChannel> parentConsumer;
 
     private RakChannelFactory(Class<? extends T> clazz, Class<? extends DatagramChannel> datagramClass, Consumer<DatagramChannel> parentConsumer) {
-        ObjectUtil.checkNotNull(clazz, "clazz");
-        ObjectUtil.checkNotNull(datagramClass, "datagramClass");
+        Objects.requireNonNull(clazz, "clazz");
+        Objects.requireNonNull(datagramClass, "datagramClass");
         try {
             this.constructor = clazz.getConstructor(DatagramChannel.class);
         } catch (NoSuchMethodException e) {

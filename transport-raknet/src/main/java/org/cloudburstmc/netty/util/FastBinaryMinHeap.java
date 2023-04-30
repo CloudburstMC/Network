@@ -18,10 +18,10 @@ package org.cloudburstmc.netty.util;
 
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.internal.ObjectPool;
-import io.netty.util.internal.ObjectUtil;
 
 import java.util.Arrays;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 
 public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
 
@@ -62,7 +62,7 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
     }
 
     public void insert(long weight, E element) {
-        ObjectUtil.checkNotNull(element, "element");
+        Objects.requireNonNull(element, "element");
         this.ensureCapacity(this.size + 1);
         this.insert0(weight, element);
     }
@@ -96,7 +96,7 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
     }
 
     public void insertSeries(long weight, E[] elements) {
-        ObjectUtil.checkNotNull(elements, "elements");
+        Objects.requireNonNull(elements, "elements");
         if (elements.length == 0) return;
 
         this.ensureCapacity(this.size + elements.length);
@@ -116,13 +116,13 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
         if (optimized) {
             // Parents are all less than series weight so we can directly insert.
             for (E element : elements) {
-                ObjectUtil.checkNotNull(element, "element");
+                Objects.requireNonNull(element, "element");
 
                 this.heap[++this.size] = newEntry(element, weight);
             }
         } else {
             for (E element : elements) {
-                ObjectUtil.checkNotNull(element, "element");
+                Objects.requireNonNull(element, "element");
                 this.insert0(weight, element);
             }
         }

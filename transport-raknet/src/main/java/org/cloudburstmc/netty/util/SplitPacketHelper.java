@@ -22,23 +22,29 @@ import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.IllegalReferenceCountException;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
-import io.netty.util.internal.ObjectUtil;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
+
+import java.util.Objects;
 
 public class SplitPacketHelper extends AbstractReferenceCounted {
     private final EncapsulatedPacket[] packets;
     private final long created = System.currentTimeMillis();
 
     public SplitPacketHelper(long expectedLength) {
-        ObjectUtil.checkPositive(expectedLength, "expectedLength");
+        if (expectedLength < 2) {
+            throw new IllegalArgumentException("expectedLength must be greater than 1");
+        }
         this.packets = new EncapsulatedPacket[(int) expectedLength];
     }
 
     public EncapsulatedPacket add(EncapsulatedPacket packet, ByteBufAllocator alloc) {
-        ObjectUtil.checkNotNull(packet, "packet cannot be null");
+        Objects.requireNonNull(packet, "packet cannot be null");
         if (!packet.isSplit()) throw new IllegalArgumentException("Packet is not split");
         if (this.refCnt() <= 0) throw new IllegalReferenceCountException(this.refCnt());
-        ObjectUtil.checkInRange(packet.getPartIndex(), 0, this.packets.length - 1, "part index");
+        if (packet.getPartIndex() < 0 || packet.getPartIndex() >= this.packets.length) {
+            throw new IllegalArgumentException(String.format("Split packet part index out of range. Got %s, expected 0-%s",
+                    packet.getPartIndex(), this.packets.length - 1));
+        }
 
         int partIndex = packet.getPartIndex();
         if (this.packets[partIndex] != null) {
