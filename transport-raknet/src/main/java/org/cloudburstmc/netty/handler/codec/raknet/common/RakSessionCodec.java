@@ -22,7 +22,6 @@ import io.netty.channel.*;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
-import io.netty.util.concurrent.PromiseCombiner;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -730,7 +729,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         ByteBuf buffer = ctx.alloc().ioBuffer(1);
         buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
-        RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE);
+        RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE);
 
         ChannelPromise promise = ctx.newPromise();
         promise.addListener((ChannelFuture future) -> // The channel provided in ChannelFuture is parent channel,
