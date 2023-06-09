@@ -45,7 +45,7 @@ public class RakConstants {
     /**
      * Time after {@link RakSessionCodec} is closed due to no activity.
      */
-    public static final int SESSION_TIMEOUT_MS = 30000;
+    public static final int SESSION_TIMEOUT_MS = 10000;
     /**
      * Time after {@link RakSessionCodec} is refreshed due to no activity.
      */
