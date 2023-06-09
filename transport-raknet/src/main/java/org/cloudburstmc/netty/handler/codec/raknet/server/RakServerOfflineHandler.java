@@ -173,7 +173,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         Integer version = this.pendingConnections.remove(sender);
         if (version == null) {
             // We can't determine the version without the previous request, so assume it's the wrong version.
-            if (log.isDebugEnabled()) {
+            if (log.isTraceEnabled()) {
                 log.trace("Received open connection request 2 from {} without open connection request 1", sender);
             }
             int[] supportedProtocols = ctx.channel().config().getOption(RakChannelOption.RAK_SUPPORTED_PROTOCOLS);
