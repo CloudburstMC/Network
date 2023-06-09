@@ -21,10 +21,11 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import net.jodah.expiringmap.ExpirationPolicy;
 import net.jodah.expiringmap.ExpiringMap;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
-import org.cloudburstmc.netty.channel.raknet.RakPendingConnection;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
@@ -41,8 +42,10 @@ import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<DatagramPacket> {
     public static final String NAME = "rak-offline-handler";
 
-    private final ExpiringMap<InetSocketAddress, RakPendingConnection> pendingConnections = ExpiringMap.builder()
-            .expiration(30, TimeUnit.SECONDS)
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakServerOfflineHandler.class);
+
+    private final ExpiringMap<InetSocketAddress, Integer> pendingConnections = ExpiringMap.builder()
+            .expiration(10, TimeUnit.SECONDS)
             .expirationPolicy(ExpirationPolicy.CREATED)
             .expirationListener((key, value) -> ReferenceCountUtil.release(value))
             .build();
@@ -139,21 +142,18 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
         int[] supportedProtocols = ctx.channel().config().getOption(RakChannelOption.RAK_SUPPORTED_PROTOCOLS);
         if (supportedProtocols != null && Arrays.binarySearch(supportedProtocols, protocolVersion) < 0) {
-            this.sendIncompatibleVersion(ctx, packet.sender(), protocolVersion, magicBuf, guid);
+            int latestVersion = supportedProtocols[supportedProtocols.length - 1];
+            this.sendIncompatibleVersion(ctx, packet.sender(), latestVersion, magicBuf, guid);
             return;
         }
 
         // TODO: banned address check?
         // TODO: max connections check?
 
-        RakPendingConnection pendingConnection = this.pendingConnections.get(sender);
-        if (pendingConnection != null) {
-            // Already received onOpenConnectionRequest2
-            this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
-            return;
+        Integer version = this.pendingConnections.put(sender, protocolVersion);
+        if (version != null && log.isTraceEnabled()) {
+            log.trace("Received duplicate open connection request 1 from {}", sender);
         }
-
-        this.pendingConnections.put(sender, RakPendingConnection.newInstance(protocolVersion));
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(28, 28);
         replyBuffer.writeByte(ID_OPEN_CONNECTION_REPLY_1);
@@ -170,9 +170,15 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
 
-        RakPendingConnection pendingConnection = this.pendingConnections.remove(sender);
-        if (pendingConnection == null) {
-            // No incoming connection, ignore
+        Integer version = this.pendingConnections.remove(sender);
+        if (version == null) {
+            // We can't determine the version without the previous request, so assume it's the wrong version.
+            if (log.isTraceEnabled()) {
+                log.trace("Received open connection request 2 from {} without open connection request 1", sender);
+            }
+            int[] supportedProtocols = ctx.channel().config().getOption(RakChannelOption.RAK_SUPPORTED_PROTOCOLS);
+            int latestVersion = supportedProtocols[supportedProtocols.length - 1];
+            this.sendIncompatibleVersion(ctx, sender, latestVersion, magicBuf, guid);
             return;
         }
 
@@ -188,7 +194,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         }
 
         RakServerChannel serverChannel = (RakServerChannel) ctx.channel();
-        RakChildChannel channel = serverChannel.createChildChannel(sender, clientGuid, pendingConnection.getProtocolVersion(), mtu);
+        RakChildChannel channel = serverChannel.createChildChannel(sender, clientGuid, version, mtu);
         if (channel == null) {
             // Already connected
             this.sendAlreadyConnected(ctx, sender, magicBuf, guid);
