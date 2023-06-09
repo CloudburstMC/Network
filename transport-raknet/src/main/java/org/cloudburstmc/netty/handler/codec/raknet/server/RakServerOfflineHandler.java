@@ -45,7 +45,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakServerOfflineHandler.class);
 
     private final ExpiringMap<InetSocketAddress, Integer> pendingConnections = ExpiringMap.builder()
-            .expiration(30, TimeUnit.SECONDS)
+            .expiration(10, TimeUnit.SECONDS)
             .expirationPolicy(ExpirationPolicy.CREATED)
             .expirationListener((key, value) -> ReferenceCountUtil.release(value))
             .build();
