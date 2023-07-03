@@ -26,6 +26,7 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import net.jodah.expiringmap.ExpirationPolicy;
 import net.jodah.expiringmap.ExpiringMap;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
+import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
@@ -177,7 +178,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
                 log.trace("Received open connection request 2 from {} without open connection request 1", sender);
             }
             int[] supportedProtocols = ctx.channel().config().getOption(RakChannelOption.RAK_SUPPORTED_PROTOCOLS);
-            int latestVersion = supportedProtocols[supportedProtocols.length - 1];
+            int latestVersion = supportedProtocols == null ? RakConstants.RAKNET_PROTOCOL_VERSION : supportedProtocols[supportedProtocols.length - 1];
             this.sendIncompatibleVersion(ctx, sender, latestVersion, magicBuf, guid);
             return;
         }
