@@ -120,6 +120,19 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<Long> RAK_SESSION_TIMEOUT =
             valueOf(RakChannelOption.class, "RAK_SESSION_TIMEOUT");
 
+    /**
+     * Whether RakNet will flush outgoing messages autoamatically every RAK_FLUSH_INTERVAL or flushing has to be triggered by the user.
+     */
+    public static final ChannelOption<Boolean> RAK_AUTO_FLUSH =
+            valueOf(RakChannelOption.class, "RAK_AUTO_FLUSH");
+
+    /**
+     * Interval in milliseconds of how often auto flushing should happen.
+     * Default is 10ms.
+     */
+    public static final ChannelOption<Integer> RAK_FLUSH_INTERVAL =
+            valueOf(RakChannelOption.class, "RAK_FLUSH_INTERVAL");
+
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {
         super(null);
