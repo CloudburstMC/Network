@@ -43,4 +43,12 @@ public interface RakChannelConfig extends ChannelConfig {
     long getSessionTimeout();
 
     RakChannelConfig setSessionTimeout(long timeout);
+
+    boolean isAutoFlush();
+
+    void setAutoFlush(boolean enable);
+
+    int getFlushInterval();
+
+    void setFlushInterval(int intervalMillis);
 }

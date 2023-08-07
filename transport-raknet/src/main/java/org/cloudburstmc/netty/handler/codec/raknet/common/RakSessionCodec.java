@@ -51,6 +51,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private volatile RakState state = RakState.UNCONNECTED;
 
     private volatile long lastTouched = System.currentTimeMillis();
+    private volatile long lastFlush;
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakSlidingWindow slidingWindow;
@@ -114,7 +115,10 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.splitPackets = new RoundRobinArray<>(256);
 
         // After session is fully initialized, start ticking.
-        this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::tryTick, 0, 10, TimeUnit.MILLISECONDS);
+        boolean autoFlush = this.channel.config().isAutoFlush();
+        // Make sure there happens at least one flush per 10ms to respect standard RakNet behavior
+        int flushInterval = autoFlush ? this.channel.config().getFlushInterval() : 10;
+        this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::tryTick, 0, flushInterval, TimeUnit.MILLISECONDS);
 
         ctx.fireChannelActive(); // fire channel active on rakPipeline()
     }
@@ -189,6 +193,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             promise.setSuccess(null);
         } finally {
             ReferenceCountUtil.release(msg);
+        }
+    }
+
+    @Override
+    public void flush(ChannelHandlerContext ctx) throws Exception {
+        if (!this.channel.config().isAutoFlush()) {
+            this.internalFlush(ctx);
         }
     }
 
@@ -406,6 +417,16 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             this.write(ctx, new RakMessage(buffer, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
         }
 
+         this.internalFlush(ctx);
+    }
+
+    private void internalFlush(ChannelHandlerContext ctx) {
+        long curTime = System.currentTimeMillis();
+        if (this.lastFlush == curTime) {
+            return; // do not flush multiple times within one ms
+        }
+        this.lastFlush = curTime;
+
         this.handleIncomingAcknowledge(ctx, curTime, this.incomingAcks, false);
         this.handleIncomingAcknowledge(ctx, curTime, this.incomingNaks, true);
 
@@ -416,13 +437,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         int writtenNacks = 0;
 
         // if (this.slidingWindow.shouldSendAcks(curTime)) {
-            while (!this.outgoingAcks.isEmpty()) {
-                ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
-                buffer.writeByte(FLAG_VALID | FLAG_ACK);
-                writtenAcks += RakUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
-                ctx.write(buffer);
-                this.slidingWindow.onSendAck();
-            }
+        while (!this.outgoingAcks.isEmpty()) {
+            ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
+            buffer.writeByte(FLAG_VALID | FLAG_ACK);
+            writtenAcks += RakUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
+            ctx.write(buffer);
+            this.slidingWindow.onSendAck();
+        }
         // }
 
         while (!this.outgoingNaks.isEmpty()) {

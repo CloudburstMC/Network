@@ -37,6 +37,8 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
     private volatile int orderingChannels = 16;
     private volatile RakMetrics metrics;
     private volatile long sessionTimeout = SESSION_TIMEOUT_MS;
+    private volatile boolean autoFlush = true;
+    private volatile int flushInterval = 10;
 
     public DefaultRakSessionConfig(Channel channel) {
         super(channel);
@@ -71,6 +73,12 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         if (option == RakChannelOption.RAK_SESSION_TIMEOUT) {
             return (T) Long.valueOf(this.getSessionTimeout());
         }
+        if (option == RakChannelOption.RAK_AUTO_FLUSH) {
+            return (T) Boolean.valueOf(this.isAutoFlush());
+        }
+        if (option == RakChannelOption.RAK_FLUSH_INTERVAL) {
+            return (T) Integer.valueOf(this.getFlushInterval());
+        }
         return this.channel.parent().config().getOption(option);
     }
 
@@ -91,6 +99,10 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         } else if (option == RakChannelOption.RAK_SESSION_TIMEOUT) {
             this.setSessionTimeout((Long) value);
             return true;
+        } else if (option == RakChannelOption.RAK_AUTO_FLUSH) {
+            this.setAutoFlush((Boolean) value);
+        } else if (option == RakChannelOption.RAK_FLUSH_INTERVAL) {
+            this.setFlushInterval((Integer) value);
         } else {
             return this.channel.parent().config().setOption(option, value);
         }
@@ -162,5 +174,25 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
     @Override
     public long getSessionTimeout() {
         return this.sessionTimeout;
+    }
+
+    @Override
+    public boolean isAutoFlush() {
+        return this.autoFlush;
+    }
+
+    @Override
+    public void setAutoFlush(boolean autoFlush) {
+        this.autoFlush = autoFlush;
+    }
+
+    @Override
+    public int getFlushInterval() {
+        return this.flushInterval;
+    }
+
+    @Override
+    public void setFlushInterval(int flushInterval) {
+        this.flushInterval = flushInterval;
     }
 }
