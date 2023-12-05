@@ -62,6 +62,7 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         this.rakPipeline.addLast(ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
         this.rakPipeline.addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
         this.rakPipeline.addLast(RakServerOnlineInitialHandler.NAME, new RakServerOnlineInitialHandler(this));
+        this.rakPipeline.addLast(RakUnhandledMessagesQueue.NAME, new RakUnhandledMessagesQueue(this));
         this.rakPipeline.fireChannelRegistered();
         this.rakPipeline.fireChannelActive();
     }
