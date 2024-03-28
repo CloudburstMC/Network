@@ -34,14 +34,17 @@ import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler
 import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
 public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<DatagramPacket> {
     public static final String NAME = "rak-offline-handler";
+    private static final int MAX_PACKETS_PER_SECOND = 10;
 
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakServerOfflineHandler.class);
 
@@ -49,6 +52,11 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             .expiration(10, TimeUnit.SECONDS)
             .expirationPolicy(ExpirationPolicy.CREATED)
             .expirationListener((key, value) -> ReferenceCountUtil.release(value))
+            .build();
+
+    private final ExpiringMap<InetAddress, AtomicInteger> packetsCounter = ExpiringMap.builder()
+            .expiration(1, TimeUnit.SECONDS)
+            .expirationPolicy(ExpirationPolicy.CREATED)
             .build();
 
     @Override
@@ -90,6 +98,12 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
         ByteBuf magicBuf = ctx.channel().config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
         long guid = ctx.channel().config().getOption(RakChannelOption.RAK_GUID);
+
+        AtomicInteger counter = this.packetsCounter.computeIfAbsent(packet.sender().getAddress(), s -> new AtomicInteger());
+        if (counter.incrementAndGet() > MAX_PACKETS_PER_SECOND) {
+            log.warn("[{}] Sent too many packets per second", packet.sender());
+            return;
+        }
 
         switch (packetId) {
             case ID_UNCONNECTED_PING:
