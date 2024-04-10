@@ -32,6 +32,7 @@ public class RakUtils {
     static {
         try {
             Constructor<DefaultChannelPipeline> constructor = DefaultChannelPipeline.class.getDeclaredConstructor(Channel.class);
+            //This is problem
             constructor.setAccessible(true);
             DEFAULT_CHANNEL_PIPELINE_CONSTRUCTOR = constructor;
         } catch (NoSuchMethodException e) {
