@@ -19,10 +19,10 @@ package org.cloudburstmc.netty.channel.raknet;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelFactory;
+import io.netty.channel.ReflectiveChannelFactory;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.util.internal.StringUtil;
 
-import java.lang.reflect.Constructor;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -31,50 +31,65 @@ public class RakChannelFactory<T extends Channel> implements ChannelFactory<T> {
 
     private final Class<T> channelClass;
     private final Function<DatagramChannel, T> constructor;
-    private final Constructor<? extends DatagramChannel> datagramConstructor;
+    private final ChannelFactory<? extends DatagramChannel> datagramChannelFactory;
     private final Consumer<DatagramChannel> parentConsumer;
 
-    private RakChannelFactory(Class<T> channelClass, Function<DatagramChannel, T> constructor, Class<? extends DatagramChannel> datagramClass,
+    private RakChannelFactory(Class<T> channelClass, Function<DatagramChannel, T> constructor, ChannelFactory<? extends DatagramChannel> datagramChannelFactory,
                               Consumer<DatagramChannel> parentConsumer) {
         Objects.requireNonNull(channelClass, "channelClass");
-        Objects.requireNonNull(datagramClass, "datagramClass");
+        Objects.requireNonNull(datagramChannelFactory, "datagramChannelFactory");
         Objects.requireNonNull(constructor, "constructor");
         this.channelClass = channelClass;
         this.constructor = constructor;
 
-        try {
-            this.datagramConstructor = datagramClass.getConstructor();
-        } catch (NoSuchMethodException e) {
-            throw new IllegalArgumentException("Class " + StringUtil.simpleClassName(datagramClass) +
-                    " does not have a public non-arg constructor", e);
-        }
+        this.datagramChannelFactory = datagramChannelFactory;
         this.parentConsumer = parentConsumer;
     }
 
     public static RakChannelFactory<RakServerChannel> server(Class<? extends DatagramChannel> clazz) {
-        return new RakChannelFactory<>(RakServerChannel.class, RakServerChannel::new, clazz, null);
+        return server(clazz, null);
     }
 
     public static RakChannelFactory<RakServerChannel> server(Class<? extends DatagramChannel> clazz, Consumer<DatagramChannel> parentConsumer) {
-        return new RakChannelFactory<>(RakServerChannel.class, RakServerChannel::new, clazz, parentConsumer);
+        return server(clazz, parentConsumer, null);
     }
 
     public static RakChannelFactory<RakServerChannel> server(Class<? extends DatagramChannel> clazz, Consumer<DatagramChannel> parentConsumer, Consumer<RakChannel> childConsumer) {
-        return new RakChannelFactory<>(RakServerChannel.class, ch -> new RakServerChannel(ch, childConsumer), clazz, parentConsumer);
+        return server(new ReflectiveChannelFactory<>(clazz), parentConsumer, childConsumer);
+    }
+
+    public static RakChannelFactory<RakServerChannel> server(ChannelFactory<? extends DatagramChannel> channelFactory) {
+        return server(channelFactory, null);
+    }
+
+    public static RakChannelFactory<RakServerChannel> server(ChannelFactory<? extends DatagramChannel> channelFactory, Consumer<DatagramChannel> parentConsumer) {
+        return server(channelFactory, parentConsumer, null);
+    }
+
+    public static RakChannelFactory<RakServerChannel> server(ChannelFactory<? extends DatagramChannel> channelFactory, Consumer<DatagramChannel> parentConsumer, Consumer<RakChannel> childConsumer) {
+        return new RakChannelFactory<>(RakServerChannel.class, ch -> new RakServerChannel(ch, childConsumer), channelFactory, parentConsumer);
     }
 
     public static RakChannelFactory<RakClientChannel> client(Class<? extends DatagramChannel> clazz) {
-        return new RakChannelFactory<>(RakClientChannel.class, RakClientChannel::new, clazz, null);
+        return client(clazz, null);
     }
 
-    public static RakChannelFactory<RakClientChannel> client(Class<? extends DatagramChannel> clazz, Consumer<DatagramChannel> parentConsumer) {
-        return new RakChannelFactory<>(RakClientChannel.class, RakClientChannel::new, clazz, parentConsumer);
+    public static RakChannelFactory<RakClientChannel> client(Class<? extends DatagramChannel> channelFactory, Consumer<DatagramChannel> parentConsumer) {
+        return client(new ReflectiveChannelFactory<>(channelFactory), parentConsumer);
+    }
+
+    public static RakChannelFactory<RakClientChannel> client(ChannelFactory<? extends DatagramChannel> channelFactory) {
+        return client(channelFactory, null);
+    }
+
+    public static RakChannelFactory<RakClientChannel> client(ChannelFactory<? extends DatagramChannel> channelFactory, Consumer<DatagramChannel> parentConsumer) {
+        return new RakChannelFactory<>(RakClientChannel.class, RakClientChannel::new, channelFactory, parentConsumer);
     }
 
     @Override
     public T newChannel() {
         try {
-            DatagramChannel channel = datagramConstructor.newInstance();
+            DatagramChannel channel = datagramChannelFactory.newChannel();
             if (this.parentConsumer != null) {
                 this.parentConsumer.accept(channel);
             }
@@ -87,7 +102,6 @@ public class RakChannelFactory<T extends Channel> implements ChannelFactory<T> {
     @Override
     public String toString() {
         return StringUtil.simpleClassName(RakChannelFactory.class) +
-                '(' + StringUtil.simpleClassName(this.channelClass) + ".class, " +
-                StringUtil.simpleClassName(datagramConstructor.getDeclaringClass()) + ".class)";
+                '(' + StringUtil.simpleClassName(this.channelClass) + ".class)";
     }
 }
