@@ -55,4 +55,7 @@ public interface RakChannelMetrics {
 
     default void stateChange(RakState state) {
     }
+
+    default void queuedPacketBytes(int count) {
+    }
 }

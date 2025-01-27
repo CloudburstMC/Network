@@ -51,4 +51,8 @@ public interface RakChannelConfig extends ChannelConfig {
     int getFlushInterval();
 
     void setFlushInterval(int intervalMillis);
+
+    void setMaxQueuedBytes(int maxQueuedBytes);
+
+    int getMaxQueuedBytes();
 }

@@ -38,6 +38,8 @@ import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
@@ -409,6 +411,23 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private void onTick() {
         long curTime = System.currentTimeMillis();
+
+        int maxQueuedBytes = this.channel.config().getOption(RakChannelOption.RAK_MAX_QUEUED_BYTES);
+
+        if (maxQueuedBytes > 0) {
+            int queuedBytes = 0;
+            try {
+                for (EncapsulatedPacket packet : this.outgoingPackets) {
+                    queuedBytes += packet.getBuffer().readableBytes();
+                    if (queuedBytes > maxQueuedBytes) {
+                        this.disconnect(RakDisconnectReason.QUEUE_TOO_LONG);
+                        return;
+                    }
+                }
+            } finally {
+                getMetrics().queuedPacketBytes(queuedBytes);
+            }
+        }
 
         if (this.state == RakState.UNCONNECTED) {
             if (this.isTimedOut(curTime)) {

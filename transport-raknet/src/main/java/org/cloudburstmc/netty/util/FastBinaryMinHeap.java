@@ -20,10 +20,12 @@ import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.internal.ObjectPool;
 
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.function.Consumer;
 
-public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
+public class FastBinaryMinHeap<E> extends AbstractReferenceCounted implements Iterable<E> {
 
     private static final Entry INFIMUM = new Entry(Long.MAX_VALUE);
     private static final Entry SUPREMUM = new Entry(Long.MIN_VALUE);
@@ -205,6 +207,11 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
         return this;
     }
 
+    @Override
+    public Iterator<E> iterator() {
+        return new SimpleIterator();
+    }
+
     private static class Entry extends AbstractReferenceCounted {
         private final ObjectPool.Handle<Entry> handle;
         private Object element;
@@ -231,6 +238,20 @@ public class FastBinaryMinHeap<E> extends AbstractReferenceCounted {
         @Override
         public Entry touch(Object hint) {
             return this;
+        }
+    }
+
+    private class SimpleIterator implements Iterator<E> {
+        private int index = 1;
+
+        @Override
+        public boolean hasNext() {
+            return heap.length > index && heap[index] != INFIMUM;
+        }
+
+        @Override
+        public E next() {
+            return (E) heap[index++].element;
         }
     }
 }

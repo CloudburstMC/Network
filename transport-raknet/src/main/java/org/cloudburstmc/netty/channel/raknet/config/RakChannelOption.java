@@ -189,6 +189,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<Integer> RAK_TIME_BETWEEN_SEND_CONNECTION_ATTEMPTS_MS =
             valueOf(RakChannelOption.class, "RAK_TIME_BETWEEN_SEND_CONNECTION_ATTEMPTS_MS");
 
+    /**
+     * Maximum amount of bytes that can be queued in a single RakNet session.
+     */
+    public static final ChannelOption<Integer> RAK_MAX_QUEUED_BYTES =
+            valueOf(RakChannelOption.class, "RAK_MAX_QUEUED_BYTES");
+
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {
         super(null);
