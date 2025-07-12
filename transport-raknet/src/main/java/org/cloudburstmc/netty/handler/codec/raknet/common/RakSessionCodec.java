@@ -37,6 +37,7 @@ import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -74,7 +75,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private long currentPingTime = -1;
     private long lastPingTime = -1;
     private long lastPongTime = -1;
-    private IntObjectMap<RakDatagramPacket> sentDatagrams;
+    private ConcurrentHashMap<Integer, RakDatagramPacket> sentDatagrams;
     private Queue<IntRange> incomingAcks;
     private Queue<IntRange> incomingNaks;
     private Queue<IntRange> outgoingAcks;
@@ -107,7 +108,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
         this.outgoingPackets = new FastBinaryMinHeap<>(8);
-        this.sentDatagrams = new IntObjectHashMap<>();
+        this.sentDatagrams = new ConcurrentHashMap<>();
 
         this.incomingAcks = new ArrayDeque<>();
         this.incomingNaks = new ArrayDeque<>();

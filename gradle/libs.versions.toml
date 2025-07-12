@@ -1,7 +1,7 @@
 [versions]
-netty = "4.1.101.Final"
-junit = "5.9.2"
-
+netty = "4.2.2.Final"
+junit = "5.13.3"
+expiringmap = "0.5.11"
 
 [libraries]
 netty-common = { group = "io.netty", name = "netty-common", version.ref = "netty" }
@@ -10,7 +10,7 @@ netty-codec = { group = "io.netty", name = "netty-codec", version.ref = "netty" 
 netty-transport = { group = "io.netty", name = "netty-transport", version.ref = "netty" }
 netty-transport-native-unix-common = { group = "io.netty", name = "netty-transport-native-unix-common", version.ref = "netty" }
 
-expiringmap = { group = "net.jodah", name = "expiringmap", version = "0.5.10" }
+expiringmap = { group = "net.jodah", name = "expiringmap", version.ref = "expiringmap" }
 
 # Test dependencies
 junit-jupiter-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine", version.ref = "junit" }

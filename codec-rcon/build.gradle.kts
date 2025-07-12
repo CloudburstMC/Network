@@ -14,12 +14,15 @@
  * under the License.
  */
 
-rootProject.name = "network"
+description = "RakNet codec rcon for Netty"
 
-plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "0.4.0"
+dependencies {
+    api(libs.bundles.netty)
+    api(libs.expiringmap)
+
+    testImplementation(libs.bundles.junit)
 }
 
-include("codec-query")
-include("codec-rcon")
-include("transport-raknet")
+tasks.jar {
+    manifest.attributes["Automatic-Module-Name"] = "org.cloudburstmc.netty.handler.codec.rcon"
+}
