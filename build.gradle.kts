@@ -50,10 +50,7 @@ subprojects {
         }
         publications {
             create<MavenPublication>("maven") {
-                artifactId = "netty-${project.name}"
-
                 from(components["java"])
-
                 pom {
                     description.set(project.description)
                     url.set("https://github.com/CloudburstMC/Network")
