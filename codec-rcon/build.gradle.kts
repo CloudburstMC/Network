@@ -14,11 +14,27 @@
  * under the License.
  */
 
+plugins {
+    alias(libs.plugins.lombok)
+}
+
 description = "RakNet codec rcon for Netty"
+
+repositories {
+    maven {
+        name = "opencollabRepositoryMavenSnapshots"
+        url = uri("https://repo.opencollab.dev/maven-snapshots")
+    }
+    maven {
+        name = "opencollabRepositoryMavenReleases"
+        url = uri("https://repo.opencollab.dev/maven-releases")
+    }
+}
 
 dependencies {
     api(libs.bundles.netty)
     api(libs.expiringmap)
+    api(libs.network.common)
 
     testImplementation(libs.bundles.junit)
 }

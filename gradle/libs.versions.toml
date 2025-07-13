@@ -1,7 +1,9 @@
 [versions]
+lombok = "8.14"
 netty = "4.2.2.Final"
 junit = "5.13.3"
 expiringmap = "0.5.11"
+network-common = "1.6.28-SNAPSHOT"
 
 [libraries]
 netty-common = { group = "io.netty", name = "netty-common", version.ref = "netty" }
@@ -11,6 +13,8 @@ netty-transport = { group = "io.netty", name = "netty-transport", version.ref = 
 netty-transport-native-unix-common = { group = "io.netty", name = "netty-transport-native-unix-common", version.ref = "netty" }
 
 expiringmap = { group = "net.jodah", name = "expiringmap", version.ref = "expiringmap" }
+
+network-common = { group = "com.nukkitx.network", name = "common", version.ref = "network-common" }
 
 # Test dependencies
 junit-jupiter-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine", version.ref = "junit" }
@@ -24,4 +28,4 @@ junit = [ "junit-jupiter-engine", "junit-jupiter-api", "junit-jupiter-params" ]
 
 
 [plugins]
-
+lombok = { id = "io.freefair.lombok", version.ref = "lombok" }
