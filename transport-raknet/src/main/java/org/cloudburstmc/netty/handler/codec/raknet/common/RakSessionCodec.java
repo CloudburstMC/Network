@@ -36,6 +36,7 @@ import org.cloudburstmc.netty.util.*;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -75,7 +76,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private long currentPingTime = -1;
     private long lastPingTime = -1;
     private long lastPongTime = -1;
-    private ConcurrentHashMap<Integer, RakDatagramPacket> sentDatagrams;
+    private Map<Integer, RakDatagramPacket> sentDatagrams;
     private Queue<IntRange> incomingAcks;
     private Queue<IntRange> incomingNaks;
     private Queue<IntRange> outgoingAcks;
