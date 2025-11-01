@@ -159,6 +159,13 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_COMPATIBILITY_MODE");
 
     /**
+     * The fallback protocol version of the RakNet client for sending RequestNetworkSettingsPacket
+     * in compatibility mode if one is not found in the pipeline.
+     */
+    public static final ChannelOption<Integer> RAK_CLIENT_BEDROCK_PROTOCOL_VERSION =
+            valueOf(RakChannelOption.class, "RAK_CLIENT_BEDROCK_PROTOCOL_VERSION");
+
+    /**
      * An array of MTU sizes that the RakNet client will use when initially connecting.
      */
     public static final ChannelOption<Integer[]> RAK_MTU_SIZES =

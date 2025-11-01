@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.handler.codec.raknet.client;
 import io.netty.channel.*;
 import io.netty.util.concurrent.PromiseCombiner;
 import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
+import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.raknet.common.UnconnectedPongDecoder;
 
 import java.net.InetSocketAddress;
@@ -47,8 +48,12 @@ public class RakClientRouteHandler extends ChannelDuplexHandler {
         ChannelFuture parentFuture = this.channel.parent().connect(remoteAddress, localAddress);
         parentFuture.addListener(future -> {
             if (future.isSuccess()) {
-                this.channel.rakPipeline().addAfter(UnconnectedPongDecoder.NAME,
-                        RakClientOfflineHandler.NAME, new RakClientOfflineHandler(channel, this.channel.getConnectPromise()));
+                this.channel.rakPipeline().addAfter(
+                        UnconnectedPongDecoder.NAME,
+                        RakClientOfflineHandler.NAME, 
+                        channel.config().getOption(RakChannelOption.RAK_COMPATIBILITY_MODE) ? 
+                                new RakClientOfflineHandlerCompatible(channel, this.channel.getConnectPromise()) :
+                                new RakClientOfflineHandler(channel, this.channel.getConnectPromise()));
             }
         });
 

@@ -78,32 +78,25 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         safeCancel(this.retryFuture, ctx.channel());
     }
 
-    private void onRetryAttempt(Channel channel) {
-        if (this.rakChannel.config().getOption(RakChannelOption.RAK_COMPATIBILITY_MODE)) {
-            if (this.state != RakOfflineState.HANDSHAKE_COMPLETED) {
+    void onRetryAttempt(Channel channel) {
+        switch (this.state) {
+            case HANDSHAKE_1:
                 this.sendOpenConnectionRequest1(channel);
                 this.connectionAttempts++;
-            }
-        } else {
-            switch (this.state) {
-                case HANDSHAKE_1:
-                    this.sendOpenConnectionRequest1(channel);
-                    this.connectionAttempts++;
-                    break;
-                case HANDSHAKE_2:
-                    this.sendOpenConnectionRequest2(channel);
-                    break;
-            }
+                break;
+            case HANDSHAKE_2:
+                this.sendOpenConnectionRequest2(channel);
+                break;
         }
     }
 
-    private void onTimeout() {
+    void onTimeout() {
         // If we received a denial reply but ran out of time before hitting the attempt limit
         // (e.g. later replies were lost), fail with that reason rather than a generic timeout.
         this.failConnection();
     }
 
-    private void onSuccess(ChannelHandlerContext ctx) {
+    void onSuccess(ChannelHandlerContext ctx) {
         // Create new session which decodes RakDatagramPacket to RakMessage
         RakSessionCodec sessionCodec = new RakSessionCodec(this.rakChannel);
         ctx.pipeline().addAfter(NAME, RakDatagramCodec.NAME, new RakDatagramCodec());
@@ -115,7 +108,6 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         // Replicate server behavior, and transform unhandled encapsulated packets to rakMessage
         ctx.pipeline().addAfter(DisconnectNotificationHandler.NAME, EncapsulatedToMessageHandler.NAME, EncapsulatedToMessageHandler.INSTANCE);
         ctx.pipeline().addAfter(DisconnectNotificationHandler.NAME, RakClientOnlineInitialHandler.NAME, new RakClientOnlineInitialHandler(this.rakChannel, this.successPromise));
-        ctx.pipeline().fireChannelActive();
     }
 
     @Override
@@ -144,6 +136,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
             case ID_OPEN_CONNECTION_REPLY_2:
                 this.onOpenConnectionReply2(ctx, buf);
                 this.onSuccess(ctx);
+                ctx.pipeline().fireChannelActive();
                 return;
             case ID_INCOMPATIBLE_PROTOCOL_VERSION:
                 this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.INCOMPATIBLE_PROTOCOL_VERSION);
@@ -198,7 +191,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         this.denyMessage = null;
     }
 
-    private void onOpenConnectionReply1(ChannelHandlerContext ctx, ByteBuf buffer) {
+    void onOpenConnectionReply1(ChannelHandlerContext ctx, ByteBuf buffer) {
         this.clearLastDeny();
 
         long serverGuid = buffer.readLong();
@@ -218,15 +211,12 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         this.sendOpenConnectionRequest2(ctx.channel());
     }
 
-    private void onOpenConnectionReply2(ChannelHandlerContext ctx, ByteBuf buffer) {
+    void onOpenConnectionReply2(ChannelHandlerContext ctx, ByteBuf buffer) {
         this.clearLastDeny();
 
         buffer.readLong(); // serverGuid
-        if (this.rakChannel.config().getOption(RakChannelOption.RAK_COMPATIBILITY_MODE)) {
-            RakUtils.skipAddress(buffer); // serverAddress
-        } else {
-            RakUtils.readAddress(buffer); // serverAddress
-        }
+        RakUtils.readAddress(buffer); // serverAddress
+
         int mtu = buffer.readShort();
         boolean security = buffer.readBoolean(); // security
         if (security) {
@@ -238,7 +228,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         this.state = RakOfflineState.HANDSHAKE_COMPLETED;
     }
 
-    private void sendOpenConnectionRequest1(Channel channel) {
+    void sendOpenConnectionRequest1(Channel channel) {
         int mtuSizeIndex = Math.min(this.connectionAttempts / 4, this.rakChannel.config().getOption(RakChannelOption.RAK_MTU_SIZES).length - 1);
         int mtuSize = this.rakChannel.config().getOption(RakChannelOption.RAK_MTU_SIZES)[mtuSizeIndex];
 
@@ -255,7 +245,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         channel.writeAndFlush(request);
     }
 
-    private void sendOpenConnectionRequest2(Channel channel) {
+    void sendOpenConnectionRequest2(Channel channel) {
         int mtuSize = this.rakChannel.config().getOption(RakChannelOption.RAK_MTU);
         ByteBuf magicBuf = this.rakChannel.config().getOption(RakChannelOption.RAK_UNCONNECTED_MAGIC);
 
@@ -272,11 +262,35 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
         channel.writeAndFlush(request);
     }
 
-    private static void safeCancel(ScheduledFuture<?> future, Channel channel) {
+    static void safeCancel(ScheduledFuture<?> future, Channel channel) {
         channel.eventLoop().execute(() -> { // Make sure this is not called at two places at the same time
             if (!future.isCancelled()) {
                 future.cancel(false);
             }
         });
+    }
+
+    RakOfflineState state() {
+        return this.state;
+    }
+
+    void state(RakOfflineState state) {
+        this.state = state;
+    }
+
+    int connectionAttempts() {
+        return this.connectionAttempts;
+    }
+
+    void incrementConnectionAttempts() {
+        this.connectionAttempts++;
+    }
+
+    RakChannel rakChannel() {
+        return this.rakChannel;
+    }
+
+    ChannelPromise successPromise() {
+        return this.successPromise;
     }
 }

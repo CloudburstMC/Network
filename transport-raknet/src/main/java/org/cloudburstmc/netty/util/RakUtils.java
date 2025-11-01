@@ -98,17 +98,15 @@ public class RakUtils {
     }
 
     public static boolean skipAddress(ByteBuf buffer) {
-        short type = buffer.readByte();
+        short type = buffer.readUnsignedByte();
         try {
             if (type == 4) {
                 // Skip 4 + 2 bytes
                 buffer.skipBytes(6);
-            } else if (type == 6) {
-                // Skip 2 + 2 + 4 + 16 + 4 bytes
-                buffer.skipBytes(28);
             } else {
-                // Vanilla client skips over if the type is not 4 or 6
-                return false;
+                // Skip 2 + 2 + 4 + 16 + 4 bytes
+                // Vanilla client treats as v6 if unknown type
+                buffer.skipBytes(28);
             }
         } catch (IndexOutOfBoundsException e) {
             return false;

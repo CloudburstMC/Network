@@ -30,7 +30,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
 
     private final ObjectPool.Handle<RakDatagramPacket> handle;
     private final List<EncapsulatedPacket> packets = new ArrayList<>();
-    private byte flags = FLAG_VALID | FLAG_NEEDS_B_AND_AS;
+    private byte flags = FLAG_VALID;
     private long sendTime;
     private long nextSend;
     private int sequenceIndex = -1;
@@ -86,7 +86,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
             packet.release();
         }
         this.packets.clear();
-        this.flags = FLAG_VALID | FLAG_NEEDS_B_AND_AS;
+        this.flags = FLAG_VALID;
         this.sendTime = 0;
         this.nextSend = 0;
         this.sequenceIndex = -1;
@@ -112,6 +112,10 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
 
     public void setFlags(byte flags) {
         this.flags = flags;
+    }
+
+    public void setFlag(byte flag) {
+        this.flags |= flag;
     }
 
     public long getSendTime() {

@@ -99,6 +99,7 @@ public class RakConstants {
     public static final short ID_UNCONNECTED_PONG = 0x1c;
     public static final short ID_ADVERTISE_SYSTEM = 0x1d;
     public static final short ID_USER_PACKET_ENUM = 0x80;
+    public static final short ID_GAME_PACKET = 0xfe;
 
     /**
      * Magic used to identify RakNet packets
