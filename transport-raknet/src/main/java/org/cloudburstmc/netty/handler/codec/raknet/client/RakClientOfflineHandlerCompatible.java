@@ -4,17 +4,11 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.util.concurrent.Promise;
 import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakOfflineState;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
-import org.cloudburstmc.netty.handler.codec.raknet.common.ConnectedPingHandler;
-import org.cloudburstmc.netty.handler.codec.raknet.common.ConnectedPongHandler;
-import org.cloudburstmc.netty.handler.codec.raknet.common.DisconnectNotificationHandler;
-import org.cloudburstmc.netty.handler.codec.raknet.common.EncapsulatedToMessageHandler;
-import org.cloudburstmc.netty.handler.codec.raknet.common.RakAcknowledgeHandler;
-import org.cloudburstmc.netty.handler.codec.raknet.common.RakDatagramCodec;
-import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
-import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodecCompatible;
+import org.cloudburstmc.netty.handler.codec.raknet.common.*;
 import org.cloudburstmc.netty.util.RakUtils;
 
 public class RakClientOfflineHandlerCompatible extends RakClientOfflineHandler {
@@ -36,17 +30,18 @@ public class RakClientOfflineHandlerCompatible extends RakClientOfflineHandler {
     @Override
     void onSuccess(ChannelHandlerContext ctx) {
         RakSessionCodec sessionCodec = new RakSessionCodecCompatible(this.rakChannel());
+        Promise<Object> packetPromise = ctx.executor().newPromise();
         ctx.pipeline().addAfter(NAME, RakDatagramCodec.NAME, new RakDatagramCodec());
         ctx.pipeline().addAfter(RakDatagramCodec.NAME, RakAcknowledgeHandler.NAME, new RakAcknowledgeHandler(sessionCodec));
         ctx.pipeline().addAfter(RakAcknowledgeHandler.NAME, RakSessionCodec.NAME, sessionCodec);
-        // Ensure new incoming connection batches with request network settings game packet
-        ctx.pipeline().addAfter(RakSessionCodec.NAME, RakClientNetworkSettingsHandler.NAME, new RakClientNetworkSettingsHandler(this.rakChannel()));
+        // Ensure new incoming connection batches with first game packet (request network settings)
+        ctx.pipeline().addAfter(RakSessionCodec.NAME, RakClientFirstPacketHandler.NAME, new RakClientFirstPacketHandler(packetPromise));
         ctx.pipeline().addAfter(RakSessionCodec.NAME, ConnectedPingHandler.NAME, new ConnectedPingHandler());
         ctx.pipeline().addAfter(ConnectedPingHandler.NAME, ConnectedPongHandler.NAME, new ConnectedPongHandler(sessionCodec));
         ctx.pipeline().addAfter(ConnectedPongHandler.NAME, DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
         // Replicate server behavior, and transform unhandled encapsulated packets to rakMessage
         ctx.pipeline().addAfter(DisconnectNotificationHandler.NAME, EncapsulatedToMessageHandler.NAME, EncapsulatedToMessageHandler.INSTANCE);
-        ctx.pipeline().addAfter(DisconnectNotificationHandler.NAME, RakClientOnlineInitialHandlerCompatible.NAME, new RakClientOnlineInitialHandlerCompatible(this.rakChannel(), this.successPromise()));
+        ctx.pipeline().addAfter(DisconnectNotificationHandler.NAME, RakClientOnlineInitialHandlerCompatible.NAME, new RakClientOnlineInitialHandlerCompatible(this.rakChannel(), this.successPromise(), packetPromise));
     }
 
     @Override
