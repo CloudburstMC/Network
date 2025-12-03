@@ -440,7 +440,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         RakChannelMetrics metrics = this.getMetrics();
         if (metrics != null) {
-            metrics.queuedPacketBytes(this.queuedBytes);
+            metrics.queuedPacketBytes((int) this.queuedBytes);
         }
 
         if (this.state == RakState.UNCONNECTED) {
