@@ -85,7 +85,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private Queue<IntRange> outgoingNaks;
     private long lastMinWeight;
 
-    private long queuedBytes = 0;
+    private int queuedBytes = 0;
 
     public RakSessionCodec(RakChannel channel) {
         this.channel = channel;
@@ -440,7 +440,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         RakChannelMetrics metrics = this.getMetrics();
         if (metrics != null) {
-            metrics.queuedPacketBytes((int) this.queuedBytes);
+            metrics.queuedPacketBytes(this.queuedBytes);
         }
 
         if (this.state == RakState.UNCONNECTED) {
