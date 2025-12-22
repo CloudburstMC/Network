@@ -63,7 +63,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private RakSlidingWindow slidingWindow;
     private int splitIndex;
     private int datagramReadIndex;
-    private int datagramWriteIndex;
+    int datagramWriteIndex;
     private int reliabilityReadIndex;
     private int reliabilityWriteIndex;
     private int[] orderReadIndex;
@@ -75,7 +75,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private FastBinaryMinHeap<EncapsulatedPacket> outgoingPackets;
     private long[] outgoingPacketNextWeights;
     private FastBinaryMinHeap<EncapsulatedPacket>[] orderingHeaps;
-    private long currentPingTime = -1;
+    long currentPingTime = -1;
     private long lastPingTime = -1;
     private long lastPongTime = -1;
     private IntObjectMap<RakDatagramPacket> sentDatagrams;
@@ -508,15 +508,19 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         ChannelHandlerContext ctx = ctx();
 
-        if (this.currentPingTime + 2000L < curTime) {
+        this.writePing(ctx, curTime);
+
+        this.internalFlush(ctx);
+    }
+
+    void writePing(ChannelHandlerContext ctx, long curTime) {
+        if (this.currentPingTime + 2000L < curTime && this.datagramWriteIndex > 1) {
             ByteBuf buffer = ctx.alloc().ioBuffer(9);
             buffer.writeByte(ID_CONNECTED_PING);
             buffer.writeLong(curTime);
             this.currentPingTime = curTime;
             this.write(ctx, new RakMessage(buffer, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
         }
-
-         this.internalFlush(ctx);
     }
 
     private void internalFlush(ChannelHandlerContext ctx) {
