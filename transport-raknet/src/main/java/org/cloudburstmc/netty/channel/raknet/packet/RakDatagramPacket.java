@@ -69,7 +69,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         }
 
         this.packets.add(packet);
-        if (packet.isSplit()) {
+        if (packet.isSplit() && packet.getPartIndex() > 0) {
             flags |= FLAG_CONTINUOUS_SEND;
         }
         return true;

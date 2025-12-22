@@ -22,13 +22,16 @@ import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.IllegalReferenceCountException;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
+import io.netty.util.collection.IntObjectHashMap;
+import io.netty.util.collection.IntObjectMap;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
 import java.util.Objects;
 
 public class SplitPacketHelper extends AbstractReferenceCounted {
-    private final EncapsulatedPacket[] packets;
+    private final IntObjectMap<EncapsulatedPacket> packets;
     private final int partId;
+    private final int expectedLength;
     private final long created = System.currentTimeMillis();
     private int reassembledSize;
 
@@ -40,46 +43,49 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
             throw new IllegalArgumentException("Too many split parts, expectedLength must be less than 8192");
         }
         this.partId = partId;
-        this.packets = new EncapsulatedPacket[(int) expectedLength];
+        this.expectedLength = (int) expectedLength;
+        this.packets = new IntObjectHashMap<>();
     }
 
     /**
      * Whether this helper is reassembling the split packet the given part was cut from.
      */
     public boolean matches(EncapsulatedPacket packet) {
-        return this.partId == packet.getPartId() && this.packets.length == packet.getPartCount();
+        return this.partId == packet.getPartId() && this.expectedLength == packet.getPartCount();
     }
 
     public EncapsulatedPacket add(EncapsulatedPacket packet, ByteBufAllocator alloc) {
         Objects.requireNonNull(packet, "packet cannot be null");
         if (!packet.isSplit()) throw new IllegalArgumentException("Packet is not split");
         if (this.refCnt() <= 0) throw new IllegalReferenceCountException(this.refCnt());
-        if (packet.getPartIndex() < 0 || packet.getPartIndex() >= this.packets.length) {
+        int partIndex = packet.getPartIndex();
+        if (partIndex < 0 || partIndex >= this.expectedLength) {
             throw new IllegalArgumentException(String.format("Split packet part index out of range. Got %s, expected 0-%s",
-                    packet.getPartIndex(), this.packets.length - 1));
+                    partIndex, this.expectedLength - 1));
         }
 
-        int partIndex = packet.getPartIndex();
-        if (this.packets[partIndex] != null) {
+        if (this.packets.containsKey(partIndex)) {
             // Duplicate
             return null;
         }
         // Retain the packet so it can be reassembled later.
-        this.packets[partIndex] = packet.retain();
+        this.packets.put(partIndex, packet.retain());
         this.reassembledSize += packet.getBuffer().readableBytes();
 
+        if (this.packets.size() < this.expectedLength) {
+            return null;
+        }
+
+        // Walk by index so the parts are sized and written in order
         int sz = 0;
-        for (EncapsulatedPacket netPacket : this.packets) {
-            if (netPacket == null) {
-                return null;
-            }
-            sz += netPacket.getBuffer().readableBytes();
+        for (int i = 0; i < this.expectedLength; i++) {
+            sz += this.packets.get(i).getBuffer().readableBytes();
         }
 
         // We can't use a composite buffer as the native code will choke on it
         ByteBuf reassembled = alloc.ioBuffer(sz);
-        for (EncapsulatedPacket netPacket : this.packets) {
-            ByteBuf buf = netPacket.getBuffer();
+        for (int i = 0; i < this.expectedLength; i++) {
+            ByteBuf buf = this.packets.get(i).getBuffer();
             reassembled.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
         }
 
@@ -102,9 +108,10 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
 
     @Override
     protected void deallocate() {
-        for (EncapsulatedPacket packet : this.packets) {
+        for (EncapsulatedPacket packet : this.packets.values()) {
             ReferenceCountUtil.release(packet);
         }
+        this.packets.clear();
     }
 
     @Override
