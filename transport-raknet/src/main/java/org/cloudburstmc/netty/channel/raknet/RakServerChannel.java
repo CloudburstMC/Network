@@ -27,6 +27,7 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.proxy.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakServerConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
 import org.cloudburstmc.netty.handler.codec.raknet.common.UnconnectedPongEncoder;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOfflineHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRateLimiter;
@@ -58,7 +59,10 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         super(channel);
         this.childConsumer = childConsumer;
         this.config = new DefaultRakServerConfig(this);
-        // Default common handler of offline phase. Handles only raknet packets, forwards rest.
+        this.initPipeline();
+    }
+
+    protected void initPipeline() {
         this.pipeline().addLast(UnconnectedPongEncoder.NAME, UnconnectedPongEncoder.INSTANCE);
         if (this.config().getPacketLimit() > 0) { // No point in enabling this.
             this.pipeline().addLast(RakServerRateLimiter.NAME, new RakServerRateLimiter(this));
@@ -75,9 +79,10 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
      * @return RakChildChannel instance of new channel.
      */
     public RakChildChannel createChildChannel(InetSocketAddress address, InetSocketAddress localAddress,
-                                              long clientGuid, int protocolVersion, int mtu) {
+                                              long clientGuid, int mtu) {
         RakChildChannel existingChannel = this.childChannelMap.get(address);
-        if (this.config().getSendCookie() && existingChannel != null) {
+        if (this.config().getCookieMode() != RakServerCookieMode.INVALID && 
+                this.config().getCookieMode() != RakServerCookieMode.OFF && existingChannel != null) {
             // We know this player is coming from this IP address due to the cookie, so we can safely close the existing channel.
             existingChannel.close();
         } else if (existingChannel != null) {
@@ -85,7 +90,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
             return null;
         }
 
-        RakChildChannel channel = new RakChildChannel(address, localAddress, this, clientGuid, protocolVersion, mtu, childConsumer);
+        RakChildChannel channel = new RakChildChannel(address, localAddress, this, clientGuid, mtu, childConsumer);
         channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
         // Fire channel thought ServerBootstrap,
         // register to eventLoop, assign default options and attributes

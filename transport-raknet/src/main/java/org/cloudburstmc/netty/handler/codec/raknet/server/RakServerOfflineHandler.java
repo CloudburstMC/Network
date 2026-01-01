@@ -20,26 +20,20 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import net.jodah.expiringmap.ExpirationPolicy;
-import net.jodah.expiringmap.ExpiringMap;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
 import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler;
 import org.cloudburstmc.netty.util.RakUtils;
-import org.cloudburstmc.netty.util.SecureAlgorithmProvider;
 
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
@@ -47,20 +41,6 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
     public static final String NAME = "rak-offline-handler";
 
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakServerOfflineHandler.class);
-
-    private final ThreadLocal<SecureRandom> random = ThreadLocal.withInitial(() -> {
-        try {
-            return SecureRandom.getInstance(SecureAlgorithmProvider.getSecurityAlgorithm());
-        } catch (NoSuchAlgorithmException e) {
-            return new SecureRandom();
-        }
-    });
-
-    private final ExpiringMap<InetSocketAddress, PendingConnection> pendingConnections = ExpiringMap.builder()
-            .expiration(10, TimeUnit.SECONDS)
-            .expirationPolicy(ExpirationPolicy.CREATED)
-            .expirationListener((key, value) -> ReferenceCountUtil.release(value))
-            .build();
 
     private final RakServerChannel channel;
 
@@ -153,6 +133,14 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
     }
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
+        RakServerChannelConfig config = (RakServerChannelConfig) ctx.channel().config();
+        RakServerCookieMode mode = config.getCookieMode();
+
+        if (mode == RakServerCookieMode.OFFLOADED || mode == RakServerCookieMode.OFFLOADED_PSK) {
+            // In OFFLOADED and OFFLOADED_PSK modes, the server is not allowed to send cookies.
+            return;
+        }
+
         ByteBuf buffer = packet.content();
         InetSocketAddress sender = packet.sender();
 
@@ -163,7 +151,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         // 1 (Packet ID), (Magic), 1 (Protocol Version), 20/40 (IP Header)
         int mtu = buffer.readableBytes() + 1 + magicBuf.readableBytes() + 1 + (sender.getAddress() instanceof Inet6Address ? 40 : 20) + UDP_HEADER_SIZE;
 
-        int[] supportedProtocols = ((RakServerChannelConfig) ctx.channel().config()).getSupportedProtocols();
+        int[] supportedProtocols = config.getSupportedProtocols();
         if (supportedProtocols != null && Arrays.binarySearch(supportedProtocols, protocolVersion) < 0) {
             int latestVersion = supportedProtocols[supportedProtocols.length - 1];
             this.sendIncompatibleVersion(ctx, packet, latestVersion, magicBuf, guid);
@@ -173,20 +161,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         // TODO: banned address check?
         // TODO: max connections check?
 
-
-        boolean sendCookie = ((RakServerChannelConfig) ctx.channel().config()).getSendCookie();
-        int cookie;
-
-        if (sendCookie) {
-            cookie = this.random.get().nextInt();
-        } else {
-            cookie = 0;
-        }
-
-        PendingConnection connection = this.pendingConnections.putIfAbsent(sender, new PendingConnection(protocolVersion, cookie));
-        if (connection != null && log.isTraceEnabled()) {
-            log.trace("Received duplicate open connection request 1 from {}", sender);
-        }
+        boolean sendCookie = mode == RakServerCookieMode.ACTIVE;
 
         int bufferCapacity = sendCookie ? 32 : 28; // 4 byte cookie
 
@@ -196,39 +171,30 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         replyBuffer.writeLong(guid);
         replyBuffer.writeBoolean(sendCookie); // Security
         if (sendCookie) {
+            int cookie = config.getSipHash().generateStatelessCookie(sender);
             replyBuffer.writeInt(cookie);
         }
-        replyBuffer.writeShort(RakUtils.clamp(mtu, ((RakServerChannelConfig) ctx.channel().config()).getMinMtu(),
-                ((RakServerChannelConfig) ctx.channel().config()).getMaxMtu()));
+        replyBuffer.writeShort(RakUtils.clamp(mtu, config.getMinMtu(), config.getMaxMtu()));
         ctx.writeAndFlush(RakUtils.datagramReply(replyBuffer, packet));
     }
 
     private void onOpenConnectionRequest2(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
+        RakServerChannelConfig config = (RakServerChannelConfig) ctx.channel().config();
+        RakServerCookieMode mode = config.getCookieMode();
+
         ByteBuf buffer = packet.content();
         InetSocketAddress sender = packet.sender();
         // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
 
-        
-        PendingConnection connection = this.pendingConnections.remove(sender);
-        if (connection == null) {
-            if (log.isTraceEnabled()) {
-                log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2 without open connection request 1", sender);
-            }
-            // Don't respond yet as we cannot verify the connection source IP
-            return;
-        }
-
-        boolean sendCookie = ((RakServerChannelConfig) ctx.channel().config()).getSendCookie();
-        if (sendCookie) {
+        boolean expectCookie = config.getCookieMode() != RakServerCookieMode.INVALID;
+        if (expectCookie) {
             int cookie = buffer.readInt();
-            int expectedCookie = connection.cookie;
-            if (expectedCookie != cookie) {
+            if (!config.getSipHash().validateCookie(cookie, sender, mode)) {
                 if (log.isTraceEnabled()) {
-                    log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2 with invalid cookie (expected {}, but received {})",
-                            sender, expectedCookie, cookie);
+                    log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2 with invalid cookie (Mode: {})", sender, mode);
                 }
-                // Incorrect cookie provided
+                // Incorrect/invalid cookie provided
                 // This is likely source IP spoofing so we will not reply
                 return;
             }
@@ -236,12 +202,12 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         }
 
         // TODO: Verify serverAddress matches?
-        InetSocketAddress serverAddress = RakUtils.readAddress(buffer);
+        RakUtils.readAddress(buffer); // serverAddress
         int mtu = buffer.readUnsignedShort();
         long clientGuid = buffer.readLong();
 
-        int minMtu = ((RakServerChannelConfig) ctx.channel().config()).getMinMtu();
-        int maxMtu = ((RakServerChannelConfig) ctx.channel().config()).getMaxMtu();
+        int minMtu = config.getMinMtu();
+        int maxMtu = config.getMaxMtu();
         if (mtu < minMtu || mtu > maxMtu) {
             if (log.isTraceEnabled()) {
                 log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2, but the MTU was {}. Expecting a value between {} - {}",
@@ -253,7 +219,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         }
 
         RakServerChannel serverChannel = (RakServerChannel) ctx.channel();
-        RakChildChannel channel = serverChannel.createChildChannel(sender, packet.recipient(), clientGuid, connection.protocolVersion, mtu);
+        RakChildChannel channel = serverChannel.createChildChannel(sender, packet.recipient(), clientGuid, mtu);
         if (channel == null) {
             if (log.isTraceEnabled()) {
                 log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2, but a channel already exists for this socket address",
@@ -289,15 +255,5 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         buffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         buffer.writeLong(guid);
         ctx.writeAndFlush(RakUtils.datagramReply(buffer, request));
-    }
-
-    private static class PendingConnection {
-        final int protocolVersion;
-        final int cookie;
-
-        public PendingConnection(int protocolVersion, int cookie) {
-            this.protocolVersion = protocolVersion;
-            this.cookie = cookie;
-        }
     }
 }

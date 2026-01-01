@@ -14,6 +14,8 @@
  * under the License.
  */
 
+import org.gradle.api.tasks.testing.logging.TestLogEvent
+
 description = "RakNet transport for Netty"
 
 dependencies {
@@ -22,6 +24,16 @@ dependencies {
 
     testImplementation(libs.bundles.junit)
     testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.withType<Test> {
+    useJUnitPlatform()
+
+    testLogging {
+        // Optionally pass -PshowTestLogs=true to show STDOUT/STDERR from tests
+        showStandardStreams = project.findProperty("showTestLogs") == "true"
+        events(TestLogEvent.PASSED, TestLogEvent.SKIPPED, TestLogEvent.FAILED)
+    }
 }
 
 tasks.jar {

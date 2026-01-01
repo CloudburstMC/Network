@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.channel.raknet.config;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelConfig;
+import org.cloudburstmc.netty.util.SipHash;
 
 public interface RakServerChannelConfig extends ChannelConfig {
 
@@ -65,10 +66,6 @@ public interface RakServerChannelConfig extends ChannelConfig {
 
     void setGlobalPacketLimit(int limit);
 
-    void setSendCookie(boolean sendCookie);
-
-    boolean getSendCookie();
-
     void setMetrics(RakServerMetrics metrics);
 
     RakServerMetrics getMetrics();
@@ -76,4 +73,12 @@ public interface RakServerChannelConfig extends ChannelConfig {
     void setIpDontFragment(boolean ipDontFragment);
 
     boolean getIpDontFragment();
+
+    RakServerCookieMode getCookieMode();
+    RakServerChannelConfig setCookieMode(RakServerCookieMode mode);
+
+    byte[] getCookieSecret();
+    RakServerChannelConfig setCookieSecret(byte[] secret);
+
+    SipHash getSipHash();
 }

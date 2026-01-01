@@ -19,10 +19,15 @@ package org.cloudburstmc.netty.channel.raknet;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelFactory;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramChannel;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.StringUtil;
+import org.cloudburstmc.netty.handler.codec.raknet.cookieservice.RakServerCookieHandler;
 
 import java.lang.reflect.Constructor;
+import java.net.InetSocketAddress;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -69,6 +74,37 @@ public class RakChannelFactory<T extends Channel> implements ChannelFactory<T> {
 
     public static RakChannelFactory<RakClientChannel> client(Class<? extends DatagramChannel> clazz, Consumer<DatagramChannel> parentConsumer) {
         return new RakChannelFactory<>(RakClientChannel.class, RakClientChannel::new, clazz, parentConsumer);
+    }
+
+    /**
+     * Creates a factory for a specialized RakServerChannel designed exclusively for issuing cookies.
+     * This service strips away session management, routing, tail handling, rate limiting, and ping handling
+     * to run efficiently as a stateless cookie issuer.
+     *
+     * @param clazz The underlying DatagramChannel class.
+     * @return A factory for cookie-service enabled RakServerChannels.
+     */
+    public static RakChannelFactory<RakServerChannel> cookieService(Class<? extends DatagramChannel> clazz) {
+        return new RakChannelFactory<>(RakServerChannel.class, channel -> {
+            RakServerChannel rakChannel = new RakServerChannel(channel, null) {
+                @Override
+                public RakChildChannel createChildChannel(InetSocketAddress address, InetSocketAddress localAddress, long clientGuid, int mtu) {
+                    return null;
+                }
+
+                @Override
+                protected void initPipeline() {
+                    this.pipeline().addLast(RakServerCookieHandler.NAME, new RakServerCookieHandler());
+                    this.pipeline().addLast("rak-cookie-sink", new ChannelInboundHandlerAdapter() {
+                        @Override
+                        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                            ReferenceCountUtil.release(msg);
+                        }
+                    });
+                }
+            };            
+            return rakChannel;
+        }, clazz, null);
     }
 
     @Override

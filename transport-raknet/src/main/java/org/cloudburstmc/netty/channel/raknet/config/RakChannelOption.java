@@ -159,12 +159,6 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_COMPATIBILITY_MODE");
 
     /**
-     * Whether to send a cookie to the client during the connection process.
-     */
-    public static final ChannelOption<Boolean> RAK_SEND_COOKIE =
-            valueOf(RakChannelOption.class, "RAK_SEND_COOKIE");
-
-    /**
      * An array of MTU sizes that the RakNet client will use when initially connecting.
      */
     public static final ChannelOption<Integer[]> RAK_MTU_SIZES =
@@ -194,6 +188,18 @@ public class RakChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<Integer> RAK_MAX_QUEUED_BYTES =
             valueOf(RakChannelOption.class, "RAK_MAX_QUEUED_BYTES");
+
+    /**
+     * The cookie mode the RakNet server will use when handling client connections.
+     */
+    public static final ChannelOption<RakServerCookieMode> RAK_SERVER_COOKIE_MODE =
+            valueOf(RakChannelOption.class, "RAK_SERVER_COOKIE_MODE");
+
+    /*
+     * The secret key used for generating stateless cookies. Must be exactly 16 bytes. One will be generated if not set.
+     */
+    public static final ChannelOption<byte[]> RAK_SERVER_COOKIE_SECRET =
+            valueOf(RakChannelOption.class, "RAK_SERVER_COOKIE_SECRET");
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {

@@ -23,7 +23,11 @@ import io.netty.channel.DefaultChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.util.IpDontFragmentProvider;
+import org.cloudburstmc.netty.util.SecureAlgorithmProvider;
+import org.cloudburstmc.netty.util.SipHash;
 
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
@@ -47,12 +51,25 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile int packetLimit = RakConstants.DEFAULT_PACKET_LIMIT;
     private volatile int globalPacketLimit = RakConstants.DEFAULT_GLOBAL_PACKET_LIMIT;
     private volatile RakServerMetrics metrics;
-    private volatile boolean sendCookie;
     private volatile boolean ipDontFragment = false;
+    private volatile RakServerCookieMode cookieMode = RakServerCookieMode.ACTIVE;
+    private volatile byte[] cookieSecret = new byte[16];
+    private volatile SipHash sipHash;
 
+
+    private final ThreadLocal<SecureRandom> random = ThreadLocal.withInitial(() -> {
+        try {
+            return SecureRandom.getInstance(SecureAlgorithmProvider.getSecurityAlgorithm());
+        } catch (NoSuchAlgorithmException e) {
+            return new SecureRandom();
+        }
+    });
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
+
+        random.get().nextBytes(this.cookieSecret);
+        this.sipHash = new SipHash(this.cookieSecret);
     }
 
     @Override
@@ -60,8 +77,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         return getOptions(
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MAX_CONNECTIONS, RakChannelOption.RAK_SUPPORTED_PROTOCOLS, RakChannelOption.RAK_UNCONNECTED_MAGIC,
-                RakChannelOption.RAK_ADVERTISEMENT, RakChannelOption.RAK_HANDLE_PING, RakChannelOption.RAK_PACKET_LIMIT, RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, RakChannelOption.RAK_SEND_COOKIE,
-                RakChannelOption.RAK_SERVER_METRICS, RakChannelOption.RAK_IP_DONT_FRAGMENT);
+                RakChannelOption.RAK_ADVERTISEMENT, RakChannelOption.RAK_HANDLE_PING, RakChannelOption.RAK_PACKET_LIMIT, RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, RakChannelOption.RAK_SERVER_METRICS, 
+                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET);
     }
 
     @SuppressWarnings("unchecked")
@@ -103,11 +120,14 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_SERVER_METRICS) {
             return (T) this.getMetrics();
         }
-        if (option == RakChannelOption.RAK_SEND_COOKIE) {
-            return (T) Boolean.valueOf(this.sendCookie);
-        }
         if (option == RakChannelOption.RAK_IP_DONT_FRAGMENT) {
             return (T) Boolean.valueOf(this.ipDontFragment);
+        }
+        if (option == RakChannelOption.RAK_SERVER_COOKIE_MODE) {
+            return (T) this.getCookieMode();
+        }
+        if (option == RakChannelOption.RAK_SERVER_COOKIE_SECRET) {
+            return (T) this.getCookieSecret();
         }
         return this.channel.parent().config().getOption(option);
     }
@@ -138,13 +158,15 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setPacketLimit((Integer) value);
         } else if (option == RakChannelOption.RAK_GLOBAL_PACKET_LIMIT) {
             this.setGlobalPacketLimit((Integer) value);
-        } else if (option == RakChannelOption.RAK_SEND_COOKIE) {
-            this.setSendCookie((Boolean) value);
         } else if (option == RakChannelOption.RAK_SERVER_METRICS) {
             this.setMetrics((RakServerMetrics) value);
         } else if (option == RakChannelOption.RAK_IP_DONT_FRAGMENT) {
             this.setIpDontFragment((Boolean) value);
             return (Boolean) value == this.getIpDontFragment();
+        } else if (option == RakChannelOption.RAK_SERVER_COOKIE_MODE) {
+            this.setCookieMode((RakServerCookieMode) value);
+        } else if (option == RakChannelOption.RAK_SERVER_COOKIE_SECRET) {
+            this.setCookieSecret((byte[]) value);
         } else {
             return this.channel.parent().config().setOption(option, value);
         }
@@ -282,16 +304,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     }
 
     @Override
-    public void setSendCookie(boolean sendCookie) {
-        this.sendCookie = sendCookie;
-    }
-
-    @Override
-    public boolean getSendCookie() {
-        return this.sendCookie;
-    }
-
-    @Override
     public void setMetrics(RakServerMetrics metrics) {
         this.metrics = metrics;
     }
@@ -309,5 +321,32 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     @Override
     public boolean getIpDontFragment() {
         return this.ipDontFragment;
+    }
+
+    @Override
+    public RakServerCookieMode getCookieMode() { 
+        return cookieMode; 
+    }
+
+    @Override
+    public RakServerChannelConfig setCookieMode(RakServerCookieMode mode) { 
+        this.cookieMode = mode; return this; 
+    }
+
+    @Override
+    public byte[] getCookieSecret() { 
+        return cookieSecret; 
+    }
+
+    @Override
+    public RakServerChannelConfig setCookieSecret(byte[] secret) {
+        this.cookieSecret = secret;
+        this.sipHash = new SipHash(secret);
+        return this;
+    }
+
+    @Override
+    public SipHash getSipHash() {
+        return this.sipHash;
     }
 }

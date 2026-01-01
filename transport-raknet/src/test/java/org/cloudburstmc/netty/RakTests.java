@@ -135,36 +135,11 @@ public class RakTests {
                 .awaitUninterruptibly();
     }
 
-    public void setupCookieServer() {
-        serverBootstrap()
-                .option(RakChannelOption.RAK_SEND_COOKIE, true)
-                .bind(new InetSocketAddress("127.0.0.1", 19132))
-                .awaitUninterruptibly();
-    }
-
     @Test
     public void testClientConnect() {
         setupServer();
         int mtu = RakConstants.MAXIMUM_MTU_SIZE;
         System.out.println("Testing client with MTU " + mtu);
-
-        clientBootstrap(mtu)
-                .handler(new ChannelInitializer<RakClientChannel>() {
-                    @Override
-                    protected void initChannel(RakClientChannel ch) throws Exception {
-                        System.out.println("Client channel initialized");
-                    }
-                })
-                .connect(new InetSocketAddress("127.0.0.1", 19132))
-                .awaitUninterruptibly()
-                .channel();
-    }
-
-    @Test
-    public void testClientConnectWithCookie() {
-        setupCookieServer();
-        int mtu = RakConstants.MAXIMUM_MTU_SIZE;
-        System.out.println("Testing client with MTU " + mtu + " and cookie enabled");
 
         clientBootstrap(mtu)
                 .handler(new ChannelInitializer<RakClientChannel>() {

@@ -41,13 +41,12 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
     private volatile boolean open = true;
     private volatile boolean active;
 
-    RakChildChannel(InetSocketAddress remoteAddress, InetSocketAddress localAddress, RakServerChannel parent, long guid, int version, int mtu, Consumer<RakChannel> childConsumer) {
+    RakChildChannel(InetSocketAddress remoteAddress, InetSocketAddress localAddress, RakServerChannel parent, long guid, int mtu, Consumer<RakChannel> childConsumer) {
         super(parent);
         this.remoteAddress = remoteAddress;
         this.localAddress = localAddress;
         this.config = new DefaultRakSessionConfig(this);
         this.config.setGuid(guid);
-        this.config.setProtocolVersion(version);
         this.config.setMtu(mtu);
         // Allow user to configure the child channel before we initialize pipeline
         // This is not the same as bootstrap.childOption() as Bootstrap does not allow setting options per channel
