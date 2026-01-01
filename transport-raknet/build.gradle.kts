@@ -21,6 +21,7 @@ dependencies {
     api(libs.expiringmap)
 
     testImplementation(libs.bundles.junit)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 tasks.jar {
