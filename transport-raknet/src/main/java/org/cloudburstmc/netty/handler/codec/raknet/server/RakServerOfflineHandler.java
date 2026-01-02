@@ -194,6 +194,12 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
                 if (log.isTraceEnabled()) {
                     log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2 with invalid cookie (Mode: {})", sender, mode);
                 }
+
+                RakServerMetrics metrics = this.channel.config().getMetrics();
+                if (metrics != null) {
+                    metrics.invalidCookie(sender);
+                }
+
                 // Incorrect/invalid cookie provided
                 // This is likely source IP spoofing so we will not reply
                 return;
