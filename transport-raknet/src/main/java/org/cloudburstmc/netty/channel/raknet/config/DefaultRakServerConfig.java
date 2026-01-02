@@ -53,7 +53,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile RakServerMetrics metrics;
     private volatile boolean ipDontFragment = false;
     private volatile RakServerCookieMode cookieMode = RakServerCookieMode.ACTIVE;
-    private volatile byte[] cookieSecret = new byte[16];
+    private volatile byte[] cookieSecret = new byte[32];
     private volatile SipHash sipHash;
 
     public DefaultRakServerConfig(RakServerChannel channel) {

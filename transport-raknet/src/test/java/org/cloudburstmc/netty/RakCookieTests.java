@@ -47,7 +47,10 @@ import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 public class RakCookieTests {
 
     private static final int PORT = 19134;
-    private static final byte[] SECRET = new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    private static final byte[] SECRET = new byte[]{
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
+    };
 
     private EventLoopGroup group;
     private Channel serverChannel;
@@ -277,6 +280,93 @@ public class RakCookieTests {
         Assertions.assertEquals(ID_OPEN_CONNECTION_REPLY_2, response.content().getUnsignedByte(0));
         response.release();
         rawClient.close();
+    }
+
+    /**
+     * Verifies that the keys actually rotate based on the epoch (every 10 minutes).
+     */
+    @Test
+    public void testKeyRotation() {
+        TestSipHash sipHash = new TestSipHash(SECRET);
+        InetSocketAddress sender = new InetSocketAddress("127.0.0.1", 12345);
+
+        // Epoch 0: Time 0
+        sipHash.setTime(0);
+        int cookieEpoch0 = sipHash.generateStatelessCookie(sender);
+
+        // Epoch 1: Time 10 minutes (600 seconds)
+        sipHash.setTime(TimeUnit.MINUTES.toMillis(10));
+        int cookieEpoch1 = sipHash.generateStatelessCookie(sender);
+        
+        // Ensure signatures are different for the same input address/timestamp-slot        
+        int sig0 = (cookieEpoch0 >>> 8) & 0xFFFFFF;
+        int sig1 = (cookieEpoch1 >>> 8) & 0xFFFFFF;
+        
+        Assertions.assertNotEquals(sig0, sig1, "Signatures must differ between epochs due to key rotation");
+    }
+
+    /**
+     * Verifies that a cookie generated near the end of Epoch 0 is still valid
+     * when received in Epoch 1, provided the 2-minute expiration window hasn't passed.
+     */
+    @Test
+    public void testEpochCrossing() {
+        TestSipHash sipHash = new TestSipHash(SECRET);
+        InetSocketAddress sender = new InetSocketAddress("127.0.0.1", 12345);
+
+        // Time: 9 minutes 50 seconds (Epoch 0)
+        long timeGen = TimeUnit.MINUTES.toMillis(9) + TimeUnit.SECONDS.toMillis(50);
+        sipHash.setTime(timeGen);
+        
+        int cookie = sipHash.generateStatelessCookie(sender);
+
+        // Time: 10 minutes 10 seconds (Epoch 1)
+        // This is 20 seconds later real-time, across the 10-minute Epoch boundary and within the 2-minute validity window.
+        long timeVerify = TimeUnit.MINUTES.toMillis(10) + TimeUnit.SECONDS.toMillis(10);
+        sipHash.setTime(timeVerify);
+        
+        boolean valid = sipHash.validateCookie(cookie, sender, RakServerCookieMode.ACTIVE);
+        Assertions.assertTrue(valid, "Cookie from previous epoch (within valid window) should be accepted");
+    }
+
+    /**
+     * Verifies that a cookie expires after the 2-minute window, even if within the same epoch.
+     */
+    @Test
+    public void testCookieExpiry() {
+        TestSipHash sipHash = new TestSipHash(SECRET);
+        InetSocketAddress sender = new InetSocketAddress("127.0.0.1", 12345);
+
+        // Time: 5 minutes
+        sipHash.setTime(TimeUnit.MINUTES.toMillis(5));
+        int cookie = sipHash.generateStatelessCookie(sender);
+
+        // Time: 7 minutes + 1ms (Diff > 2 minutes)
+        sipHash.setTime(TimeUnit.MINUTES.toMillis(7) + 1000); // 2 mins and 1 sec later
+        
+        boolean valid = sipHash.validateCookie(cookie, sender, RakServerCookieMode.ACTIVE);
+        Assertions.assertFalse(valid, "Cookie should expire after 2 minutes");
+    }
+
+    /**
+     * Helper subclass to mock time for testing rotation.
+     */
+    private static class TestSipHash extends SipHash {
+        private long mockedTime;
+
+        public TestSipHash(byte[] key) {
+            super(key);
+            this.mockedTime = System.currentTimeMillis();
+        }
+
+        public void setTime(long timeMillis) {
+            this.mockedTime = timeMillis;
+        }
+
+        @Override
+        protected long now() {
+            return this.mockedTime;
+        }
     }
 
     private ByteBuf createOCR2(java.net.SocketAddress clientAddr, InetSocketAddress serverAddr, int cookie, boolean hasCookie) {
