@@ -328,7 +328,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
 
     @Override
     public RakServerChannelConfig setCookieMode(RakServerCookieMode mode) { 
-        this.cookieMode = mode; return this; 
+        this.cookieMode = mode; 
+        return this;
     }
 
     @Override
