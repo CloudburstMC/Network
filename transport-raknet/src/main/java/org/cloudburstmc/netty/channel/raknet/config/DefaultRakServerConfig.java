@@ -56,19 +56,17 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile byte[] cookieSecret = new byte[16];
     private volatile SipHash sipHash;
 
-
-    private final ThreadLocal<SecureRandom> random = ThreadLocal.withInitial(() -> {
-        try {
-            return SecureRandom.getInstance(SecureAlgorithmProvider.getSecurityAlgorithm());
-        } catch (NoSuchAlgorithmException e) {
-            return new SecureRandom();
-        }
-    });
-
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
 
-        random.get().nextBytes(this.cookieSecret);
+        SecureRandom random;
+        try {
+            random = SecureRandom.getInstance(SecureAlgorithmProvider.getSecurityAlgorithm());
+        } catch (NoSuchAlgorithmException e) {
+            random = new SecureRandom();
+        }
+
+        random.nextBytes(this.cookieSecret);
         this.sipHash = new SipHash(this.cookieSecret);
     }
 
