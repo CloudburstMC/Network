@@ -32,7 +32,7 @@ public class RakUtils {
 
     private static final Constructor<DefaultChannelPipeline> DEFAULT_CHANNEL_PIPELINE_CONSTRUCTOR;
     private static final Method PIPELINE_DESTROY_METHOD;
-    private static final long startTime = System.currentTimeMillis();
+    private static final long startTime = System.nanoTime() / 1_000_000;
 
     static {
         try {
@@ -194,6 +194,6 @@ public class RakUtils {
     }
 
     public static long timestamp() {
-        return System.currentTimeMillis() - startTime;
+        return System.nanoTime() / 1_000_000 - startTime;
     }
 }
