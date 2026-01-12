@@ -51,8 +51,6 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private volatile ScheduledFuture<?> handshakeTimeoutTask;
 
-    private volatile String localUfrag;
-
     private int retryCount = 0;
 
     /**
@@ -204,6 +202,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private void initWebRTC(List<NetherNetSignaling.IceServerInfo> iceServers) {
         RTCConfiguration rtcConfig = new RTCConfiguration();
+        rtcConfig.portAllocatorConfig = this.config.getOption(NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG);
         rtcConfig.bundlePolicy = RTCBundlePolicy.MAX_BUNDLE;
 
         if (iceServers != null) {
@@ -219,24 +218,10 @@ public class NetherNetClientChannel extends NetherNetChannel {
         peerConnection = factory.createPeerConnection(rtcConfig, new PeerConnectionObserver() {
             @Override
             public void onIceCandidate(RTCIceCandidate candidate) {
-                // Wait until we have the ufrag (usually available immediately after createOffer)
-                if (localUfrag == null) {
-                    log.warn("Generated ICE candidate before local ufrag was available. Skipping.");
-                    return;
-                }
-                
-                String sdp = candidate.sdp.trim();
-                
-                // Format: <StandardSDP> ufrag <LocalUfrag> network-id <LocalNetworkID> network-cost 0
-                StringBuilder sb = new StringBuilder(sdp)
-                    .append(" ufrag ").append(localUfrag)
-                    .append(" network-id ").append(signaling.getLocalNetworkId())
-                    .append(" network-cost 0");
-
                 try {
                     signaling.sendSignal(
                         targetNetworkId, 
-                        NetherNetConstants.buildSignalCandidateAdd(connectionId, sb.toString())
+                        NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate.sdp)
                     );
                 } catch (Exception e) {
                     log.error("Failed to send ICE candidate", e);
@@ -261,29 +246,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
         setupDataChannels();
     }
 
-    private String extractUfrag(String sdp) {
-        if (sdp == null) return "";
-        for (String line : sdp.split("\\r?\\n")) {
-            line = line.trim();
-            if (line.startsWith("a=ice-ufrag:")) {
-                return line.substring("a=ice-ufrag:".length()).trim();
-            }
-            // Some implementations might omit 'a='
-            if (line.startsWith("ice-ufrag:")) {
-                return line.substring("ice-ufrag:".length()).trim();
-            }
-        }
-        log.warn("Could not find ice-ufrag in local SDP!");
-        return "";
-    }
-
     private void createAndSendOffer() {
         if (peerConnection == null) return;
         peerConnection.createOffer(new RTCOfferOptions(), new CreateSessionDescriptionObserver() {
             @Override
             public void onSuccess(RTCSessionDescription description) {
                 if (peerConnection == null) return;
-                NetherNetClientChannel.this.localUfrag = extractUfrag(description.sdp);
                 peerConnection.setLocalDescription(description, new SetSessionDescriptionObserver() {
                     @Override
                     public void onSuccess() {

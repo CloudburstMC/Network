@@ -1,8 +1,15 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
+import dev.kastle.webrtc.PortAllocatorConfig;
 import io.netty.channel.ChannelOption;
 
 public class NetherChannelOption<T> extends ChannelOption<T> {
+
+    /**
+     * The PortAllocatorConfig used for WebRTC connections.
+     */
+    public static final ChannelOption<PortAllocatorConfig> NETHER_PORT_ALLOCATOR_CONFIG =
+            valueOf(NetherChannelOption.class, "NETHER_PORT_ALLOCATOR_CONFIG");
 
     /**
      * The timeout in seconds for completing the WebRTC handshake on the client before retrying.

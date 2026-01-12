@@ -231,6 +231,7 @@ public class NetherNetXboxSignaling extends SimpleChannelInboundHandler<TextWebS
     }
 
     private void handleSignal(JsonObject json) {
+        log.trace("Received Signal: {}", json.toString());
         String sender = json.has("From") ? json.get("From").getAsString() : "0";
         if (!json.has("Message")) {
             log.warn("Received SIGNAL (1) without Message payload.");

@@ -77,6 +77,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
         RTCConfiguration rtcConfig = new RTCConfiguration();
+        rtcConfig.portAllocatorConfig = this.config.getOption(NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG);
         rtcConfig.bundlePolicy = RTCBundlePolicy.MAX_BUNDLE;
 
         // Inject ICE servers if the signaling implementation supports it
