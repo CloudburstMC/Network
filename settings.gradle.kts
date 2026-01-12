@@ -22,3 +22,4 @@ plugins {
 
 include("transport-common")
 include("transport-raknet")
+include("transport-nethernet")
