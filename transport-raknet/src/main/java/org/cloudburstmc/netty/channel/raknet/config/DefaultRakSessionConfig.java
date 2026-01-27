@@ -44,6 +44,11 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         super(channel);
     }
 
+    public DefaultRakSessionConfig(Channel channel, RakChannelMetrics metrics) {
+        super(channel);
+        this.metrics = metrics;
+    }
+
     @Override
     public Map<ChannelOption<?>, Object> getOptions() {
         return this.getOptions(

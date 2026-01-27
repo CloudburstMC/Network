@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.channel.*;
 import io.netty.util.ReferenceCountUtil;
+import org.cloudburstmc.netty.channel.raknet.config.DefaultChannelToServerProxyMetrics;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
@@ -45,7 +46,7 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         super(parent);
         this.remoteAddress = remoteAddress;
         this.localAddress = localAddress;
-        this.config = new DefaultRakSessionConfig(this);
+        this.config = new DefaultRakSessionConfig(this, new DefaultChannelToServerProxyMetrics(parent, this));
         this.config.setGuid(guid);
         this.config.setProtocolVersion(version);
         this.config.setMtu(mtu);
