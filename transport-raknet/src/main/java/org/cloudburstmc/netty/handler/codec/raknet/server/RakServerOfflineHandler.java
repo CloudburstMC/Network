@@ -25,11 +25,13 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
+import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
 import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler;
 import org.cloudburstmc.netty.util.RakUtils;
+import org.cloudburstmc.netty.util.SipHash;
 
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
@@ -171,7 +173,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         replyBuffer.writeLong(guid);
         replyBuffer.writeBoolean(sendCookie); // Security
         if (sendCookie) {
-            int cookie = config.getSipHash().generateStatelessCookie(sender);
+            int cookie = config.getSipHash().generateStatelessCookie(sender, protocolVersion);
             replyBuffer.writeInt(cookie);
         }
         replyBuffer.writeShort(RakUtils.clamp(mtu, config.getMinMtu(), config.getMaxMtu()));
@@ -188,8 +190,9 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         buffer.skipBytes(magicBuf.readableBytes());
 
         boolean expectCookie = config.getCookieMode() != RakServerCookieMode.INVALID;
+        int cookie = 0;
         if (expectCookie) {
-            int cookie = buffer.readInt();
+            cookie = buffer.readInt();
             if (!config.getSipHash().validateCookie(cookie, sender, mode)) {
                 if (log.isTraceEnabled()) {
                     log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2 with invalid cookie (Mode: {})", sender, mode);
@@ -204,7 +207,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
                 // This is likely source IP spoofing so we will not reply
                 return;
             }
-            buffer.readBoolean(); // Client wrote challenge
+                buffer.readBoolean(); // Client wrote challenge
         }
 
         // TODO: Verify serverAddress matches?
@@ -234,6 +237,11 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             // Already connected
             this.sendAlreadyConnected(ctx, packet, magicBuf, guid);
             return;
+        }
+
+        if (mode == RakServerCookieMode.ACTIVE) {
+            int protocolVersion = SipHash.getProtocolVersion(cookie);
+            channel.config().setOption(RakChannelOption.RAK_PROTOCOL_VERSION, protocolVersion);
         }
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(31);

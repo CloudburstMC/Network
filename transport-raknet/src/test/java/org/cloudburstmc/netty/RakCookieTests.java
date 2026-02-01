@@ -51,6 +51,7 @@ public class RakCookieTests {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
         17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
     };
+    private static final int PROTOCOL_VERSION = 11;
 
     private EventLoopGroup group;
     private Channel serverChannel;
@@ -95,7 +96,7 @@ public class RakCookieTests {
         return new Bootstrap()
                 .channelFactory(RakChannelFactory.client(NioDatagramChannel.class))
                 .group(group)
-                .option(RakChannelOption.RAK_PROTOCOL_VERSION, 11)
+                .option(RakChannelOption.RAK_PROTOCOL_VERSION, PROTOCOL_VERSION)
                 .handler(new ChannelInitializer<RakClientChannel>() {
                     @Override
                     protected void initChannel(RakClientChannel ch) {
@@ -160,8 +161,8 @@ public class RakCookieTests {
 
         // Generate cookie with Valid Timestamp but Garbage Signature
         SipHash sipHash = new SipHash(SECRET);
-        int validCookie = sipHash.generateStatelessCookie(serverAddress); // Gives valid signature
-        // Corrupt the signature (top 24 bits), keep timestamp (bottom 8 bits)
+        int validCookie = sipHash.generateStatelessCookie(serverAddress, PROTOCOL_VERSION); // Gives valid signature
+        // Corrupt the signature (top 24 bits), keep combined byte (bottom 8 bits: time + proto)
         int forgedCookie = (validCookie & 0xFF) | 0xABCDEF00; 
 
         ByteBuf ocr2 = createOCR2(rawClient.localAddress(), serverAddress, forgedCookie, true);
@@ -202,7 +203,7 @@ public class RakCookieTests {
         // Valid Cookie
         SipHash sipHash = new SipHash(SECRET);
         // Note: The server verifies the signature based on the SENDER address (rawClient.localAddress())
-        int validCookie = sipHash.generateStatelessCookie((InetSocketAddress) rawClient.localAddress());
+        int validCookie = sipHash.generateStatelessCookie((InetSocketAddress) rawClient.localAddress(), PROTOCOL_VERSION);
 
         ByteBuf ocr2 = createOCR2(rawClient.localAddress(), serverAddress, validCookie, true);
         rawClient.writeAndFlush(new DatagramPacket(ocr2, serverAddress));
@@ -237,7 +238,12 @@ public class RakCookieTests {
                 .bind(new InetSocketAddress("127.0.0.1", 0)).awaitUninterruptibly().channel();
 
         // Invalid Cookie (Garbage Signature)
-        int invalidCookie = 0xABCDEF00 | ((int)(System.currentTimeMillis() / 60000) & 0xFF); 
+        // Timestamp is 4 bits, Proto is 4 bits.
+        int time = (int) ((System.currentTimeMillis() / 60000) & 0x0F);
+        int proto = (PROTOCOL_VERSION - 1) & 0x0F;
+        int combined = (time << 4) | proto;
+
+        int invalidCookie = 0xABCDEF00 | combined; 
 
         ByteBuf ocr2 = createOCR2(rawClient.localAddress(), serverAddress, invalidCookie, true);
         rawClient.writeAndFlush(new DatagramPacket(ocr2, serverAddress));
@@ -292,11 +298,11 @@ public class RakCookieTests {
 
         // Epoch 0: Time 0
         sipHash.setTime(0);
-        int cookieEpoch0 = sipHash.generateStatelessCookie(sender);
+        int cookieEpoch0 = sipHash.generateStatelessCookie(sender, PROTOCOL_VERSION);
 
         // Epoch 1: Time 10 minutes (600 seconds)
         sipHash.setTime(TimeUnit.MINUTES.toMillis(10));
-        int cookieEpoch1 = sipHash.generateStatelessCookie(sender);
+        int cookieEpoch1 = sipHash.generateStatelessCookie(sender, PROTOCOL_VERSION);
         
         // Ensure signatures are different for the same input address/timestamp-slot        
         int sig0 = (cookieEpoch0 >>> 8) & 0xFFFFFF;
@@ -318,7 +324,7 @@ public class RakCookieTests {
         long timeGen = TimeUnit.MINUTES.toMillis(9) + TimeUnit.SECONDS.toMillis(50);
         sipHash.setTime(timeGen);
         
-        int cookie = sipHash.generateStatelessCookie(sender);
+        int cookie = sipHash.generateStatelessCookie(sender, PROTOCOL_VERSION);
 
         // Time: 10 minutes 10 seconds (Epoch 1)
         // This is 20 seconds later real-time, across the 10-minute Epoch boundary and within the 2-minute validity window.
@@ -339,7 +345,7 @@ public class RakCookieTests {
 
         // Time: 5 minutes
         sipHash.setTime(TimeUnit.MINUTES.toMillis(5));
-        int cookie = sipHash.generateStatelessCookie(sender);
+        int cookie = sipHash.generateStatelessCookie(sender, PROTOCOL_VERSION);
 
         // Time: 7 minutes + 1ms (Diff > 2 minutes)
         sipHash.setTime(TimeUnit.MINUTES.toMillis(7) + 1000); // 2 mins and 1 sec later

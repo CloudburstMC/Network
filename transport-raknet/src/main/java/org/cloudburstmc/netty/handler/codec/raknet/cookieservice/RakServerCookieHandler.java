@@ -89,7 +89,7 @@ public class RakServerCookieHandler extends AdvancedChannelInboundHandler<Datagr
 
         // Generate Stateless Cookie
         SipHash sipHash = config.getSipHash();
-        int cookie = sipHash.generateStatelessCookie(sender);
+        int cookie = sipHash.generateStatelessCookie(sender, protocolVersion);
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(32);
         replyBuffer.writeByte(ID_OPEN_CONNECTION_REPLY_1);

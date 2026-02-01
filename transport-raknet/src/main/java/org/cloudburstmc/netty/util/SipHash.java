@@ -119,16 +119,23 @@ public class SipHash {
         return v0 ^ v1 ^ v2 ^ v3;
     }
 
-    public int generateStatelessCookie(InetSocketAddress sender) {
+    public int generateStatelessCookie(InetSocketAddress sender, int protocolVersion) {
         long now = now();
-        long timestampMinutes = (now / 60000) & 0xFF;
+        // 4 bits timestamp (16 minutes cycle)
+        long timestampMinutes = (now / 60000) & 0x0F;
         long epoch = (now / 1000) / 600;
         
         SipHashKey keys = getKeys(epoch);
-        long signature = computeSignature(sender, timestampMinutes, keys);
         
-        // Cookie = [Signature (24 bits) | Timestamp (8 bits)]
-        return (int) ((signature << 8) | timestampMinutes);
+        // High bits: Timestamp
+        // Low bits: Protocol Version (Mapped 1-16 -> 0-15)
+        int proto = (protocolVersion - 1) & 0x0F;
+        int combinedByte = (int) ((timestampMinutes << 4) | proto);
+
+        long signature = computeSignature(sender, combinedByte, keys);
+        
+        // Cookie = [Signature (24 bits) | Timestamp (4 bits) | Protocol (4 bits)]
+        return (int) ((signature << 8) | combinedByte);
     }
 
     private long computeSignature(InetSocketAddress sender, long timestamp, SipHashKey keys) {        
@@ -152,13 +159,14 @@ public class SipHash {
             return true;
         }
 
-        int timestamp = cookie & 0xFF;
+        int combinedByte = cookie & 0xFF;
+        int timestamp = (combinedByte >>> 4) & 0x0F;
         int receivedSignature = (cookie >>> 8) & 0xFFFFFF;
 
         // Verify timestamp (All modes except OFF)
         long now = now();
-        long currentMinutes = (now / 60000) & 0xFF;
-        long diff = (currentMinutes - timestamp) & 0xFF; // Wrap-around
+        long currentMinutes = (now / 60000) & 0x0F;
+        long diff = (currentMinutes - timestamp) & 0x0F; // Wrap-around 4 bits
         
         // (0 = current, 1 = previous, etc.)
         // If diff is small positive, it's recent past.
@@ -177,8 +185,13 @@ public class SipHash {
 
         // ACTIVE or OFFLOADED_PSK
         SipHashKey keys = getKeys(epoch);
-        long expectedSignature = computeSignature(sender, timestamp, keys);
+        long expectedSignature = computeSignature(sender, combinedByte, keys);
         return receivedSignature == expectedSignature;
+    }
+
+    public static int getProtocolVersion(int cookie) {
+        // Low 4 bits + 1
+        return (cookie & 0x0F) + 1;
     }
 
     protected long now() {
