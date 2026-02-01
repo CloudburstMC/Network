@@ -136,12 +136,6 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
     private void onOpenConnectionRequest1(ChannelHandlerContext ctx, DatagramPacket packet, ByteBuf magicBuf, long guid) {
         RakServerChannelConfig config = (RakServerChannelConfig) ctx.channel().config();
-        RakServerCookieMode mode = config.getCookieMode();
-
-        if (mode == RakServerCookieMode.OFFLOADED || mode == RakServerCookieMode.OFFLOADED_PSK) {
-            // In OFFLOADED and OFFLOADED_PSK modes, the server is not allowed to send cookies.
-            return;
-        }
 
         ByteBuf buffer = packet.content();
         InetSocketAddress sender = packet.sender();
@@ -163,7 +157,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         // TODO: banned address check?
         // TODO: max connections check?
 
-        boolean sendCookie = mode == RakServerCookieMode.ACTIVE;
+        boolean sendCookie = config.getCookieMode() == RakServerCookieMode.ACTIVE;
 
         int bufferCapacity = sendCookie ? 32 : 28; // 4 byte cookie
 
