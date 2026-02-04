@@ -31,54 +31,93 @@ public class DefaultChannelToServerProxyMetrics implements RakChannelMetrics {
     }
 
     public void bytesIn(int count) {
-        this.parent.config().getMetrics().bytesIn(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.bytesIn(channel, count);
+        }
     }
 
     public void bytesOut(int count) {
-        this.parent.config().getMetrics().bytesOut(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.bytesOut(channel, count);
+        }
     }
 
     public void rakDatagramsIn(int count) {
-        this.parent.config().getMetrics().rakDatagramsIn(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakDatagramsIn(channel, count);
+        }
     }
 
     public void rakDatagramsOut(int count) {
-        this.parent.config().getMetrics().rakDatagramsOut(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakDatagramsOut(channel, count);
+        }
     }
 
     public void encapsulatedIn(int count) {
-        this.parent.config().getMetrics().encapsulatedIn(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.encapsulatedIn(channel, count);
+        }
     }
 
     public void encapsulatedOut(int count) {
-        this.parent.config().getMetrics().encapsulatedOut(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.encapsulatedOut(channel, count);
+        }
     }
 
     public void rakStaleDatagrams(int count) {
-        this.parent.config().getMetrics().rakStaleDatagrams(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakStaleDatagrams(channel, count);
+        }
     }
 
     public void ackIn(int count) {
-        this.parent.config().getMetrics().ackIn(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.ackIn(channel, count);
+        }
     }
 
     public void ackOut(int count) {
-        this.parent.config().getMetrics().ackOut(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.ackOut(channel, count);
+        }
     }
 
     public void nackOut(int count) {
-        this.parent.config().getMetrics().nackOut(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.nackOut(channel, count);
+        }
     }
 
     public void nackIn(int count) {
-        this.parent.config().getMetrics().nackIn(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.nackIn(channel, count);
+        }
     }
 
     public void stateChange(RakState state) {
-        this.parent.config().getMetrics().stateChange(channel, state);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.stateChange(channel, state);
+        }
     }
 
     public void queuedPacketBytes(int count) {
-        this.parent.config().getMetrics().queuedPacketBytes(channel, count);
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.queuedPacketBytes(channel, count);
+        }
     }
 }
