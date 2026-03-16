@@ -22,6 +22,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import net.jodah.expiringmap.ExpirationPolicy;
+import net.jodah.expiringmap.ExpiringMap;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
@@ -36,6 +38,7 @@ import org.cloudburstmc.netty.util.SipHash;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
@@ -45,6 +48,12 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakServerOfflineHandler.class);
 
     private final RakServerChannel channel;
+
+    // Stores protocol version from OCR1 for non-cookie modes (OFF, INVALID)
+    private final ExpiringMap<InetSocketAddress, Integer> pendingProtocolVersions = ExpiringMap.builder()
+            .expiration(10, TimeUnit.SECONDS)
+            .expirationPolicy(ExpirationPolicy.CREATED)
+            .build();
 
     public RakServerOfflineHandler(RakServerChannel channel) {
         this.channel = channel;
@@ -159,6 +168,10 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
         boolean sendCookie = config.getCookieMode() == RakServerCookieMode.ACTIVE;
 
+        if (!sendCookie) {
+            this.pendingProtocolVersions.put(sender, protocolVersion);
+        }
+
         int bufferCapacity = sendCookie ? 32 : 28; // 4 byte cookie
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(bufferCapacity, bufferCapacity);
@@ -183,7 +196,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         // Skip already verified magic
         buffer.skipBytes(magicBuf.readableBytes());
 
-        boolean expectCookie = config.getCookieMode() != RakServerCookieMode.INVALID;
+        boolean expectCookie = mode != RakServerCookieMode.OFF && mode != RakServerCookieMode.INVALID;
         int cookie = 0;
         if (expectCookie) {
             cookie = buffer.readInt();
@@ -236,6 +249,11 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
         if (mode == RakServerCookieMode.ACTIVE) {
             int protocolVersion = SipHash.getProtocolVersion(cookie);
             channel.config().setOption(RakChannelOption.RAK_PROTOCOL_VERSION, protocolVersion);
+        } else {
+            Integer protocolVersion = this.pendingProtocolVersions.remove(sender);
+            if (protocolVersion != null) {
+                channel.config().setOption(RakChannelOption.RAK_PROTOCOL_VERSION, protocolVersion);
+            }
         }
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(31);

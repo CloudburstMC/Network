@@ -254,38 +254,18 @@ public class RakCookieTests {
     }
 
     @Test
-    public void testOffMode() throws InterruptedException {
-        // OFF mode: Server expects a cookie structure but accepts anything.
-        // Cookie requirement: Any 4 byte cookie is valid.
-        setupServer(RakServerCookieMode.OFF, SECRET);
+    public void testOffMode() {
+        // OFF mode: No cookie protection. Server sends security=false in OCR1,
+        // client does not include cookie in OCR2. Standard client should connect normally.
+        setupServer(RakServerCookieMode.OFF, null);
 
-        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
-        BlockingQueue<DatagramPacket> responses = new LinkedBlockingQueue<>();
+        Channel client = clientBootstrap()
+                .connect(new InetSocketAddress("127.0.0.1", PORT))
+                .awaitUninterruptibly()
+                .channel();
 
-        Channel rawClient = new Bootstrap()
-                .group(group)
-                .channel(NioDatagramChannel.class)
-                .handler(new ChannelInboundHandlerAdapter() {
-                    @Override
-                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                        if (msg instanceof DatagramPacket) {
-                            responses.add(((DatagramPacket) msg).retain());
-                        }
-                    }
-                })
-                .bind(0).awaitUninterruptibly().channel();
-
-        // Completely garbage cookie
-        int garbageCookie = 0x12345678;
-
-        ByteBuf ocr2 = createOCR2(rawClient.localAddress(), serverAddress, garbageCookie, true);
-        rawClient.writeAndFlush(new DatagramPacket(ocr2, serverAddress));
-
-        DatagramPacket response = responses.poll(1, TimeUnit.SECONDS);
-        Assertions.assertNotNull(response, "Server should respond to OCR2 in OFF mode with garbage cookie");
-        Assertions.assertEquals(ID_OPEN_CONNECTION_REPLY_2, response.content().getUnsignedByte(0));
-        response.release();
-        rawClient.close();
+        Assertions.assertTrue(client.isActive(), "Client should connect in OFF mode");
+        client.close().awaitUninterruptibly();
     }
 
     /**
