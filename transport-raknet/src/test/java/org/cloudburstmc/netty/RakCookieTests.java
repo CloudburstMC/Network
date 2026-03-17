@@ -55,10 +55,12 @@ public class RakCookieTests {
 
     private EventLoopGroup group;
     private Channel serverChannel;
+    private BlockingQueue<Channel> acceptedChannels;
 
     @BeforeEach
     public void setup() {
         group = new NioEventLoopGroup();
+        acceptedChannels = new LinkedBlockingQueue<>();
     }
 
     @AfterEach
@@ -82,6 +84,7 @@ public class RakCookieTests {
                 .childHandler(new ChannelInitializer<Channel>() {
                     @Override
                     protected void initChannel(Channel ch) {
+                        acceptedChannels.add(ch);
                     }
                 });
 
@@ -174,6 +177,12 @@ public class RakCookieTests {
         ByteBuf content = response.content();
         Assertions.assertEquals(ID_OPEN_CONNECTION_REPLY_2, content.getUnsignedByte(0));
         response.release();
+        Channel accepted = acceptedChannels.poll(1, TimeUnit.SECONDS);
+        Assertions.assertNotNull(accepted, "Server should create a child channel in OFFLOADED mode");
+        Assertions.assertEquals(
+                PROTOCOL_VERSION,
+                accepted.config().getOption(RakChannelOption.RAK_PROTOCOL_VERSION),
+                "OFFLOADED mode should recover RakNet protocol version from the cookie");
         rawClient.close();
     }
 
@@ -212,6 +221,12 @@ public class RakCookieTests {
         Assertions.assertNotNull(response, "Server should respond to OCR2 with valid PSK cookie");
         Assertions.assertEquals(ID_OPEN_CONNECTION_REPLY_2, response.content().getUnsignedByte(0));
         response.release();
+        Channel accepted = acceptedChannels.poll(1, TimeUnit.SECONDS);
+        Assertions.assertNotNull(accepted, "Server should create a child channel in OFFLOADED_PSK mode");
+        Assertions.assertEquals(
+                PROTOCOL_VERSION,
+                accepted.config().getOption(RakChannelOption.RAK_PROTOCOL_VERSION),
+                "OFFLOADED_PSK mode should recover RakNet protocol version from the cookie");
         rawClient.close();
     }
 

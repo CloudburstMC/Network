@@ -233,7 +233,9 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             return;
         }
 
-        if (mode == RakServerCookieMode.ACTIVE) {
+        if (mode == RakServerCookieMode.ACTIVE
+                || mode == RakServerCookieMode.OFFLOADED
+                || mode == RakServerCookieMode.OFFLOADED_PSK) {
             int protocolVersion = SipHash.getProtocolVersion(cookie);
             channel.config().setOption(RakChannelOption.RAK_PROTOCOL_VERSION, protocolVersion);
         }
