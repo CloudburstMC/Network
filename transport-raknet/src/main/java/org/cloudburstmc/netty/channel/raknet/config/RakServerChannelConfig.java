@@ -20,6 +20,8 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelConfig;
 import org.cloudburstmc.netty.util.SipHash;
 
+import java.nio.file.Path;
+
 public interface RakServerChannelConfig extends ChannelConfig {
 
     int getMaxChannels();
@@ -81,4 +83,11 @@ public interface RakServerChannelConfig extends ChannelConfig {
     RakServerChannelConfig setCookieSecret(byte[] secret);
 
     SipHash getSipHash();
+
+    Path getFilterRegistrationSocketPath();
+    RakServerChannelConfig setFilterRegistrationSocketPath(Path socketPath);
+
+    RakServerChannelConfig applyExternalFilterProtection();
+
+    RakServerChannelConfig clearExternalFilterProtection();
 }

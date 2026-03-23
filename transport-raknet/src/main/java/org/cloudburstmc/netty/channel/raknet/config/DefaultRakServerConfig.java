@@ -28,6 +28,7 @@ import org.cloudburstmc.netty.util.SipHash;
 
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
@@ -53,8 +54,11 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile RakServerMetrics metrics;
     private volatile boolean ipDontFragment = false;
     private volatile RakServerCookieMode cookieMode = RakServerCookieMode.ACTIVE;
+    private volatile RakServerCookieMode fallbackCookieMode = RakServerCookieMode.ACTIVE;
     private volatile byte[] cookieSecret = new byte[32];
     private volatile SipHash sipHash;
+    private volatile Path filterRegistrationSocketPath;
+    private volatile boolean cookieModeExplicit;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -76,7 +80,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MAX_CONNECTIONS, RakChannelOption.RAK_SUPPORTED_PROTOCOLS, RakChannelOption.RAK_UNCONNECTED_MAGIC,
                 RakChannelOption.RAK_ADVERTISEMENT, RakChannelOption.RAK_HANDLE_PING, RakChannelOption.RAK_PACKET_LIMIT, RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, RakChannelOption.RAK_SERVER_METRICS, 
-                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET);
+                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET,
+                RakChannelOption.RAK_SERVER_FILTER_REGISTRATION_SOCKET_PATH);
     }
 
     @SuppressWarnings("unchecked")
@@ -127,6 +132,9 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_SERVER_COOKIE_SECRET) {
             return (T) this.getCookieSecret();
         }
+        if (option == RakChannelOption.RAK_SERVER_FILTER_REGISTRATION_SOCKET_PATH) {
+            return (T) this.getFilterRegistrationSocketPath();
+        }
         return this.channel.parent().config().getOption(option);
     }
 
@@ -165,6 +173,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setCookieMode((RakServerCookieMode) value);
         } else if (option == RakChannelOption.RAK_SERVER_COOKIE_SECRET) {
             this.setCookieSecret((byte[]) value);
+        } else if (option == RakChannelOption.RAK_SERVER_FILTER_REGISTRATION_SOCKET_PATH) {
+            this.setFilterRegistrationSocketPath((Path) value);
         } else {
             return this.channel.parent().config().setOption(option, value);
         }
@@ -328,7 +338,10 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
 
     @Override
     public RakServerChannelConfig setCookieMode(RakServerCookieMode mode) { 
+        this.ensureFilterRegistrationSocketUnset("cookie mode");
         this.cookieMode = mode; 
+        this.fallbackCookieMode = mode;
+        this.cookieModeExplicit = true;
         return this;
     }
 
@@ -339,13 +352,52 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
 
     @Override
     public RakServerChannelConfig setCookieSecret(byte[] secret) {
-        this.cookieSecret = secret;
-        this.sipHash = new SipHash(secret);
+        this.setCookieSecretState(secret);
         return this;
     }
 
     @Override
     public SipHash getSipHash() {
         return this.sipHash;
+    }
+
+    @Override
+    public Path getFilterRegistrationSocketPath() {
+        return this.filterRegistrationSocketPath;
+    }
+
+    @Override
+    public RakServerChannelConfig setFilterRegistrationSocketPath(Path socketPath) {
+        if (socketPath != null && this.cookieModeExplicit) {
+            throw new IllegalStateException("bedrock-guard registration socket cannot be combined with an explicit cookie mode");
+        }
+        this.filterRegistrationSocketPath = socketPath;
+        return this;
+    }
+
+    @Override
+    public RakServerChannelConfig applyExternalFilterProtection() {
+        this.cookieMode = RakServerCookieMode.OFFLOADED_PSK;
+        return this;
+    }
+
+    @Override
+    public RakServerChannelConfig clearExternalFilterProtection() {
+        this.cookieMode = this.fallbackCookieMode;
+        return this;
+    }
+
+    private void ensureFilterRegistrationSocketUnset(String fieldName) {
+        if (this.filterRegistrationSocketPath != null) {
+            throw new IllegalStateException("bedrock-guard registration socket cannot be combined with an explicit " + fieldName);
+        }
+    }
+
+    private void setCookieSecretState(byte[] secret) {
+        if (secret == null || secret.length != 32) {
+            throw new IllegalArgumentException("cookie secret must be exactly 32 bytes");
+        }
+        this.cookieSecret = Arrays.copyOf(secret, secret.length);
+        this.sipHash = new SipHash(this.cookieSecret);
     }
 }

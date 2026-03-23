@@ -34,11 +34,14 @@ import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOfflineHandle
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRateLimiter;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRouteHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerTailHandler;
+import org.cloudburstmc.netty.util.BedrockGuardRegistrationClient;
 import org.cloudburstmc.netty.util.RakUtils;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -51,6 +54,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     private final RakServerChannelConfig config;
     private final Map<SocketAddress, RakChildChannel> childChannelMap = new ConcurrentHashMap<>();
     private final Consumer<RakChannel> childConsumer;
+    private volatile boolean filterProtectionRegistered;
 
     public RakServerChannel(DatagramChannel channel) {
         this(channel, null);
@@ -141,6 +145,11 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         if (log.isTraceEnabled()) {
             log.trace("Closing RakServerChannel: {}", Thread.currentThread().getName(), new Throwable());
         }
+        try {
+            this.unregisterFilterProtectionIfNeeded();
+        } catch (IOException e) {
+            log.warn("Failed to unregister bedrock-guard protection for {}", this.localAddress(), e);
+        }
         PromiseCombiner combiner = new PromiseCombiner(this.eventLoop());
         this.childChannelMap.values().forEach(channel -> combiner.add(channel.close()));
 
@@ -160,5 +169,68 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     @Override
     public RakServerChannelConfig config() {
         return this.config;
+    }
+
+    @Override
+    public ChannelFuture bind(SocketAddress localAddress) {
+        return this.bind(localAddress, this.newPromise());
+    }
+
+    @Override
+    public ChannelFuture bind(SocketAddress localAddress, ChannelPromise promise) {
+        ChannelPromise bindPromise = this.newPromise();
+        bindPromise.addListener(future -> {
+            if (!future.isSuccess()) {
+                promise.tryFailure(future.cause());
+                return;
+            }
+
+            this.registerFilterProtectionIfConfigured();
+            promise.trySuccess();
+        });
+        super.bind(localAddress, bindPromise);
+        return promise;
+    }
+
+    private void registerFilterProtectionIfConfigured() {
+        Path socketPath = this.config.getFilterRegistrationSocketPath();
+        if (socketPath == null || this.filterProtectionRegistered) {
+            return;
+        }
+
+        InetSocketAddress localAddress = this.localAddress();
+        if (localAddress == null) {
+            log.error("bedrock-guard integration requires a bound local address; falling back to ACTIVE cookie mode");
+            this.config.clearExternalFilterProtection();
+            return;
+        }
+
+        try {
+            BedrockGuardRegistrationClient.registerListener(socketPath, localAddress, this.config.getCookieSecret());
+            this.config.applyExternalFilterProtection();
+            this.filterProtectionRegistered = true;
+            log.info("Registered bedrock-guard protection for {} via {} and switched cookie mode to OFFLOADED_PSK", localAddress, socketPath);
+        } catch (IOException e) {
+            this.config.clearExternalFilterProtection();
+            this.filterProtectionRegistered = false;
+            log.error("Failed to register bedrock-guard protection for {} via {}; falling back to ACTIVE cookie mode", localAddress, socketPath, e);
+        }
+    }
+
+    private void unregisterFilterProtectionIfNeeded() throws IOException {
+        Path socketPath = this.config.getFilterRegistrationSocketPath();
+        if (socketPath == null || !this.filterProtectionRegistered) {
+            return;
+        }
+
+        InetSocketAddress localAddress = this.localAddress();
+        if (localAddress == null) {
+            this.filterProtectionRegistered = false;
+            return;
+        }
+
+        BedrockGuardRegistrationClient.unregisterListener(socketPath, localAddress);
+        this.filterProtectionRegistered = false;
+        log.info("Unregistered bedrock-guard protection for {} via {}", localAddress, socketPath);
     }
 }

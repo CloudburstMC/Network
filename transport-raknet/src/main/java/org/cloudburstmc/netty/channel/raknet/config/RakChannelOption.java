@@ -19,6 +19,8 @@ package org.cloudburstmc.netty.channel.raknet.config;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelOption;
 
+import java.nio.file.Path;
+
 public class RakChannelOption<T> extends ChannelOption<T> {
 
     /**
@@ -200,6 +202,14 @@ public class RakChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<byte[]> RAK_SERVER_COOKIE_SECRET =
             valueOf(RakChannelOption.class, "RAK_SERVER_COOKIE_SECRET");
+
+    /**
+     * Optional Unix domain socket path for a bedrock-guard listener-registration socket.
+     * When set, the RakNet server bind lifecycle will register and unregister its local
+     * Bedrock listener against the external filter process automatically.
+     */
+    public static final ChannelOption<Path> RAK_SERVER_FILTER_REGISTRATION_SOCKET_PATH =
+            valueOf(RakChannelOption.class, "RAK_SERVER_FILTER_REGISTRATION_SOCKET_PATH");
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {
