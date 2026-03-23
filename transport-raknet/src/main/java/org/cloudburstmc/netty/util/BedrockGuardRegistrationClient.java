@@ -16,7 +16,6 @@
 
 package org.cloudburstmc.netty.util;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
@@ -26,105 +25,125 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class BedrockGuardRegistrationClient {
 
-    private static final Pattern TYPE_PATTERN = Pattern.compile("\"type\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern MESSAGE_PATTERN = Pattern.compile("\"message\"\\s*:\\s*\"([^\"]+)\"");
+    private static final byte PROTOCOL_VERSION = 1;
+    private static final byte STATUS_OK = 0;
+    private static final byte STATUS_ERROR = 1;
+    private static final byte OP_REGISTER = 1;
+    private static final byte OP_UNREGISTER = 2;
+    private static final int REGISTER_PAYLOAD_LEN = 4 + 2 + 32;
+    private static final int UNREGISTER_PAYLOAD_LEN = 4 + 2;
 
     private BedrockGuardRegistrationClient() {
     }
 
     public static void registerListener(Path socketPath, InetSocketAddress localAddress, byte[] masterSecret) throws IOException {
-        String response = sendListenerRequest(socketPath, "register_listener", localAddress, masterSecret);
-        String responseType = extractField(TYPE_PATTERN, response);
-        if ("error".equals(responseType)) {
-            throw new IOException(extractMessage(response));
-        }
-        if (!"listener_registration".equals(responseType)) {
-            throw new IOException("unexpected bedrock-guard registration response: " + response);
+        RegistrationResponse response = sendListenerRequest(socketPath, OP_REGISTER, localAddress, masterSecret);
+        if (!response.ok) {
+            throw new IOException(response.message);
         }
     }
 
     public static void unregisterListener(Path socketPath, InetSocketAddress localAddress) throws IOException {
-        String response = sendListenerRequest(socketPath, "unregister_listener", localAddress);
-        String responseType = extractField(TYPE_PATTERN, response);
-        if ("error".equals(responseType)) {
-            throw new IOException(extractMessage(response));
-        }
-        if (!"ack".equals(responseType)) {
-            throw new IOException("unexpected bedrock-guard unregister response: " + response);
+        RegistrationResponse response = sendListenerRequest(socketPath, OP_UNREGISTER, localAddress, null);
+        if (!response.ok) {
+            throw new IOException(response.message);
         }
     }
 
-    private static String sendListenerRequest(Path socketPath, String type, InetSocketAddress localAddress, byte[] masterSecret) throws IOException {
+    private static RegistrationResponse sendListenerRequest(Path socketPath, byte opcode, InetSocketAddress localAddress, byte[] masterSecret) throws IOException {
         if (!(localAddress.getAddress() instanceof Inet4Address)) {
             throw new IOException("bedrock-guard integration requires an IPv4 local bind address");
         }
 
-        String address = localAddress.getAddress().getHostAddress();
-        String payload;
-        if ("register_listener".equals(type)) {
-            if (masterSecret == null || masterSecret.length != 32) {
-                throw new IOException("bedrock-guard integration requires a 32-byte master secret");
-            }
-            payload = "{\"type\":\"" + type + "\",\"address\":\"" + address + "\",\"port\":" + localAddress.getPort() + ",\"master_secret_hex\":\"" + hexEncode(masterSecret) + "\"}";
-        } else {
-            payload = "{\"type\":\"" + type + "\",\"address\":\"" + address + "\",\"port\":" + localAddress.getPort() + "}";
-        }
+        byte[] request = buildRequest(opcode, localAddress, masterSecret);
 
         try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX)) {
             channel.connect(UnixDomainSocketAddress.of(socketPath));
-            channel.write(ByteBuffer.wrap(payload.getBytes(StandardCharsets.UTF_8)));
+            writeFully(channel, ByteBuffer.wrap(request));
             channel.shutdownOutput();
-
-            String response = readAll(channel);
-            return response;
+            return readResponse(channel);
         }
     }
 
-    private static String sendListenerRequest(Path socketPath, String type, InetSocketAddress localAddress) throws IOException {
-        return sendListenerRequest(socketPath, type, localAddress, null);
+    private static byte[] buildRequest(byte opcode, InetSocketAddress localAddress, byte[] masterSecret) throws IOException {
+        byte[] addressBytes = ((Inet4Address) localAddress.getAddress()).getAddress();
+        ByteBuffer buffer;
+
+        if (opcode == OP_REGISTER) {
+            if (masterSecret == null || masterSecret.length != 32) {
+                throw new IOException("bedrock-guard integration requires a 32-byte master secret");
+            }
+            buffer = ByteBuffer.allocate(4 + REGISTER_PAYLOAD_LEN);
+            buffer.put(PROTOCOL_VERSION);
+            buffer.put(OP_REGISTER);
+            buffer.putShort((short) REGISTER_PAYLOAD_LEN);
+            buffer.put(addressBytes);
+            buffer.putShort((short) localAddress.getPort());
+            buffer.put(masterSecret);
+        } else if (opcode == OP_UNREGISTER) {
+            buffer = ByteBuffer.allocate(4 + UNREGISTER_PAYLOAD_LEN);
+            buffer.put(PROTOCOL_VERSION);
+            buffer.put(OP_UNREGISTER);
+            buffer.putShort((short) UNREGISTER_PAYLOAD_LEN);
+            buffer.put(addressBytes);
+            buffer.putShort((short) localAddress.getPort());
+        } else {
+            throw new IOException("unsupported bedrock-guard registration opcode: " + opcode);
+        }
+
+        return buffer.array();
     }
 
-    private static String readAll(SocketChannel channel) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        ByteBuffer buffer = ByteBuffer.allocate(1024);
-        while (true) {
+    private static RegistrationResponse readResponse(SocketChannel channel) throws IOException {
+        ByteBuffer header = ByteBuffer.allocate(4);
+        readFully(channel, header);
+        header.flip();
+
+        byte version = header.get();
+        if (version != PROTOCOL_VERSION) {
+            throw new IOException("unsupported bedrock-guard registration protocol version: " + Byte.toUnsignedInt(version));
+        }
+        byte status = header.get();
+        int messageLength = Short.toUnsignedInt(header.getShort());
+
+        ByteBuffer messageBuffer = ByteBuffer.allocate(messageLength);
+        readFully(channel, messageBuffer);
+        String message = new String(messageBuffer.array(), StandardCharsets.UTF_8);
+
+        if (status == STATUS_OK) {
+            return new RegistrationResponse(true, message);
+        }
+        if (status == STATUS_ERROR) {
+            return new RegistrationResponse(false, message);
+        }
+        throw new IOException("unsupported bedrock-guard registration response status: " + Byte.toUnsignedInt(status));
+    }
+
+    private static void writeFully(SocketChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
+            channel.write(buffer);
+        }
+    }
+
+    private static void readFully(SocketChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
             int read = channel.read(buffer);
             if (read < 0) {
-                break;
+                throw new IOException("unexpected EOF from bedrock-guard registration socket");
             }
-            if (read == 0) {
-                continue;
-            }
-            buffer.flip();
-            output.write(buffer.array(), 0, buffer.remaining());
-            buffer.clear();
         }
-        return output.toString(StandardCharsets.UTF_8);
     }
 
-    private static String extractMessage(String response) {
-        return extractField(MESSAGE_PATTERN, response);
-    }
+    private static final class RegistrationResponse {
+        private final boolean ok;
+        private final String message;
 
-    private static String extractField(Pattern pattern, String response) {
-        Matcher matcher = pattern.matcher(response);
-        if (!matcher.find()) {
-            return "";
+        private RegistrationResponse(boolean ok, String message) {
+            this.ok = ok;
+            this.message = message;
         }
-        return matcher.group(1);
-    }
-
-    private static String hexEncode(byte[] bytes) {
-        StringBuilder builder = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            builder.append(Character.forDigit((value >>> 4) & 0x0f, 16));
-            builder.append(Character.forDigit(value & 0x0f, 16));
-        }
-        return builder.toString();
     }
 }

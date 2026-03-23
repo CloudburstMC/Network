@@ -31,15 +31,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.Inet4Address;
 import java.net.InetSocketAddress;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -49,13 +48,18 @@ import java.util.concurrent.atomic.AtomicReference;
 public class RakServerProtectionTests {
 
     private static final String TEST_MASTER_SECRET_HEX = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    private static final byte PROTOCOL_VERSION = 1;
+    private static final byte STATUS_OK = 0;
+    private static final byte STATUS_ERROR = 1;
+    private static final byte OP_REGISTER = 1;
+    private static final byte OP_UNREGISTER = 2;
 
     private NioEventLoopGroup group;
     private Channel serverChannel;
     private ServerSocketChannel registrationSocket;
     private Thread registrationThread;
-    private final BlockingQueue<String> requests = new LinkedBlockingQueue<>();
-    private final AtomicReference<String> response = new AtomicReference<>("{\"type\":\"listener_registration\",\"message\":\"ok\"}");
+    private final BlockingQueue<RegistrationRequestFrame> requests = new LinkedBlockingQueue<>();
+    private final AtomicReference<RegistrationResponseFrame> response = new AtomicReference<>(new RegistrationResponseFrame(true, "ok"));
 
     @BeforeEach
     public void setup() {
@@ -96,25 +100,26 @@ public class RakServerProtectionTests {
 
         this.serverChannel.close().awaitUninterruptibly();
 
-        String register = this.requests.poll(1, TimeUnit.SECONDS);
-        String unregister = this.requests.poll(1, TimeUnit.SECONDS);
+        RegistrationRequestFrame register = this.requests.poll(1, TimeUnit.SECONDS);
+        RegistrationRequestFrame unregister = this.requests.poll(1, TimeUnit.SECONDS);
 
         Assertions.assertNotNull(register, "expected register_listener request");
-        Assertions.assertTrue(register.contains("\"type\":\"register_listener\""));
-        Assertions.assertTrue(register.contains("\"address\":\"127.0.0.1\""));
-        Assertions.assertTrue(register.contains("\"port\":" + localAddress.getPort()));
-        Assertions.assertTrue(register.contains("\"master_secret_hex\":\"" + TEST_MASTER_SECRET_HEX + "\""));
+        Assertions.assertEquals(OP_REGISTER, register.opcode);
+        Assertions.assertEquals("127.0.0.1", register.address.getHostAddress());
+        Assertions.assertEquals(localAddress.getPort(), register.port);
+        Assertions.assertArrayEquals(hexDecode(TEST_MASTER_SECRET_HEX), register.masterSecret);
 
         Assertions.assertNotNull(unregister, "expected unregister_listener request");
-        Assertions.assertTrue(unregister.contains("\"type\":\"unregister_listener\""));
-        Assertions.assertTrue(unregister.contains("\"address\":\"127.0.0.1\""));
-        Assertions.assertTrue(unregister.contains("\"port\":" + localAddress.getPort()));
+        Assertions.assertEquals(OP_UNREGISTER, unregister.opcode);
+        Assertions.assertEquals("127.0.0.1", unregister.address.getHostAddress());
+        Assertions.assertEquals(localAddress.getPort(), unregister.port);
+        Assertions.assertNull(unregister.masterSecret);
     }
 
     @Test
     public void testFailedProtectionRegistrationFallsBackToActive(@TempDir Path tempDir) throws Exception {
         Path socketPath = tempDir.resolve("bedrock-guard.sock");
-        this.response.set("{\"type\":\"error\",\"message\":\"listener denied\"}");
+        this.response.set(new RegistrationResponseFrame(false, "listener denied"));
         this.startRegistrationSocket(socketPath);
 
         ServerBootstrap bootstrap = this.serverBootstrap(socketPath);
@@ -126,9 +131,9 @@ public class RakServerProtectionTests {
         Assertions.assertEquals(RakServerCookieMode.ACTIVE, serverChannel.config().getCookieMode());
         Assertions.assertNotEquals(RakServerCookieMode.OFFLOADED_PSK, serverChannel.config().getCookieMode());
 
-        String register = this.requests.poll(1, TimeUnit.SECONDS);
+        RegistrationRequestFrame register = this.requests.poll(1, TimeUnit.SECONDS);
         Assertions.assertNotNull(register, "expected register request before bind failure");
-        Assertions.assertTrue(register.contains("\"type\":\"register_listener\""));
+        Assertions.assertEquals(OP_REGISTER, register.opcode);
     }
 
     @Test
@@ -171,12 +176,12 @@ public class RakServerProtectionTests {
     private void acceptLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             try (SocketChannel channel = this.registrationSocket.accept()) {
-                String request = readAll(channel);
+                RegistrationRequestFrame request = readRequest(channel);
                 this.requests.add(request);
-                String response = request.contains("\"type\":\"unregister_listener\"")
-                        ? "{\"type\":\"ack\",\"message\":\"ok\"}"
+                RegistrationResponseFrame response = request.opcode == OP_UNREGISTER
+                        ? new RegistrationResponseFrame(true, "ok")
                         : this.response.get();
-                channel.write(ByteBuffer.wrap(response.getBytes(StandardCharsets.UTF_8)));
+                writeFully(channel, encodeResponse(response));
             } catch (IOException e) {
                 if (this.registrationSocket.isOpen()) {
                     throw new RuntimeException(e);
@@ -186,22 +191,60 @@ public class RakServerProtectionTests {
         }
     }
 
-    private static String readAll(SocketChannel channel) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        ByteBuffer buffer = ByteBuffer.allocate(1024);
-        while (true) {
+    private static RegistrationRequestFrame readRequest(SocketChannel channel) throws IOException {
+        ByteBuffer header = ByteBuffer.allocate(4);
+        readFully(channel, header);
+        header.flip();
+
+        byte version = header.get();
+        Assertions.assertEquals(PROTOCOL_VERSION, version);
+        byte opcode = header.get();
+        int payloadLength = Short.toUnsignedInt(header.getShort());
+
+        ByteBuffer payload = ByteBuffer.allocate(payloadLength);
+        readFully(channel, payload);
+        payload.flip();
+
+        byte[] rawAddress = new byte[4];
+        payload.get(rawAddress);
+        Inet4Address address = (Inet4Address) Inet4Address.getByAddress(rawAddress);
+        int port = Short.toUnsignedInt(payload.getShort());
+
+        if (opcode == OP_REGISTER) {
+            byte[] masterSecret = new byte[32];
+            payload.get(masterSecret);
+            return new RegistrationRequestFrame(opcode, address, port, masterSecret);
+        }
+        if (opcode == OP_UNREGISTER) {
+            return new RegistrationRequestFrame(opcode, address, port, null);
+        }
+
+        throw new IOException("unsupported opcode: " + Byte.toUnsignedInt(opcode));
+    }
+
+    private static byte[] encodeResponse(RegistrationResponseFrame response) {
+        byte[] messageBytes = response.message.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        ByteBuffer buffer = ByteBuffer.allocate(4 + messageBytes.length);
+        buffer.put(PROTOCOL_VERSION);
+        buffer.put(response.ok ? STATUS_OK : STATUS_ERROR);
+        buffer.putShort((short) messageBytes.length);
+        buffer.put(messageBytes);
+        return buffer.array();
+    }
+
+    private static void writeFully(SocketChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
+            channel.write(buffer);
+        }
+    }
+
+    private static void readFully(SocketChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
             int read = channel.read(buffer);
             if (read < 0) {
-                break;
+                throw new IOException("unexpected EOF from registration socket");
             }
-            if (read == 0) {
-                continue;
-            }
-            buffer.flip();
-            output.write(buffer.array(), 0, buffer.remaining());
-            buffer.clear();
         }
-        return output.toString(StandardCharsets.UTF_8);
     }
 
     private static byte[] hexDecode(String value) {
@@ -211,5 +254,29 @@ public class RakServerProtectionTests {
             output[index] = (byte) Integer.parseInt(value.substring(start, start + 2), 16);
         }
         return output;
+    }
+
+    private static final class RegistrationRequestFrame {
+        private final byte opcode;
+        private final Inet4Address address;
+        private final int port;
+        private final byte[] masterSecret;
+
+        private RegistrationRequestFrame(byte opcode, Inet4Address address, int port, byte[] masterSecret) {
+            this.opcode = opcode;
+            this.address = address;
+            this.port = port;
+            this.masterSecret = masterSecret;
+        }
+    }
+
+    private static final class RegistrationResponseFrame {
+        private final boolean ok;
+        private final String message;
+
+        private RegistrationResponseFrame(boolean ok, String message) {
+            this.ok = ok;
+            this.message = message;
+        }
     }
 }
