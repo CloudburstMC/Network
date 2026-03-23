@@ -17,10 +17,12 @@
 package org.cloudburstmc.netty.util;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
-import java.net.StandardProtocolFamily;
-import java.net.UnixDomainSocketAddress;
+import java.net.ProtocolFamily;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
@@ -60,8 +62,7 @@ public final class BedrockGuardRegistrationClient {
 
         byte[] request = buildRequest(opcode, localAddress, masterSecret);
 
-        try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX)) {
-            channel.connect(UnixDomainSocketAddress.of(socketPath));
+        try (SocketChannel channel = openUnixSocketChannel(socketPath)) {
             writeFully(channel, ByteBuffer.wrap(request));
             channel.shutdownOutput();
             return readResponse(channel);
@@ -135,6 +136,43 @@ public final class BedrockGuardRegistrationClient {
                 throw new IOException("unexpected EOF from bedrock-guard registration socket");
             }
         }
+    }
+
+    private static SocketChannel openUnixSocketChannel(Path socketPath) throws IOException {
+        try {
+            Method openMethod = SocketChannel.class.getMethod("open", ProtocolFamily.class);
+            SocketChannel channel = (SocketChannel) openMethod.invoke(null, resolveUnixProtocolFamily());
+            try {
+                channel.connect(resolveUnixSocketAddress(socketPath));
+                return channel;
+            } catch (IOException error) {
+                channel.close();
+                throw error;
+            }
+        } catch (NoSuchMethodException e) {
+            throw new IOException("bedrock-guard registration requires a JDK with Unix domain socket support", e);
+        } catch (IllegalAccessException | ClassNotFoundException e) {
+            throw new IOException("failed to access JDK Unix domain socket support", e);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof IOException) {
+                throw (IOException) cause;
+            }
+            throw new IOException("failed to open Unix domain socket channel", cause);
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static ProtocolFamily resolveUnixProtocolFamily() throws ClassNotFoundException {
+        Class<? extends Enum> protocolFamilyClass = Class.forName("java.net.StandardProtocolFamily").asSubclass(Enum.class);
+        return (ProtocolFamily) Enum.valueOf(protocolFamilyClass, "UNIX");
+    }
+
+    private static SocketAddress resolveUnixSocketAddress(Path socketPath)
+            throws ClassNotFoundException, NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+        Class<?> addressClass = Class.forName("java.net.UnixDomainSocketAddress");
+        Method ofMethod = addressClass.getMethod("of", Path.class);
+        return (SocketAddress) ofMethod.invoke(null, socketPath);
     }
 
     private static final class RegistrationResponse {

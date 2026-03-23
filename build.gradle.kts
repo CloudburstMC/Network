@@ -14,6 +14,8 @@
  * under the License.
  */
 
+import org.gradle.jvm.toolchain.JavaToolchainService
+
 subprojects {
     apply(plugin = "java-library")
     apply(plugin = "maven-publish")
@@ -21,6 +23,7 @@ subprojects {
 
     group = "org.cloudburstmc.netty"
     version = rootProject.property("version") as String
+    val javaToolchainService = project.extensions.getByType<JavaToolchainService>()
 
     repositories {
         mavenLocal()
@@ -102,6 +105,9 @@ subprojects {
             options.encoding = "UTF-8"
         }
         named<Test>("test") {
+            javaLauncher.set(javaToolchainService.launcherFor {
+                languageVersion.set(JavaLanguageVersion.of(21))
+            })
             minHeapSize = "512m"
             maxHeapSize = "1024m"
             jvmArgs = listOf("-XX:MaxMetaspaceSize=512m")

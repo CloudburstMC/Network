@@ -18,6 +18,7 @@ package org.cloudburstmc.netty;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
@@ -27,15 +28,18 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
-import java.net.StandardProtocolFamily;
-import java.net.UnixDomainSocketAddress;
+import java.net.ProtocolFamily;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
@@ -87,6 +91,7 @@ public class RakServerProtectionTests {
 
     @Test
     public void testRegistersAndUnregistersBedrockGuardProtection(@TempDir Path tempDir) throws Exception {
+        Assumptions.assumeTrue(unixDomainSocketsSupported(), "JDK runtime lacks Unix domain socket support");
         Path socketPath = tempDir.resolve("bedrock-guard.sock");
         this.startRegistrationSocket(socketPath);
 
@@ -118,12 +123,13 @@ public class RakServerProtectionTests {
 
     @Test
     public void testFailedProtectionRegistrationFallsBackToActive(@TempDir Path tempDir) throws Exception {
+        Assumptions.assumeTrue(unixDomainSocketsSupported(), "JDK runtime lacks Unix domain socket support");
         Path socketPath = tempDir.resolve("bedrock-guard.sock");
         this.response.set(new RegistrationResponseFrame(false, "listener denied"));
         this.startRegistrationSocket(socketPath);
 
         ServerBootstrap bootstrap = this.serverBootstrap(socketPath);
-        var bindFuture = bootstrap.bind(new InetSocketAddress("127.0.0.1", 0)).awaitUninterruptibly();
+        ChannelFuture bindFuture = bootstrap.bind(new InetSocketAddress("127.0.0.1", 0)).awaitUninterruptibly();
 
         Assertions.assertTrue(bindFuture.isSuccess(), "bind should succeed when protection registration fails");
         this.serverChannel = bindFuture.channel();
@@ -166,8 +172,8 @@ public class RakServerProtectionTests {
     }
 
     private void startRegistrationSocket(Path socketPath) throws IOException {
-        this.registrationSocket = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
-        this.registrationSocket.bind(UnixDomainSocketAddress.of(socketPath));
+        this.registrationSocket = openUnixServerSocketChannel();
+        this.registrationSocket.bind(resolveUnixSocketAddress(socketPath));
         this.registrationThread = new Thread(this::acceptLoop, "bedrock-guard-test-socket");
         this.registrationThread.setDaemon(true);
         this.registrationThread.start();
@@ -181,7 +187,7 @@ public class RakServerProtectionTests {
                 RegistrationResponseFrame response = request.opcode == OP_UNREGISTER
                         ? new RegistrationResponseFrame(true, "ok")
                         : this.response.get();
-                writeFully(channel, encodeResponse(response));
+                writeFully(channel, ByteBuffer.wrap(encodeResponse(response)));
             } catch (IOException e) {
                 if (this.registrationSocket.isOpen()) {
                     throw new RuntimeException(e);
@@ -254,6 +260,59 @@ public class RakServerProtectionTests {
             output[index] = (byte) Integer.parseInt(value.substring(start, start + 2), 16);
         }
         return output;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static boolean unixDomainSocketsSupported() {
+        try {
+            Class.forName("java.net.UnixDomainSocketAddress");
+            ServerSocketChannel.class.getMethod("open", ProtocolFamily.class);
+            SocketChannel.class.getMethod("open", ProtocolFamily.class);
+            Class<? extends Enum> protocolFamilyClass = Class.forName("java.net.StandardProtocolFamily").asSubclass(Enum.class);
+            Enum.valueOf(protocolFamilyClass, "UNIX");
+            return true;
+        } catch (ClassNotFoundException | NoSuchMethodException e) {
+            return false;
+        }
+    }
+
+    private static ServerSocketChannel openUnixServerSocketChannel() throws IOException {
+        try {
+            Method openMethod = ServerSocketChannel.class.getMethod("open", ProtocolFamily.class);
+            return (ServerSocketChannel) openMethod.invoke(null, resolveUnixProtocolFamily());
+        } catch (NoSuchMethodException e) {
+            throw new IOException("test requires a JDK with Unix domain socket support", e);
+        } catch (IllegalAccessException | ClassNotFoundException e) {
+            throw new IOException("failed to access JDK Unix domain socket support", e);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof IOException) {
+                throw (IOException) cause;
+            }
+            throw new IOException("failed to open Unix domain server socket channel", cause);
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static ProtocolFamily resolveUnixProtocolFamily() throws ClassNotFoundException {
+        Class<? extends Enum> protocolFamilyClass = Class.forName("java.net.StandardProtocolFamily").asSubclass(Enum.class);
+        return (ProtocolFamily) Enum.valueOf(protocolFamilyClass, "UNIX");
+    }
+
+    private static SocketAddress resolveUnixSocketAddress(Path socketPath) throws IOException {
+        try {
+            Class<?> addressClass = Class.forName("java.net.UnixDomainSocketAddress");
+            Method ofMethod = addressClass.getMethod("of", Path.class);
+            return (SocketAddress) ofMethod.invoke(null, socketPath);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IOException("failed to access JDK Unix domain socket address support", e);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof IOException) {
+                throw (IOException) cause;
+            }
+            throw new IOException("failed to create Unix domain socket address", cause);
+        }
     }
 
     private static final class RegistrationRequestFrame {
