@@ -26,6 +26,7 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.proxy.ProxyChannel;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakServerConfig;
+import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
 import org.cloudburstmc.netty.handler.codec.raknet.common.UnconnectedPongEncoder;
@@ -75,13 +76,13 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     /**
      * Create new child channel assigned to remote address.
      *
-     * @param address remote address of new connection.
-     * @return RakChildChannel instance of new channel.
+     * @param address         remote address of new connection.
+     * @param protocolVersion RakNet protocol version from the handshake cookie, or 0 if not available.
+     * @return RakChildChannel instance of new channel, or {@code null} if a non-replaceable channel already exists.
      */
-    public RakChildChannel createChildChannel(InetSocketAddress address, InetSocketAddress localAddress,
-                                              long clientGuid, int mtu) {
+    public RakChildChannel createChildChannel(InetSocketAddress address, InetSocketAddress localAddress, long clientGuid, int mtu, int protocolVersion) {
         RakChildChannel existingChannel = this.childChannelMap.get(address);
-        if (this.config().getCookieMode() != RakServerCookieMode.INVALID && 
+        if (this.config().getCookieMode() != RakServerCookieMode.INVALID &&
                 this.config().getCookieMode() != RakServerCookieMode.OFF && existingChannel != null) {
             // We know this player is coming from this IP address due to the cookie, so we can safely close the existing channel.
             existingChannel.close();
@@ -92,6 +93,10 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
 
         RakChildChannel channel = new RakChildChannel(address, localAddress, this, clientGuid, mtu, childConsumer);
         channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
+        // Set before fireChannelRead because initChannel runs async on the child worker thread.
+        if (protocolVersion != 0) {
+            channel.config().setOption(RakChannelOption.RAK_PROTOCOL_VERSION, protocolVersion);
+        }
         // Fire channel thought ServerBootstrap,
         // register to eventLoop, assign default options and attributes
         this.pipeline().fireChannelRead(channel).fireChannelReadComplete();

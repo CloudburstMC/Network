@@ -25,7 +25,6 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakPing;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
-import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
@@ -201,7 +200,7 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
                 // This is likely source IP spoofing so we will not reply
                 return;
             }
-                buffer.readBoolean(); // Client wrote challenge
+            buffer.readBoolean(); // Client wrote challenge
         }
 
         // TODO: Verify serverAddress matches?
@@ -221,8 +220,15 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             return;
         }
 
+        int protocolVersion = 0;
+        if (mode == RakServerCookieMode.ACTIVE
+                || mode == RakServerCookieMode.OFFLOADED
+                || mode == RakServerCookieMode.OFFLOADED_PSK) {
+            protocolVersion = SipHash.getProtocolVersion(cookie);
+        }
+
         RakServerChannel serverChannel = (RakServerChannel) ctx.channel();
-        RakChildChannel channel = serverChannel.createChildChannel(sender, packet.recipient(), clientGuid, mtu);
+        RakChildChannel channel = serverChannel.createChildChannel(sender, packet.recipient(), clientGuid, mtu, protocolVersion);
         if (channel == null) {
             if (log.isTraceEnabled()) {
                 log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2, but a channel already exists for this socket address",
@@ -231,13 +237,6 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             // Already connected
             this.sendAlreadyConnected(ctx, packet, magicBuf, guid);
             return;
-        }
-
-        if (mode == RakServerCookieMode.ACTIVE
-                || mode == RakServerCookieMode.OFFLOADED
-                || mode == RakServerCookieMode.OFFLOADED_PSK) {
-            int protocolVersion = SipHash.getProtocolVersion(cookie);
-            channel.config().setOption(RakChannelOption.RAK_PROTOCOL_VERSION, protocolVersion);
         }
 
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(31);
