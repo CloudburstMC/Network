@@ -51,6 +51,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     protected Channel channel;
     protected CompletableFuture<List<IceServerInfo>> connectFuture;
     protected volatile List<IceServerInfo> iceServers = new ArrayList<>();
+    protected volatile long lastMessageReceivedAt;
 
     protected final Map<Long, SignalHandler> handlers = new ConcurrentHashMap<>();
     protected NetherNetServerSignaling.NewConnectionHandler newConnectionHandler;
@@ -130,10 +131,54 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt == WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE) {
             log.debug("{} WebSocket Connected", getClass().getSimpleName());
+            lastMessageReceivedAt = System.currentTimeMillis();
             onConnected(ctx);
         } else {
             super.userEventTriggered(ctx, evt);
         }
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        // Track liveness: every inbound frame counts. Used by isChannelAlive()
+        // to detect silent half-closed TCP where channel.isActive() lies.
+        lastMessageReceivedAt = System.currentTimeMillis();
+        super.channelRead(ctx, msg);
+    }
+
+    /**
+     * @return true if the signaling WebSocket channel is active. Does NOT
+     *         detect silent half-closed TCP (Netty can report active on a
+     *         dead socket). For stricter checking use {@link #isChannelAlive(long)}
+     *         or compare {@link #getMillisSinceLastMessage()} against your
+     *         own threshold.
+     */
+    public boolean isChannelAlive() {
+        Channel c = this.channel;
+        return c != null && c.isActive();
+    }
+
+    /**
+     * @param maxSilenceMillis max tolerated time since last received frame.
+     *                         Note: a server that's not receiving any client
+     *                         connections may legitimately go long periods
+     *                         without inbound messages.
+     * @return true if the channel is active and has received a frame within
+     *         the given window.
+     */
+    public boolean isChannelAlive(long maxSilenceMillis) {
+        if (!isChannelAlive()) return false;
+        long silence = getMillisSinceLastMessage();
+        return silence >= 0 && silence <= maxSilenceMillis;
+    }
+
+    /**
+     * @return milliseconds since the last received frame, or -1 if no frame
+     *         has been received yet.
+     */
+    public long getMillisSinceLastMessage() {
+        if (lastMessageReceivedAt == 0) return -1;
+        return System.currentTimeMillis() - lastMessageReceivedAt;
     }
 
     /**

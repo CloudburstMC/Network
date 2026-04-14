@@ -47,10 +47,27 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
+        // IMPORTANT: scheduleAtFixedRate silently cancels the task on the first
+        // exception thrown by the runnable. A single transient write failure would
+        // kill the ping loop forever, leaving the connection to die to idle timeouts.
+        // We wrap in try/catch and add a write listener so failures are logged
+        // but the task keeps running on its regular cadence.
         ctx.executor().scheduleAtFixedRate(() -> {
-            JsonObject ping = new JsonObject();
-            ping.addProperty("Type", 0); 
-            ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)));
+            try {
+                if (!ctx.channel().isActive()) {
+                    return;
+                }
+                JsonObject ping = new JsonObject();
+                ping.addProperty("Type", 0);
+                ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)))
+                        .addListener(future -> {
+                            if (!future.isSuccess()) {
+                                log.warn("Ping write failed: {}", future.cause() != null ? future.cause().getMessage() : "unknown");
+                            }
+                        });
+            } catch (Throwable t) {
+                log.warn("Ping iteration threw; loop continues: {}", t.getMessage());
+            }
         }, 5, 5, TimeUnit.SECONDS);
     }
 
