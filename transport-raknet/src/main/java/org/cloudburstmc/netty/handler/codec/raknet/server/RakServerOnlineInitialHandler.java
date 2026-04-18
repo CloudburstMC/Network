@@ -120,7 +120,7 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
         reply.writeLong(guid);
 
         sendRaw(ctx, reply);
-        ctx.fireUserEventTriggered(RakDisconnectReason.CONNECTION_REQUEST_FAILED).close();
+        ctx.fireUserEventTriggered(RakDisconnectReason.CONNECTION_REQUEST_FAILED);
     }
 
     private void sendRaw(ChannelHandlerContext ctx, ByteBuf buf) {
