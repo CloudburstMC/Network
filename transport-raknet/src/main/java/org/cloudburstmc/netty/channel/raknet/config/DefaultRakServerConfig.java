@@ -55,6 +55,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile RakServerCookieMode cookieMode = RakServerCookieMode.ACTIVE;
     private volatile byte[] cookieSecret = new byte[32];
     private volatile SipHash sipHash;
+    private volatile boolean proxyProtocol = true;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -347,5 +348,15 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     @Override
     public SipHash getSipHash() {
         return this.sipHash;
+    }
+
+    @Override
+    public boolean getProxyProtocol() {
+        return this.proxyProtocol;
+    }
+
+    @Override
+    public void setProxyProtocol(boolean proxyProtocol) {
+        this.proxyProtocol = proxyProtocol;
     }
 }

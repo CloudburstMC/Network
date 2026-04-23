@@ -38,14 +38,16 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
     private final RakChannelConfig config;
     private final InetSocketAddress remoteAddress;
     private final InetSocketAddress localAddress;
+    private final InetSocketAddress clientAddress;
     private final DefaultChannelPipeline rakPipeline;
     private volatile boolean open = true;
     private volatile boolean active;
 
-    RakChildChannel(InetSocketAddress remoteAddress, InetSocketAddress localAddress, RakServerChannel parent, long guid, int mtu, Consumer<RakChannel> childConsumer) {
+    RakChildChannel(InetSocketAddress remoteAddress, InetSocketAddress localAddress, InetSocketAddress clientAddress, RakServerChannel parent, long guid, int mtu, Consumer<RakChannel> childConsumer) {
         super(parent);
         this.remoteAddress = remoteAddress;
         this.localAddress = localAddress;
+        this.clientAddress = clientAddress;
         this.config = new DefaultRakSessionConfig(this, new DefaultChannelToServerProxyMetrics(parent, this));
         this.config.setGuid(guid);
         this.config.setMtu(mtu);
@@ -87,7 +89,7 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
 
     @Override
     public SocketAddress remoteAddress0() {
-        return this.remoteAddress;
+        return this.clientAddress;
     }
 
     @Override
@@ -98,6 +100,10 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
     @Override
     public InetSocketAddress remoteAddress() {
         return (InetSocketAddress) super.remoteAddress();
+    }
+
+    public InetSocketAddress remoteOrProxyAddress() {
+        return remoteAddress;
     }
 
     @Override

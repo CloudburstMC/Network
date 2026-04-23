@@ -81,4 +81,8 @@ public interface RakServerChannelConfig extends ChannelConfig {
     RakServerChannelConfig setCookieSecret(byte[] secret);
 
     SipHash getSipHash();
+
+    boolean getProxyProtocol();
+
+    void setProxyProtocol(boolean proxyProtocol);
 }

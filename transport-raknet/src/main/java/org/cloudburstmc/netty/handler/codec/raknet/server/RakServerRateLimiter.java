@@ -26,6 +26,7 @@ import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
 
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -143,7 +144,8 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
             return;
         }
 
-        InetAddress address = datagram.sender().getAddress();
+        InetSocketAddress clientAddress = channel.getClientAddress(datagram.sender());
+        InetAddress address = clientAddress != null ? clientAddress.getAddress() : datagram.sender().getAddress();
         if (this.blockedConnections.containsKey(address)) {
             return;
         }
