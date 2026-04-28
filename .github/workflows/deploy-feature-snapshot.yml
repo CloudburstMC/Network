@@ -1,0 +1,50 @@
+name: Deploy Feature Snapshot
+
+on:
+  push:
+    branches:
+      - 'feature-snapshot/**'
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      publish-version: ${{ steps.version.outputs.publish-version }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Compute feature snapshot version
+        id: version
+        shell: bash
+        run: |
+          base_version="$(sed -n 's/^version=//p' gradle.properties)"
+          base_version="${base_version%-SNAPSHOT}"
+          if [ -z "$base_version" ]; then
+            echo "::error::Could not read project version from gradle.properties"
+            exit 1
+          fi
+
+          feature_name="${GITHUB_REF_NAME#feature-snapshot/}"
+          feature_name="${feature_name//\//-}"
+          feature_name="${feature_name//[^A-Za-z0-9._-]/-}"
+          # Keep this as a Maven snapshot. The snapshot repository will publish
+          # timestamped concrete artifacts, matching the normal develop flow.
+          publish_version="${base_version}-${feature_name}-SNAPSHOT"
+          if [[ "${publish_version}" != *-SNAPSHOT ]]; then
+            echo "::error::Feature publishes must use Maven snapshot versions"
+            exit 1
+          fi
+
+          echo "publish-version=${publish_version}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${publish_version}"
+
+  deploy:
+    needs: version
+    uses: ./.github/workflows/deploy.yml
+    with:
+      deploy-url: "https://repo.opencollab.dev/maven-snapshots/"
+      publish-version: ${{ needs.version.outputs.publish-version }}
+    secrets:
+      DEPLOY_USERNAME: ${{ secrets.OPENCOLLAB_USERNAME }}
+      DEPLOY_PASSWORD: ${{ secrets.OPENCOLLAB_PASSWORD }}
+      PGP_SECRET: ${{ secrets.MAVEN_CENTRAL_SECRET }}
+      PGP_PASSPHRASE: ${{ secrets.MAVEN_CENTRAL_PASSPHRASE }}
