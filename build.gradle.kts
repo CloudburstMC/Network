@@ -106,7 +106,7 @@ subprojects {
         }
         named<Test>("test") {
             javaLauncher.set(javaToolchainService.launcherFor {
-                languageVersion.set(JavaLanguageVersion.of(21))
+                languageVersion.set(JavaLanguageVersion.of(17))
             })
             minHeapSize = "512m"
             maxHeapSize = "1024m"
