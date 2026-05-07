@@ -97,7 +97,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId);
         RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, observer);
 
-        NetherNetChildChannel child = new NetherNetChildChannel(this, pc, new InetSocketAddress(0), localAddress);
+        NetherNetChildChannel child = new NetherNetChildChannel(this, pc, generatePlaceholderAddress(), localAddress);
         observer.setChildChannel(child);
 
         child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
@@ -256,7 +256,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         // The code below works but delays fireChannelActive, which causes pipeline timing
         // issues (duplicate handler registration). Requires a synchronous getter in the
         // native JNI layer to avoid the delay. Until then, connections use a unique
-        // 0.x.x.x placeholder address set at channel creation time.
+        // 10.x.x.x placeholder address set at channel creation time.
         //
         // private void resolveRemoteAddressThenActivate(NetherNetChildChannel child) {
         //     java.util.concurrent.atomic.AtomicBoolean activated = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -312,10 +312,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     }
 
     /**
-     * Generates a unique placeholder address in the 0.x.x.x range for a new
-     * Nethernet connection. This is used as the initial remote address before
-     * ICE candidate resolution completes. The 0.0.0.0/8 range is reserved
-     * ("this network") and will never collide with a real client address.
+     * Generates a unique placeholder address in the 10.x.x.x range for a new
+     * Nethernet connection. The 10.0.0.0/8 range is private (RFC 1918) and
+     * will not collide with real public client addresses.
      */
     private static InetSocketAddress generatePlaceholderAddress() {
         ThreadLocalRandom r = ThreadLocalRandom.current();
