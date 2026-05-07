@@ -22,6 +22,7 @@ import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class NetherNetChannel extends AbstractChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
@@ -36,6 +37,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
     protected RTCDataChannel unreliableChannel;
 
     protected final Queue<Object> pendingWrites = new ConcurrentLinkedQueue<>();
+    private final AtomicBoolean channelActiveFired = new AtomicBoolean();
 
     protected volatile boolean open = true;
 
@@ -94,6 +96,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
                             assemblyBuf.skipBytes(assemblyBuf.readableBytes());
 
                             eventLoop().execute(() -> {
+                                fireChannelActiveIfReady();
                                 pipeline().fireChannelRead(packet);
                                 pipeline().fireChannelReadComplete();
                             });
@@ -117,12 +120,24 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     private void onDataChannelStateChange() {
         if (isActive()) {
-            if (!pendingWrites.isEmpty()) {
-                pipeline().fireChannelWritabilityChanged();
-                unsafe().flush();
-            }
+            fireChannelActiveIfReady();
         } else if (reliableChannel.getState() == RTCDataChannelState.CLOSED) {
             close();
+        }
+    }
+
+    protected void fireChannelActiveIfReady() {
+        if (!isRegistered() || !isActive()) {
+            return;
+        }
+
+        if (channelActiveFired.compareAndSet(false, true)) {
+            pipeline().fireChannelActive();
+        }
+
+        if (!pendingWrites.isEmpty()) {
+            pipeline().fireChannelWritabilityChanged();
+            unsafe().flush();
         }
     }
 
@@ -194,6 +209,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     protected void doRegister() throws Exception {
+        if (isActive()) {
+            channelActiveFired.set(true);
+        }
     }
 
     @Override

@@ -173,6 +173,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         
         private RTCDataChannel reliable;
         private RTCDataChannel unreliable;
+        private boolean dataChannelsSet;
 
         private ScheduledFuture<?> handshakeTimeout;
 
@@ -238,17 +239,15 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
         
         private void checkDataChannels() {
-            if (child != null && reliable != null && unreliable != null) {
+            if (child != null && reliable != null && unreliable != null && !dataChannelsSet) {
+                dataChannelsSet = true;
                 if (handshakeTimeout != null) {
                     handshakeTimeout.cancel(false);
                 }
 
                 log.debug("Data Channels established for {}", Long.toUnsignedString(this.connectionId));
                 child.setDataChannels(reliable, unreliable);
-
-                if (child.pipeline() != null) {
-                    child.pipeline().fireChannelActive();
-                }
+                child.fireChannelActiveIfReady();
             }
         }
 
