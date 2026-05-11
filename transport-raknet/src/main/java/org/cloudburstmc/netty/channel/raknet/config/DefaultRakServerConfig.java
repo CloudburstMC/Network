@@ -55,7 +55,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile RakServerCookieMode cookieMode = RakServerCookieMode.ACTIVE;
     private volatile byte[] cookieSecret = new byte[32];
     private volatile SipHash sipHash;
-    private volatile boolean proxyProtocol = true;
+    private volatile boolean proxyProtocol;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -128,6 +128,9 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_SERVER_COOKIE_SECRET) {
             return (T) this.getCookieSecret();
         }
+        if (option == RakChannelOption.PROXY_PROTOCOL) {
+            return (T) Boolean.valueOf(this.getProxyProtocol());
+        }
         return this.channel.parent().config().getOption(option);
     }
 
@@ -166,6 +169,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setCookieMode((RakServerCookieMode) value);
         } else if (option == RakChannelOption.RAK_SERVER_COOKIE_SECRET) {
             this.setCookieSecret((byte[]) value);
+        } else if (option == RakChannelOption.PROXY_PROTOCOL) {
+            this.setProxyProtocol((Boolean) value);
         } else {
             return this.channel.parent().config().setOption(option, value);
         }

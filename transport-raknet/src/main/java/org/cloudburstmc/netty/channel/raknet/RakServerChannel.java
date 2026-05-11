@@ -78,6 +78,9 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     }
 
     protected void initPipeline() {
+        if (this.config().getProxyProtocol()) {
+            this.pipeline().addLast(RakProxyServerHandler.NAME, new RakProxyServerHandler(this));
+        }
         this.pipeline().addLast(UnconnectedPongEncoder.NAME, UnconnectedPongEncoder.INSTANCE);
         if (this.config().getPacketLimit() > 0) { // No point in enabling this.
             this.pipeline().addLast(RakServerRateLimiter.NAME, new RakServerRateLimiter(this));
@@ -85,9 +88,6 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         this.pipeline().addLast(RakServerOfflineHandler.NAME, new RakServerOfflineHandler(this));
         this.pipeline().addLast(RakServerRouteHandler.NAME, new RakServerRouteHandler(this));
         this.pipeline().addLast(RakServerTailHandler.NAME, RakServerTailHandler.INSTANCE);
-        if (this.config().getProxyProtocol()) {
-            this.pipeline().addFirst(RakProxyServerHandler.NAME, new RakProxyServerHandler(this));
-        }
     }
 
     /**

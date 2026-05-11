@@ -89,7 +89,7 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
 
     @Override
     public SocketAddress remoteAddress0() {
-        return this.clientAddress;
+        return this.remoteAddress;
     }
 
     @Override
@@ -102,8 +102,8 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         return (InetSocketAddress) super.remoteAddress();
     }
 
-    public InetSocketAddress remoteOrProxyAddress() {
-        return remoteAddress;
+    public InetSocketAddress clientAddress() {
+        return clientAddress;
     }
 
     @Override
