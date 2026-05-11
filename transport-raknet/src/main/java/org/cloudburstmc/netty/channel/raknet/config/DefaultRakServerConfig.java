@@ -43,6 +43,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile long guid = ThreadLocalRandom.current().nextLong();
     private volatile int[] supportedProtocols;
     private volatile int maxConnections;
+    private volatile int maxConnectionsPerIp;
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
     private volatile ByteBuf advertisement;
     private volatile boolean handlePing;
@@ -77,7 +78,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MAX_CONNECTIONS, RakChannelOption.RAK_SUPPORTED_PROTOCOLS, RakChannelOption.RAK_UNCONNECTED_MAGIC,
                 RakChannelOption.RAK_ADVERTISEMENT, RakChannelOption.RAK_HANDLE_PING, RakChannelOption.RAK_PACKET_LIMIT, RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, RakChannelOption.RAK_SERVER_METRICS, 
-                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET);
+                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET, RakChannelOption.PROXY_PROTOCOL, RakChannelOption.RAK_MAX_CONNECTIONS_PER_IP);
     }
 
     @SuppressWarnings("unchecked")
@@ -97,6 +98,9 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         }
         if (option == RakChannelOption.RAK_MAX_CONNECTIONS) {
             return (T) Integer.valueOf(this.getMaxConnections());
+        }
+        if (option == RakChannelOption.RAK_MAX_CONNECTIONS_PER_IP) {
+            return (T) Integer.valueOf(this.getMaxConnectionsPerIp());
         }
         if (option == RakChannelOption.RAK_SUPPORTED_PROTOCOLS) {
             return (T) this.getSupportedProtocols();
@@ -144,6 +148,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setMaxChannels((Integer) value);
         } else if (option == RakChannelOption.RAK_MAX_CONNECTIONS) {
             this.setMaxConnections((Integer) value);
+        } else if (option == RakChannelOption.RAK_MAX_CONNECTIONS_PER_IP) {
+            this.setMaxConnectionsPerIp((Integer) value);
         } else if (option == RakChannelOption.RAK_SUPPORTED_PROTOCOLS) {
             this.setSupportedProtocols((int[]) value);
         } else if (option == RakChannelOption.RAK_UNCONNECTED_MAGIC) {
@@ -226,6 +232,17 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     @Override
     public RakServerChannelConfig setMaxConnections(int maxConnections) {
         this.maxConnections = maxConnections;
+        return this;
+    }
+
+    @Override
+    public int getMaxConnectionsPerIp() {
+        return this.maxConnectionsPerIp;
+    }
+
+    @Override
+    public RakServerChannelConfig setMaxConnectionsPerIp(int maxConnectionsPerIp) {
+        this.maxConnectionsPerIp = maxConnectionsPerIp;
         return this;
     }
 
@@ -361,7 +378,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     }
 
     @Override
-    public void setProxyProtocol(boolean proxyProtocol) {
+    public RakServerChannelConfig setProxyProtocol(boolean proxyProtocol) {
         this.proxyProtocol = proxyProtocol;
+        return this;
     }
 }

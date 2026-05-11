@@ -45,6 +45,7 @@ import java.net.SocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public class RakServerChannel extends ProxyChannel<DatagramChannel> implements ServerChannel {
@@ -57,6 +58,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     private final ExpiringMap<InetSocketAddress, InetSocketAddress> clientAddresses = ExpiringMap.builder()
             .expiration(RakConstants.SESSION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .expirationPolicy(ExpirationPolicy.ACCESSED).build();
+    private final Map<InetAddress, AtomicInteger> connectionsPerIp = new ConcurrentHashMap<>();
 
     public RakServerChannel(DatagramChannel channel) {
         this(channel, null);
@@ -109,6 +111,15 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         }
 
         InetSocketAddress clientAddress = this.getClientAddress(address);
+        int maxConnectionsPerIp = this.config().getMaxConnectionsPerIp();
+        if (maxConnectionsPerIp > 0) {
+            AtomicInteger connectionsPerIp = this.connectionsPerIp.computeIfAbsent(clientAddress.getAddress(), ignored -> new AtomicInteger());
+            if (connectionsPerIp.incrementAndGet() > maxConnectionsPerIp) {
+                connectionsPerIp.decrementAndGet();
+                return null;
+            }
+        }
+
         RakChildChannel channel = new RakChildChannel(address, localAddress, clientAddress, this, clientGuid, mtu, childConsumer);
         channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
         // Set before fireChannelRead because initChannel runs async on the child worker thread.
@@ -144,6 +155,11 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         // DefaultChannelPipeline.destroy() is only called when channel.isOpen() is false,
         // but the method is called on parent channel, and there is no other way to destroy pipeline.
         RakUtils.destroyChannelPipeline(channel.rakPipeline());
+
+        AtomicInteger connectionsPerIp = this.connectionsPerIp.get(channel.remoteAddress().getAddress());
+        if (connectionsPerIp != null && connectionsPerIp.decrementAndGet() <= 0) {
+            this.connectionsPerIp.remove(channel.remoteAddress().getAddress());
+        }
     }
 
     @Override
@@ -159,7 +175,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         combiner.finish(combinedPromise);
     }
 
-    public boolean tryBlockAddress(InetAddress address, long time, TimeUnit unit) {
+    public boolean tryBlockAddress(InetSocketAddress address, long time, TimeUnit unit) {
         RakServerRateLimiter rateLimiter = this.pipeline().get(RakServerRateLimiter.class);
         if (rateLimiter != null) {
             return rateLimiter.blockAddress(address, time, unit);

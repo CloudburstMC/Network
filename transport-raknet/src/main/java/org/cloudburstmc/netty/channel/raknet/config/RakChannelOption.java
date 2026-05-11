@@ -70,6 +70,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_MAX_CONNECTIONS");
 
     /**
+     * Maximum allowed connections per ip to the RakNet server. Subsequent connections will be denied.
+     */
+    public static final ChannelOption<Integer> RAK_MAX_CONNECTIONS_PER_IP =
+            valueOf(RakChannelOption.class, "MAX_CONNECTIONS_PER_IP");
+
+    /**
      * RakNet protocol version to send to remote peer.
      */
     public static final ChannelOption<Integer> RAK_PROTOCOL_VERSION =
@@ -202,7 +208,7 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_SERVER_COOKIE_SECRET");
 
     /**
-     * Use proxy protocol to determine the client's ip
+     * Use proxy protocol to determine the client's ip.
      */
     public static final ChannelOption<byte[]> PROXY_PROTOCOL =
             valueOf(RakChannelOption.class, "PROXY_PROTOCOL");

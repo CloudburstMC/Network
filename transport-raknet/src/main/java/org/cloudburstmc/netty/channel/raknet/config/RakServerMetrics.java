@@ -36,10 +36,10 @@ public interface RakServerMetrics {
     default void connectionInitPacket(InetSocketAddress address, int packetId) {
     }
 
-    default void addressBlocked(InetAddress address) {
+    default void addressBlocked(InetSocketAddress address) {
     }
 
-    default void addressUnblocked(InetAddress address) {
+    default void addressUnblocked(InetSocketAddress address) {
     }
 
     default void invalidCookie(InetSocketAddress address) {

@@ -38,6 +38,10 @@ public interface RakServerChannelConfig extends ChannelConfig {
 
     RakServerChannelConfig setMaxConnections(int maxConnections);
 
+    int getMaxConnectionsPerIp();
+
+    RakServerChannelConfig setMaxConnectionsPerIp(int maxConnectionsPerIp);
+
     ByteBuf getUnconnectedMagic();
 
     RakServerChannelConfig setUnconnectedMagic(ByteBuf unconnectedMagic);
@@ -84,5 +88,5 @@ public interface RakServerChannelConfig extends ChannelConfig {
 
     boolean getProxyProtocol();
 
-    void setProxyProtocol(boolean proxyProtocol);
+    RakServerChannelConfig setProxyProtocol(boolean proxyProtocol);
 }

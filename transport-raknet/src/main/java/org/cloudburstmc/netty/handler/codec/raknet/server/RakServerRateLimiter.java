@@ -39,10 +39,10 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
 
     private final RakServerChannel channel;
 
-    private final ConcurrentHashMap<InetAddress, AtomicInteger> rateLimitMap = new ConcurrentHashMap<>();
-    private final Map<InetAddress, Long> blockedConnections = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<InetSocketAddress, AtomicInteger> rateLimitMap = new ConcurrentHashMap<>();
+    private final Map<InetSocketAddress, Long> blockedConnections = new ConcurrentHashMap<>();
 
-    private final Collection<InetAddress> exceptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Collection<InetSocketAddress> exceptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     private final AtomicLong globalCounter = new AtomicLong(0);
 
@@ -76,9 +76,9 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
 
         RakServerMetrics metrics = this.channel.config().getMetrics();
 
-        Iterator<Map.Entry<InetAddress, Long>> iterator = this.blockedConnections.entrySet().iterator();
+        Iterator<Map.Entry<InetSocketAddress, Long>> iterator = this.blockedConnections.entrySet().iterator();
         while (iterator.hasNext()) {
-            Map.Entry<InetAddress, Long> entry = iterator.next();
+            Map.Entry<InetSocketAddress, Long> entry = iterator.next();
             if (entry.getValue() != 0 && currTime > entry.getValue()) {
                 iterator.remove();
                 log.info("Unblocked address {}", entry.getKey());
@@ -89,7 +89,7 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
         }
     }
 
-    public boolean blockAddress(InetAddress address, long time, TimeUnit unit) {
+    public boolean blockAddress(InetSocketAddress address, long time, TimeUnit unit) {
         if (this.exceptions.contains(address)) {
             return false;
         }
@@ -103,7 +103,7 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
         return true;
     }
 
-    public void unblockAddress(InetAddress address) {
+    public void unblockAddress(InetSocketAddress address) {
         if (this.blockedConnections.remove(address) == null) {
             return;
         }
@@ -115,23 +115,23 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
         }
     }
 
-    public boolean isAddressBlocked(InetAddress address) {
+    public boolean isAddressBlocked(InetSocketAddress address) {
         return this.blockedConnections.containsKey(address);
     }
 
-    public void addException(InetAddress address) {
+    public void addException(InetSocketAddress address) {
         this.exceptions.add(address);
     }
 
-    public void removeException(InetAddress address) {
+    public void removeException(InetSocketAddress address) {
         this.exceptions.remove(address);
     }
 
-    public Collection<InetAddress> getExceptions() {
+    public Collection<InetSocketAddress> getExceptions() {
         return Collections.unmodifiableCollection(this.exceptions);
     }
 
-    protected int getAddressMaxPacketCount(InetAddress address) {
+    protected int getAddressMaxPacketCount(InetSocketAddress address) {
         return this.channel.config().getPacketLimit();
     }
 
@@ -144,7 +144,7 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
             return;
         }
 
-        InetAddress address = channel.getClientAddress(datagram.sender()).getAddress();
+        InetSocketAddress address = channel.getClientAddress(datagram.sender());
         if (this.blockedConnections.containsKey(address)) {
             return;
         }
