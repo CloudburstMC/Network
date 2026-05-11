@@ -109,7 +109,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         }
 
         InetSocketAddress clientAddress = this.getClientAddress(address);
-        RakChildChannel channel = new RakChildChannel(address, localAddress, clientAddress == null ? address : clientAddress, this, clientGuid, mtu, childConsumer);
+        RakChildChannel channel = new RakChildChannel(address, localAddress, clientAddress, this, clientGuid, mtu, childConsumer);
         channel.closeFuture().addListener((GenericFutureListener<ChannelFuture>) this::onChildClosed);
         // Set before fireChannelRead because initChannel runs async on the child worker thread.
         if (protocolVersion != 0) {
@@ -132,10 +132,10 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
 
     private void onChildClosed(ChannelFuture channelFuture) {
         RakChildChannel channel = (RakChildChannel) channelFuture.channel();
-        this.childChannelMap.remove(channel.remoteAddress());
+        this.childChannelMap.remove(channel.remoteOrProxyAddress());
 
         if (this.config().getMetrics() != null) {
-            this.config().getMetrics().channelClose(channel.remoteAddress());
+            this.config().getMetrics().channelClose(channel.remoteOrProxyAddress());
         }
 
         channel.rakPipeline().fireChannelInactive();
@@ -173,7 +173,8 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     }
 
     public InetSocketAddress getClientAddress(InetSocketAddress address) {
-        return this.clientAddresses.get(address);
+        InetSocketAddress clientAddress = this.clientAddresses.get(address);
+        return clientAddress != null ? clientAddress : address;
     }
 
     public void setClientAddress(InetSocketAddress address, InetSocketAddress clientAddress) {

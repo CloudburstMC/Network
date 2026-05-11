@@ -144,8 +144,7 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
             return;
         }
 
-        InetSocketAddress clientAddress = channel.getClientAddress(datagram.sender());
-        InetAddress address = clientAddress != null ? clientAddress.getAddress() : datagram.sender().getAddress();
+        InetAddress address = channel.getClientAddress(datagram.sender()).getAddress();
         if (this.blockedConnections.containsKey(address)) {
             return;
         }
