@@ -97,7 +97,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId);
         RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, observer);
 
-        NetherNetChildChannel child = new NetherNetChildChannel(this, pc, new InetSocketAddress(0), localAddress);
+        NetherNetChildChannel child = new NetherNetChildChannel(this, pc, generatePlaceholderAddress(), localAddress);
         observer.setChildChannel(child);
 
         child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
