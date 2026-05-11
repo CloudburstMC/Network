@@ -56,7 +56,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     private final Consumer<RakChannel> childConsumer;
     private final ExpiringMap<InetSocketAddress, InetSocketAddress> clientAddresses = ExpiringMap.builder()
             .expiration(RakConstants.SESSION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                .expirationPolicy(ExpirationPolicy.ACCESSED).build();
+            .expirationPolicy(ExpirationPolicy.ACCESSED).build();
 
     public RakServerChannel(DatagramChannel channel) {
         this(channel, null);
