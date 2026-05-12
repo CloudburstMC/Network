@@ -55,10 +55,10 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     private final RakServerChannelConfig config;
     private final Map<SocketAddress, RakChildChannel> childChannelMap = new ConcurrentHashMap<>();
     private final Consumer<RakChannel> childConsumer;
-    private final ExpiringMap<InetSocketAddress, InetSocketAddress> clientAddresses = ExpiringMap.builder()
-            .expiration(RakConstants.SESSION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .expirationPolicy(ExpirationPolicy.ACCESSED).build();
-    private final Map<InetAddress, AtomicInteger> connectionsPerIp = new ConcurrentHashMap<>();
+
+    private final ExpiringMap<InetSocketAddress, InetSocketAddress> clientAddresses;
+    private final Map<InetAddress, AtomicInteger> connectionsPerIp;
+    private final ExpiringMap<InetAddress, AtomicInteger> connectionThrottle;
 
     public RakServerChannel(DatagramChannel channel) {
         this(channel, null);
@@ -69,6 +69,18 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         this.childConsumer = childConsumer;
         this.config = new DefaultRakServerConfig(this);
         this.initPipeline();
+
+        this.clientAddresses = config().getProxyProtocol()
+                ? ExpiringMap.builder()
+                  .expiration(RakConstants.SESSION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                  .expirationPolicy(ExpirationPolicy.ACCESSED).build()
+                : null;
+        this.connectionsPerIp = config().getMaxConnectionsPerIp() > 0 ? new ConcurrentHashMap<>() : null;
+        this.connectionThrottle = config().getConnectionThrottlePeriod() > 0 && config().getConnectionThrottleLimit() > 0
+                ? ExpiringMap.builder()
+                  .expiration(config().getConnectionThrottlePeriod(), TimeUnit.MILLISECONDS)
+                  .expirationPolicy(ExpirationPolicy.CREATED).build()
+                : null;
 
         channel.closeFuture().addListener(future -> {
             if (!future.isSuccess()) {
@@ -111,13 +123,23 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         }
 
         InetSocketAddress clientAddress = this.getClientAddress(address);
-        int maxConnectionsPerIp = this.config().getMaxConnectionsPerIp();
-        if (maxConnectionsPerIp > 0) {
+
+        if (this.connectionsPerIp != null) {
             AtomicInteger connectionsPerIp = this.connectionsPerIp.computeIfAbsent(clientAddress.getAddress(), ignored -> new AtomicInteger());
-            if (connectionsPerIp.incrementAndGet() > maxConnectionsPerIp) {
-                connectionsPerIp.decrementAndGet();
+            if (connectionsPerIp.get() >= this.config().getMaxConnectionsPerIp()) {
                 return null;
             }
+
+            connectionsPerIp.incrementAndGet();
+        }
+
+        if (this.connectionThrottle != null) {
+            AtomicInteger connectionThrottleCount = this.connectionThrottle.computeIfAbsent(clientAddress.getAddress(), ignored -> new AtomicInteger());
+            if (connectionThrottleCount.get() >= this.config().getConnectionThrottleLimit()) {
+                return null;
+            }
+
+            connectionThrottleCount.incrementAndGet();
         }
 
         RakChildChannel channel = new RakChildChannel(address, localAddress, clientAddress, this, clientGuid, mtu, childConsumer);
@@ -156,9 +178,11 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         // but the method is called on parent channel, and there is no other way to destroy pipeline.
         RakUtils.destroyChannelPipeline(channel.rakPipeline());
 
-        AtomicInteger connectionsPerIp = this.connectionsPerIp.get(channel.remoteAddress().getAddress());
-        if (connectionsPerIp != null && connectionsPerIp.decrementAndGet() <= 0) {
-            this.connectionsPerIp.remove(channel.remoteAddress().getAddress());
+        if (this.connectionsPerIp != null) {
+            AtomicInteger connectionsPerIp = this.connectionsPerIp.get(channel.remoteAddress().getAddress());
+            if (connectionsPerIp != null && connectionsPerIp.decrementAndGet() <= 0) {
+                this.connectionsPerIp.remove(channel.remoteAddress().getAddress());
+            }
         }
     }
 
@@ -189,8 +213,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     }
 
     public InetSocketAddress getClientAddress(InetSocketAddress address) {
-        InetSocketAddress clientAddress = this.clientAddresses.get(address);
-        return clientAddress != null ? clientAddress : address;
+        return this.clientAddresses != null ? this.clientAddresses.get(address) : address;
     }
 
     public void setClientAddress(InetSocketAddress address, InetSocketAddress clientAddress) {

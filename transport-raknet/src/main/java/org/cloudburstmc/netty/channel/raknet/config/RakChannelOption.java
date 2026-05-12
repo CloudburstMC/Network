@@ -210,8 +210,20 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     /**
      * Use proxy protocol to determine the client's ip.
      */
-    public static final ChannelOption<Boolean> PROXY_PROTOCOL =
-            valueOf(RakChannelOption.class, "PROXY_PROTOCOL");
+    public static final ChannelOption<Boolean> RAK_PROXY_PROTOCOL =
+            valueOf(RakChannelOption.class, "RAK_PROXY_PROTOCOL");
+    /**
+     * The duration new connection attempts should be grouped together.
+     */
+    public static final ChannelOption<Long> RAK_CONNECTION_THROTTLE_PERIOD =
+            valueOf(RakChannelOption.class, "RAK_CONNECTION_THROTTLE_PERIOD");
+
+    /**
+     * How many new connections can occur within the duration.
+     */
+    public static final ChannelOption<Integer> RAK_CONNECTION_THROTTLE_LIMIT =
+            valueOf(RakChannelOption.class, "RAK_CONNECTION_THROTTLE_LIMIT");
+
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {

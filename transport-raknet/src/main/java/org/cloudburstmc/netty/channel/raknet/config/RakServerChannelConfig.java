@@ -89,4 +89,12 @@ public interface RakServerChannelConfig extends ChannelConfig {
     boolean getProxyProtocol();
 
     RakServerChannelConfig setProxyProtocol(boolean proxyProtocol);
+
+    long getConnectionThrottlePeriod();
+
+    RakServerChannelConfig setConnectionThrottlePeriod(long connectionThrottlePeriod);
+
+    int getConnectionThrottleLimit();
+
+    RakServerChannelConfig setConnectionThrottleLimit(int connectionThrottleLimit);
 }
