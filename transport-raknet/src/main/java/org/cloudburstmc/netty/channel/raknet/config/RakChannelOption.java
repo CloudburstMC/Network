@@ -210,7 +210,7 @@ public class RakChannelOption<T> extends ChannelOption<T> {
     /**
      * Use proxy protocol to determine the client's ip.
      */
-    public static final ChannelOption<byte[]> PROXY_PROTOCOL =
+    public static final ChannelOption<Boolean> PROXY_PROTOCOL =
             valueOf(RakChannelOption.class, "PROXY_PROTOCOL");
 
     @SuppressWarnings("deprecation")
