@@ -43,7 +43,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile long guid = ThreadLocalRandom.current().nextLong();
     private volatile int[] supportedProtocols;
     private volatile int maxConnections;
-    private volatile int maxConnectionsPerIp;
+    private volatile int maxConnectionsPerIp = 10;
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
     private volatile ByteBuf advertisement;
     private volatile boolean handlePing;
