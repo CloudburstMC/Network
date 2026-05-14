@@ -27,8 +27,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class DefaultRakServerThrottle implements RakServerThrottle {
-    private final Map<InetAddress, AtomicInteger> connectionsPerIp;
-    private final int connectionsPerIpMax;
+    private final Map<InetAddress, AtomicInteger> connections;
+    private final int connectionsMax;
 
     private final ExpiringMap<InetAddress, AtomicInteger> connects;
     private final int connectsMax;
@@ -37,9 +37,9 @@ public class DefaultRakServerThrottle implements RakServerThrottle {
         this(10, 4_000, 3);
     }
 
-    public DefaultRakServerThrottle(int connectionsPerIpMax, long connectWindowInMs, int connectsMax) {
-        this.connectionsPerIp = new ConcurrentHashMap<>();
-        this.connectionsPerIpMax = connectionsPerIpMax;
+    public DefaultRakServerThrottle(int connectionsMax, long connectWindowInMs, int connectsMax) {
+        this.connections = new ConcurrentHashMap<>();
+        this.connectionsMax = connectionsMax;
 
         this.connects = ExpiringMap.builder()
                 .expiration(connectWindowInMs, TimeUnit.MILLISECONDS)
@@ -50,11 +50,11 @@ public class DefaultRakServerThrottle implements RakServerThrottle {
 
     @Override
     public boolean accept(InetSocketAddress address) {
-        AtomicInteger connectionsPerIp = this.connectionsPerIp.computeIfAbsent(address.getAddress(), ignored -> new AtomicInteger());
-        if (connectionsPerIp.get() >= connectionsPerIpMax) {
+        AtomicInteger connections = this.connections.computeIfAbsent(address.getAddress(), ignored -> new AtomicInteger());
+        if (connections.get() >= connectionsMax) {
             return false;
         }
-        connectionsPerIp.incrementAndGet();
+        connections.incrementAndGet();
 
         AtomicInteger attempts = this.connects.computeIfAbsent(address.getAddress(), ignored -> new AtomicInteger());
         if (attempts.get() > connectsMax) {
@@ -67,9 +67,9 @@ public class DefaultRakServerThrottle implements RakServerThrottle {
 
     @Override
     public void closed(InetSocketAddress address) {
-        AtomicInteger connectionsPerIp = this.connectionsPerIp.get(address.getAddress());
+        AtomicInteger connectionsPerIp = this.connections.get(address.getAddress());
         if (connectionsPerIp != null && connectionsPerIp.decrementAndGet() <= 0) {
-            this.connectionsPerIp.remove(address.getAddress());
+            this.connections.remove(address.getAddress());
         }
     }
 }
