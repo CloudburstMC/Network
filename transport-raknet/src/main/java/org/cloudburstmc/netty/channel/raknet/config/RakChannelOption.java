@@ -70,12 +70,6 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_MAX_CONNECTIONS");
 
     /**
-     * Maximum allowed connections per ip to the RakNet server. Subsequent connections will be denied.
-     */
-    public static final ChannelOption<Integer> RAK_MAX_CONNECTIONS_PER_IP =
-            valueOf(RakChannelOption.class, "MAX_CONNECTIONS_PER_IP");
-
-    /**
      * RakNet protocol version to send to remote peer.
      */
     public static final ChannelOption<Integer> RAK_PROTOCOL_VERSION =
@@ -212,18 +206,12 @@ public class RakChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<Boolean> RAK_PROXY_PROTOCOL =
             valueOf(RakChannelOption.class, "RAK_PROXY_PROTOCOL");
-    /**
-     * The duration new connection attempts should be grouped together.
-     */
-    public static final ChannelOption<Long> RAK_CONNECTION_THROTTLE_PERIOD =
-            valueOf(RakChannelOption.class, "RAK_CONNECTION_THROTTLE_PERIOD");
 
     /**
-     * How many new connections can occur within the duration.
+     * Called to determine if a connection should be accepted.
      */
-    public static final ChannelOption<Integer> RAK_CONNECTION_THROTTLE_LIMIT =
-            valueOf(RakChannelOption.class, "RAK_CONNECTION_THROTTLE_LIMIT");
-
+    public static final ChannelOption<RakServerThrottle> RAK_THROTTLE =
+            valueOf(RakChannelOption.class, "RAK_THROTTLE");
 
     @SuppressWarnings("deprecation")
     protected RakChannelOption() {

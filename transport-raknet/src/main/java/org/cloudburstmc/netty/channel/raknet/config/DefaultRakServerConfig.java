@@ -43,7 +43,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile long guid = ThreadLocalRandom.current().nextLong();
     private volatile int[] supportedProtocols;
     private volatile int maxConnections;
-    private volatile int maxConnectionsPerIp = 10;
     private volatile ByteBuf unconnectedMagic = Unpooled.wrappedBuffer(DEFAULT_UNCONNECTED_MAGIC);
     private volatile ByteBuf advertisement;
     private volatile boolean handlePing;
@@ -57,8 +56,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile byte[] cookieSecret = new byte[32];
     private volatile SipHash sipHash;
     private volatile boolean proxyProtocol;
-    private volatile long connectionThrottlePeriod = 4_000;
-    private volatile int connectionThrottleLimit = 3;
+    private volatile RakServerThrottle throttle;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -80,8 +78,7 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MAX_CONNECTIONS, RakChannelOption.RAK_SUPPORTED_PROTOCOLS, RakChannelOption.RAK_UNCONNECTED_MAGIC,
                 RakChannelOption.RAK_ADVERTISEMENT, RakChannelOption.RAK_HANDLE_PING, RakChannelOption.RAK_PACKET_LIMIT, RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, RakChannelOption.RAK_SERVER_METRICS, 
-                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET, RakChannelOption.RAK_PROXY_PROTOCOL,
-                RakChannelOption.RAK_MAX_CONNECTIONS_PER_IP, RakChannelOption.RAK_CONNECTION_THROTTLE_PERIOD, RakChannelOption.RAK_CONNECTION_THROTTLE_LIMIT);
+                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET, RakChannelOption.RAK_PROXY_PROTOCOL, RakChannelOption.RAK_THROTTLE);
     }
 
     @SuppressWarnings("unchecked")
@@ -101,9 +98,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         }
         if (option == RakChannelOption.RAK_MAX_CONNECTIONS) {
             return (T) Integer.valueOf(this.getMaxConnections());
-        }
-        if (option == RakChannelOption.RAK_MAX_CONNECTIONS_PER_IP) {
-            return (T) Integer.valueOf(this.getMaxConnectionsPerIp());
         }
         if (option == RakChannelOption.RAK_SUPPORTED_PROTOCOLS) {
             return (T) this.getSupportedProtocols();
@@ -138,11 +132,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_PROXY_PROTOCOL) {
             return (T) Boolean.valueOf(this.getProxyProtocol());
         }
-        if (option == RakChannelOption.RAK_CONNECTION_THROTTLE_PERIOD) {
-            return (T) Long.valueOf(this.getConnectionThrottlePeriod());
-        }
-        if (option == RakChannelOption.RAK_CONNECTION_THROTTLE_LIMIT) {
-            return (T) Integer.valueOf(this.getConnectionThrottleLimit());
+        if (option == RakChannelOption.RAK_THROTTLE) {
+            return (T) this.getThrottle();
         }
         return this.channel.parent().config().getOption(option);
     }
@@ -157,8 +148,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setMaxChannels((Integer) value);
         } else if (option == RakChannelOption.RAK_MAX_CONNECTIONS) {
             this.setMaxConnections((Integer) value);
-        } else if (option == RakChannelOption.RAK_MAX_CONNECTIONS_PER_IP) {
-            this.setMaxConnectionsPerIp((Integer) value);
         } else if (option == RakChannelOption.RAK_SUPPORTED_PROTOCOLS) {
             this.setSupportedProtocols((int[]) value);
         } else if (option == RakChannelOption.RAK_UNCONNECTED_MAGIC) {
@@ -186,10 +175,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setCookieSecret((byte[]) value);
         } else if (option == RakChannelOption.RAK_PROXY_PROTOCOL) {
             this.setProxyProtocol((Boolean) value);
-        } else if (option == RakChannelOption.RAK_CONNECTION_THROTTLE_PERIOD) {
-            this.setConnectionThrottlePeriod((Long) value);
-        } else if (option == RakChannelOption.RAK_CONNECTION_THROTTLE_LIMIT) {
-            this.setConnectionThrottleLimit((Integer) value);
+        } else if (option == RakChannelOption.RAK_THROTTLE) {
+            this.setThrottle((RakServerThrottle) value);
         } else {
             return this.channel.parent().config().setOption(option, value);
         }
@@ -245,17 +232,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     @Override
     public RakServerChannelConfig setMaxConnections(int maxConnections) {
         this.maxConnections = maxConnections;
-        return this;
-    }
-
-    @Override
-    public int getMaxConnectionsPerIp() {
-        return this.maxConnectionsPerIp;
-    }
-
-    @Override
-    public RakServerChannelConfig setMaxConnectionsPerIp(int maxConnectionsPerIp) {
-        this.maxConnectionsPerIp = maxConnectionsPerIp;
         return this;
     }
 
@@ -397,24 +373,13 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     }
 
     @Override
-    public long getConnectionThrottlePeriod() {
-        return this.connectionThrottlePeriod;
+    public RakServerThrottle getThrottle() {
+        return this.throttle;
     }
 
     @Override
-    public RakServerChannelConfig setConnectionThrottlePeriod(long connectionThrottlePeriod) {
-        this.connectionThrottlePeriod = connectionThrottlePeriod;
-        return this;
-    }
-
-    @Override
-    public int getConnectionThrottleLimit() {
-        return this.connectionThrottleLimit;
-    }
-
-    @Override
-    public RakServerChannelConfig setConnectionThrottleLimit(int throttleWindowConnections) {
-        this.connectionThrottleLimit = throttleWindowConnections;
+    public RakServerChannelConfig setThrottle(RakServerThrottle throttle) {
+        this.throttle = throttle;
         return this;
     }
 }

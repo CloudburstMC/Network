@@ -38,10 +38,6 @@ public interface RakServerChannelConfig extends ChannelConfig {
 
     RakServerChannelConfig setMaxConnections(int maxConnections);
 
-    int getMaxConnectionsPerIp();
-
-    RakServerChannelConfig setMaxConnectionsPerIp(int maxConnectionsPerIp);
-
     ByteBuf getUnconnectedMagic();
 
     RakServerChannelConfig setUnconnectedMagic(ByteBuf unconnectedMagic);
@@ -90,11 +86,7 @@ public interface RakServerChannelConfig extends ChannelConfig {
 
     RakServerChannelConfig setProxyProtocol(boolean proxyProtocol);
 
-    long getConnectionThrottlePeriod();
+    RakServerThrottle getThrottle();
 
-    RakServerChannelConfig setConnectionThrottlePeriod(long connectionThrottlePeriod);
-
-    int getConnectionThrottleLimit();
-
-    RakServerChannelConfig setConnectionThrottleLimit(int connectionThrottleLimit);
+    RakServerChannelConfig setThrottle(RakServerThrottle throttle);
 }
