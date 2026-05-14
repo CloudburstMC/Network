@@ -54,13 +54,14 @@ public class DefaultRakServerThrottle implements RakServerThrottle {
         if (connections.get() >= connectionsMax) {
             return false;
         }
-        connections.incrementAndGet();
 
-        AtomicInteger attempts = this.connects.computeIfAbsent(address.getAddress(), ignored -> new AtomicInteger());
-        if (attempts.get() > connectsMax) {
+        AtomicInteger connects = this.connects.computeIfAbsent(address.getAddress(), ignored -> new AtomicInteger());
+        if (connects.get() >= connectsMax) {
             return false;
         }
-        attempts.incrementAndGet();
+        connects.incrementAndGet();
+
+        connections.incrementAndGet();
 
         return true;
     }

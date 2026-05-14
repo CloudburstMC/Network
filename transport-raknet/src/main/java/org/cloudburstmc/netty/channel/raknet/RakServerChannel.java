@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.ServerChannel;
 import io.netty.channel.socket.DatagramChannel;
@@ -39,13 +40,11 @@ import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRouteHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerTailHandler;
 import org.cloudburstmc.netty.util.RakUtils;
 
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public class RakServerChannel extends ProxyChannel<DatagramChannel> implements ServerChannel {
@@ -56,7 +55,8 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
     private final Map<SocketAddress, RakChildChannel> childChannelMap = new ConcurrentHashMap<>();
     private final Consumer<RakChannel> childConsumer;
 
-    private final ExpiringMap<InetSocketAddress, InetSocketAddress> clientAddresses;
+    private boolean pipelineInitialized;
+    private ExpiringMap<InetSocketAddress, InetSocketAddress> clientAddresses = null;
 
     public RakServerChannel(DatagramChannel channel) {
         this(channel, null);
@@ -66,13 +66,6 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         super(channel);
         this.childConsumer = childConsumer;
         this.config = new DefaultRakServerConfig(this);
-        this.initPipeline();
-
-        this.clientAddresses = config().getProxyProtocol()
-                ? ExpiringMap.builder()
-                  .expiration(RakConstants.SESSION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                  .expirationPolicy(ExpirationPolicy.ACCESSED).build()
-                : null;
 
         channel.closeFuture().addListener(future -> {
             if (!future.isSuccess()) {
@@ -83,7 +76,21 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         });
     }
 
+    @Override
+    public ChannelPipeline pipeline() {
+        if (!this.pipelineInitialized) {
+            this.pipelineInitialized = true;
+            initPipeline();
+        }
+        return super.pipeline();
+    }
+
     protected void initPipeline() {
+        this.clientAddresses = this.config().getProxyProtocol()
+                ? ExpiringMap.builder()
+                  .expiration(RakConstants.SESSION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                  .expirationPolicy(ExpirationPolicy.ACCESSED).build()
+                : null;
         if (this.config().getProxyProtocol()) {
             this.pipeline().addLast(RakProxyServerHandler.NAME, new RakProxyServerHandler(this));
         }
@@ -131,7 +138,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         this.childChannelMap.put(address, channel);
 
         if (this.config().getMetrics() != null) {
-            this.config().getMetrics().channelOpen(address);
+            this.config().getMetrics().channelOpen(clientAddress);
         }
         return channel;
     }
@@ -145,7 +152,7 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         this.childChannelMap.remove(channel.remoteOrProxyAddress());
 
         if (this.config().getMetrics() != null) {
-            this.config().getMetrics().channelClose(channel.remoteOrProxyAddress());
+            this.config().getMetrics().channelClose(channel.remoteAddress());
         }
 
         channel.rakPipeline().fireChannelInactive();

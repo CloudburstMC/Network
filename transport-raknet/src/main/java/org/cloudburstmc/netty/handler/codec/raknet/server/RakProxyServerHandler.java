@@ -33,8 +33,8 @@ import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyProtocolException;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.cloudburstmc.netty.channel.proxy.ProxyProtocolDecoder;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
+import org.cloudburstmc.netty.util.ProxyProtocolDecoder;
 
 import java.net.InetSocketAddress;
 

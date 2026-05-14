@@ -23,7 +23,7 @@
  * @link https://github.com/GeyserMC/Geyser
  */
 
-package org.cloudburstmc.netty.channel.proxy;
+package org.cloudburstmc.netty.util;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.ProtocolDetectionResult;
