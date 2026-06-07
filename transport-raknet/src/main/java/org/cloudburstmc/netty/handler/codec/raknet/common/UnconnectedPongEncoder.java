@@ -54,6 +54,6 @@ public class UnconnectedPongEncoder extends ChannelOutboundHandlerAdapter {
         pongBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         pongBuffer.writeShort(pongData.readableBytes());
         pongBuffer.writeBytes(pongData, pongData.readerIndex(), pongData.readableBytes());
-        ctx.write(new DatagramPacket(pongBuffer, pong.getSender()), promise);
+        ctx.write(new DatagramPacket(pongBuffer, pong.getSender(), pong.getRecipient()), promise);
     }
 }

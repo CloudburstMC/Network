@@ -28,12 +28,18 @@ public class RakPong extends AbstractReferenceCounted {
     private final long guid;
     private final ByteBuf pongData;
     private final InetSocketAddress sender;
+    private final InetSocketAddress recipient;
 
     public RakPong(long pingTime, long guid, ByteBuf pongData, InetSocketAddress sender) {
+        this(pingTime, guid, pongData, sender, null);
+    }
+
+    public RakPong(long pingTime, long guid, ByteBuf pongData, InetSocketAddress sender, InetSocketAddress recipient) {
         this.pingTime = pingTime;
         this.guid = guid;
         this.pongData = pongData;
         this.sender = sender;
+        this.recipient = recipient;
     }
 
     public long getPingTime() {
@@ -50,6 +56,10 @@ public class RakPong extends AbstractReferenceCounted {
 
     public InetSocketAddress getSender() {
         return this.sender;
+    }
+
+    public InetSocketAddress getRecipient() {
+        return this.recipient;
     }
 
     @Override

@@ -66,6 +66,6 @@ public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<Datagr
         if (buf.isReadable(2)) { // Length
             pongData = buf.readRetainedSlice(buf.readUnsignedShort());
         }
-        ctx.fireChannelRead(new RakPong(pingTime, guid, pongData, packet.sender()));
+        ctx.fireChannelRead(new RakPong(pingTime, guid, pongData, packet.sender(), packet.recipient()));
     }
 }

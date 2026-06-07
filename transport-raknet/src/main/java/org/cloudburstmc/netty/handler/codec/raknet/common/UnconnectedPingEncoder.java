@@ -52,6 +52,6 @@ public class UnconnectedPingEncoder extends ChannelOutboundHandlerAdapter {
         pingBuffer.writeLong(ping.getPingTime());
         pingBuffer.writeBytes(magicBuf, magicBuf.readerIndex(), magicBuf.readableBytes());
         pingBuffer.writeLong(guid);
-        ctx.write(new DatagramPacket(pingBuffer, ping.getSender()), promise);
+        ctx.write(new DatagramPacket(pingBuffer, ping.getSender(), ping.getRecipient()), promise);
     }
 }

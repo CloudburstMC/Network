@@ -24,10 +24,16 @@ public class RakPing {
 
     private final long pingTime;
     private final InetSocketAddress sender;
+    private final InetSocketAddress recipient;
 
     public RakPing(long pingTime, InetSocketAddress sender) {
+        this(pingTime, sender, null);
+    }
+
+    public RakPing(long pingTime, InetSocketAddress sender, InetSocketAddress recipient) {
         this.pingTime = pingTime;
         this.sender = sender;
+        this.recipient = recipient;
     }
 
     public long getPingTime() {
@@ -39,7 +45,11 @@ public class RakPing {
         return this.sender;
     }
 
+    public InetSocketAddress getRecipient() {
+        return this.recipient;
+    }
+
     public RakPong reply(long guid, ByteBuf pongData) {
-        return new RakPong(this.pingTime, guid, pongData, this.sender);
+        return new RakPong(this.pingTime, guid, pongData, this.sender, this.recipient);
     }
 }
