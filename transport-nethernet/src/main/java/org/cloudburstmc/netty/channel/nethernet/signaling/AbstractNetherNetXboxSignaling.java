@@ -21,6 +21,7 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
 import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler;
+import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
 import io.netty.handler.codec.http.websocketx.WebSocketVersion;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
@@ -114,6 +115,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                      p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), 443));
                      p.addLast(new HttpClientCodec(), new HttpObjectAggregator(8192));
                      p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker));
+                     p.addLast("ws-aggregator", new WebSocketFrameAggregator(16 * 1024)); // Allow 16KB aggregations
                      p.addLast("handler", AbstractNetherNetXboxSignaling.this);
                  }
              });
