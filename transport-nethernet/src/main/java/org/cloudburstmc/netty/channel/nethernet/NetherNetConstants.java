@@ -177,4 +177,34 @@ public class NetherNetConstants {
     public static String buildSignalCandidateAdd(long connectionId, String candidateSdp) {
         return RTC_NEGOTIATION_CANDIDATE_ADD + " " + Long.toUnsignedString(connectionId) + " " + candidateSdp;
     }
+
+    /**
+     * Parses the {@code a=max-message-size} attribute from an SDP description.
+     * This is the maximum SCTP user message size, in bytes, that the describing
+     * endpoint is willing to receive, so outbound fragmentation must never
+     * exceed the value advertised by the remote peer.
+     *
+     * @param sdp      the SDP description to scan, may be null
+     * @param fallback the value to return when the attribute is absent or invalid
+     * @return the advertised maximum message size, or {@code fallback} if not found
+     */
+    public static int parseMaxMessageSize(String sdp, int fallback) {
+        if (sdp == null) {
+            return fallback;
+        }
+        for (String line : sdp.split("\\r?\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("a=max-message-size:")) {
+                try {
+                    int value = Integer.parseInt(trimmed.substring("a=max-message-size:".length()).trim());
+                    if (value > 1) {
+                        return value;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Fall through to the fallback for a malformed attribute.
+                }
+            }
+        }
+        return fallback;
+    }
 }

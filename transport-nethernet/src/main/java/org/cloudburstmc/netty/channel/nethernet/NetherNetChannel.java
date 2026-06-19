@@ -41,6 +41,23 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     protected volatile boolean open = true;
 
+    // Reassembly state for inbound fragmented messages. assemblyBuf is written on
+    // the WebRTC callback thread (the data channel observer) and released on the
+    // event loop (doClose), so every access is guarded by assemblyLock together
+    // with the assemblyClosed flag, which orders the release strictly after the
+    // observer is detached and prevents a use-after-free.
+    private final Object assemblyLock = new Object();
+    private ByteBuf assemblyBuf;
+    private boolean assemblyClosed;
+    private int currentSegmentCount = -1;
+
+    // Maximum outbound SCTP message size in bytes. writeInternal must never
+    // fragment beyond what the remote advertised it can receive (the
+    // a=max-message-size attribute in its SDP); subclasses set this from the
+    // negotiated description. Defaults to the conservative MAX_SCTP_MESSAGE_SIZE
+    // until negotiation supplies the real value.
+    protected volatile int maxOutboundMessageSize = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE;
+
     protected NetherNetChannel(Channel parent, InetSocketAddress remote, InetSocketAddress local) {
         super(parent);
         this.remoteAddress = remote;
@@ -49,12 +66,23 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     public void setDataChannels(RTCDataChannel reliable, RTCDataChannel unreliable) {
         this.reliableChannel = reliable;
+        // The unreliable channel is intentionally stored but never observed or
+        // written to: this is a reliable-only implementation, which gives the
+        // ordered, lossless stream a Bedrock translation proxy needs. If it is
+        // ever wired up it must stay single-message only, because an unreliable
+        // channel can drop or reorder and would strand a multi-fragment message
+        // mid-reassembly: observe it but never run reassembly on it (every
+        // inbound message must arrive complete, header 0), and on send drop
+        // anything too large to fit one message rather than fragmenting it.
         this.unreliableChannel = unreliable;
 
-        RTCDataChannelObserver observer = new RTCDataChannelObserver() {
-            private final ByteBuf assemblyBuf = config.getAllocator().buffer();
-            private int currentSegmentCount = -1;
+        synchronized (assemblyLock) {
+            if (assemblyBuf == null && !assemblyClosed) {
+                assemblyBuf = config.getAllocator().buffer();
+            }
+        }
 
+        RTCDataChannelObserver observer = new RTCDataChannelObserver() {
             @Override
             public void onBufferedAmountChange(long previousAmount) {
             }
@@ -72,40 +100,45 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
                 int segments = data.get() & 0xFF;
 
-                if (currentSegmentCount == -1) {
-                    currentSegmentCount = segments;
-                } else {
-                    if (segments != currentSegmentCount - 1) {
-                        assemblyBuf.clear();
-                        currentSegmentCount = -1;
+                synchronized (assemblyLock) {
+                    if (assemblyClosed || assemblyBuf == null) {
                         return;
                     }
-                    currentSegmentCount = segments;
-                }
 
-                if (data.hasRemaining()) {
-                    byte[] payload = new byte[data.remaining()];
-                    data.get(payload);
-                    assemblyBuf.writeBytes(payload);
-                }
-
-                if (segments == 0) {
-                    try {
-                        if (assemblyBuf.isReadable()) {
-                            ByteBuf packet = assemblyBuf.copy();
-                            assemblyBuf.skipBytes(assemblyBuf.readableBytes());
-
-                            eventLoop().execute(() -> {
-                                fireChannelActiveIfReady();
-                                pipeline().fireChannelRead(packet);
-                                pipeline().fireChannelReadComplete();
-                            });
+                    if (currentSegmentCount == -1) {
+                        currentSegmentCount = segments;
+                    } else {
+                        if (segments != currentSegmentCount - 1) {
+                            assemblyBuf.clear();
+                            currentSegmentCount = -1;
+                            return;
                         }
-                    } catch (Exception e) {
-                        log.error("Error processing packet", e);
-                    } finally {
-                        assemblyBuf.clear();
-                        currentSegmentCount = -1;
+                        currentSegmentCount = segments;
+                    }
+
+                    if (data.hasRemaining()) {
+                        byte[] payload = new byte[data.remaining()];
+                        data.get(payload);
+                        assemblyBuf.writeBytes(payload);
+                    }
+
+                    if (segments == 0) {
+                        try {
+                            if (assemblyBuf.isReadable()) {
+                                ByteBuf packet = assemblyBuf.copy();
+
+                                eventLoop().execute(() -> {
+                                    fireChannelActiveIfReady();
+                                    pipeline().fireChannelRead(packet);
+                                    pipeline().fireChannelReadComplete();
+                                });
+                            }
+                        } catch (Exception e) {
+                            log.error("Error processing packet", e);
+                        } finally {
+                            assemblyBuf.clear();
+                            currentSegmentCount = -1;
+                        }
                     }
                 }
             }
@@ -115,6 +148,19 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
         if (reliableChannel.getState() == RTCDataChannelState.OPEN) {
             eventLoop().execute(this::onDataChannelStateChange);
+        }
+    }
+
+    /**
+     * Sets the maximum outbound SCTP message size, in bytes, for this channel.
+     * Should be the {@code a=max-message-size} the remote peer advertised in its
+     * SDP. Values too small to leave room for the fragment header are ignored.
+     *
+     * @param size the negotiated maximum message size
+     */
+    public void setMaxOutboundMessageSize(int size) {
+        if (size > 1) {
+            this.maxOutboundMessageSize = size;
         }
     }
 
@@ -175,15 +221,26 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
         ByteBuf payload = (ByteBuf) msg;
 
-        ByteBuf framed = payload.retainedDuplicate();
-
-        int totalLength = framed.readableBytes();
-        int maxPayload = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
+        int maxPayload = maxOutboundMessageSize - 1;
+        int totalLength = payload.readableBytes();
 
         int segments = (totalLength / maxPayload);
         if (totalLength % maxPayload != 0)
             segments++;
 
+        // Each fragment carries a one-byte countdown header, so a message can
+        // span at most 256 fragments. The negotiated max-message-size keeps this
+        // ceiling far out of reach, but guard it anyway: without the check an
+        // oversized message would wrap the header byte and silently corrupt the
+        // stream instead of failing.
+        if (segments > 256) {
+            pipeline().fireExceptionCaught(new IllegalStateException(
+                "Outbound message of " + totalLength + " bytes exceeds the maximum "
+                    + (256 * maxPayload) + " bytes addressable by the fragment header"));
+            return;
+        }
+
+        ByteBuf framed = payload.retainedDuplicate();
         try {
             int offset = 0;
             for (int i = 0; i < segments; i++) {
@@ -242,6 +299,18 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
         if (peerConnection != null) {
             peerConnection.close();
+        }
+
+        // Release the reassembly buffer now that the observer is unregistered.
+        // Guarded by assemblyLock with assemblyClosed so it cannot race, or be
+        // re-allocated by, an in-flight onMessage on the WebRTC callback thread.
+        synchronized (assemblyLock) {
+            assemblyClosed = true;
+            if (assemblyBuf != null) {
+                assemblyBuf.release();
+                assemblyBuf = null;
+            }
+            currentSegmentCount = -1;
         }
 
         Object msg;

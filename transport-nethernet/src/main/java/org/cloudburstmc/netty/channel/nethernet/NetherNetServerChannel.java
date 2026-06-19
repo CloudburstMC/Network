@@ -98,6 +98,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, observer);
 
         NetherNetChildChannel child = new NetherNetChildChannel(this, pc, generatePlaceholderAddress(), localAddress);
+        // Fragment outbound data no larger than the client advertised it can
+        // receive (a=max-message-size in its offer), falling back to the
+        // conservative default when the client does not advertise one.
+        child.setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(offerSdp, NetherNetConstants.MAX_SCTP_MESSAGE_SIZE));
         observer.setChildChannel(child);
 
         child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));

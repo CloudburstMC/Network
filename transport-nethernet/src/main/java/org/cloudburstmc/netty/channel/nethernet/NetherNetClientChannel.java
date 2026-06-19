@@ -296,6 +296,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
             switch (type) {
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE -> {
+                    // Fragment outbound data no larger than the remote advertised
+                    // it can receive (a=max-message-size in its answer).
+                    setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(data, NetherNetConstants.MAX_SCTP_MESSAGE_SIZE));
                     peerConnection.setRemoteDescription(new RTCSessionDescription(RTCSdpType.ANSWER, data), new SetSessionDescriptionObserver() {
                         @Override public void onSuccess() {}
                         @Override public void onFailure(String e) { /* Retry handled by timeout */ }
