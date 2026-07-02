@@ -36,6 +36,16 @@ public abstract class NetherNetChannel extends AbstractChannel {
     protected RTCDataChannel reliableChannel;
     protected RTCDataChannel unreliableChannel;
 
+    // Mirrors the reliable channel's OPEN state, updated from the data channel
+    // observer. isActive() is called on every write and formerly crossed JNI
+    // into a blocking native call for it; the cached flag makes it free.
+    private volatile boolean reliableOpen;
+
+    // Reusable outbound fragment buffer. Confined to the event loop (doWrite),
+    // and safe to reuse across sends because the native layer copies the data
+    // out before sendAsync returns.
+    private ByteBuffer outboundScratch;
+
     protected final Queue<Object> pendingWrites = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean channelActiveFired = new AtomicBoolean();
 
@@ -66,6 +76,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     public void setDataChannels(RTCDataChannel reliable, RTCDataChannel unreliable) {
         this.reliableChannel = reliable;
+        // Seed the cached state once; the observer keeps it current from here.
+        this.reliableOpen = reliable.getState() == RTCDataChannelState.OPEN;
         // The unreliable channel is intentionally stored but never observed or
         // written to: this is a reliable-only implementation, which gives the
         // ordered, lossless stream a Bedrock translation proxy needs. If it is
@@ -94,6 +106,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
             @Override
             public void onMessage(RTCDataChannelBuffer buffer) {
+                // The ByteBuffer wraps native memory that is only valid for
+                // the duration of this callback, so every path below must copy
+                // exactly once into a netty buffer before handing off.
                 ByteBuffer data = buffer.data;
                 if (!data.hasRemaining())
                     return;
@@ -102,6 +117,15 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
                 synchronized (assemblyLock) {
                     if (assemblyClosed || assemblyBuf == null) {
+                        return;
+                    }
+
+                    // Fast path: complete single-segment message (the common
+                    // case) skips the assembly buffer entirely.
+                    if (currentSegmentCount == -1 && segments == 0) {
+                        if (data.hasRemaining()) {
+                            deliver(copyToBuf(data));
+                        }
                         return;
                     }
 
@@ -117,27 +141,17 @@ public abstract class NetherNetChannel extends AbstractChannel {
                     }
 
                     if (data.hasRemaining()) {
-                        byte[] payload = new byte[data.remaining()];
-                        data.get(payload);
-                        assemblyBuf.writeBytes(payload);
+                        assemblyBuf.writeBytes(data);
                     }
 
                     if (segments == 0) {
-                        try {
-                            if (assemblyBuf.isReadable()) {
-                                ByteBuf packet = assemblyBuf.copy();
-
-                                eventLoop().execute(() -> {
-                                    fireChannelActiveIfReady();
-                                    pipeline().fireChannelRead(packet);
-                                    pipeline().fireChannelReadComplete();
-                                });
-                            }
-                        } catch (Exception e) {
-                            log.error("Error processing packet", e);
-                        } finally {
-                            assemblyBuf.clear();
-                            currentSegmentCount = -1;
+                        currentSegmentCount = -1;
+                        if (assemblyBuf.isReadable()) {
+                            // Hand the assembled buffer off to the pipeline and
+                            // start a fresh one instead of copying it again.
+                            ByteBuf packet = assemblyBuf;
+                            assemblyBuf = config.getAllocator().buffer();
+                            deliver(packet);
                         }
                     }
                 }
@@ -148,6 +162,33 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
         if (reliableChannel.getState() == RTCDataChannelState.OPEN) {
             eventLoop().execute(this::onDataChannelStateChange);
+        }
+    }
+
+    /**
+     * Copies the remaining bytes of the given callback-scoped buffer into a
+     * freshly allocated netty buffer.
+     */
+    private ByteBuf copyToBuf(ByteBuffer data) {
+        ByteBuf packet = config.getAllocator().buffer(data.remaining());
+        packet.writeBytes(data);
+        return packet;
+    }
+
+    /**
+     * Fires a fully reassembled packet down the pipeline on the event loop.
+     * Releases the packet if the event loop rejects the task (shutdown race)
+     * so the buffer cannot leak.
+     */
+    private void deliver(ByteBuf packet) {
+        try {
+            eventLoop().execute(() -> {
+                fireChannelActiveIfReady();
+                pipeline().fireChannelRead(packet);
+                pipeline().fireChannelReadComplete();
+            });
+        } catch (Exception e) {
+            packet.release();
         }
     }
 
@@ -165,9 +206,18 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     private void onDataChannelStateChange() {
+        RTCDataChannel channel = this.reliableChannel;
+        if (channel == null) {
+            return;
+        }
+        // One native call per state transition; every other isActive() check
+        // reads the cached flag.
+        RTCDataChannelState state = channel.getState();
+        reliableOpen = state == RTCDataChannelState.OPEN;
+
         if (isActive()) {
             fireChannelActiveIfReady();
-        } else if (reliableChannel.getState() == RTCDataChannelState.CLOSED) {
+        } else if (state == RTCDataChannelState.CLOSED) {
             close();
         }
     }
@@ -242,19 +292,25 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
         ByteBuf framed = payload.retainedDuplicate();
         try {
+            // One reusable direct buffer for every fragment of every message:
+            // sendAsync copies the bytes out before returning, so the scratch
+            // can be refilled immediately, and unlike the blocking send it
+            // never stalls this event loop on the native network thread.
+            ByteBuffer chunk = outboundScratch(1 + maxPayload);
+
             int offset = 0;
             for (int i = 0; i < segments; i++) {
                 int remaining = segments - 1 - i;
                 int chunkSize = Math.min(maxPayload, framed.readableBytes() - offset);
 
-                ByteBuffer chunk = ByteBuffer.allocateDirect(1 + chunkSize);
+                chunk.clear();
+                chunk.limit(1 + chunkSize);
                 chunk.put((byte) remaining);
 
                 framed.getBytes(offset, chunk);
-                chunk.position(chunk.limit());
                 chunk.flip();
 
-                reliableChannel.send(new RTCDataChannelBuffer(chunk, true));
+                reliableChannel.sendAsync(new RTCDataChannelBuffer(chunk, true));
                 offset += chunkSize;
             }
         } catch (Exception e) {
@@ -262,6 +318,20 @@ public abstract class NetherNetChannel extends AbstractChannel {
         } finally {
             framed.release();
         }
+    }
+
+    /**
+     * Returns the reusable outbound fragment buffer, growing it when the
+     * negotiated max message size demands more. Only used from doWrite on the
+     * event loop.
+     */
+    private ByteBuffer outboundScratch(int capacity) {
+        ByteBuffer scratch = this.outboundScratch;
+        if (scratch == null || scratch.capacity() < capacity) {
+            scratch = ByteBuffer.allocateDirect(capacity);
+            this.outboundScratch = scratch;
+        }
+        return scratch;
     }
 
     @Override
@@ -288,6 +358,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
     @Override
     protected void doClose() throws Exception {
         this.open = false;
+        this.reliableOpen = false;
+        this.outboundScratch = null;
 
         if (reliableChannel != null) {
             reliableChannel.unregisterObserver();
@@ -350,7 +422,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     public boolean isActive() {
-        return isOpen() && this.reliableChannel != null && this.reliableChannel.getState() == RTCDataChannelState.OPEN;
+        // Hot path: called around every write. Reads the observer-maintained
+        // flag instead of a blocking JNI call into the native network thread.
+        return isOpen() && this.reliableChannel != null && this.reliableOpen;
     }
 
     @Override
