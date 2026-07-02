@@ -10,7 +10,6 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
 import java.net.URI;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
 @Sharable
 public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
@@ -18,7 +17,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     /**
      * Creates a NetherNetXboxSignaling instance.
-     * 
+     *
      * @param networkId The Network ID to use.
      * @param xboxToken The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
@@ -28,7 +27,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     /**
      * Creates a NetherNetXboxSignaling instance.
-     * 
+     *
      * @param localNetworkId The local Network ID to use.
      * @param xboxToken      The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
@@ -38,7 +37,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     /**
      * Creates a NetherNetXboxSignaling instance with a random local Network ID.
-     * 
+     *
      * @param xboxToken The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
     public NetherNetXboxSignaling(String xboxToken) {
@@ -47,28 +46,16 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
-        // IMPORTANT: scheduleAtFixedRate silently cancels the task on the first
-        // exception thrown by the runnable. A single transient write failure would
-        // kill the ping loop forever, leaving the connection to die to idle timeouts.
-        // We wrap in try/catch and add a write listener so failures are logged
-        // but the task keeps running on its regular cadence.
-        ctx.executor().scheduleAtFixedRate(() -> {
-            try {
-                if (!ctx.channel().isActive()) {
-                    return;
-                }
-                JsonObject ping = new JsonObject();
-                ping.addProperty("Type", 0);
-                ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)))
-                        .addListener(future -> {
-                            if (!future.isSuccess()) {
-                                log.warn("Ping write failed: {}", future.cause() != null ? future.cause().getMessage() : "unknown");
-                            }
-                        });
-            } catch (Throwable t) {
-                log.warn("Ping iteration threw; loop continues: {}", t.getMessage());
-            }
-        }, 5, 5, TimeUnit.SECONDS);
+        scheduleRecurring(ctx, "app-ping", () -> {
+            JsonObject ping = new JsonObject();
+            ping.addProperty("Type", 0);
+            ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)))
+                    .addListener(future -> {
+                        if (!future.isSuccess()) {
+                            log.warn("Ping write failed: {}", future.cause() != null ? future.cause().getMessage() : "unknown");
+                        }
+                    });
+        }, 5, 5);
     }
 
     @Override
@@ -95,11 +82,15 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
                 }
                 case NetherNetConstants.XBOX_SIGNAL_CREDENTIALS -> {
                     log.trace("Received Credentials");
-                    if (json.has("Message") && connectFuture != null && !connectFuture.isDone()) {
+                    if (json.has("Message")) {
                         String rawMsg = json.get("Message").getAsString();
                         JsonObject credentials = JsonParser.parseString(rawMsg).getAsJsonObject();
-                        
-                        connectFuture.complete(parseTurnServers(credentials));
+
+                        // Applied unconditionally, not just while connecting: the
+                        // service pushes refreshed TURN credentials over the
+                        // lifetime of the socket, and peer connections created
+                        // later must not be handed the expired originals.
+                        updateIceServers(parseTurnServers(credentials));
                     }
                 }
                 case NetherNetConstants.XBOX_SIGNAL_ACCEPTED, NetherNetConstants.XBOX_SIGNAL_ACK -> log.trace("Signal Ack: {}", text);
@@ -112,6 +103,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     public void sendSignal(String targetNetworkId, String data) {
+        var channel = this.channel;
         if (channel != null && channel.isActive()) {
             JsonObject msg = new JsonObject();
             msg.addProperty("Type", 1);
