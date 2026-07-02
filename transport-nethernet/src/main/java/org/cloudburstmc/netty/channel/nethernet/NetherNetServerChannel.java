@@ -28,6 +28,7 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -37,15 +38,19 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private static final ChannelMetadata METADATA = new ChannelMetadata(false, 16);
 
     private final DefaultNetherServerChannelConfig config;
-    private final PeerConnectionFactory factory;
+    private final List<PeerConnectionFactory> factories;
     private final NetherNetServerSignaling signaling;
-    
+
+    // Round robin cursor into factories. Only touched from this channel's
+    // event loop (establishConnection), so no synchronization is needed.
+    private int nextFactory;
+
     private InetSocketAddress localAddress;
     private volatile boolean open = true;
 
     /**
      * Creates a NetherNetServerChannel with a new PeerConnectionFactory.
-     * 
+     *
      * @param signaling The NetherNetServerSignaling instance for signaling.
      */
     public NetherNetServerChannel(NetherNetServerSignaling signaling) {
@@ -54,12 +59,30 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     /**
      * Creates a NetherNetServerChannel.
-     * 
+     *
      * @param factory   The PeerConnectionFactory to use for creating peer connections. Should be reused where possible.
      * @param signaling The NetherNetServerSignaling instance for signaling.
      */
     public NetherNetServerChannel(PeerConnectionFactory factory, NetherNetServerSignaling signaling) {
-        this.factory = factory;
+        this(List.of(factory), signaling);
+    }
+
+    /**
+     * Creates a NetherNetServerChannel backed by a pool of PeerConnectionFactory
+     * instances. Each native factory runs one network, worker, and signaling
+     * thread shared by all its peer connections; connections are assigned to
+     * factories round robin, spreading the DTLS and SCTP load of many players
+     * across the pool instead of serializing it on a single network thread.
+     *
+     * @param factories The PeerConnectionFactory pool, at least one. This
+     *                  channel takes ownership and disposes each on close.
+     * @param signaling The NetherNetServerSignaling instance for signaling.
+     */
+    public NetherNetServerChannel(List<PeerConnectionFactory> factories, NetherNetServerSignaling signaling) {
+        if (factories.isEmpty()) {
+            throw new IllegalArgumentException("factories must not be empty");
+        }
+        this.factories = List.copyOf(factories);
         this.signaling = signaling;
         this.config = new DefaultNetherServerChannelConfig(this);
     }
@@ -68,7 +91,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     protected void doBind(SocketAddress localAddress) throws Exception {
         if (!(localAddress instanceof InetSocketAddress)) throw new IllegalArgumentException("Unsupported address type");
         this.localAddress = (InetSocketAddress) localAddress;
-        
+
         this.signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp) -> {
             acceptConnection(connectionId, offerSdp, remoteNetworkId);
         });
@@ -76,48 +99,151 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         this.signaling.bind(localAddress);
     }
 
+    /**
+     * Accepts an incoming connection offer. Runs on the signaling I/O thread:
+     * only the signal handler registration happens here (a cheap map put, so
+     * candidates arriving right behind the offer are never dropped), then all
+     * WebRTC work hops onto this server channel's event loop. Native peer
+     * connection calls block on the WebRTC signaling thread and must never
+     * stall the signaling socket's thread, whose keepalives are what hold the
+     * connection to the signaling service open.
+     */
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
-        RTCConfiguration rtcConfig = new RTCConfiguration();
-        rtcConfig.portAllocatorConfig = this.config.getOption(NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG);
-        rtcConfig.bundlePolicy = RTCBundlePolicy.MAX_BUNDLE;
+        PendingConnection pending = new PendingConnection(connectionId);
+        signaling.setSignalHandler(connectionId, signal -> eventLoop().execute(() -> pending.handleSignal(signal)));
+        eventLoop().execute(() -> establishConnection(pending, connectionId, offerSdp, remoteNetworkId));
+    }
 
-        // Inject ICE servers if the signaling implementation supports it
-        List<IceServerInfo> iceServers = this.signaling.getIceServers();
-        if (iceServers != null && !iceServers.isEmpty()) {
-            log.trace("Injecting {} ICE Servers into PeerConnection for {}", iceServers.size(), Long.toUnsignedString(connectionId));
-            for (IceServerInfo info : iceServers) {
-                RTCIceServer iceServer = new RTCIceServer();
-                iceServer.urls = info.urls();
-                iceServer.username = info.username();
-                iceServer.password = info.password();
-                rtcConfig.iceServers.add(iceServer);
+    /**
+     * Builds the peer connection for an accepted offer. Runs on this server
+     * channel's event loop; incoming signals for the connection hop onto the
+     * same loop, so everything here is single-threaded and ordered.
+     */
+    private void establishConnection(PendingConnection pending, long connectionId, String offerSdp, String remoteNetworkId) {
+        try {
+            RTCConfiguration rtcConfig = new RTCConfiguration();
+            rtcConfig.portAllocatorConfig = this.config.getOption(NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG);
+            rtcConfig.bundlePolicy = RTCBundlePolicy.MAX_BUNDLE;
+
+            // Inject ICE servers if the signaling implementation supports it
+            List<IceServerInfo> iceServers = this.signaling.getIceServers();
+            if (iceServers != null && !iceServers.isEmpty()) {
+                log.trace("Injecting {} ICE Servers into PeerConnection for {}", iceServers.size(), Long.toUnsignedString(connectionId));
+                for (IceServerInfo info : iceServers) {
+                    RTCIceServer iceServer = new RTCIceServer();
+                    iceServer.urls = info.urls();
+                    iceServer.username = info.username();
+                    iceServer.password = info.password();
+                    rtcConfig.iceServers.add(iceServer);
+                }
+            }
+
+            ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId);
+            PeerConnectionFactory factory = factories.get(nextFactory);
+            nextFactory = (nextFactory + 1) % factories.size();
+            RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, observer);
+
+            NetherNetChildChannel child = new NetherNetChildChannel(this, pc, generatePlaceholderAddress(), localAddress);
+            // Fragment outbound data no larger than the client advertised it can
+            // receive (a=max-message-size in its offer), falling back to the
+            // conservative default when the client does not advertise one.
+            child.setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(offerSdp, NetherNetConstants.MAX_SCTP_MESSAGE_SIZE));
+            observer.setChildChannel(child);
+
+            child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
+
+            int handshakeTimeoutSeconds = this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
+            ScheduledFuture<?> timeoutTask = eventLoop().schedule(() -> {
+                if (!child.isActive()) {
+                    log.warn("Connection {} timed out during handshake ({}s)", Long.toUnsignedString(connectionId), handshakeTimeoutSeconds);
+                    child.close();
+                    pc.close();
+                }
+            }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
+            observer.setHandshakeTimeout(timeoutTask);
+
+            // Handle Offer
+            pc.setRemoteDescription(new RTCSessionDescription(RTCSdpType.OFFER, offerSdp), new SetSessionDescriptionObserver() {
+                @Override
+                public void onSuccess() {
+                    log.trace("Remote description set for {}", Long.toUnsignedString(connectionId));
+                    pc.createAnswer(new RTCAnswerOptions(), new CreateSessionDescriptionObserver() {
+                        @Override
+                        public void onSuccess(RTCSessionDescription description) {
+                            pc.setLocalDescription(description, new SetSessionDescriptionObserver() {
+                                @Override
+                                public void onSuccess() {
+                                    log.trace("Sending Answer SDP for {}", Long.toUnsignedString(connectionId));
+                                    try {
+                                        signaling.sendSignal(
+                                            remoteNetworkId,
+                                            NetherNetConstants.buildSignalConnectResponse(connectionId, description.sdp)
+                                        );
+                                    } catch (Exception e) {
+                                        // Signaling dropped mid-handshake; the client cannot
+                                        // receive the answer, so let the handshake timeout
+                                        // reap this connection.
+                                        log.warn("Failed to send answer for {} (signaling unavailable): {}",
+                                            Long.toUnsignedString(connectionId), e.getMessage());
+                                        return;
+                                    }
+                                    pipeline().fireChannelRead(child);
+                                }
+                                @Override public void onFailure(String error) { log.error("SetLocalDesc failed: {}", error); }
+                            });
+                        }
+                        @Override public void onFailure(String error) { log.error("CreateAnswer failed: {}", error); }
+                    });
+                }
+                @Override public void onFailure(String error) { log.error("SetRemoteDesc failed: {}", error); }
+            });
+
+            // Publish the peer connection to the signal handler and drain any
+            // candidates that arrived while it was being created.
+            pending.attach(pc, child);
+        } catch (Exception e) {
+            log.error("Failed to establish connection {}: {}", Long.toUnsignedString(connectionId), e.getMessage(), e);
+            signaling.removeSignalHandler(connectionId);
+        }
+    }
+
+    /**
+     * Per-connection signal state. All methods run on this server channel's
+     * event loop, so no synchronization is needed. Signals that arrive between
+     * the offer and the peer connection becoming available are queued and
+     * drained by attach, preserving arrival order.
+     */
+    private final class PendingConnection {
+        private final long connectionId;
+        private RTCPeerConnection pc;
+        private NetherNetChildChannel child;
+        private List<String> queued = new ArrayList<>();
+
+        PendingConnection(long connectionId) {
+            this.connectionId = connectionId;
+        }
+
+        void attach(RTCPeerConnection pc, NetherNetChildChannel child) {
+            this.pc = pc;
+            this.child = child;
+            List<String> pendingSignals = this.queued;
+            this.queued = null;
+            for (String signal : pendingSignals) {
+                apply(signal);
             }
         }
 
-        ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId);
-        RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, observer);
-
-        NetherNetChildChannel child = new NetherNetChildChannel(this, pc, generatePlaceholderAddress(), localAddress);
-        // Fragment outbound data no larger than the client advertised it can
-        // receive (a=max-message-size in its offer), falling back to the
-        // conservative default when the client does not advertise one.
-        child.setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(offerSdp, NetherNetConstants.MAX_SCTP_MESSAGE_SIZE));
-        observer.setChildChannel(child);
-
-        child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
-
-        int handshakeTimeoutSeconds = this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
-        ScheduledFuture<?> timeoutTask = eventLoop().schedule(() -> {
-            if (!child.isActive()) {
-                log.warn("Connection {} timed out during handshake ({}s)", Long.toUnsignedString(connectionId), handshakeTimeoutSeconds);
-                child.close();
-                pc.close();
+        void handleSignal(String signal) {
+            if (pc == null) {
+                if (queued != null) {
+                    queued.add(signal);
+                }
+                return;
             }
-        }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
-        observer.setHandshakeTimeout(timeoutTask);
-        
-        // Register Signal Handler
-        signaling.setSignalHandler(connectionId, (signal) -> {
+            apply(signal);
+        }
+
+        private void apply(String signal) {
             String[] parts = signal.split(" ", 3);
             if (parts.length < 3) return;
             String type = parts[0];
@@ -137,34 +263,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                     child.close();
                 }
             }
-        });
-
-        // Handle Offer
-        pc.setRemoteDescription(new RTCSessionDescription(RTCSdpType.OFFER, offerSdp), new SetSessionDescriptionObserver() {
-            @Override
-            public void onSuccess() {
-                log.trace("Remote description set for {}", Long.toUnsignedString(connectionId));
-                pc.createAnswer(new RTCAnswerOptions(), new CreateSessionDescriptionObserver() {
-                    @Override
-                    public void onSuccess(RTCSessionDescription description) {
-                        pc.setLocalDescription(description, new SetSessionDescriptionObserver() {
-                            @Override
-                            public void onSuccess() {
-                                log.trace("Sending Answer SDP for {}", Long.toUnsignedString(connectionId));
-                                signaling.sendSignal(
-                                    remoteNetworkId, 
-                                    NetherNetConstants.buildSignalConnectResponse(connectionId, description.sdp)
-                                );
-                                pipeline().fireChannelRead(child);
-                            }
-                            @Override public void onFailure(String error) { log.error("SetLocalDesc failed: {}", error); }
-                        });
-                    }
-                    @Override public void onFailure(String error) { log.error("CreateAnswer failed: {}", error); }
-                });
-            }
-            @Override public void onFailure(String error) { log.error("SetRemoteDesc failed: {}", error); }
-        });
+        }
     }
 
     /**
@@ -174,12 +273,16 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private final long connectionId;
         private final String remoteNetworkId;
         private NetherNetChildChannel child;
-        
+
         private RTCDataChannel reliable;
         private RTCDataChannel unreliable;
         private boolean dataChannelsSet;
 
         private ScheduledFuture<?> handshakeTimeout;
+
+        // Real remote address from ICE nomination. Buffered here when the
+        // callback fires before the child channel is attached.
+        private volatile InetSocketAddress pendingRemoteAddress;
 
         public ServerPeerConnectionObserver(long connectionId, String remoteNetworkId) {
             this.connectionId = connectionId;
@@ -192,19 +295,57 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         public void setChildChannel(NetherNetChildChannel child) {
             this.child = child;
+            InetSocketAddress pending = this.pendingRemoteAddress;
+            if (pending != null) {
+                child.remoteAddress = pending;
+            }
             checkDataChannels();
+        }
+
+        @Override
+        public void onSelectedCandidatePairChanged(String remoteAddress, int remotePort, String candidateType) {
+            // ICE nominated a pair. This fires before DTLS and the data
+            // channels open, so the channel carries its real remote address
+            // before it activates and anything downstream reads it. Until
+            // then the channel holds its unique random placeholder, which
+            // also covers the case of this callback never firing. For a
+            // relayed connection the address is the TURN relay, which is the
+            // peer actually connected to us and the intended value. A later
+            // re-nomination simply overwrites.
+            try {
+                InetSocketAddress resolved = new InetSocketAddress(remoteAddress, remotePort);
+                NetherNetChildChannel target = this.child;
+                if (target != null) {
+                    target.remoteAddress = resolved;
+                } else {
+                    this.pendingRemoteAddress = resolved;
+                }
+                log.debug("Resolved remote address for {}: {}:{} (type: {})",
+                    Long.toUnsignedString(this.connectionId), remoteAddress, remotePort, candidateType);
+            } catch (Exception e) {
+                log.debug("Failed to set remote address for {}: {}",
+                    Long.toUnsignedString(this.connectionId), e.getMessage());
+            }
         }
 
         @Override
         public void onIceCandidate(RTCIceCandidate candidate) {
             if (log.isTraceEnabled()) {
-                log.trace("Generated ICE Candidate for {}: {} (Type: {})", 
+                log.trace("Generated ICE Candidate for {}: {} (Type: {})",
                     Long.toUnsignedString(this.connectionId), candidate.sdp, extractCandidateType(candidate.sdp));
             }
-            signaling.sendSignal(
-                remoteNetworkId, 
-                NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate.sdp)
-            );
+            try {
+                signaling.sendSignal(
+                    remoteNetworkId,
+                    NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate.sdp)
+                );
+            } catch (Exception e) {
+                // Signaling dropped mid-handshake. Established connections don't
+                // signal candidates, so only this in-flight handshake is affected;
+                // the handshake timeout cleans it up if it cannot complete.
+                log.debug("Failed to signal ICE candidate for {} (signaling unavailable): {}",
+                    Long.toUnsignedString(this.connectionId), e.getMessage());
+            }
         }
 
         private String extractCandidateType(String sdp) {
@@ -232,16 +373,16 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         public void onDataChannel(RTCDataChannel dataChannel) {
             String label = dataChannel.getLabel();
             log.debug("Received Data Channel: {}", label);
-            
+
             if (NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label)) {
                 this.reliable = dataChannel;
             } else if (NetherNetConstants.UNRELIABLE_CHANNEL_LABEL.equals(label)) {
                 this.unreliable = dataChannel;
             }
-            
+
             checkDataChannels();
         }
-        
+
         private void checkDataChannels() {
             if (child != null && reliable != null && unreliable != null && !dataChannelsSet) {
                 dataChannelsSet = true;
@@ -255,54 +396,6 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
         }
 
-        // TODO: Resolve real remote address from ICE candidate pair via webrtc-java fork.
-        // The code below works but delays fireChannelActive, which causes pipeline timing
-        // issues (duplicate handler registration). Requires a synchronous getter in the
-        // native JNI layer to avoid the delay. Until then, connections use a unique
-        // 10.x.x.x placeholder address set at channel creation time.
-        //
-        // private void resolveRemoteAddressThenActivate(NetherNetChildChannel child) {
-        //     java.util.concurrent.atomic.AtomicBoolean activated = new java.util.concurrent.atomic.AtomicBoolean(false);
-        //     ScheduledFuture<?> fallback = eventLoop().schedule(() -> {
-        //         activateOnce(child, activated);
-        //     }, 2, TimeUnit.SECONDS);
-        //     try {
-        //         child.peerConnection.getStats(report -> {
-        //             try {
-        //                 String remoteId = null;
-        //                 for (var entry : report.getStats().entrySet()) {
-        //                     var stats = entry.getValue();
-        //                     if (stats.getType() == dev.kastle.webrtc.RTCStatsType.CANDIDATE_PAIR) {
-        //                         Object selected = stats.getAttributes().get("nominated");
-        //                         if (Boolean.TRUE.equals(selected)) {
-        //                             remoteId = (String) stats.getAttributes().get("remoteCandidateId");
-        //                             break;
-        //                         }
-        //                     }
-        //                 }
-        //                 if (remoteId != null) {
-        //                     var remoteStat = report.getStats().get(remoteId);
-        //                     if (remoteStat != null) {
-        //                         String ip = (String) remoteStat.getAttributes().get("ip");
-        //                         Object portObj = remoteStat.getAttributes().get("port");
-        //                         if (ip != null && portObj != null) {
-        //                             int port = (portObj instanceof Number) ? ((Number) portObj).intValue() : Integer.parseInt(portObj.toString());
-        //                             child.remoteAddress = new InetSocketAddress(ip, port);
-        //                         }
-        //                     }
-        //                 }
-        //             } catch (Exception e) {
-        //                 log.debug("Failed to resolve remote address: {}", e.getMessage());
-        //             } finally {
-        //                 fallback.cancel(false);
-        //                 activateOnce(child, activated);
-        //             }
-        //         });
-        //     } catch (Exception e) {
-        //         fallback.cancel(false);
-        //         activateOnce(child, activated);
-        //     }
-        // }
         //
         // private void activateOnce(NetherNetChildChannel child, java.util.concurrent.atomic.AtomicBoolean activated) {
         //     if (!activated.compareAndSet(false, true)) return;
@@ -328,11 +421,23 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     @Override
     protected void doClose() throws Exception {
         this.open = false;
-        
+
         try {
             signaling.close();
         } finally {
-            factory.dispose();
+            Exception failure = null;
+            for (PeerConnectionFactory factory : factories) {
+                try {
+                    factory.dispose();
+                } catch (Exception e) {
+                    // Keep disposing the rest; rethrow the first failure after.
+                    if (failure == null) failure = e;
+                    log.warn("Failed to dispose PeerConnectionFactory: {}", e.getMessage());
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
         }
     }
 
@@ -348,24 +453,24 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     @Override
     protected boolean isCompatible(EventLoop loop) {
-        return true; 
+        return true;
     }
 
     @Override
     public ChannelConfig config() { return config; }
-    
-    @Override 
-    public boolean isOpen() { 
+
+    @Override
+    public boolean isOpen() {
         return this.open;
     }
-    
-    @Override 
-    public boolean isActive() { 
+
+    @Override
+    public boolean isActive() {
         return isOpen() && localAddress0() != null;
     }
-    
-    @Override 
-    public ChannelMetadata metadata() { 
-        return METADATA; 
+
+    @Override
+    public ChannelMetadata metadata() {
+        return METADATA;
     }
 }
