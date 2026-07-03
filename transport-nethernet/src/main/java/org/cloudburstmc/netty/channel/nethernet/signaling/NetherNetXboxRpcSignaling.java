@@ -7,6 +7,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -27,7 +28,23 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
      * connections created on a long-lived socket never receive expired ones. */
     private static final long TURN_REFRESH_INTERVAL_SECONDS = 30 * 60;
 
-    private final Map<String, CompletableFuture<JsonObject>> pendingRequests = new ConcurrentHashMap<>();
+    /**
+     * An in-flight JSON-RPC request, tagged with the WebSocket channel it was
+     * written to so that a dying channel only fails its own requests. During
+     * a reconnect the old channel's inactive event must not fail requests
+     * already sent on the replacement socket.
+     */
+    private static final class PendingRequest {
+        final CompletableFuture<JsonObject> future;
+        final Channel channel;
+
+        PendingRequest(CompletableFuture<JsonObject> future, Channel channel) {
+            this.future = future;
+            this.channel = channel;
+        }
+    }
+
+    private final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
 
     /**
      * Creates a NetherNetXboxRpcSignaling instance.
@@ -90,12 +107,15 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     protected void onChannelInactive(ChannelHandlerContext ctx) {
         // Fail everything that was waiting on a reply over the dead socket so
         // callers see a prompt error instead of a future that never completes.
-        for (String id : pendingRequests.keySet()) {
-            CompletableFuture<JsonObject> future = pendingRequests.remove(id);
-            if (future != null) {
-                future.completeExceptionally(new ClosedChannelException());
+        // Only requests written to THIS channel: during a reconnect the old
+        // channel's inactive event must not fail the new socket's requests.
+        pendingRequests.entrySet().removeIf(entry -> {
+            if (entry.getValue().channel == ctx.channel()) {
+                entry.getValue().future.completeExceptionally(new ClosedChannelException());
+                return true;
             }
-        }
+            return false;
+        });
     }
 
     @Override
@@ -117,7 +137,8 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     private void handleResponse(JsonObject json) {
         if (!json.has("id") || json.get("id").isJsonNull()) return;
         String id = json.get("id").getAsString();
-        CompletableFuture<JsonObject> future = pendingRequests.remove(id);
+        PendingRequest pending = pendingRequests.remove(id);
+        CompletableFuture<JsonObject> future = pending != null ? pending.future : null;
 
         if (future != null) {
             if (json.has("error") && !json.get("error").isJsonNull()) {
@@ -221,7 +242,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
         var channel = this.channel;
         if (channel != null && channel.isActive()) {
-            pendingRequests.put(id, future);
+            pendingRequests.put(id, new PendingRequest(future, channel));
             channel.writeAndFlush(new TextWebSocketFrame(gson.toJson(rpc)));
         } else {
             future.completeExceptionally(new ClosedChannelException());

@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
+import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import dev.kastle.webrtc.PeerConnectionFactory;
@@ -48,6 +49,19 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
      */
     public static ChannelFactory<NetherNetServerChannel> server(List<PeerConnectionFactory> factories, NetherNetServerSignaling signaling) {
         return new NetherNetChannelFactory<>(() -> new NetherNetServerChannel(factories, signaling));
+    }
+
+    /**
+     * Creates a NetherNet Server Channel Factory over an explicit WebRTC
+     * backend. The resulting server channel takes ownership of the backend
+     * and closes it on close.
+     *
+     * @param backend   The backend negotiating and carrying connections.
+     * @param signaling The NetherNetServerSignaling instance for signaling.
+     * @return A ChannelFactory for NetherNetServerChannel.
+     */
+    public static ChannelFactory<NetherNetServerChannel> server(WebRtcServerBackend backend, NetherNetServerSignaling signaling) {
+        return new NetherNetChannelFactory<>(() -> new NetherNetServerChannel(backend, signaling));
     }
 
     /**

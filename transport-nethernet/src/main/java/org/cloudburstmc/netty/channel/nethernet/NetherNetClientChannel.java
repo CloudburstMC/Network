@@ -18,6 +18,7 @@ import dev.kastle.webrtc.RTCDataChannelState;
 import dev.kastle.webrtc.RTCIceCandidate;
 import dev.kastle.webrtc.RTCIceServer;
 import dev.kastle.webrtc.RTCOfferOptions;
+import dev.kastle.webrtc.RTCPeerConnection;
 import dev.kastle.webrtc.RTCPeerConnectionState;
 import dev.kastle.webrtc.RTCSdpType;
 import dev.kastle.webrtc.RTCSessionDescription;
@@ -39,8 +40,16 @@ import java.util.concurrent.TimeUnit;
 public class NetherNetClientChannel extends NetherNetChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetClientChannel.class);
 
-    private final PeerConnectionFactory factory;    
+    private final PeerConnectionFactory factory;
     private final NetherNetClientSignaling signaling;
+
+    // The client channel talks to libwebrtc directly (it predates the server
+    // side backend seam); its data channel handling mirrors the seam's
+    // semantics: raw framed messages into the pipeline, framing done by the
+    // NetherNetFramingCodec in the pipeline.
+    private volatile RTCPeerConnection peerConnection;
+    private volatile RTCDataChannel reliableChannel;
+    private volatile RTCDataChannel unreliableChannel;
 
     private volatile long connectionId; // Session ID (Long)
     private volatile String targetNetworkId; // Peer ID (String, for Realms)
@@ -52,6 +61,20 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private volatile ScheduledFuture<?> handshakeTimeoutTask;
 
     private int retryCount = 0;
+
+    // Monotonic attempt marker, bumped on every handshake retry. Async engine
+    // callbacks belonging to a previous attempt (offer creation, description
+    // observers, data channel state changes) capture their generation and
+    // bail once a retry has moved past them, so a delayed stale callback can
+    // no longer mutate the replacement attempt's state.
+    private volatile int attemptGeneration;
+
+    // Event loop confined. The synchronous native addIceCandidate rejects
+    // candidates applied while the peer connection has no remote description
+    // yet, so candidates arriving before the CONNECT_RESPONSE answer has been
+    // applied are buffered and drained once it succeeds.
+    private boolean remoteDescriptionSet;
+    private java.util.List<String> pendingRemoteCandidates = new java.util.ArrayList<>();
 
     /**
      * Creates a NetherNetClientChannel with a new PeerConnectionFactory.
@@ -88,6 +111,19 @@ public class NetherNetClientChannel extends NetherNetChannel {
     @Override
     protected void doClose() throws Exception {
         super.doClose();
+        RTCDataChannel reliable = this.reliableChannel;
+        if (reliable != null) {
+            reliable.unregisterObserver();
+            reliable.close();
+        }
+        RTCDataChannel unreliable = this.unreliableChannel;
+        if (unreliable != null) {
+            unreliable.close();
+        }
+        RTCPeerConnection pc = this.peerConnection;
+        if (pc != null) {
+            pc.close();
+        }
         if (handshakeTimeoutTask != null) {
             handshakeTimeoutTask.cancel(false);
         }
@@ -189,6 +225,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         }
 
         retryCount++;
+        attemptGeneration++;
 
         if (peerConnection != null) {
             peerConnection.close();
@@ -197,6 +234,8 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
         signaling.removeSignalHandler(this.connectionId);
         this.cycleConnectionId();
+        remoteDescriptionSet = false;
+        pendingRemoteCandidates = new java.util.ArrayList<>();
         startHandshake();
     }
 
@@ -215,17 +254,27 @@ public class NetherNetClientChannel extends NetherNetChannel {
             }
         }
 
-        peerConnection = factory.createPeerConnection(rtcConfig, new PeerConnectionObserver() {
+        final int gen = attemptGeneration;
+        final long attemptConnectionId = this.connectionId;
+
+        RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, new PeerConnectionObserver() {
             @Override
             public void onIceCandidate(RTCIceCandidate candidate) {
+                if (gen != attemptGeneration) {
+                    return;
+                }
                 try {
                     signaling.sendSignal(
-                        targetNetworkId, 
-                        NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate.sdp)
+                        targetNetworkId,
+                        NetherNetConstants.buildSignalCandidateAdd(attemptConnectionId, candidate.sdp)
                     );
                 } catch (Exception e) {
                     log.error("Failed to send ICE candidate", e);
-                    eventLoop().execute(() -> resetAndRetryHandshake());
+                    eventLoop().execute(() -> {
+                        if (gen == attemptGeneration) {
+                            resetAndRetryHandshake();
+                        }
+                    });
                 }
             }
 
@@ -234,7 +283,11 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 if (state == RTCPeerConnectionState.FAILED) {
                     // Fast fail trigger: retry immediately instead of waiting for timeout
                     log.warn("PeerConnection entered FAILED state, resetting and retrying handshake.");
-                    eventLoop().execute(() -> resetAndRetryHandshake());
+                    eventLoop().execute(() -> {
+                        if (gen == attemptGeneration) {
+                            resetAndRetryHandshake();
+                        }
+                    });
                 } else {
                     log.trace("PeerConnection state changed to {}", state);
                 }
@@ -242,27 +295,36 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
             @Override public void onDataChannel(RTCDataChannel dataChannel) { }
         });
+        this.peerConnection = pc;
 
-        setupDataChannels();
+        setupDataChannels(pc, gen);
     }
 
     private void createAndSendOffer() {
-        if (peerConnection == null) return;
-        peerConnection.createOffer(new RTCOfferOptions(), new CreateSessionDescriptionObserver() {
+        final RTCPeerConnection pc = this.peerConnection;
+        final int gen = attemptGeneration;
+        final long attemptConnectionId = this.connectionId;
+        if (pc == null) return;
+        pc.createOffer(new RTCOfferOptions(), new CreateSessionDescriptionObserver() {
             @Override
             public void onSuccess(RTCSessionDescription description) {
-                if (peerConnection == null) return;
-                peerConnection.setLocalDescription(description, new SetSessionDescriptionObserver() {
+                if (gen != attemptGeneration) return;
+                pc.setLocalDescription(description, new SetSessionDescriptionObserver() {
                     @Override
                     public void onSuccess() {
+                        if (gen != attemptGeneration) return;
                         try {
                             signaling.sendSignal(
-                                targetNetworkId, 
-                                NetherNetConstants.buildSignalConnectRequest(connectionId, description.sdp)
+                                targetNetworkId,
+                                NetherNetConstants.buildSignalConnectRequest(attemptConnectionId, description.sdp)
                             );
                         } catch (Exception e) {
                             log.error("Failed to send Connect Request", e);
-                            eventLoop().execute(() -> resetAndRetryHandshake());
+                            eventLoop().execute(() -> {
+                                if (gen == attemptGeneration) {
+                                    resetAndRetryHandshake();
+                                }
+                            });
                         }
                     }
                     @Override public void onFailure(String error) { /* Retry handled by timeout */ }
@@ -280,8 +342,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
         String data = parts.length > 2 ? parts[2] : "";
 
         // Verify this signal belongs to the current attempt
+        final long signalId;
         try {
-            long signalId = Long.parseUnsignedLong(idStr);
+            signalId = Long.parseUnsignedLong(idStr);
             if (signalId != this.connectionId) {
                 log.debug("Ignored stale signal for ID {}", idStr);
                 return;
@@ -291,6 +354,15 @@ public class NetherNetClientChannel extends NetherNetChannel {
         }
 
         eventLoop().execute(() -> {
+            // Re-validate on the event loop: a retry may have cycled the
+            // connection id between the check above (signaling thread) and
+            // this task running. Inside the task the id, generation, and
+            // peer connection mutate together, so passing this check means
+            // everything read below belongs to the current attempt.
+            if (signalId != this.connectionId) {
+                log.debug("Ignored stale signal for ID {} (attempt retried)", idStr);
+                return;
+            }
             if (peerConnection == null) return;
             if (!isOpen() || handshakeComplete) return;
 
@@ -299,13 +371,31 @@ public class NetherNetClientChannel extends NetherNetChannel {
                     // Fragment outbound data no larger than the remote advertised
                     // it can receive (a=max-message-size in its answer).
                     setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(data, NetherNetConstants.MAX_SCTP_MESSAGE_SIZE));
-                    peerConnection.setRemoteDescription(new RTCSessionDescription(RTCSdpType.ANSWER, data), new SetSessionDescriptionObserver() {
-                        @Override public void onSuccess() {}
+                    final int gen = attemptGeneration;
+                    final RTCPeerConnection pc = peerConnection;
+                    pc.setRemoteDescription(new RTCSessionDescription(RTCSdpType.ANSWER, data), new SetSessionDescriptionObserver() {
+                        @Override public void onSuccess() {
+                            // Apply candidates that arrived before the answer
+                            // finished applying, in arrival order.
+                            eventLoop().execute(() -> {
+                                if (gen != attemptGeneration) return;
+                                remoteDescriptionSet = true;
+                                java.util.List<String> drained = pendingRemoteCandidates;
+                                pendingRemoteCandidates = new java.util.ArrayList<>();
+                                for (String candidate : drained) {
+                                    applyRemoteCandidate(candidate);
+                                }
+                            });
+                        }
                         @Override public void onFailure(String e) { /* Retry handled by timeout */ }
                     });
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
-                    peerConnection.addIceCandidate(new RTCIceCandidate("0", 0, data));
+                    if (remoteDescriptionSet) {
+                        applyRemoteCandidate(data);
+                    } else {
+                        pendingRemoteCandidates.add(data);
+                    }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
                     log.error("Received SIGNAL_CONNECT_ERROR for {}.", Long.toUnsignedString(this.connectionId));
@@ -321,7 +411,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         });
     }
 
-    private void setupDataChannels() {
+    private void setupDataChannels(RTCPeerConnection pc, int gen) {
         RTCDataChannelInit reliableInit = new RTCDataChannelInit();
         reliableInit.ordered = true;
         reliableInit.protocol = NetherNetConstants.RELIABLE_CHANNEL_LABEL;
@@ -330,14 +420,17 @@ public class NetherNetClientChannel extends NetherNetChannel {
         unreliableInit.ordered = false;
         unreliableInit.maxRetransmits = 0;
 
-        RTCDataChannel reliable = peerConnection.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, reliableInit);
-        RTCDataChannel unreliable = peerConnection.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, unreliableInit);
+        RTCDataChannel reliable = pc.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, reliableInit);
+        RTCDataChannel unreliable = pc.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, unreliableInit);
 
         reliable.registerObserver(new RTCDataChannelObserver() {
             @Override
             public void onStateChange() {
                 if (reliable.getState() == RTCDataChannelState.OPEN) {
                     eventLoop().execute(() -> {
+                        if (gen != attemptGeneration) {
+                            return;
+                        }
                         if (!handshakeComplete) {
                             log.debug("NetherNet Connection Established!");
                             handshakeComplete = true;
@@ -361,6 +454,64 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 ReferenceCountUtil.release(buffer);
             }
         });
+    }
+
+    /**
+     * Adopts the negotiated data channels: watches the reliable channel and
+     * delivers its raw framed messages into the pipeline. Reliable only, as
+     * on the server side; the unreliable channel is stored but never
+     * observed.
+     */
+    private void setDataChannels(RTCDataChannel reliable, RTCDataChannel unreliable) {
+        this.reliableChannel = reliable;
+        this.unreliableChannel = unreliable;
+
+        reliable.registerObserver(new RTCDataChannelObserver() {
+            @Override
+            public void onStateChange() {
+                if (reliable.getState() == RTCDataChannelState.CLOSED) {
+                    markTransportClosed();
+                    close();
+                }
+            }
+
+            @Override
+            public void onMessage(RTCDataChannelBuffer buffer) {
+                deliverInbound(buffer.data);
+            }
+
+            @Override
+            public void onBufferedAmountChange(long previousAmount) {
+                // Despite the legacy parameter name, webrtc-java passes
+                // libwebrtc's sent_data_size here: the number of buffered
+                // bytes that were just written to the wire. Without this
+                // report the base class write gate would pause forever once
+                // the high water mark is crossed.
+                onEngineBytesSent(previousAmount);
+            }
+        });
+
+        markTransportOpen();
+    }
+
+    @Override
+    protected void sendFramed(io.netty.buffer.ByteBuf framed) {
+        RTCDataChannel reliable = this.reliableChannel;
+        if (reliable != null) {
+            reliable.sendAsync(new RTCDataChannelBuffer(toNioBuffer(framed), true));
+        }
+    }
+
+    private void applyRemoteCandidate(String candidateSdp) {
+        RTCPeerConnection pc = this.peerConnection;
+        if (pc == null) {
+            return;
+        }
+        try {
+            pc.addIceCandidate(new RTCIceCandidate("0", 0, candidateSdp));
+        } catch (Exception e) {
+            log.debug("Failed to apply ICE candidate (connection likely closed): {}", e.toString());
+        }
     }
 
     private long cycleConnectionId() {
