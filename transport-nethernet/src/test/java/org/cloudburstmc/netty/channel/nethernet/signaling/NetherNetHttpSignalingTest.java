@@ -8,6 +8,7 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.handler.ssl.SslContext;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -80,7 +81,7 @@ class NetherNetHttpSignalingTest {
     static void setUp() throws Exception {
         group = new NioEventLoopGroup(2);
         backend = new ScriptedBackend();
-        signaling = new NetherNetHttpSignaling(null, group);
+        signaling = new NetherNetHttpSignaling((SslContext) null, group);
 
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(group, group)

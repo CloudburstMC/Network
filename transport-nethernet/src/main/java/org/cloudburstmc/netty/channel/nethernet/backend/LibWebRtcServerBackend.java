@@ -147,6 +147,17 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         }
     }
 
+    /**
+     * Removes a=identity attributes before an SDP reaches the engine, as the
+     * NetherNet spec instructs: the assertion is signaling layer metadata
+     * (validated there, not here), and stripping it removes any dependence
+     * on the engine's tolerance for it. The unstripped offer stays available
+     * to the layers above for validation.
+     */
+    static String stripIdentityAttributes(String sdp) {
+        return sdp.replaceAll("(?m)^a=identity:[^\\r\\n]*\\r?\\n?", "");
+    }
+
     private void closeLocked() {
         // Close every live session before disposing the factories they run
         // on: disposing a factory with live peer connections is a native
@@ -265,7 +276,7 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                 }
                 this.pc = pc;
             }
-            pc.setRemoteDescription(new RTCSessionDescription(RTCSdpType.OFFER, offerSdp), new SetSessionDescriptionObserver() {
+            pc.setRemoteDescription(new RTCSessionDescription(RTCSdpType.OFFER, stripIdentityAttributes(offerSdp)), new SetSessionDescriptionObserver() {
                 @Override
                 public void onSuccess() {
                     // A session closed during the handshake (timeout, connect
