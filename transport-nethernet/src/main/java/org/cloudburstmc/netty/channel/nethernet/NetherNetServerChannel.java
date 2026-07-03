@@ -189,11 +189,24 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 try {
                     finalAnswer = decorator.decorate(answerSdp);
                 } catch (Exception e) {
-                    // An undecorated answer is at worst refused by the client,
-                    // which then falls back; dropping it would stall the
-                    // exchange until the negotiation timeout.
-                    log.warn("Answer decoration failed for {}: {}",
+                    // Consumers attach a decorator because peers require the
+                    // decoration (the identity assertion); an undecorated
+                    // answer would only be refused by the peer after parsing.
+                    // Fail the exchange instead: the signaling layer reports
+                    // the error (a 400 on HTTP) and the peer falls back
+                    // immediately.
+                    log.warn("Answer decoration failed for {}; failing the exchange: {}",
                             Long.toUnsignedString(connectionId), e.getMessage());
+                    try {
+                        signaling.sendSignal(remoteNetworkId, NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR
+                                + " " + Long.toUnsignedString(connectionId) + " answer decoration failed");
+                    } catch (Exception signalError) {
+                        // Signaling gone too; the handshake timeout reaps the child.
+                        log.debug("Could not signal decoration failure for {}: {}",
+                                Long.toUnsignedString(connectionId), signalError.getMessage());
+                    }
+                    child.close();
+                    return;
                 }
             }
             try {

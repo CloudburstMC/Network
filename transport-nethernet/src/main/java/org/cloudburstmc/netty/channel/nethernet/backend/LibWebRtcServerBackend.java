@@ -448,7 +448,15 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                 log.debug("Dropping send on unopened or closed session");
                 return;
             }
-            r.sendAsync(new RTCDataChannelBuffer(data, true));
+            try {
+                r.sendAsync(new RTCDataChannelBuffer(data, true));
+            } catch (Exception e) {
+                // The closed check above races teardown; a session closed
+                // between it and the native call is the same condition and
+                // honors the same contract: the send is dropped, never
+                // thrown into the caller's write path.
+                log.debug("Dropping send on session closed mid write: {}", e.toString());
+            }
         }
 
         @Override
