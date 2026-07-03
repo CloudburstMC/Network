@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import java.net.ConnectException;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.List;
 
@@ -48,6 +49,27 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      */
     default List<IceServerInfo> getIceServers() {
         return java.util.Collections.emptyList();
+    }
+
+    /**
+     * Whether connections offered by this signaling require full ICE answers:
+     * a single answer containing every gathered candidate, with no trickle
+     * candidate signals in either direction. Request/response signaling
+     * (HTTP) returns true because the whole SDP exchange must fit one round
+     * trip; message based signaling keeps the default trickle behavior.
+     */
+    default boolean fullIceAnswers() {
+        return false;
+    }
+
+    /**
+     * The remote peer's transport address for an in flight connection, when
+     * the signaling medium knows it (an HTTP front end sees the request's
+     * source address). Null when unknown; the channel then uses a placeholder
+     * until ICE nominates a candidate pair.
+     */
+    default InetSocketAddress remoteAddressOf(long connectionId) {
+        return null;
     }
 
     /**

@@ -128,7 +128,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      */
     private void establishConnection(PendingConnection pending, long connectionId, String offerSdp, String remoteNetworkId) {
         try {
-            NetherNetChildChannel child = new NetherNetChildChannel(this, generatePlaceholderAddress(), localAddress);
+            // An HTTP front end knows the peer's address from the request; ICE
+            // nomination later overwrites it with the actual candidate pair.
+            InetSocketAddress signaledAddress = signaling.remoteAddressOf(connectionId);
+            NetherNetChildChannel child = new NetherNetChildChannel(this,
+                    signaledAddress != null ? signaledAddress : generatePlaceholderAddress(), localAddress);
             // Fragment outbound data no larger than the client advertised it
             // can receive (a=max-message-size in its offer), falling back to
             // the conservative default when the client does not advertise one.
@@ -137,7 +141,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
 
             WebRtcSession session = backend.accept(offerSdp, signaling.getIceServers(),
-                    new ChildSessionBridge(child, connectionId, remoteNetworkId));
+                    new ChildSessionBridge(child, connectionId, remoteNetworkId), signaling.fullIceAnswers());
             child.attachSession(session);
             pending.attach(child, session);
 
@@ -179,9 +183,22 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         @Override
         public void onAnswerReady(String answerSdp) {
+            String finalAnswer = answerSdp;
+            NetherNetAnswerDecorator decorator = config.getOption(NetherChannelOption.NETHER_SERVER_ANSWER_DECORATOR);
+            if (decorator != null) {
+                try {
+                    finalAnswer = decorator.decorate(answerSdp);
+                } catch (Exception e) {
+                    // An undecorated answer is at worst refused by the client,
+                    // which then falls back; dropping it would stall the
+                    // exchange until the negotiation timeout.
+                    log.warn("Answer decoration failed for {}: {}",
+                            Long.toUnsignedString(connectionId), e.getMessage());
+                }
+            }
             try {
                 signaling.sendSignal(remoteNetworkId,
-                        NetherNetConstants.buildSignalConnectResponse(connectionId, answerSdp));
+                        NetherNetConstants.buildSignalConnectResponse(connectionId, finalAnswer));
             } catch (Exception e) {
                 // Signaling dropped mid handshake; the client cannot receive
                 // the answer, so let the handshake timeout reap this

@@ -14,6 +14,7 @@ import dev.kastle.webrtc.RTCDataChannelBuffer;
 import dev.kastle.webrtc.RTCDataChannelObserver;
 import dev.kastle.webrtc.RTCDataChannelState;
 import dev.kastle.webrtc.RTCIceCandidate;
+import dev.kastle.webrtc.RTCIceGatheringState;
 import dev.kastle.webrtc.RTCIceServer;
 import dev.kastle.webrtc.RTCPeerConnection;
 import dev.kastle.webrtc.RTCPeerConnectionState;
@@ -94,19 +95,19 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
     }
 
     @Override
-    public WebRtcSession accept(String offerSdp, List<IceServerInfo> iceServers, WebRtcSessionListener listener) {
+    public WebRtcSession accept(String offerSdp, List<IceServerInfo> iceServers, WebRtcSessionListener listener, boolean fullIceAnswer) {
         lifecycleLock.readLock().lock();
         try {
             if (closed) {
                 throw new IllegalStateException("Backend is closed");
             }
-            return acceptLocked(offerSdp, iceServers, listener);
+            return acceptLocked(offerSdp, iceServers, listener, fullIceAnswer);
         } finally {
             lifecycleLock.readLock().unlock();
         }
     }
 
-    private WebRtcSession acceptLocked(String offerSdp, List<IceServerInfo> iceServers, WebRtcSessionListener listener) {
+    private WebRtcSession acceptLocked(String offerSdp, List<IceServerInfo> iceServers, WebRtcSessionListener listener, boolean fullIceAnswer) {
         RTCConfiguration rtcConfig = new RTCConfiguration();
         if (portAllocatorConfig != null) {
             rtcConfig.portAllocatorConfig = portAllocatorConfig;
@@ -124,7 +125,7 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
             }
         }
 
-        Session session = new Session(listener, sessions::remove);
+        Session session = new Session(listener, sessions::remove, fullIceAnswer);
         sessions.add(session);
         PeerConnectionFactory factory = factories.get(Math.floorMod(nextFactory.getAndIncrement(), factories.size()));
         RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, session.observer);
@@ -171,6 +172,7 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
     private static final class Session implements WebRtcSession {
         private final WebRtcSessionListener listener;
         private final Consumer<Session> onClosed;
+        private final boolean fullIceAnswer;
 
         private volatile RTCPeerConnection pc;
         private volatile RTCDataChannel reliable;
@@ -181,6 +183,14 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         private boolean openFired;
         private boolean closedFlag;
 
+        // Full ICE answer state, guarded by this. The answer is reported only
+        // once BOTH the local description has applied and candidate gathering
+        // has completed; the two events arrive on the engine signaling thread
+        // but the flags make the order irrelevant.
+        private boolean localDescriptionSet;
+        private boolean gatheringComplete;
+        private boolean fullAnswerDelivered;
+
         // Guarded by this. The synchronous native addIceCandidate rejects
         // candidates applied while the peer connection has no remote
         // description yet, so candidates arriving before SetRemoteDescription
@@ -188,16 +198,31 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         private boolean remoteDescriptionSet;
         private List<String> pendingCandidates = new ArrayList<>();
 
-        private Session(WebRtcSessionListener listener, Consumer<Session> onClosed) {
+        private Session(WebRtcSessionListener listener, Consumer<Session> onClosed, boolean fullIceAnswer) {
             this.listener = listener;
             this.onClosed = onClosed;
+            this.fullIceAnswer = fullIceAnswer;
         }
 
         // Callbacks arrive on native engine threads.
         private final PeerConnectionObserver observer = new PeerConnectionObserver() {
             @Override
             public void onIceCandidate(RTCIceCandidate candidate) {
-                listener.onLocalCandidate(candidate.sdp);
+                // In full ICE mode candidates ride inside the answer; there is
+                // no trickle channel to signal them on.
+                if (!fullIceAnswer) {
+                    listener.onLocalCandidate(candidate.sdp);
+                }
+            }
+
+            @Override
+            public void onIceGatheringChange(RTCIceGatheringState state) {
+                if (fullIceAnswer && state == RTCIceGatheringState.COMPLETE) {
+                    synchronized (Session.this) {
+                        gatheringComplete = true;
+                    }
+                    maybeDeliverFullAnswer();
+                }
             }
 
             @Override
@@ -274,7 +299,14 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                                     if (isClosed()) {
                                         return;
                                     }
-                                    listener.onAnswerReady(description.sdp);
+                                    if (fullIceAnswer) {
+                                        synchronized (Session.this) {
+                                            localDescriptionSet = true;
+                                        }
+                                        maybeDeliverFullAnswer();
+                                    } else {
+                                        listener.onAnswerReady(description.sdp);
+                                    }
                                 }
 
                                 @Override
@@ -300,6 +332,44 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
 
         private synchronized boolean isClosed() {
             return closedFlag;
+        }
+
+        /**
+         * Reports the full ICE answer once the local description is applied
+         * AND candidate gathering has completed, whichever happens last. The
+         * local description is re-read from the engine at this point because
+         * it has accumulated every gathered candidate since it was set.
+         */
+        private void maybeDeliverFullAnswer() {
+            synchronized (this) {
+                if (!localDescriptionSet || !gatheringComplete || fullAnswerDelivered || closedFlag) {
+                    return;
+                }
+                fullAnswerDelivered = true;
+            }
+            RTCPeerConnection pc = this.pc;
+            if (pc == null) {
+                return;
+            }
+            RTCSessionDescription local = pc.getLocalDescription();
+            if (local == null || local.sdp == null) {
+                log.error("Full ICE answer unavailable after gathering completed");
+                return;
+            }
+            listener.onAnswerReady(markEndOfCandidates(local.sdp));
+        }
+
+        /**
+         * Appends a=end-of-candidates to a full ICE answer. The engine's local
+         * description accumulates candidates but never the terminator, which
+         * is only emitted through the trickle path; the spec's example answer
+         * carries it, so add it once gathering is known complete.
+         */
+        private static String markEndOfCandidates(String sdp) {
+            if (sdp.contains("a=end-of-candidates")) {
+                return sdp;
+            }
+            return sdp.endsWith("\n") ? sdp + "a=end-of-candidates\r\n" : sdp + "\r\na=end-of-candidates\r\n";
         }
 
         /**

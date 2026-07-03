@@ -1,9 +1,18 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetAnswerDecorator;
 import dev.kastle.webrtc.PortAllocatorConfig;
 import io.netty.channel.ChannelOption;
 
 public class NetherChannelOption<T> extends ChannelOption<T> {
+
+    /**
+     * Transforms every SDP answer before it is signaled, e.g. to attach the
+     * server identity assertion. Null (the default) signals answers as
+     * negotiated.
+     */
+    public static final ChannelOption<NetherNetAnswerDecorator> NETHER_SERVER_ANSWER_DECORATOR =
+            valueOf(NetherChannelOption.class, "NETHER_SERVER_ANSWER_DECORATOR");
 
     /**
      * The PortAllocatorConfig used for WebRTC connections.
