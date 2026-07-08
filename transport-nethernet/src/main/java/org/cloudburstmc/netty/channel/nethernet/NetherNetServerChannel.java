@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
  * NetherNet server channel: accepts connection offers arriving over a
@@ -35,8 +36,17 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private static final ChannelMetadata METADATA = new ChannelMetadata(false, 16);
 
     private final DefaultNetherServerChannelConfig config;
-    private final WebRtcServerBackend backend;
+    private final Supplier<? extends WebRtcServerBackend> backendSupplier;
     private final NetherNetServerSignaling signaling;
+
+    /**
+     * The WebRTC backend. Set at construction for the eager constructors;
+     * for the supplier constructor it materializes in {@link #doBind} only
+     * after the signaling endpoint bound successfully, so a failed bind
+     * never creates (and then immediately tears down) native engine state.
+     * Written and read on this channel's event loop; volatile for doClose.
+     */
+    private volatile WebRtcServerBackend backend;
 
     private InetSocketAddress localAddress;
     private volatile boolean open = true;
@@ -81,6 +91,28 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      */
     public NetherNetServerChannel(WebRtcServerBackend backend, NetherNetServerSignaling signaling) {
         this.backend = backend;
+        this.backendSupplier = null;
+        this.signaling = signaling;
+        this.config = new DefaultNetherServerChannelConfig(this);
+    }
+
+    /**
+     * Creates a NetherNetServerChannel whose backend is created lazily,
+     * only after the signaling endpoint bound successfully. A signaling
+     * endpoint that cannot bind (a taken TCP port, a refused websocket)
+     * therefore never creates native engine state, instead of creating a
+     * factory pool and disposing it milliseconds later, a teardown that
+     * races engine initialization.
+     *
+     * @param backendSupplier Invoked once from {@link #doBind} after the
+     *                        signaling bind succeeded. The channel takes
+     *                        ownership of the returned backend and closes
+     *                        it on close.
+     * @param signaling       The NetherNetServerSignaling instance for signaling.
+     */
+    public NetherNetServerChannel(Supplier<? extends WebRtcServerBackend> backendSupplier, NetherNetServerSignaling signaling) {
+        this.backend = null;
+        this.backendSupplier = backendSupplier;
         this.signaling = signaling;
         this.config = new DefaultNetherServerChannelConfig(this);
     }
@@ -90,20 +122,42 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         if (!(localAddress instanceof InetSocketAddress)) throw new IllegalArgumentException("Unsupported address type");
         this.localAddress = (InetSocketAddress) localAddress;
 
-        // Channel options are set between construction and bind, so this is
-        // the moment to hand the configured port allocator settings (with
-        // their NetherNet defaults: no TCP candidates, IPv6, shared socket)
-        // to the backend. An explicit backend construction wins.
-        if (backend instanceof LibWebRtcServerBackend) {
-            ((LibWebRtcServerBackend) backend).applyDefaultPortAllocatorConfig(
-                    config.getOption(NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG));
-        }
-
         this.signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp) -> {
             acceptConnection(connectionId, offerSdp, remoteNetworkId);
         });
 
+        // Bind the signaling endpoint before any backend exists: binding is
+        // the step that fails in the wild (a taken TCP port), and a lazily
+        // supplied backend means that failure creates no native state at
+        // all. Offers cannot outrun the backend: they hop onto this event
+        // loop, which is still running doBind.
         this.signaling.bind(localAddress);
+
+        if (backend == null) {
+            try {
+                backend = backendSupplier.get();
+            } catch (Exception e) {
+                // The signaling endpoint is up but the backend never came to
+                // be; close signaling so the failed channel holds nothing.
+                try {
+                    signaling.close();
+                } catch (Exception closeError) {
+                    log.debug("Failed to close signaling after backend creation failed: {}", closeError.getMessage());
+                }
+                throw e;
+            }
+        }
+
+        // Channel options are set between construction and bind, so this is
+        // the moment to hand the configured port allocator settings (with
+        // their NetherNet defaults: no TCP candidates, IPv6, shared socket)
+        // to the backend. An explicit backend construction wins. Offers
+        // queued behind doBind on this event loop see the configured
+        // backend.
+        if (backend instanceof LibWebRtcServerBackend) {
+            ((LibWebRtcServerBackend) backend).applyDefaultPortAllocatorConfig(
+                    config.getOption(NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG));
+        }
     }
 
     /**
@@ -127,6 +181,13 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * same loop, so everything here is single threaded and ordered.
      */
     private void establishConnection(PendingConnection pending, long connectionId, String offerSdp, String remoteNetworkId) {
+        // Offers racing a failed doBind: signaling briefly accepted
+        // connections but the backend never materialized.
+        if (backend == null) {
+            log.debug("Dropping offer {} received before the backend existed", Long.toUnsignedString(connectionId));
+            signaling.removeSignalHandler(connectionId);
+            return;
+        }
         try {
             // An HTTP front end knows the peer's address from the request; ICE
             // nomination later overwrites it with the actual candidate pair.
@@ -345,7 +406,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         try {
             signaling.close();
         } finally {
-            backend.close();
+            // Null when a lazily supplied backend never materialized
+            // (signaling bind failed); there is nothing to tear down then.
+            WebRtcServerBackend materialized = backend;
+            if (materialized != null) {
+                materialized.close();
+            }
         }
     }
 

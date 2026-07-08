@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
+import org.cloudburstmc.netty.channel.nethernet.backend.LibWebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
@@ -49,6 +50,25 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
      */
     public static ChannelFactory<NetherNetServerChannel> server(List<PeerConnectionFactory> factories, NetherNetServerSignaling signaling) {
         return new NetherNetChannelFactory<>(() -> new NetherNetServerChannel(factories, signaling));
+    }
+
+    /**
+     * Creates a NetherNet Server Channel Factory whose PeerConnectionFactory
+     * pool is created lazily, only after the channel's signaling endpoint
+     * bound successfully. A bind that fails (a taken TCP port, a refused
+     * websocket) therefore never creates native engine state; there is
+     * nothing to tear down on that path.
+     *
+     * @param factoriesSupplier Invoked once per channel after its signaling
+     *                          bind succeeded; must return a non empty pool.
+     *                          The channel takes ownership and disposes every
+     *                          factory on close.
+     * @param signaling         The NetherNetServerSignaling instance for signaling.
+     * @return A ChannelFactory for NetherNetServerChannel.
+     */
+    public static ChannelFactory<NetherNetServerChannel> server(Supplier<List<PeerConnectionFactory>> factoriesSupplier, NetherNetServerSignaling signaling) {
+        return new NetherNetChannelFactory<>(() -> new NetherNetServerChannel(
+                () -> new LibWebRtcServerBackend(factoriesSupplier.get()), signaling));
     }
 
     /**
