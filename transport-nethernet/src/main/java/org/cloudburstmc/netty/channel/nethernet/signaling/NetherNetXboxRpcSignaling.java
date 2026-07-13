@@ -124,9 +124,17 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         switch (method) {
             case NetherNetConstants.XBOX_RPC_METHOD_RECEIVE_MESSAGE -> {
                 if (id != null) sendJsonRpcResult(id, null);
-                JsonArray params = json.getAsJsonArray("params");
-                if (params != null) {
-                    for (JsonElement el : params) processIncomingMessage(el.getAsJsonObject());
+
+                if (json.isJsonArray()) {
+                    JsonArray params = json.getAsJsonArray("params");
+                    if (params != null) {
+                        for (JsonElement el : params) processIncomingMessage(el.getAsJsonObject());
+                    }
+                } else if (json.isJsonObject()) {
+                    JsonObject params = json.getAsJsonObject("params");
+                    if (params != null) {
+                        processIncomingMessage(params);
+                    }
                 }
             }
             case NetherNetConstants.XBOX_RPC_METHOD_PONG, NetherNetConstants.XBOX_RPC_METHOD_PING -> {
