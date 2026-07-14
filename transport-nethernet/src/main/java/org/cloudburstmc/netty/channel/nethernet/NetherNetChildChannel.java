@@ -42,6 +42,16 @@ public class NetherNetChildChannel extends NetherNetChannel {
     }
 
     @Override
+    protected void requestRttSample(java.util.function.DoubleConsumer callback) {
+        WebRtcSession session = this.session;
+        if (session != null) {
+            session.requestRtt(callback);
+        } else {
+            callback.accept(-1);
+        }
+    }
+
+    @Override
     protected AbstractUnsafe newUnsafe() {
         return new AbstractUnsafe() {
             @Override

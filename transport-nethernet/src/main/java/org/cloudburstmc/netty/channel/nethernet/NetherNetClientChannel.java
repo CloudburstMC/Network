@@ -109,6 +109,21 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     @Override
+    protected void requestRttSample(java.util.function.DoubleConsumer callback) {
+        RTCPeerConnection pc = this.peerConnection;
+        if (pc == null) {
+            callback.accept(-1);
+            return;
+        }
+        try {
+            pc.getStats(report -> callback.accept(
+                    org.cloudburstmc.netty.channel.nethernet.backend.WebRtcRtt.extractRttMillis(report)));
+        } catch (Exception e) {
+            callback.accept(-1);
+        }
+    }
+
+    @Override
     protected void doClose() throws Exception {
         super.doClose();
         RTCDataChannel reliable = this.reliableChannel;

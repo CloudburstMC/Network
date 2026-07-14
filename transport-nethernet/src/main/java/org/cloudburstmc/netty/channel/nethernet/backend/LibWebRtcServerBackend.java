@@ -460,6 +460,22 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         }
 
         @Override
+        public void requestRtt(java.util.function.DoubleConsumer callback) {
+            RTCPeerConnection pc = this.pc;
+            if (pc == null || closedFlag) {
+                callback.accept(-1);
+                return;
+            }
+            try {
+                pc.getStats(report -> callback.accept(WebRtcRtt.extractRttMillis(report)));
+            } catch (Exception e) {
+                // Races teardown like send; a stats request on a closing
+                // connection just reports no measurement.
+                callback.accept(-1);
+            }
+        }
+
+        @Override
         public void addRemoteCandidate(String candidateSdp) {
             synchronized (this) {
                 if (closedFlag) {

@@ -33,6 +33,19 @@ public interface WebRtcSession {
     void addRemoteCandidate(String candidateSdp);
 
     /**
+     * Requests the current ICE round trip time. The callback is invoked
+     * asynchronously, possibly on an engine thread, with the RTT in
+     * milliseconds, or a negative value when no measurement is available.
+     * The default implementation reports no measurement, so backends
+     * without an RTT source need not implement this.
+     *
+     * @param callback receives the RTT in milliseconds or a negative value
+     */
+    default void requestRtt(java.util.function.DoubleConsumer callback) {
+        callback.accept(-1);
+    }
+
+    /**
      * Tears the session down. Idempotent; does not fire
      * {@link WebRtcSessionListener#onTransportClosed()}.
      */
