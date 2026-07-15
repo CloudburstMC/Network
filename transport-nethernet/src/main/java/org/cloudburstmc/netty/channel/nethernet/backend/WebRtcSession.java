@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.backend;
 
 import java.nio.ByteBuffer;
+import java.util.function.DoubleConsumer;
 
 /**
  * One negotiated WebRTC connection as seen by the NetherNet transport: a
@@ -41,7 +42,7 @@ public interface WebRtcSession {
      *
      * @param callback receives the RTT in milliseconds or a negative value
      */
-    default void requestRtt(java.util.function.DoubleConsumer callback) {
+    default void requestRtt(DoubleConsumer callback) {
         callback.accept(-1);
     }
 

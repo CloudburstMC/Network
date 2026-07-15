@@ -9,6 +9,7 @@ import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -18,6 +19,7 @@ import java.nio.ByteBuffer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.DoubleConsumer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -77,7 +79,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
     // the channel is active; negative until the first measurement arrives.
     // Failed samples keep the last good value.
     private volatile long rttMillis = -1;
-    private io.netty.util.concurrent.ScheduledFuture<?> rttSampler;
+    private ScheduledFuture<?> rttSampler;
     protected volatile boolean open = true;
 
     /**
@@ -340,7 +342,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * milliseconds or a negative value when unavailable. Subclasses with an
      * RTT source override this.
      */
-    protected void requestRttSample(java.util.function.DoubleConsumer callback) {
+    protected void requestRttSample(DoubleConsumer callback) {
         callback.accept(-1);
     }
 

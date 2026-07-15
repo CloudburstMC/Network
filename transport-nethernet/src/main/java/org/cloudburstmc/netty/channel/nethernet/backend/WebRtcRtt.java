@@ -1,10 +1,12 @@
 package org.cloudburstmc.netty.channel.nethernet.backend;
 
+import dev.kastle.webrtc.RTCPeerConnection;
 import dev.kastle.webrtc.RTCStats;
 import dev.kastle.webrtc.RTCStatsReport;
 import dev.kastle.webrtc.RTCStatsType;
 
 import java.util.Map;
+import java.util.function.DoubleConsumer;
 
 /**
  * Extracts the active candidate pair's round trip time from a WebRTC stats
@@ -14,6 +16,25 @@ import java.util.Map;
 public final class WebRtcRtt {
 
     private WebRtcRtt() {
+    }
+
+    /**
+     * Requests a one shot RTT sample from the peer connection, reporting a
+     * negative value when the connection is absent or the stats request races
+     * teardown. Shared by the server backend session and the client channel so
+     * their teardown behavior cannot drift.
+     */
+    public static void requestRtt(RTCPeerConnection pc, DoubleConsumer callback) {
+        if (pc == null) {
+            callback.accept(-1);
+            return;
+        }
+        try {
+            pc.getStats(report -> callback.accept(extractRttMillis(report)));
+        } catch (Exception e) {
+            // A stats request on a closing connection just reports no measurement.
+            callback.accept(-1);
+        }
     }
 
     /**

@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
+import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcRtt;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherClientChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
@@ -36,6 +37,7 @@ import java.nio.channels.ClosedChannelException;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.DoubleConsumer;
 
 public class NetherNetClientChannel extends NetherNetChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetClientChannel.class);
@@ -109,18 +111,8 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     @Override
-    protected void requestRttSample(java.util.function.DoubleConsumer callback) {
-        RTCPeerConnection pc = this.peerConnection;
-        if (pc == null) {
-            callback.accept(-1);
-            return;
-        }
-        try {
-            pc.getStats(report -> callback.accept(
-                    org.cloudburstmc.netty.channel.nethernet.backend.WebRtcRtt.extractRttMillis(report)));
-        } catch (Exception e) {
-            callback.accept(-1);
-        }
+    protected void requestRttSample(DoubleConsumer callback) {
+        WebRtcRtt.requestRtt(this.peerConnection, callback);
     }
 
     @Override
