@@ -184,6 +184,14 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_TIME_BETWEEN_SEND_CONNECTION_ATTEMPTS_MS");
 
     /**
+     * The maximum number of connection attempts the client will make before failing when the server
+     * repeatedly denies the connection for a transient reason (already connected, no free incoming
+     * connections or the IP recently connected / is being rate limited).
+     */
+    public static final ChannelOption<Integer> RAK_MAX_CONNECTION_ATTEMPTS =
+            valueOf(RakChannelOption.class, "RAK_MAX_CONNECTION_ATTEMPTS");
+
+    /**
      * Maximum amount of bytes that can be queued in a single RakNet session.
      */
     public static final ChannelOption<Integer> RAK_MAX_QUEUED_BYTES =

@@ -44,6 +44,9 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
 
     private RakOfflineState state = RakOfflineState.HANDSHAKE_1;
     private int connectionAttempts = 0;
+    private int deniedConnectionAttempts = 0;
+    private RakDisconnectReason denyReason;
+    private String denyMessage;
     private int cookie;
     private boolean security;
 
@@ -95,7 +98,9 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     }
 
     private void onTimeout() {
-        this.successPromise.tryFailure(new ConnectTimeoutException());
+        // If we received a denial reply but ran out of time before hitting the attempt limit
+        // (e.g. later replies were lost), fail with that reason rather than a generic timeout.
+        this.failConnection();
     }
 
     private void onSuccess(ChannelHandlerContext ctx) {
@@ -145,21 +150,57 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
                 this.successPromise.tryFailure(new IllegalStateException("Incompatible raknet version"));
                 return;
             case ID_ALREADY_CONNECTED:
-                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.ALREADY_CONNECTED);
-                this.successPromise.tryFailure(new ChannelException("Already connected"));
+                this.onConnectionDenied(RakDisconnectReason.ALREADY_CONNECTED, "Already connected");
                 return;
             case ID_NO_FREE_INCOMING_CONNECTIONS:
-                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.NO_FREE_INCOMING_CONNECTIONS);
-                this.successPromise.tryFailure(new ChannelException("No free incoming connections"));
+                this.onConnectionDenied(RakDisconnectReason.NO_FREE_INCOMING_CONNECTIONS, "No free incoming connections");
                 return;
             case ID_IP_RECENTLY_CONNECTED:
-                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.IP_RECENTLY_CONNECTED);
-                this.successPromise.tryFailure(new ChannelException("Address recently connected"));
+                this.onConnectionDenied(RakDisconnectReason.IP_RECENTLY_CONNECTED, "Address recently connected");
                 return;
         }
     }
 
+    /**
+     * Handles a connection reply that denied the connection for a transient reason.
+     * Instead of failing immediately, the current handshake state is kept so the periodic retry task
+     * resends the open connection request. The connection is only failed once we run out of attempts.
+     */
+    private void onConnectionDenied(RakDisconnectReason reason, String message) {
+        // Remember the latest denial so the timeout path can surface the real reason even if
+        // we never reach the attempt limit (e.g. some replies are lost).
+        this.denyReason = reason;
+        this.denyMessage = message;
+
+        int maxAttempts = this.rakChannel.config().getOption(RakChannelOption.RAK_MAX_CONNECTION_ATTEMPTS);
+        if (++this.deniedConnectionAttempts >= maxAttempts) {
+            this.failConnection();
+        }
+    }
+
+    private void failConnection() {
+        if (this.successPromise.isDone()) {
+            return;
+        }
+        if (this.denyReason != null) {
+            this.rakChannel.pipeline().fireUserEventTriggered(this.denyReason);
+            this.successPromise.tryFailure(new ChannelException(this.denyMessage));
+        } else {
+            this.successPromise.tryFailure(new ConnectTimeoutException());
+        }
+    }
+    
+    private void clearLastDeny() {
+        // Server might initially respond with an error, then proceed with a connection reply,
+        // but then fail to finish the connection in time and time-out.
+        // We clear it so it shows the time-out message.
+        this.denyReason = null;
+        this.denyMessage = null;
+    }
+
     private void onOpenConnectionReply1(ChannelHandlerContext ctx, ByteBuf buffer) {
+        this.clearLastDeny();
+
         long serverGuid = buffer.readLong();
         boolean security = buffer.readBoolean();
         if (security) {
@@ -178,6 +219,8 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     }
 
     private void onOpenConnectionReply2(ChannelHandlerContext ctx, ByteBuf buffer) {
+        this.clearLastDeny();
+
         buffer.readLong(); // serverGuid
         if (this.rakChannel.config().getOption(RakChannelOption.RAK_COMPATIBILITY_MODE)) {
             RakUtils.skipAddress(buffer); // serverAddress
