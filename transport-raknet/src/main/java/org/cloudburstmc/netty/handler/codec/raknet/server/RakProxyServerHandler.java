@@ -60,18 +60,27 @@ public class RakProxyServerHandler extends SimpleChannelInboundHandler<DatagramP
         }
 
         if (presentAddress == null) {
-            final HAProxyMessage decoded;
+            HAProxyMessage decoded = null;
             try {
                 if ((decoded = ProxyProtocolDecoder.decode(content, detectedVersion)) == null) {
                     // PROXY header was not present in the packet, ignore.
                     return;
                 }
+                if (decoded.sourceAddress() == null) {
+                    // LOCAL command or UNKNOWN protocol carries no client address, ignore.
+                    log.debug("{} sent PROXY header without address information", packet.sender());
+                    return;
+                }
+                presentAddress = new InetSocketAddress(decoded.sourceAddress(), decoded.sourcePort());
             } catch (HAProxyProtocolException e) {
                 log.debug("{} sent malformed PROXY header", packet.sender(), e);
                 return;
+            } finally {
+                if (decoded != null) {
+                    decoded.release();
+                }
             }
 
-            presentAddress = new InetSocketAddress(decoded.sourceAddress(), decoded.sourcePort());
             log.debug("Got PROXY header: (from {}) {}", packet.sender(), presentAddress);
             parent.setClientAddress(packet.sender(), presentAddress);
         } else {
