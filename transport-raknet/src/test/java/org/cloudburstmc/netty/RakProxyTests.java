@@ -24,11 +24,16 @@ import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.channel.socket.nio.NioDatagramChannel;
+import io.netty.handler.codec.haproxy.HAProxyCommand;
+import io.netty.handler.codec.haproxy.HAProxyMessage;
+import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
+import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
 import io.netty.util.ReferenceCountUtil;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.raknet.client.RakClientProxyRouteHandler;
+import org.cloudburstmc.netty.util.ProxyProtocolDecoder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -75,7 +80,7 @@ public class RakProxyTests {
         this.serverChannel = b.bind(new InetSocketAddress(PORT)).awaitUninterruptibly().channel();
     }
 
-    private Bootstrap clientBootstrap() {
+    private Bootstrap clientBootstrap(boolean localHeaderFirst) {
         return new Bootstrap()
                 .channelFactory(RakChannelFactory.client(NioDatagramChannel.class))
                 .group(group)
@@ -86,7 +91,7 @@ public class RakProxyTests {
                         ch.rakPipeline().addBefore(
                                 RakClientProxyRouteHandler.NAME,
                                 "proxy-protocol-header",
-                                new ProxyProtocolHeaderPrepender()
+                                new ProxyProtocolHeaderPrepender(localHeaderFirst)
                         );
                     }
                 });
@@ -96,13 +101,43 @@ public class RakProxyTests {
     public void testProxyProtocol() {
         setupServer();
 
-        Channel client = clientBootstrap()
+        Channel client = clientBootstrap(false)
                 .connect(new InetSocketAddress("127.0.0.1", PORT))
                 .awaitUninterruptibly()
                 .channel();
 
         Assertions.assertTrue(client.isActive(), "Client should connect with fake IP");
         client.close().awaitUninterruptibly();
+    }
+
+    @Test
+    public void testLocalHeaderIgnored() {
+        setupServer();
+
+        Channel client = clientBootstrap(true)
+                .connect(new InetSocketAddress("127.0.0.1", PORT))
+                .awaitUninterruptibly()
+                .channel();
+
+        Assertions.assertTrue(client.isActive(),
+                "Client should connect after a LOCAL PROXY header packet is ignored by the server");
+        client.close().awaitUninterruptibly();
+    }
+
+    @Test
+    public void testLocalHeaderDecodesWithoutAddress() {
+        ByteBuf buf = ProxyProtocolHeaderPrepender.localHeader(ByteBufAllocator.DEFAULT);
+        HAProxyMessage message = null;
+        try {
+            message = ProxyProtocolDecoder.decode(buf, ProxyProtocolDecoder.findVersion(buf));
+            Assertions.assertNotNull(message, "LOCAL header should decode to a message");
+            Assertions.assertNull(message.sourceAddress(), "LOCAL command carries no source address");
+        } finally {
+            if (message != null) {
+                message.release();
+            }
+            buf.release();
+        }
     }
 
     private static class ProxyProtocolHeaderPrepender extends ChannelOutboundHandlerAdapter {
@@ -114,7 +149,13 @@ public class RakProxyTests {
                 0x0A
         };
 
+        private final boolean localHeaderFirst;
+        private boolean sentLocalHeader;
         private boolean sentHeader;
+
+        ProxyProtocolHeaderPrepender(boolean localHeaderFirst) {
+            this.localHeaderFirst = localHeaderFirst;
+        }
 
         @Override
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
@@ -123,14 +164,19 @@ public class RakProxyTests {
                 return;
             }
 
-            sentHeader = true;
-
             DatagramPacket packet = (DatagramPacket) msg;
-            ByteBuf header = proxyProtocolHeader(
-                    ctx.alloc(),
-                    FAKE,
-                    packet.recipient()
-            );
+            ByteBuf header;
+            if (localHeaderFirst && !sentLocalHeader) {
+                sentLocalHeader = true;
+                header = localHeader(ctx.alloc());
+            } else {
+                sentHeader = true;
+                header = proxyProtocolHeader(
+                        ctx.alloc(),
+                        FAKE,
+                        packet.recipient()
+                );
+            }
 
             ByteBuf content = ctx.alloc().buffer(
                     header.readableBytes() + packet.content().readableBytes()
@@ -154,6 +200,15 @@ public class RakProxyTests {
             }
         }
 
+        private static ByteBuf localHeader(ByteBufAllocator alloc) {
+            ByteBuf buf = alloc.buffer(16);
+            buf.writeBytes(PROXY_V2_SIGNATURE);
+            buf.writeByte(HAProxyProtocolVersion.V2.byteValue() | HAProxyCommand.LOCAL.byteValue());
+            buf.writeByte(HAProxyProxiedProtocol.UNKNOWN.byteValue());
+            buf.writeShort(0); // no address information
+            return buf;
+        }
+
         private static ByteBuf proxyProtocolHeader(ByteBufAllocator alloc,
                                                    InetSocketAddress source,
                                                    InetSocketAddress destination) {
@@ -165,8 +220,8 @@ public class RakProxyTests {
 
             ByteBuf buf = alloc.buffer(28);
             buf.writeBytes(PROXY_V2_SIGNATURE);
-            buf.writeByte(0x21);
-            buf.writeByte(0x12);
+            buf.writeByte(HAProxyProtocolVersion.V2.byteValue() | HAProxyCommand.PROXY.byteValue());
+            buf.writeByte(HAProxyProxiedProtocol.UDP4.byteValue());
             buf.writeShort(12);
             buf.writeBytes(sourceAddress);
             buf.writeBytes(destinationAddress);
