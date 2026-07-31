@@ -13,11 +13,14 @@ import dev.kastle.webrtc.RTCBundlePolicy;
 import dev.kastle.webrtc.RTCConfiguration;
 import dev.kastle.webrtc.RTCDataChannel;
 import dev.kastle.webrtc.RTCIceCandidate;
+import dev.kastle.webrtc.RTCIceGatheringState;
 import dev.kastle.webrtc.RTCIceServer;
 import dev.kastle.webrtc.RTCPeerConnection;
 import dev.kastle.webrtc.RTCPeerConnectionState;
 import dev.kastle.webrtc.RTCSdpType;
 import dev.kastle.webrtc.RTCSessionDescription;
+import dev.kastle.webrtc.RTCStats;
+import dev.kastle.webrtc.RTCStatsType;
 import dev.kastle.webrtc.SetSessionDescriptionObserver;
 import io.netty.channel.AbstractServerChannel;
 import io.netty.channel.ChannelConfig;
@@ -28,9 +31,11 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jose4j.lang.JoseException;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 public class NetherNetServerChannel extends AbstractServerChannel {
@@ -81,7 +86,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             acceptConnection(connectionId, offerSdp, remoteNetworkId);
         });
 
-        this.signaling.bind(localAddress);
+        this.signaling.bind(localAddress, eventLoop());
     }
 
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
@@ -104,6 +109,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId);
         RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, observer);
+        observer.setPeerConnection(pc);
 
         NetherNetChildChannel child = new NetherNetChildChannel(this, pc, new InetSocketAddress(0), localAddress);
         observer.setChildChannel(child);
@@ -165,13 +171,19 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                                 }
                                 pipeline().fireChannelRead(child);
                             }
-                            @Override public void onFailure(String error) { log.error("SetLocalDesc failed: {}", error); }
+                            @Override public void onFailure(String error) {
+                                log.error("SetLocalDesc failed: {}", error);
+                            }
                         });
                     }
-                    @Override public void onFailure(String error) { log.error("CreateAnswer failed: {}", error); }
+                    @Override public void onFailure(String error) {
+                        log.error("CreateAnswer failed: {}", error);
+                    }
                 });
             }
-            @Override public void onFailure(String error) { log.error("SetRemoteDesc failed: {}", error); }
+            @Override public void onFailure(String error) {
+                log.error("SetRemoteDesc failed: {}", error);
+            }
         });
     }
 
@@ -188,6 +200,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         private ScheduledFuture<?> handshakeTimeout;
 
+        private RTCPeerConnection peerConnection;
+        private volatile boolean fullSdpSent = false;
+
         public ServerPeerConnectionObserver(long connectionId, String remoteNetworkId) {
             this.connectionId = connectionId;
             this.remoteNetworkId = remoteNetworkId;
@@ -200,6 +215,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         public void setChildChannel(NetherNetChildChannel child) {
             this.child = child;
             checkDataChannels();
+        }
+
+        public void setPeerConnection(RTCPeerConnection pc) {
+            this.peerConnection = pc;
         }
 
         @Override
@@ -224,6 +243,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         @Override
         public void onConnectionChange(RTCPeerConnectionState state) {
             log.debug("Connection {} state changed: {}", Long.toUnsignedString(this.connectionId), state);
+            if (state == RTCPeerConnectionState.CONNECTED) {
+                updateRemoteAddress();
+            }
             if (state == RTCPeerConnectionState.FAILED || state == RTCPeerConnectionState.CLOSED) {
                 if (child != null && child.isOpen()) {
                     log.debug("Closing connection {} due to state change: {}", Long.toUnsignedString(this.connectionId), state);
@@ -233,6 +255,58 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                     handshakeTimeout.cancel(false);
                 }
             }
+        }
+
+        /**
+         * Resolve the real client address from the selected ICE candidate pair and store it on the child channel.
+         * This replaces the placeholder used at construction.
+         */
+        private void updateRemoteAddress() {
+            this.peerConnection.getStats(report -> {
+                Map<String, RTCStats> stats = report.getStats();
+
+                // Find the nominated/succeeded candidate pair, then look up its remote candidate.
+                String remoteCandidateId = null;
+                for (RTCStats stat : stats.values()) {
+                    if (stat.getType() != RTCStatsType.CANDIDATE_PAIR) {
+                        continue;
+                    }
+
+                    Map<String, Object> attributes = stat.getAttributes();
+                    if (attributes.get("state").equals("succeeded") && attributes.get("nominated").equals(true)) {
+                        remoteCandidateId = String.valueOf(attributes.get("remoteCandidateId"));
+                        break;
+                    }
+                }
+
+                // Get the stats for the candidate
+                RTCStats remoteCandidate = stats.get(remoteCandidateId);
+                if (remoteCandidateId == null || remoteCandidate == null) {
+                    return;
+                }
+
+                Map<String, Object> attributes = remoteCandidate.getAttributes();
+                String ip = (String) attributes.get("address");
+                Integer port = (Integer) attributes.get("port");
+                if (ip == null || port == null) {
+                    return;
+                }
+
+                try {
+                    InetAddress address = InetAddress.getByName(ip);
+                    this.child.setRemoteAddress(new InetSocketAddress(address, port));
+                    log.debug("Resolved remote address for {}: {}:{}", Long.toUnsignedString(connectionId), ip, port);
+                } catch (Exception e) {
+                    log.debug("Failed to resolve remote address for {}: {}", Long.toUnsignedString(connectionId), e.toString());
+                }
+            });
+        }
+
+        private boolean asBoolean(Object value) {
+            if (value instanceof Boolean bool) {
+                return bool;
+            }
+            return Boolean.parseBoolean(String.valueOf(value));
         }
 
         @Override
@@ -262,6 +336,22 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                     child.pipeline().fireChannelActive();
                 }
             }
+        }
+
+        @Override
+        public void onIceGatheringChange(RTCIceGatheringState state) {
+            if (state != RTCIceGatheringState.COMPLETE || fullSdpSent) return;
+
+            RTCSessionDescription local = peerConnection.getLocalDescription();
+            if (local == null) {
+                log.warn("Gathering complete for {} but local description is null", Long.toUnsignedString(connectionId));
+                return;
+            }
+
+            fullSdpSent = true;
+
+            log.trace("Sending full SDP (with gathered candidates) for {}", Long.toUnsignedString(connectionId));
+            signaling.sendFullSdp(remoteNetworkId, local.sdp);
         }
     }
 

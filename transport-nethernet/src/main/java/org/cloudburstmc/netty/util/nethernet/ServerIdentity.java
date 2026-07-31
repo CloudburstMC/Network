@@ -9,14 +9,26 @@ import org.jose4j.jwt.NumericDate;
 import org.jose4j.keys.EllipticCurves;
 import org.jose4j.lang.JoseException;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
-import java.util.stream.Collectors;
+
+import javax.naming.InvalidNameException;
+import javax.naming.ldap.LdapName;
+import javax.naming.ldap.Rdn;
+import javax.security.auth.x500.X500Principal;
 
 /**
  * Produces the server-side identity assertion for each SDP answer
@@ -34,6 +46,75 @@ public class ServerIdentity {
         this.privateKey = privateKey;
         this.domain = domain;
         this.token = buildToken(publicKey, expiry);
+    }
+
+    /**
+     * Loads the keypair from the first key entry of a PKCS12 keystore.
+     *
+     * @param keystore The PKCS12 keystore file
+     * @param password The keystore password
+     * @return The loaded ServerIdentity
+     * @throws GeneralSecurityException If there is a security error
+     * @throws IOException If there is an I/O error
+     * @throws JoseException If there is an error creating the JWT
+     */
+    public static ServerIdentity fromKeystore(File keystore, String password) throws GeneralSecurityException, IOException, JoseException {
+        char[] pwd = password.toCharArray();
+
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        try (FileInputStream fis = new FileInputStream(keystore)) {
+            ks.load(fis, pwd);
+        }
+
+        // Find the first key in the keystore and extract the certificate
+        String alias = findKeyAlias(ks);
+        PrivateKey privateKey = (PrivateKey) ks.getKey(alias, pwd);
+        Certificate cert = ks.getCertificate(alias);
+        PublicKey publicKey = cert.getPublicKey();
+
+        // Extract the expiry and common name from the cert if they exist
+        Instant expiry = null;
+        String domain = "";
+        if (cert instanceof X509Certificate x509) {
+            expiry = x509.getNotAfter().toInstant();
+            domain = extractCommonName(x509.getSubjectX500Principal());
+        }
+
+        return new ServerIdentity(privateKey, publicKey, expiry, domain);
+    }
+
+    /**
+     * Finds the first key entry alias in a keystore.
+     *
+     * @param keyStore The keystore to search
+     * @return The alias of the first key entry
+     * @throws KeyStoreException If no key entry is found
+     */
+    private static String findKeyAlias(KeyStore keyStore) throws KeyStoreException {
+        for (String candidate : Collections.list(keyStore.aliases())) {
+            if (keyStore.isKeyEntry(candidate)) {
+                return candidate;
+            }
+        }
+        throw new KeyStoreException("No private key entry found in identity keystore");
+    }
+
+    /**
+     * Search the principal and extract the common name
+     *
+     * @param principal The X500Principal to extract the common name from
+     * @return The common name, or an empty string if not found
+     */
+    private static String extractCommonName(X500Principal principal) {
+        try {
+            LdapName name = new LdapName(principal.getName());
+            for (Rdn rdn : name.getRdns()) {
+                if (rdn.getType().equalsIgnoreCase("CN")) {
+                    return rdn.getValue().toString();
+                }
+            }
+        } catch (InvalidNameException ignored) { }
+        return "";
     }
 
     /**
@@ -98,7 +179,7 @@ public class ServerIdentity {
      */
     public String identityValue(String answerSdp) throws JoseException {
         // Generate and sign the fingerprint
-        String[] fingerprintParts = sign(getCanonicalFingerprintJson(answerSdp)).split("\\.");
+        String[] fingerprintParts = sign(IdentityUtils.getCanonicalFingerprintJson(answerSdp)).split("\\.");
         String fingerprints = fingerprintParts[0] + ".." + fingerprintParts[2];
 
         Identity.Assertion assertion = new Identity.Assertion(token, fingerprints);
@@ -135,26 +216,5 @@ public class ServerIdentity {
         }
 
         return String.join(eol, out);
-    }
-
-    /**
-     * Get the canonical fingerprint JSON from the SDP offer
-     *
-     * @param sdpOffer The SDP offer to extract fingerprints from
-     * @return The canonical fingerprint JSON
-     */
-    private static String getCanonicalFingerprintJson(String sdpOffer) {
-        String prefix = "a=fingerprint:";
-        return Arrays.stream(sdpOffer.split("\n"))
-            .filter(line -> line.startsWith(prefix))
-            .map(line -> line.substring(prefix.length()).trim())
-            .map(line -> {
-                String[] parts = line.split(" ");
-                if (parts.length != 2) {
-                    throw new IllegalArgumentException("Invalid fingerprint line: " + line);
-                }
-                return "{\"algorithm\":\"" + parts[0] + "\",\"digest\":\"" + parts[1] + "\"}";
-            })
-            .collect(Collectors.joining(",", "{\"fingerprint\":[", "]}"));
     }
 }

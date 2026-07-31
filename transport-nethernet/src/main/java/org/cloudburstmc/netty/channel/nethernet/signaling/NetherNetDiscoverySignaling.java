@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -100,7 +101,7 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     }
 
     @Override
-    public void bind(SocketAddress localAddress) {
+    public void bind(SocketAddress localAddress, EventLoop eventLoop) {
         if (!this.discovery.isActive()) {
             if (localAddress instanceof InetSocketAddress) {
                 this.discovery.bind((InetSocketAddress) localAddress);
