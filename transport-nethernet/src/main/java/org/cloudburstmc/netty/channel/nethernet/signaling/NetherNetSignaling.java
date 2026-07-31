@@ -10,7 +10,20 @@ public interface NetherNetSignaling extends AutoCloseable {
      * @param targetNetworkId The Network ID of the destination (String to support Realms).
      * @param data            The raw signaling payload.
      */
-    void sendSignal(String targetNetworkId, String data);
+    default void sendSignal(String targetNetworkId, String data) {
+        // Default implementation does nothing
+    }
+
+    /**
+     * Sends a full SDP message with all candidates to the remote peer
+     * TODO Find a better name
+     *
+     * @param targetNetworkId The Network ID of the destination (String to support Realms).
+     * @param sdp             The full SDP message with all candidates.
+     */
+    default void sendFullSdp(String targetNetworkId, String sdp) {
+        // Default implementation does nothing
+    }
 
     /**
      * Sets a handler to receive signaling messages for a specific connection ID.
