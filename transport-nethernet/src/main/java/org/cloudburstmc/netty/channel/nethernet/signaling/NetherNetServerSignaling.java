@@ -1,5 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import io.netty.channel.EventLoop;
+
 import java.net.ConnectException;
 import java.net.SocketAddress;
 import java.util.List;
@@ -7,11 +9,12 @@ import java.util.List;
 public interface NetherNetServerSignaling extends NetherNetSignaling {
     /**
      * Binds the signaling medium to listen for incoming connections (Server mode).
-     * 
+     *
      * @param localAddress The local address to bind to.
-     * @throws ConnectException 
+     * @param eventLoop The owning channel's event loop.
+     * @throws ConnectException
      */
-    void bind(SocketAddress localAddress) throws ConnectException;
+    void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException;
 
     /**
      * Handler for new connections.

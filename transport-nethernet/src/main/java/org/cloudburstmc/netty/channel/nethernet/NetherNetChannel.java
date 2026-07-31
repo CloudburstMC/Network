@@ -270,4 +270,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
     public ChannelMetadata metadata() {
         return METADATA;
     }
+
+    public void setRemoteAddress(SocketAddress remoteAddress) {
+        this.remoteAddress = remoteAddress;
+    }
 }
