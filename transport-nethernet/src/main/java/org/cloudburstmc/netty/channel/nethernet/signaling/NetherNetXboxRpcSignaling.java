@@ -2,7 +2,6 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -171,16 +170,11 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
             case NetherNetConstants.XBOX_RPC_METHOD_RECEIVE_MESSAGE -> {
                 if (id != null) sendJsonRpcResult(id, null);
 
-                if (json.isJsonArray()) {
-                    JsonArray params = json.getAsJsonArray("params");
-                    if (params != null) {
-                        for (JsonElement el : params) processIncomingMessage(el.getAsJsonObject());
-                    }
-                } else if (json.isJsonObject()) {
-                    JsonObject params = json.getAsJsonObject("params");
-                    if (params != null) {
-                        processIncomingMessage(params);
-                    }
+                JsonElement params = json.get("params");
+                if (params != null && params.isJsonArray()) {
+                    for (JsonElement el : params.getAsJsonArray()) processIncomingMessage(el.getAsJsonObject());
+                } else if (params != null && params.isJsonObject()) {
+                    processIncomingMessage(params.getAsJsonObject());
                 }
             }
             case NetherNetConstants.XBOX_RPC_METHOD_PONG, NetherNetConstants.XBOX_RPC_METHOD_PING -> {
