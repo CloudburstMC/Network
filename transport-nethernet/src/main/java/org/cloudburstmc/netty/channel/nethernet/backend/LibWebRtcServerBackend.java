@@ -128,9 +128,17 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
 
         Session session = new Session(listener, sessions::remove, fullIceAnswer);
         sessions.add(session);
-        PeerConnectionFactory factory = factories.get(Math.floorMod(nextFactory.getAndIncrement(), factories.size()));
-        RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, session.observer);
-        session.start(pc, offerSdp);
+        try {
+            PeerConnectionFactory factory = factories.get(Math.floorMod(nextFactory.getAndIncrement(), factories.size()));
+            RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, session.observer);
+            session.start(pc, offerSdp);
+        } catch (RuntimeException e) {
+            // A session whose engine setup failed must not stay tracked until
+            // backend shutdown; closing it also releases whatever half of the
+            // native state came to be.
+            session.close();
+            throw e;
+        }
         return session;
     }
 
@@ -503,22 +511,37 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                 }
                 closedFlag = true;
             }
-            try {
-                RTCDataChannel r = this.reliable;
-                if (r != null) {
+            // One guard per resource: a throwing close must not skip the
+            // closes behind it, or the skipped resources leak until the
+            // backend disposes its factories.
+            RTCDataChannel r = this.reliable;
+            if (r != null) {
+                try {
                     r.unregisterObserver();
+                } catch (Exception e) {
+                    log.debug("Error unregistering data channel observer: {}", e.getMessage());
+                }
+                try {
                     r.close();
+                } catch (Exception e) {
+                    log.debug("Error closing reliable channel: {}", e.getMessage());
                 }
-                RTCDataChannel u = this.unreliable;
-                if (u != null) {
+            }
+            RTCDataChannel u = this.unreliable;
+            if (u != null) {
+                try {
                     u.close();
+                } catch (Exception e) {
+                    log.debug("Error closing unreliable channel: {}", e.getMessage());
                 }
-                RTCPeerConnection pc = this.pc;
-                if (pc != null) {
+            }
+            RTCPeerConnection pc = this.pc;
+            if (pc != null) {
+                try {
                     pc.close();
+                } catch (Exception e) {
+                    log.debug("Error closing peer connection: {}", e.getMessage());
                 }
-            } catch (Exception e) {
-                log.debug("Error during session teardown: {}", e.getMessage());
             }
             onClosed.accept(this);
             if (notify) {
