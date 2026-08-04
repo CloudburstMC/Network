@@ -2,6 +2,7 @@
 netty = "4.1.130.Final"
 webrtc-java = "1.0.3"
 gson = "2.13.2"
+jose4j = "0.9.6"
 junit = "5.9.2"
 
 
@@ -17,6 +18,7 @@ netty-transport-native-unix-common = { group = "io.netty", name = "netty-transpo
 expiringmap = { group = "net.jodah", name = "expiringmap", version = "0.5.10" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 webrtc-java = { group = "dev.kastle.webrtc", name = "webrtc-java", version.ref = "webrtc-java" }
+jose4j = { group = "org.bitbucket.b_c", name = "jose4j", version.ref = "jose4j" }
 
 # Test dependencies
 junit-jupiter-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine", version.ref = "junit" }
