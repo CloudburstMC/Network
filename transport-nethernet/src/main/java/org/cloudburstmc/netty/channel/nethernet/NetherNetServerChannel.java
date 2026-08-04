@@ -4,6 +4,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChanne
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
+import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
 import dev.kastle.webrtc.CreateSessionDescriptionObserver;
 import dev.kastle.webrtc.PeerConnectionFactory;
 import dev.kastle.webrtc.PeerConnectionObserver;
@@ -25,6 +26,7 @@ import io.netty.channel.EventLoop;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jose4j.lang.JoseException;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -41,6 +43,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     
     private InetSocketAddress localAddress;
     private volatile boolean open = true;
+
+    private ServerIdentity serverIdentity;
 
     /**
      * Creates a NetherNetServerChannel with a new PeerConnectionFactory.
@@ -61,6 +65,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         this.factory = factory;
         this.signaling = signaling;
         this.config = new DefaultNetherServerChannelConfig(this);
+        try {
+            this.serverIdentity = ServerIdentity.generate("self");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -146,10 +155,14 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                             @Override
                             public void onSuccess() {
                                 log.trace("Sending Answer SDP for {}", Long.toUnsignedString(connectionId));
-                                signaling.sendSignal(
-                                    remoteNetworkId, 
-                                    NetherNetConstants.buildSignalConnectResponse(connectionId, description.sdp)
-                                );
+                                try {
+                                    signaling.sendSignal(
+                                        remoteNetworkId,
+                                        NetherNetConstants.buildSignalConnectResponse(connectionId, serverIdentity.augmentAnswer(description.sdp))
+                                    );
+                                } catch (JoseException e) {
+                                    throw new RuntimeException(e);
+                                }
                                 pipeline().fireChannelRead(child);
                             }
                             @Override public void onFailure(String error) { log.error("SetLocalDesc failed: {}", error); }
