@@ -11,6 +11,7 @@ dependencies {
     api(libs.webrtc.java)
 
     implementation(libs.gson)
+    implementation(libs.jose4j)
 
     testImplementation(libs.bundles.junit)
     testRuntimeOnly(libs.junit.platform.launcher) 

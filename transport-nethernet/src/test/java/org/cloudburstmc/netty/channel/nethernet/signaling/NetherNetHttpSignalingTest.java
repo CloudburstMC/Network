@@ -131,7 +131,11 @@ class NetherNetHttpSignalingTest {
         HttpResponse<String> response = post("/v1/join/12345678901234567890", "v=0\r\nfake offer\r\n");
         assertEquals(200, response.statusCode());
         assertEquals("application/sdp", response.headers().firstValue("content-type").orElse(""));
-        assertEquals(CANNED_ANSWER, response.body());
+        // No decorator option is set, so the channel's built in identity
+        // signs the answer: the canned SDP comes back intact with the
+        // a=identity assertion attached.
+        assertTrue(response.body().startsWith(CANNED_ANSWER));
+        assertTrue(response.body().contains("a=identity:"));
         assertTrue(response.headers().firstValue("connection").orElse("").equalsIgnoreCase("close"));
         // The channel must have requested a full ICE answer from the backend.
         assertTrue(backend.fullIceFlags.stream().allMatch(Boolean::booleanValue));

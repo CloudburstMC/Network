@@ -7,6 +7,7 @@ import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSessionListener;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
+import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
 import dev.kastle.webrtc.PeerConnectionFactory;
 import io.netty.channel.AbstractServerChannel;
 import io.netty.channel.ChannelConfig;
@@ -50,6 +51,14 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     private InetSocketAddress localAddress;
     private volatile boolean open = true;
+
+    /**
+     * The built in self signed identity backing the default answer
+     * decoration. Generated for every channel regardless of constructor so
+     * no construction path can reach an answer without an identity to sign
+     * it with.
+     */
+    private final ServerIdentity serverIdentity = generateDefaultIdentity();
 
     /**
      * Creates a NetherNetServerChannel with a single default engine factory.
@@ -115,6 +124,14 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         this.backendSupplier = backendSupplier;
         this.signaling = signaling;
         this.config = new DefaultNetherServerChannelConfig(this);
+    }
+
+    private static ServerIdentity generateDefaultIdentity() {
+        try {
+            return ServerIdentity.generate("self");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -245,30 +262,33 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         @Override
         public void onAnswerReady(String answerSdp) {
             String finalAnswer = answerSdp;
+            // The built in self signed identity keeps answers acceptable to
+            // 26.40 clients out of the box; consumers replace it to own the
+            // keys and domain of the assertion.
             NetherNetAnswerDecorator decorator = config.getOption(NetherChannelOption.NETHER_SERVER_ANSWER_DECORATOR);
-            if (decorator != null) {
+            if (decorator == null) {
+                decorator = serverIdentity::augmentAnswer;
+            }
+            try {
+                finalAnswer = decorator.decorate(answerSdp);
+            } catch (Exception e) {
+                // Peers require the decoration (the identity assertion); an
+                // undecorated answer would only be refused by the peer after
+                // parsing. Fail the exchange instead: the signaling layer
+                // reports the error (a 400 on HTTP) and the peer falls back
+                // immediately.
+                log.warn("Answer decoration failed for {}; failing the exchange: {}",
+                        Long.toUnsignedString(connectionId), e.getMessage());
                 try {
-                    finalAnswer = decorator.decorate(answerSdp);
-                } catch (Exception e) {
-                    // Consumers attach a decorator because peers require the
-                    // decoration (the identity assertion); an undecorated
-                    // answer would only be refused by the peer after parsing.
-                    // Fail the exchange instead: the signaling layer reports
-                    // the error (a 400 on HTTP) and the peer falls back
-                    // immediately.
-                    log.warn("Answer decoration failed for {}; failing the exchange: {}",
-                            Long.toUnsignedString(connectionId), e.getMessage());
-                    try {
-                        signaling.sendSignal(remoteNetworkId, NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR
-                                + " " + Long.toUnsignedString(connectionId) + " answer decoration failed");
-                    } catch (Exception signalError) {
-                        // Signaling gone too; the handshake timeout reaps the child.
-                        log.debug("Could not signal decoration failure for {}: {}",
-                                Long.toUnsignedString(connectionId), signalError.getMessage());
-                    }
-                    child.close();
-                    return;
+                    signaling.sendSignal(remoteNetworkId, NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR
+                            + " " + Long.toUnsignedString(connectionId) + " answer decoration failed");
+                } catch (Exception signalError) {
+                    // Signaling gone too; the handshake timeout reaps the child.
+                    log.debug("Could not signal decoration failure for {}: {}",
+                            Long.toUnsignedString(connectionId), signalError.getMessage());
                 }
+                child.close();
+                return;
             }
             try {
                 signaling.sendSignal(remoteNetworkId,
