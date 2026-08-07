@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -48,7 +49,10 @@ import java.util.function.Supplier;
  *
  * Endpoints:
  * - GET /v1/join: any 2xx means NetherNet is supported and the client
- *   proceeds with the SDP exchange.
+ *   proceeds with the SDP exchange. Carries the
+ *   {@link NetherNetServerStatus} document when a supplier is set, which
+ *   vanilla 1.26.50 and later answer with as their equivalent of the RakNet
+ *   unconnected pong; older clients ignore the body.
  * - POST /v1/join/{networkId}: the request body is the client's SDP offer;
  *   the response body is the full ICE SDP answer (application/sdp). The
  *   whole exchange fits one round trip, so {@link #fullIceAnswers()} is true
@@ -80,6 +84,9 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     private final Map<Long, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
     private final Map<Long, PendingExchange> pendingExchanges = new ConcurrentHashMap<>();
 
+    private volatile Supplier<NetherNetServerStatus> statusSupplier;
+    // Racing a duplicate first warn is harmless; this only bounds the spam.
+    private volatile boolean statusSupplierWarned;
     private volatile NewConnectionHandler newConnectionHandler;
     private volatile Channel serverChannel;
     // The TCP accept loop. Owned: bind() is called from the NetherNet server
@@ -110,6 +117,21 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     public NetherNetHttpSignaling(Supplier<SslContext> sslContextSupplier, EventLoopGroup workerGroup) {
         this.sslContextSupplier = sslContextSupplier;
         this.workerGroup = workerGroup;
+    }
+
+    /**
+     * Sets the source of the server status answered on the capability check,
+     * or null to answer with an empty body as before. Consulted per request,
+     * so live values (the player count above all) need no republishing; the
+     * consumer owns any caching, since this endpoint is reachable by anyone
+     * who can open a TCP connection.
+     *
+     * Called from connection I/O threads; implementations must be thread
+     * safe and return promptly. A failure is treated as no status being
+     * available and never turns the capability check negative.
+     */
+    public void setStatusSupplier(Supplier<NetherNetServerStatus> statusSupplier) {
+        this.statusSupplier = statusSupplier;
     }
 
     @Override
@@ -293,7 +315,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                 if (newConnectionHandler == null || closed) {
                     respond(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "text/plain", "Service unavailable");
                 } else {
-                    respond(ctx, HttpResponseStatus.OK, "text/plain", "");
+                    respondStatus(ctx);
                 }
                 return;
             }
@@ -372,6 +394,46 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
      * after the write, matching the one request per connection model. Safe
      * from any thread.
      */
+    /**
+     * Answers the capability check, carrying the server status document when
+     * the consumer supplies one. A supplier that is absent or that fails
+     * leaves the historical empty body, which every client accepts: the guide
+     * defines the body as ignored, and only 1.26.50 and later read it.
+     */
+    private void respondStatus(ChannelHandlerContext ctx) {
+        Supplier<NetherNetServerStatus> supplier = this.statusSupplier;
+        if (supplier == null) {
+            respond(ctx, HttpResponseStatus.OK, "text/plain", "");
+            return;
+        }
+        String body;
+        try {
+            NetherNetServerStatus status = supplier.get();
+            body = status == null ? null : status.toJson();
+        } catch (Exception e) {
+            // The probe decides whether the client attempts NetherNet at all,
+            // so it must still answer 2xx when the consumer cannot describe
+            // itself. Older clients ignore the body outright; what a reading
+            // client makes of an absent one is not established.
+            //
+            // Warn once, then debug: the endpoint is unauthenticated TCP, so
+            // per request warns would let anyone drive log volume by
+            // hammering the probe against a broken supplier.
+            if (statusSupplierWarned) {
+                log.debug("Server status supplier failed: {}", e.getMessage());
+            } else {
+                statusSupplierWarned = true;
+                log.warn("Server status supplier failed (further failures log at debug): {}", e.getMessage());
+            }
+            body = null;
+        }
+        if (body == null) {
+            respond(ctx, HttpResponseStatus.OK, "text/plain", "");
+        } else {
+            respond(ctx, HttpResponseStatus.OK, "application/json", body);
+        }
+    }
+
     private static void respond(ChannelHandlerContext ctx, HttpResponseStatus status, String contentType, String body) {
         FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status,
                 Unpooled.copiedBuffer(body, StandardCharsets.UTF_8));

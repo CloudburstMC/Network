@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerChannel;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSession;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSessionListener;
@@ -118,6 +119,43 @@ class NetherNetHttpSignalingTest {
     @Test
     void joinProbeAnswers200() throws Exception {
         assertEquals(200, get("/v1/join").statusCode());
+    }
+
+    @Test
+    void joinProbeCarriesTheServerStatusWhenSupplied() throws Exception {
+        try {
+            // No supplier: the historical empty body, which every client
+            // accepts since the guide defines it as ignored.
+            HttpResponse<String> bare = get("/v1/join");
+            assertEquals(200, bare.statusCode());
+            assertEquals("", bare.body());
+
+            signaling.setStatusSupplier(() -> NetherNetServerStatus.builder()
+                    .name("Test Server")
+                    .protocol(1001)
+                    .version("1.26.40")
+                    .level("Test Level")
+                    .players(3)
+                    .maxPlayers(20)
+                    .gameType(NetherNetServerStatus.GAME_TYPE_SURVIVAL)
+                    .build());
+            HttpResponse<String> described = get("/v1/join");
+            assertEquals(200, described.statusCode());
+            assertEquals("application/json", described.headers().firstValue("content-type").orElse(""));
+            assertEquals("{\"name\":\"Test Server\",\"protocol\":1001,\"version\":\"1.26.40\","
+                    + "\"level\":\"Test Level\",\"players\":3,\"maxPlayers\":20,\"gameType\":0}", described.body());
+
+            // A failing supplier must not turn the capability check negative,
+            // or the client stops attempting NetherNet entirely.
+            signaling.setStatusSupplier(() -> {
+                throw new IllegalStateException("no status available");
+            });
+            HttpResponse<String> degraded = get("/v1/join");
+            assertEquals(200, degraded.statusCode());
+            assertEquals("", degraded.body());
+        } finally {
+            signaling.setStatusSupplier(null);
+        }
     }
 
     @Test
