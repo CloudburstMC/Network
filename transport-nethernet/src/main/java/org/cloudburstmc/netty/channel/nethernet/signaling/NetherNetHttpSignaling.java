@@ -3,6 +3,7 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
@@ -22,9 +23,11 @@ import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
@@ -34,6 +37,7 @@ import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -62,10 +66,14 @@ import java.util.function.Supplier;
  * and a negotiation that produces no answer within the timeout responds 502
  * and tears the half negotiated connection down.
  *
- * TLS: current clients require HTTPS with a certificate that validates
- * against the server's IP address; pass an SslContext for that. A null
- * SslContext serves plaintext, which works behind a TLS terminating reverse
- * proxy today and directly once clients implement the TOFU trust flow.
+ * TLS: pre 26.40 clients require HTTPS with a certificate that validates
+ * against the server's IP address; pass an SslContext for that. 26.40 and
+ * later also accept plain HTTP, trusting the server identity through their
+ * TOFU flow. The listener serves both on the one port: each connection's
+ * protocol is selected from its first bytes, so with a certificate present
+ * TLS and plaintext both work, and with none (or behind a TLS terminating
+ * reverse proxy) plaintext alone is served and TLS speakers are closed
+ * immediately.
  */
 public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetHttpSignaling.class);
@@ -145,11 +153,8 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            SslContext sslContext = sslContextSupplier.get();
-                            if (sslContext != null) {
-                                ch.pipeline().addLast(sslContext.newHandler(ch.alloc()));
-                            }
                             ch.pipeline().addLast(new ReadTimeoutHandler(READ_TIMEOUT_SECONDS));
+                            ch.pipeline().addLast(new ProtocolSelectingHandler());
                             ch.pipeline().addLast(new HttpServerCodec());
                             ch.pipeline().addLast(new HttpObjectAggregator(MAX_OFFER_BYTES + 8192));
                             ch.pipeline().addLast(new SignalingRequestHandler());
@@ -157,7 +162,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                     });
             this.serverChannel = bootstrap.bind(localAddress).sync().channel();
             log.info("HTTP signaling listening on {} ({})", localAddress,
-                    sslContextSupplier.get() != null ? "TLS" : "plaintext");
+                    sslContextSupplier.get() != null ? "TLS, plaintext fallback" : "plaintext");
         } catch (Exception e) {
             ConnectException ce = new ConnectException("Failed to bind HTTP signaling listener: " + e.getMessage());
             ce.initCause(e);
@@ -390,10 +395,44 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     }
 
     /**
-     * Writes a one shot response: Connection: close and the channel closed
-     * after the write, matching the one request per connection model. Safe
-     * from any thread.
+     * Selects the connection's protocol from its first bytes, so TLS and
+     * plaintext are both served on the one port a client ever derives from
+     * the join address. A TLS record installs the SslHandler when a
+     * certificate is available, and closes the connection when none is,
+     * before any handshake byte can reach the HTTP codec. Everything else
+     * proceeds as plaintext HTTP, which keeps signaling reachable for
+     * clients whose TLS attempt failed against a broken certificate: 26.40
+     * and later retry over plain HTTP and trust the server identity through
+     * their TOFU flow, so certificate rot degrades to a confirmation prompt
+     * instead of losing NetherNet entirely.
      */
+    private final class ProtocolSelectingHandler extends ByteToMessageDecoder {
+
+        @Override
+        protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+            // A TLS record is recognizable from its first five bytes.
+            if (in.readableBytes() < 5) {
+                return;
+            }
+            if (SslHandler.isEncrypted(in, false)) {
+                SslContext sslContext = sslContextSupplier.get();
+                if (sslContext == null) {
+                    // TLS spoken at a certificate-less server: close instead
+                    // of letting handshake bytes reach the HTTP codec. The
+                    // immediate close is also the fastest signal for the
+                    // client's own fallback ladder.
+                    ctx.close();
+                    return;
+                }
+                ctx.pipeline().addAfter(ctx.name(), null, sslContext.newHandler(ctx.alloc()));
+            }
+            // Removing the decoder forwards the buffered bytes to whichever
+            // handler now follows: the SslHandler for TLS, the HTTP codec
+            // for plaintext.
+            ctx.pipeline().remove(this);
+        }
+    }
+
     /**
      * Answers the capability check, carrying the server status document when
      * the consumer supplies one. A supplier that is absent or that fails
@@ -410,11 +449,15 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
         try {
             NetherNetServerStatus status = supplier.get();
             body = status == null ? null : status.toJson();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             // The probe decides whether the client attempts NetherNet at all,
             // so it must still answer 2xx when the consumer cannot describe
             // itself. Older clients ignore the body outright; what a reading
-            // client makes of an absent one is not established.
+            // client makes of an absent one is not established. Throwable
+            // rather than Exception: an Error escaping here reaches
+            // exceptionCaught, which closes the connection with no response
+            // at all, and a client reads that as no NetherNet rather than as
+            // a server that cannot currently describe itself.
             //
             // Warn once, then debug: the endpoint is unauthenticated TCP, so
             // per request warns would let anyone drive log volume by
@@ -434,6 +477,11 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
         }
     }
 
+    /**
+     * Writes a one shot response: Connection: close and the channel closed
+     * after the write, matching the one request per connection model. Safe
+     * from any thread.
+     */
     private static void respond(ChannelHandlerContext ctx, HttpResponseStatus status, String contentType, String body) {
         FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status,
                 Unpooled.copiedBuffer(body, StandardCharsets.UTF_8));
