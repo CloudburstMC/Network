@@ -1,8 +1,10 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
+import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -63,45 +65,25 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final Random random = new Random();
     private final Map<String, Promise<String>> pendingAnswers = new ConcurrentHashMap<>();
 
+    private final PlayerFilter playerFilter;
+    private final MotdProvider motdProvider;
+
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
     private NewConnectionHandler newConnectionHandler;
 
     private Channel serverChannel;
 
-    public NetherNetHTTPSignaling(File identityKeystore, String identityPassword) {
-        this(identityKeystore, identityPassword, null, "");
-    }
+    private NetherNetHTTPSignaling(Builder builder) {
+        this.playerFilter = builder.playerFilter;
+        this.motdProvider = builder.motdProvider;
 
-    public NetherNetHTTPSignaling(File identityKeystore, File httpsKeystore) {
-        this(identityKeystore, "", httpsKeystore, "");
-    }
-
-    /**
-     * Creates an HTTP(S) signalling server, backed by one keystore for the TLS
-     * listener and another for the server identity used to sign SDP answers.
-     * <p>
-     * Both must be PKCS12 files. The identity key must be EC P-384, and its certificate
-     * CN is surfaced as the identity domain, so set it to something recognisable.
-     * Generate one with:
-     * <pre>{@code
-     * keytool -genkeypair -alias identity -keyalg EC -groupname secp384r1 \
-     *         -storetype PKCS12 -keystore identity.p12 -storepass changeit \
-     *         -dname "CN=Your Server" -validity 3650
-     * }</pre>
-     *
-     * @param identityKeystore PKCS12 keystore holding the EC P-384 identity key
-     * @param identityPassword Password for {@code identityKeystore}, or "" if unprotected
-     * @param httpsKeystore    PKCS12 keystore holding the TLS certificate and key, or null for plaintext
-     * @param httpsPassword    Password for {@code httpsKeystore}, or "" if unprotected
-     */
-    public NetherNetHTTPSignaling(File identityKeystore, String identityPassword, File httpsKeystore, String httpsPassword) {
-        if (httpsKeystore != null) {
+        if (builder.httpsKeystore != null) {
             try {
-                char[] passwordChars = httpsPassword.toCharArray();
+                char[] passwordChars = builder.httpsPassword.toCharArray();
 
                 KeyStore ks = KeyStore.getInstance("PKCS12");
-                try (FileInputStream fis = new FileInputStream(httpsKeystore)) {
+                try (FileInputStream fis = new FileInputStream(builder.httpsKeystore)) {
                     ks.load(fis, passwordChars);
                 }
 
@@ -115,7 +97,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         try {
-            this.serverIdentity = ServerIdentity.fromKeystore(identityKeystore, identityPassword);
+            this.serverIdentity = ServerIdentity.fromKeystore(builder.identityKeystore, builder.identityPassword);
         } catch (Exception ex) {
             log.error("Error loading identity keystore: " + ex.getMessage(), ex);
         }
@@ -128,11 +110,11 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         // Bind the listening socket ourselves so a failure throws correctly
-        ServerSocketChannel javaChannel;
+        ServerSocketChannel channel;
         try {
-            javaChannel = ServerSocketChannel.open();
-            javaChannel.configureBlocking(false);
-            javaChannel.bind(localAddress, 128);
+            channel = ServerSocketChannel.open();
+            channel.configureBlocking(false);
+            channel.bind(localAddress, 128);
         } catch (IOException e) {
             throw new ConnectException("Failed to bind HTTP signaling to " + localAddress + ": " + e.getMessage());
         }
@@ -140,7 +122,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         // Setup a new server bootstrap for http using the existing event loop and channel
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(eventLoop)
-            .channelFactory((ChannelFactory<NioServerSocketChannel>) () -> new NioServerSocketChannel(javaChannel))
+            .channelFactory((ChannelFactory<NioServerSocketChannel>) () -> new NioServerSocketChannel(channel))
             .childHandler(new ChannelInitializer<>() {
                 @Override
                 protected void initChannel(Channel ch) {
@@ -179,10 +161,26 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
             String path = new QueryStringDecoder(req.uri()).path();
             HttpMethod method = req.method();
+            String host = req.headers().get(HttpHeaderNames.HOST);
+            InetSocketAddress remoteAddress = (InetSocketAddress) ctx.channel().remoteAddress();
 
             // Respond to the status check
             if (path.equals("/v1/join")) {
-                respondEmptyWithStatus(ctx, HttpMethod.GET.equals(method) ? HttpResponseStatus.OK : HttpResponseStatus.METHOD_NOT_ALLOWED);
+                if (!HttpMethod.GET.equals(method)) {
+                    respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
+                    return;
+                }
+
+                PongData motd;
+                try {
+                    motd = motdProvider.getMotd(host, remoteAddress);
+                } catch (Exception e) {
+                    log.error("MOTD provider failed", e);
+                    respondEmptyWithStatus(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR);
+                    return;
+                }
+
+                respondWithString(ctx, motd.toJson(), "application/json");
                 return;
             }
 
@@ -209,14 +207,30 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             String sdpOffer = req.content().toString(StandardCharsets.UTF_8);
             log.trace("Received sdp offer: " + sdpOffer);
 
+            JwtClaims claims;
             try {
-                JwtClaims claims = IdentityUtils.validateSdp(sdpOffer);
-
-                // TODO Some form of callback if people want to do filtering of xuid etc at this point?
-                log.debug("Identity is valid: " + claims.getClaimValueAsString("xname") + " (" + claims.getClaimValueAsString("xid") + ")");
+                claims = IdentityUtils.validateSdp(sdpOffer);
             } catch (Exception e) {
                 log.error("Identity validation failed", e);
                 respondEmptyWithStatus(ctx, HttpResponseStatus.UNAUTHORIZED);
+                return;
+            }
+
+            PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"), claims.getClaimValueAsString("xname"), networkId, remoteAddress, claims);
+            log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
+
+            // Let the user reject the player before we start a connection for them
+            boolean allowed;
+            try {
+                allowed = playerFilter.allow(host, player);
+            } catch (Exception e) {
+                log.error("Player filter failed for " + player.xuid(), e);
+                allowed = false;
+            }
+
+            if (!allowed) {
+                log.debug("Rejected join from " + player.displayName() + " (" + player.xuid() + ")");
+                respondEmptyWithStatus(ctx, HttpResponseStatus.FORBIDDEN);
                 return;
             }
 
@@ -255,11 +269,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
                 log.debug("Sending SDP answer");
 
-                ByteBuf body = Unpooled.wrappedBuffer(signedAnswer.getBytes(StandardCharsets.UTF_8));
-                FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, body);
-                response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/sdp");
-                response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.readableBytes());
-                ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+                respondWithString(ctx, signedAnswer, "application/sdp");
             });
 
             // We cant use the network ID as the connection ID as they can be out of the bounds of a long
@@ -279,6 +289,14 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     }
 
+    private void respondWithString(ChannelHandlerContext ctx, String body, String contentType) {
+        ByteBuf bodyBuf = Unpooled.wrappedBuffer(body.getBytes(StandardCharsets.UTF_8));
+        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, bodyBuf);
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, contentType);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bodyBuf.readableBytes());
+        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+    }
+
     @Override
     public void setNewConnectionHandler(NewConnectionHandler handler) {
         this.newConnectionHandler = handler;
@@ -291,7 +309,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     @Override
     public void sendFullSdp(String targetNetworkId, String sdp) {
-        log.debug("Sending sdp to " + targetNetworkId + ": " + sdp);
+        log.debug("Sending sdp to " + targetNetworkId);
 
         Promise<String> answer = pendingAnswers.get(targetNetworkId);
         if (answer != null) {
@@ -325,5 +343,162 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     @Override
     public void close() {
         if (serverChannel != null) serverChannel.close();
+    }
+
+    /**
+     * Functional interface for filtering players before a connection is created for them.
+     */
+    @FunctionalInterface
+    public interface PlayerFilter {
+        /**
+         * Called once the identity attached to an SDP offer has been validated, before
+         * the connection is handed to the {@link NewConnectionHandler}.
+         * <p>
+         * Called on the event loop, so don't block in here. A thrown exception is treated
+         * as a rejection.
+         *
+         * @param host The host header from the join request, which may be used to identify the server
+         * @param player The validated player attempting to join
+         * @return true to accept the player, false to reject them with a 403
+         */
+        boolean allow(String host, PlayerInfo player);
+    }
+
+    /**
+     * Functional interface providing the MOTD returned to clients querying the server.
+     */
+    @FunctionalInterface
+    public interface MotdProvider {
+        /**
+         * Called for every status request, so the returned data can change over time.
+         * <p>
+         * Called on the event loop, so don't block in here. The discovery-only fields of
+         * {@link PongData} are ignored, as they have no place in the status response.
+         *
+         * @param host The host header from the join request, which may be used to identify the server
+         * @param remoteAddress The address the status request came from
+         * @return The MOTD to advertise
+         */
+        PongData getMotd(String host, InetSocketAddress remoteAddress);
+    }
+
+    /**
+     * Builder for {@link NetherNetHTTPSignaling}.
+     * <p>
+     * The server is backed by one keystore for the TLS listener and another for the
+     * server identity used to sign SDP answers. Both must be PKCS12 files, and only
+     * the identity keystore is required.
+     */
+    public static class Builder {
+        private File identityKeystore;
+        private String identityPassword = "";
+        private File httpsKeystore;
+        private String httpsPassword = "";
+        private PlayerFilter playerFilter = (host, player) -> true;
+        private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
+
+        /**
+         * Sets the unprotected keystore holding the identity key. Required.
+         *
+         * @param identityKeystore PKCS12 keystore holding the EC P-384 identity key
+         * @return This builder
+         */
+        public Builder setIdentityKeystore(File identityKeystore) {
+            return setIdentityKeystore(identityKeystore, "");
+        }
+
+        /**
+         * Sets the keystore holding the identity key used to sign SDP answers. Required.
+         * <p>
+         * The key must be EC P-384, and its certificate CN is surfaced as the identity
+         * domain, so set it to something recognisable.
+         * Generate one with:
+         * <pre>{@code
+         * keytool -genkeypair -alias identity -keyalg EC -groupname secp384r1 \
+         *         -storetype PKCS12 -keystore identity.p12 -storepass changeit \
+         *         -dname "CN=Your Server" -validity 3650
+         * }</pre>
+         *
+         * @param identityKeystore PKCS12 keystore holding the EC P-384 identity key
+         * @param identityPassword Password for {@code identityKeystore}, or "" if unprotected
+         * @return This builder
+         */
+        public Builder setIdentityKeystore(File identityKeystore, String identityPassword) {
+            this.identityKeystore = identityKeystore;
+            this.identityPassword = identityPassword;
+            return this;
+        }
+
+        /**
+         * Sets the unprotected keystore holding the TLS certificate and key.
+         *
+         * @param httpsKeystore PKCS12 keystore holding the TLS certificate and key
+         * @return This builder
+         */
+        public Builder setHttpsKeystore(File httpsKeystore) {
+            return setHttpsKeystore(httpsKeystore, "");
+        }
+
+        /**
+         * Sets the keystore holding the TLS certificate and key.
+         * If unset the server listens in plaintext.
+         *
+         * @param httpsKeystore PKCS12 keystore holding the TLS certificate and key
+         * @param httpsPassword Password for {@code httpsKeystore}, or "" if unprotected
+         * @return This builder
+         */
+        public Builder setHttpsKeystore(File httpsKeystore, String httpsPassword) {
+            this.httpsKeystore = httpsKeystore;
+            this.httpsPassword = httpsPassword;
+            return this;
+        }
+
+        /**
+         * Sets the filter consulted for each join once its identity has been validated.
+         * Defaults to allowing everyone.
+         *
+         * @param playerFilter The filter to consult
+         * @return This builder
+         */
+        public Builder setPlayerFilter(PlayerFilter playerFilter) {
+            this.playerFilter = playerFilter;
+            return this;
+        }
+
+        /**
+         * Sets the provider called for each status request.
+         * Defaults to {@link PongData#DEFAULT}.
+         *
+         * @param motdProvider The provider to call
+         * @return This builder
+         */
+        public Builder setMotdProvider(MotdProvider motdProvider) {
+            this.motdProvider = motdProvider;
+            return this;
+        }
+
+        /**
+         * Sets a fixed MOTD to advertise for every status request.
+         *
+         * @param motd The MOTD to advertise
+         * @return This builder
+         */
+        public Builder setMotd(PongData motd) {
+            return setMotdProvider((host, remoteAddress) -> motd);
+        }
+
+        /**
+         * Builds the signalling instance.
+         *
+         * @return A new signalling instance
+         * @throws IllegalStateException If no identity keystore was set
+         */
+        public NetherNetHTTPSignaling build() {
+            if (identityKeystore == null) {
+                throw new IllegalStateException("An identity keystore is required");
+            }
+
+            return new NetherNetHTTPSignaling(this);
+        }
     }
 }

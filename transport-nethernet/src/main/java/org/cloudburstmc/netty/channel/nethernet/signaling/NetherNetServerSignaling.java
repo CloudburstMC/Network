@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import com.google.gson.JsonObject;
 import io.netty.channel.EventLoop;
 
 import java.net.ConnectException;
@@ -57,6 +58,8 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * Data structure for Pong advertisement data.
      * 
      * @param serverName      The name of the server.
+     * @param protocol        The Bedrock protocol version the server speaks.
+     * @param version         The Bedrock version string the server reports.
      * @param levelName       The name of the level/world.
      * @param gameType        The game type (e.g. Survival, Creative).
      * @param playerCount     The current number of players.
@@ -66,10 +69,28 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * @param transportLayer  The transport layer identifier (e.g. NetherNet).
      * @param connectionType  The connection type identifier (e.g. LAN, Online).
      */
-    public record PongData(String serverName, String levelName, int gameType, int playerCount, int maxPlayerCount, 
-            boolean isEditorWorld, boolean isHardcore, int transportLayer, int connectionType) {
+    public record PongData(String serverName, int protocol, String version, String levelName, int gameType,
+            int playerCount, int maxPlayerCount, boolean isEditorWorld, boolean isHardcore, int transportLayer,
+            int connectionType) {
+
+        public static final PongData DEFAULT = new Builder().build();
+
+        public String toJson() {
+            JsonObject info = new JsonObject();
+            info.addProperty("name", serverName());
+            info.addProperty("protocol", protocol());
+            info.addProperty("version", version());
+            info.addProperty("level", levelName());
+            info.addProperty("players", playerCount());
+            info.addProperty("maxPlayers", maxPlayerCount());
+            info.addProperty("gameType", gameType());
+            return info.toString();
+        }
+
         public static class Builder {
             private String serverName = "Server";
+            private int protocol = 2187;
+            private String version = "1.26.50";
             private String levelName = "World";
             private int gameType = 0; // Default to Survival
             private int playerCount = 0;
@@ -81,6 +102,16 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
 
             public Builder setServerName(String serverName) {
                 this.serverName = serverName;
+                return this;
+            }
+
+            public Builder setProtocol(int protocol) {
+                this.protocol = protocol;
+                return this;
+            }
+
+            public Builder setVersion(String version) {
+                this.version = version;
                 return this;
             }
 
@@ -125,8 +156,8 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
             }
 
             public PongData build() {
-                return new PongData(serverName, levelName, gameType, playerCount, maxPlayerCount, 
-                    isEditorWorld, isHardcore, transportLayer, connectionType);
+                return new PongData(serverName, protocol, version, levelName, gameType, playerCount,
+                    maxPlayerCount, isEditorWorld, isHardcore, transportLayer, connectionType);
             }
         }
     }
