@@ -105,7 +105,7 @@ public class RakServerOnlineInitialHandler extends SimpleChannelInboundHandler<E
             RakUtils.writeAddress(outBuf, socketAddress);
         }
         outBuf.writeLong(time);
-        outBuf.writeLong(System.currentTimeMillis());
+        outBuf.writeLong(RakUtils.timestamp());
 
         ctx.writeAndFlush(new RakMessage(outBuf, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE));
     }

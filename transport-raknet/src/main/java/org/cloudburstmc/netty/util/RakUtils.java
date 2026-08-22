@@ -32,6 +32,7 @@ public class RakUtils {
 
     private static final Constructor<DefaultChannelPipeline> DEFAULT_CHANNEL_PIPELINE_CONSTRUCTOR;
     private static final Method PIPELINE_DESTROY_METHOD;
+    private static final long startTime = System.nanoTime() / 1_000_000;
 
     static {
         try {
@@ -190,5 +191,9 @@ public class RakUtils {
 
     public static DatagramPacket datagramReply(ByteBuf buf, DatagramPacket request) {
         return new DatagramPacket(buf, request.sender(), request.recipient());
+    }
+
+    public static long timestamp() {
+        return System.nanoTime() / 1_000_000 - startTime;
     }
 }
