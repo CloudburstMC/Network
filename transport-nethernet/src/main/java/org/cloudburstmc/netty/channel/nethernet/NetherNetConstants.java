@@ -48,6 +48,8 @@ public class NetherNetConstants {
 
     // SCTP Constants
     public static final int MAX_SCTP_MESSAGE_SIZE = 10000;
+    public static final int MAX_ADVERTISED_MESSAGE_SIZE = 256 * 1024; // 256 KB
+
     public static final String RELIABLE_CHANNEL_LABEL = "ReliableDataChannel";
     public static final String UNRELIABLE_CHANNEL_LABEL = "UnreliableDataChannel";
 

@@ -5,28 +5,18 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling;
-import dev.kastle.webrtc.CreateSessionDescriptionObserver;
-import dev.kastle.webrtc.PeerConnectionFactory;
-import dev.kastle.webrtc.PeerConnectionObserver;
-import dev.kastle.webrtc.RTCBundlePolicy;
-import dev.kastle.webrtc.RTCConfiguration;
-import dev.kastle.webrtc.RTCDataChannel;
-import dev.kastle.webrtc.RTCDataChannelBuffer;
-import dev.kastle.webrtc.RTCDataChannelInit;
-import dev.kastle.webrtc.RTCDataChannelObserver;
-import dev.kastle.webrtc.RTCDataChannelState;
-import dev.kastle.webrtc.RTCIceCandidate;
-import dev.kastle.webrtc.RTCIceServer;
-import dev.kastle.webrtc.RTCOfferOptions;
-import dev.kastle.webrtc.RTCPeerConnectionState;
-import dev.kastle.webrtc.RTCSdpType;
-import dev.kastle.webrtc.RTCSessionDescription;
-import dev.kastle.webrtc.SetSessionDescriptionObserver;
+import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
 import io.netty.channel.ChannelPromise;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import tel.schich.libdatachannel.DataChannel;
+import tel.schich.libdatachannel.DataChannelInitSettings;
+import tel.schich.libdatachannel.DataChannelReliability;
+import tel.schich.libdatachannel.PeerConnection;
+import tel.schich.libdatachannel.PeerConnectionConfiguration;
+import tel.schich.libdatachannel.PeerState;
+import tel.schich.libdatachannel.SessionDescriptionType;
 
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
@@ -39,12 +29,11 @@ import java.util.concurrent.TimeUnit;
 public class NetherNetClientChannel extends NetherNetChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetClientChannel.class);
 
-    private final PeerConnectionFactory factory;    
     private final NetherNetClientSignaling signaling;
 
     private volatile long connectionId; // Session ID (Long)
     private volatile String targetNetworkId; // Peer ID (String, for Realms)
-    
+
     private volatile boolean handshakeComplete = false;
 
     private ChannelPromise connectPromise;
@@ -54,23 +43,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private int retryCount = 0;
 
     /**
-     * Creates a NetherNetClientChannel with a new PeerConnectionFactory.
-     * 
+     * Creates a NetherNetClientChannel.
+     *
      * @param signaling The NetherNetClientSignaling instance for signaling.
      */
     public NetherNetClientChannel(NetherNetClientSignaling signaling) {
-        this(new PeerConnectionFactory(), signaling);
-    }
-
-    /**
-     * Creates a NetherNetClientChannel.
-     * 
-     * @param factory   The PeerConnectionFactory to use. Should be reused where possible.
-     * @param signaling The NetherNetClientSignaling instance for signaling.
-     */
-    public NetherNetClientChannel(PeerConnectionFactory factory, NetherNetClientSignaling signaling) {
         super(null, null, null);
-        this.factory = factory;
         this.signaling = signaling;
         this.connectionId = this.cycleConnectionId();
         this.config = new DefaultNetherClientChannelConfig(this);
@@ -149,7 +127,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         signaling.setSignalHandler(this.connectionId, this::handleSignal);
 
         signaling.connect(remoteAddress).thenAcceptAsync(iceServers -> {
-            if (handshakeComplete) return; 
+            if (handshakeComplete) return;
             try {
                 // If this is a retry, peerConnection might be null, so we recreate it
                 if (peerConnection == null) {
@@ -189,11 +167,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         }
 
         retryCount++;
-
-        if (peerConnection != null) {
-            peerConnection.close();
-            peerConnection = null;
-        }
+        closeWebRTC();
 
         signaling.removeSignalHandler(this.connectionId);
         this.cycleConnectionId();
@@ -201,46 +175,33 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     private void initWebRTC(List<NetherNetSignaling.IceServerInfo> iceServers) {
-        RTCConfiguration rtcConfig = new RTCConfiguration();
-        rtcConfig.portAllocatorConfig = this.config.getOption(NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG);
-        rtcConfig.bundlePolicy = RTCBundlePolicy.MAX_BUNDLE;
+        PeerConnectionConfiguration rtcConfig = this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG)
+            .withDisableAutoNegotiation(true)
+            .withIceServers(iceServers.stream().map(IceServerInfo::toUris).flatMap(List::stream).toList());
 
-        if (iceServers != null) {
-            for (NetherNetSignaling.IceServerInfo info : iceServers) {
-                RTCIceServer iceServer = new RTCIceServer();
-                iceServer.urls = info.urls();
-                iceServer.username = info.username();
-                iceServer.password = info.password();
-                rtcConfig.iceServers.add(iceServer);
+        peerConnection = PeerConnection.createPeer(rtcConfig);
+
+        // Registering is what arms the native callback, so it must happen before anything can fire it
+        peerConnection.onLocalCandidate.register((peer, candidate, mediaId) -> {
+            try {
+                signaling.sendSignal(
+                    targetNetworkId,
+                    NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate)
+                );
+            } catch (Exception e) {
+                log.error("Failed to send ICE candidate", e);
+                eventLoop().execute(() -> resetAndRetryHandshake());
             }
-        }
+        });
 
-        peerConnection = factory.createPeerConnection(rtcConfig, new PeerConnectionObserver() {
-            @Override
-            public void onIceCandidate(RTCIceCandidate candidate) {
-                try {
-                    signaling.sendSignal(
-                        targetNetworkId, 
-                        NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate.sdp)
-                    );
-                } catch (Exception e) {
-                    log.error("Failed to send ICE candidate", e);
-                    eventLoop().execute(() -> resetAndRetryHandshake());
-                }
+        peerConnection.onStateChange.register((peer, state) -> {
+            if (state == PeerState.RTC_FAILED) {
+                // Fast fail trigger: retry immediately instead of waiting for timeout
+                log.warn("PeerConnection entered FAILED state, resetting and retrying handshake.");
+                eventLoop().execute(() -> resetAndRetryHandshake());
+            } else {
+                log.trace("PeerConnection state changed to {}", state);
             }
-
-            @Override
-            public void onConnectionChange(RTCPeerConnectionState state) {
-                if (state == RTCPeerConnectionState.FAILED) {
-                    // Fast fail trigger: retry immediately instead of waiting for timeout
-                    log.warn("PeerConnection entered FAILED state, resetting and retrying handshake.");
-                    eventLoop().execute(() -> resetAndRetryHandshake());
-                } else {
-                    log.trace("PeerConnection state changed to {}", state);
-                }
-            }
-
-            @Override public void onDataChannel(RTCDataChannel dataChannel) { }
         });
 
         setupDataChannels();
@@ -248,28 +209,18 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private void createAndSendOffer() {
         if (peerConnection == null) return;
-        peerConnection.createOffer(new RTCOfferOptions(), new CreateSessionDescriptionObserver() {
-            @Override
-            public void onSuccess(RTCSessionDescription description) {
-                if (peerConnection == null) return;
-                peerConnection.setLocalDescription(description, new SetSessionDescriptionObserver() {
-                    @Override
-                    public void onSuccess() {
-                        try {
-                            signaling.sendSignal(
-                                targetNetworkId, 
-                                NetherNetConstants.buildSignalConnectRequest(connectionId, description.sdp)
-                            );
-                        } catch (Exception e) {
-                            log.error("Failed to send Connect Request", e);
-                            eventLoop().execute(() -> resetAndRetryHandshake());
-                        }
-                    }
-                    @Override public void onFailure(String error) { /* Retry handled by timeout */ }
-                });
-            }
-            @Override public void onFailure(String error) { /* Retry handled by timeout */ }
-        });
+
+        // Not null for autodetection, that path releases an unset string in JNI and crashes the JVM
+        peerConnection.setLocalDescription("offer");
+        try {
+            signaling.sendSignal(
+                targetNetworkId,
+                NetherNetConstants.buildSignalConnectRequest(connectionId, peerConnection.localDescription())
+            );
+        } catch (Exception e) {
+            log.error("Failed to send Connect Request", e);
+            eventLoop().execute(() -> resetAndRetryHandshake());
+        }
     }
 
     private void handleSignal(String signal) {
@@ -296,13 +247,18 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
             switch (type) {
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE -> {
-                    peerConnection.setRemoteDescription(new RTCSessionDescription(RTCSdpType.ANSWER, data), new SetSessionDescriptionObserver() {
-                        @Override public void onSuccess() {}
-                        @Override public void onFailure(String e) { /* Retry handled by timeout */ }
-                    });
+                    try {
+                        peerConnection.setRemoteDescription(data, SessionDescriptionType.ANSWER);
+                    } catch (Exception e) {
+                        log.debug("Failed to apply answer for {}: {}", Long.toUnsignedString(connectionId), e.toString());
+                    }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
-                    peerConnection.addIceCandidate(new RTCIceCandidate("0", 0, data));
+                    try {
+                        peerConnection.addRemoteCandidate(data);
+                    } catch (Exception e) {
+                        log.debug("Failed to apply ICE candidate for {}: {}", Long.toUnsignedString(connectionId), e.toString());
+                    }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
                     log.error("Received SIGNAL_CONNECT_ERROR for {}.", Long.toUnsignedString(this.connectionId));
@@ -319,45 +275,31 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     private void setupDataChannels() {
-        RTCDataChannelInit reliableInit = new RTCDataChannelInit();
-        reliableInit.ordered = true;
-        reliableInit.protocol = NetherNetConstants.RELIABLE_CHANNEL_LABEL;
+        DataChannelInitSettings reliableInit = DataChannelInitSettings.DEFAULT;
 
-        RTCDataChannelInit unreliableInit = new RTCDataChannelInit();
-        unreliableInit.ordered = false;
-        unreliableInit.maxRetransmits = 0;
+        DataChannelInitSettings unreliableInit = DataChannelInitSettings.DEFAULT
+            .withReliability(new DataChannelReliability(true, true, 0L, 0));
 
-        RTCDataChannel reliable = peerConnection.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, reliableInit);
-        RTCDataChannel unreliable = peerConnection.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, unreliableInit);
+        DataChannel reliable = peerConnection.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, reliableInit);
+        DataChannel unreliable = peerConnection.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, unreliableInit);
 
-        reliable.registerObserver(new RTCDataChannelObserver() {
-            @Override
-            public void onStateChange() {
-                if (reliable.getState() == RTCDataChannelState.OPEN) {
-                    eventLoop().execute(() -> {
-                        if (!handshakeComplete) {
-                            log.debug("NetherNet Connection Established!");
-                            handshakeComplete = true;
-                            
-                            // Cancel timeout now that we are done
-                            if (handshakeTimeoutTask != null) {
-                                handshakeTimeoutTask.cancel(false);
-                            }
-                            
-                            setDataChannels(reliable, unreliable);
-                            if (connectPromise != null && !connectPromise.isDone()) {
-                                connectPromise.trySuccess();
-                            }
-                            pipeline().fireChannelActive();
-                        }
-                    });
-                }
+        reliable.onOpen.register(channel -> eventLoop().execute(() -> {
+            if (handshakeComplete) return;
+
+            log.debug("NetherNet Connection Established!");
+            handshakeComplete = true;
+
+            // Cancel timeout now that we are done
+            if (handshakeTimeoutTask != null) {
+                handshakeTimeoutTask.cancel(false);
             }
-            @Override public void onBufferedAmountChange(long previousAmount) {}
-            @Override public void onMessage(RTCDataChannelBuffer buffer) {
-                ReferenceCountUtil.release(buffer);
+
+            setDataChannels(reliable, unreliable);
+            if (connectPromise != null && !connectPromise.isDone()) {
+                connectPromise.trySuccess();
             }
-        });
+            pipeline().fireChannelActive();
+        }));
     }
 
     private long cycleConnectionId() {

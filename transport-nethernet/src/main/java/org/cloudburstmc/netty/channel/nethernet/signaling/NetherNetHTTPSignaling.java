@@ -254,22 +254,11 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 }
 
                 String sdpAnswer = future.getNow();
-                log.trace("Received SDP answer: " + sdpAnswer);
-
-                // Sign the answer with the server identity
-                String signedAnswer;
-                try {
-                    signedAnswer = serverIdentity.augmentAnswer(sdpAnswer);
-                    log.trace("Signed SDP answer: " + signedAnswer);
-                } catch (Exception e) {
-                    log.error("Failed to attach server identity to answer", e);
-                    respondEmptyWithStatus(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR);
-                    return;
-                }
+                log.trace("Signed SDP answer: " + sdpAnswer);
 
                 log.debug("Sending SDP answer");
 
-                respondWithString(ctx, signedAnswer, "application/sdp");
+                respondWithString(ctx, sdpAnswer, "application/sdp");
             });
 
             // We cant use the network ID as the connection ID as they can be out of the bounds of a long
@@ -305,6 +294,16 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     @Override
     public void setAdvertisementData(PongData pongData) {
         // No-op for Web Signaling.
+    }
+
+    @Override
+    public ServerIdentity serverIdentity() {
+        return this.serverIdentity;
+    }
+
+    @Override
+    public boolean usesTrickleIce() {
+        return false;
     }
 
     @Override

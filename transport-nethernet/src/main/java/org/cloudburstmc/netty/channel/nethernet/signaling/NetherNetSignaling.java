@@ -1,5 +1,13 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 public interface NetherNetSignaling extends AutoCloseable {
@@ -78,6 +86,55 @@ public interface NetherNetSignaling extends AutoCloseable {
      * @param urls     The list of URLs for the ICE server.
      */
     public record IceServerInfo(String username, String password, List<String> urls) {
+        private static final InternalLogger log = InternalLoggerFactory.getInstance(IceServerInfo.class);
+
+        /**
+         * Converts this server to the URI form libdatachannel expects, which carries the credentials in
+         * the authority: {@code turn:user:pass@host:port?transport=udp}. Unparseable URLs are skipped.
+         *
+         * @return The URIs for this server.
+         */
+        public List<URI> toUris() {
+            List<URI> uris = new ArrayList<>();
+            if (urls == null) return uris;
+
+            for (String url : urls) {
+                if (url == null || url.isBlank()) continue;
+
+                try {
+                    uris.add(new URI(withCredentials(url.trim())));
+                } catch (URISyntaxException e) {
+                    log.warn("Ignoring unparseable ICE server URL {}: {}", url, e.toString());
+                }
+            }
+
+            return uris;
+        }
+
+        /**
+         * Inserts the credentials after the scheme, leaving STUN alone as it has no authentication.
+         */
+        private String withCredentials(String url) {
+            int scheme = url.indexOf(':');
+            if (scheme < 0 || username == null || username.isEmpty() || url.regionMatches(true, 0, "stun", 0, 4)) {
+                return url;
+            }
+
+            int authority = url.startsWith("://", scheme) ? scheme + 3 : scheme + 1;
+            if (url.indexOf('@', authority) >= 0) return url;
+
+            return url.substring(0, authority) + encode(username) + ":" + encode(password) + "@" + url.substring(authority);
+        }
+
+        /**
+         * Encodes the input using %20 for spaces instead of +, which is what libdatachannel expects.
+         */
+        private static String encode(String value) {
+            if (value == null) return "";
+
+            return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+        }
+
         public static class Builder {
             private String username = "";
             private String password = "";
