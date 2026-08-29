@@ -1,11 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
-import dev.kastle.webrtc.RTCDataChannel;
-import dev.kastle.webrtc.RTCDataChannelBuffer;
-import dev.kastle.webrtc.RTCDataChannelObserver;
-import dev.kastle.webrtc.RTCDataChannelState;
-import dev.kastle.webrtc.RTCPeerConnection;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.AbstractChannel;
 import io.netty.channel.Channel;
@@ -16,6 +11,9 @@ import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import tel.schich.libdatachannel.DataChannel;
+import tel.schich.libdatachannel.DataChannelCallback;
+import tel.schich.libdatachannel.PeerConnection;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -28,12 +26,12 @@ public abstract class NetherNetChannel extends AbstractChannel {
     protected static final ChannelMetadata METADATA = new ChannelMetadata(false);
 
     protected DefaultNetherChannelConfig config;
-    protected volatile RTCPeerConnection peerConnection;
+    protected volatile PeerConnection peerConnection;
     protected volatile SocketAddress remoteAddress;
     protected volatile SocketAddress localAddress;
 
-    protected RTCDataChannel reliableChannel;
-    protected RTCDataChannel unreliableChannel;
+    protected DataChannel reliableChannel;
+    protected DataChannel unreliableChannel;
 
     protected final Queue<Object> pendingWrites = new ConcurrentLinkedQueue<>();
 
@@ -45,26 +43,19 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.localAddress = local;
     }
 
-    public void setDataChannels(RTCDataChannel reliable, RTCDataChannel unreliable) {
+    public void setDataChannels(DataChannel reliable, DataChannel unreliable) {
         this.reliableChannel = reliable;
         this.unreliableChannel = unreliable;
 
-        RTCDataChannelObserver observer = new RTCDataChannelObserver() {
+        this.reliableChannel.onOpen.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
+        this.reliableChannel.onClosed.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
+
+        this.reliableChannel.onMessage.register(DataChannelCallback.Message.handleBinary(new DataChannelCallback.BinaryMessage() {
             private final ByteBuf assemblyBuf = config.getAllocator().buffer();
             private int currentSegmentCount = -1;
 
             @Override
-            public void onBufferedAmountChange(long previousAmount) {
-            }
-
-            @Override
-            public void onStateChange() {
-                eventLoop().execute(() -> onDataChannelStateChange());
-            }
-
-            @Override
-            public void onMessage(RTCDataChannelBuffer buffer) {
-                ByteBuffer data = buffer.data;
+            public void onBinary(DataChannel channel, ByteBuffer data) {
                 if (!data.hasRemaining())
                     return;
 
@@ -106,11 +97,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
                     }
                 }
             }
-        };
+        }));
 
-        this.reliableChannel.registerObserver(observer);
-
-        if (reliableChannel.getState() == RTCDataChannelState.OPEN) {
+        if (reliableChannel.isOpen()) {
             eventLoop().execute(this::onDataChannelStateChange);
         }
     }
@@ -121,7 +110,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
                 pipeline().fireChannelWritabilityChanged();
                 unsafe().flush();
             }
-        } else if (reliableChannel.getState() == RTCDataChannelState.CLOSED) {
+        } else if (reliableChannel != null && reliableChannel.isClosed()) {
             close();
         }
     }
@@ -182,7 +171,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
                 chunk.position(chunk.limit());
                 chunk.flip();
 
-                reliableChannel.send(new RTCDataChannelBuffer(chunk, true));
+                reliableChannel.sendMessage(chunk);
                 offset += chunkSize;
             }
         } catch (Exception e) {
@@ -213,23 +202,53 @@ public abstract class NetherNetChannel extends AbstractChannel {
     @Override
     protected void doClose() throws Exception {
         this.open = false;
-
-        if (reliableChannel != null) {
-            reliableChannel.unregisterObserver();
-            reliableChannel.close();
-        }
-        if (unreliableChannel != null) {
-            unreliableChannel.unregisterObserver();
-            unreliableChannel.close();
-        }
-        if (peerConnection != null) {
-            peerConnection.close();
-        }
+        closeWebRTC();
 
         Object msg;
         while ((msg = pendingWrites.poll()) != null) {
             ReferenceCountUtil.release(msg);
         }
+    }
+
+    /**
+     * Closes the data channels and peer connection, dropping their listeners first.
+     */
+    protected void closeWebRTC() {
+        if (reliableChannel != null) {
+            deregisterAll(reliableChannel);
+            reliableChannel.close();
+            reliableChannel = null;
+        }
+        if (unreliableChannel != null) {
+            deregisterAll(unreliableChannel);
+            unreliableChannel.close();
+            unreliableChannel = null;
+        }
+        if (peerConnection != null) {
+            deregisterAll(peerConnection);
+            peerConnection.close();
+            peerConnection = null;
+        }
+    }
+
+    static void deregisterAll(PeerConnection peer) {
+        peer.onLocalDescription.deregisterAll();
+        peer.onLocalCandidate.deregisterAll();
+        peer.onStateChange.deregisterAll();
+        peer.onIceStateChange.deregisterAll();
+        peer.onGatheringStateChange.deregisterAll();
+        peer.onSignalingStateChange.deregisterAll();
+        peer.onDataChannel.deregisterAll();
+        peer.onTrack.deregisterAll();
+    }
+
+    static void deregisterAll(DataChannel channel) {
+        channel.onOpen.deregisterAll();
+        channel.onClosed.deregisterAll();
+        channel.onError.deregisterAll();
+        channel.onMessage.deregisterAll();
+        channel.onBufferedAmountLow.deregisterAll();
+        channel.onAvailable.deregisterAll();
     }
 
     @Override
@@ -263,7 +282,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     public boolean isActive() {
-        return isOpen() && this.reliableChannel != null && this.reliableChannel.getState() == RTCDataChannelState.OPEN;
+        return isOpen() && this.reliableChannel != null && this.reliableChannel.isOpen();
     }
 
     @Override
