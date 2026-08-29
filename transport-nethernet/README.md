@@ -3,7 +3,24 @@
 ## Usage
 
 > [!IMPORTANT]
-> This library requires the platform-specific WebRTC native libraries at runtime. See [Kas-tle/webrtc-java](https://github.com/Kas-tle/webrtc-java?tab=readme-ov-file#usage) for instructions on how to include the native libraries in your project.
+> This library uses [libdatachannel-java](https://github.com/pschichtel/libdatachannel-java) and needs its platform-specific native library at runtime. The main artifact contains no natives, so you have to add the classifier(s) for the platforms you ship yourself.
+
+```kotlin
+val nativePlatforms = listOf(
+    "windows-x86_64",
+    "x86_64",        // linux x86_64
+    "aarch64",       // linux aarch64
+    "macos-x86_64",
+    "macos-arm64"
+)
+
+dependencies {
+    implementation("org.cloudburstmc.netty:netty-transport-nethernet:$netherNetVersion")
+    nativePlatforms.forEach { platform ->
+        runtimeOnly("tel.schich:libdatachannel-java:$libdatachannelVersion:$platform")
+    }
+}
+```
 
 ### Examples
 

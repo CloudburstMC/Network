@@ -101,6 +101,11 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     }
 
     @Override
+    public boolean allowsIceOnLocalPort() {
+        return false;
+    }
+
+    @Override
     public void bind(SocketAddress localAddress, EventLoop eventLoop) {
         if (!this.discovery.isActive()) {
             if (localAddress instanceof InetSocketAddress) {
