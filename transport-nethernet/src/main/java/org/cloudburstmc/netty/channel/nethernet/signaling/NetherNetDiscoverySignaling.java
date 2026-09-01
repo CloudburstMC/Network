@@ -165,6 +165,11 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     }
 
     @Override
+    public boolean isActive() {
+        return this.discovery.isActive();
+    }
+
+    @Override
     public void close() {
         this.discovery.close();
     }
