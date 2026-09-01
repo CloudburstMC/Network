@@ -34,6 +34,11 @@ public interface NetherNetSignaling extends AutoCloseable {
     String getLocalNetworkId();
 
     /**
+     * Whether the signaling is connected and able to carry messages
+     */
+    boolean isActive();
+
+    /**
      * Closes the signaling channel and releases any associated resources.
      */
     @Override
