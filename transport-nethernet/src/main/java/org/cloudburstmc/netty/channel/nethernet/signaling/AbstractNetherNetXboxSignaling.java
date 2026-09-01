@@ -195,6 +195,12 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     @Override
+    public boolean isActive() {
+        Channel ch = this.channel;
+        return ch != null && ch.isActive();
+    }
+
+    @Override
     public void close() {
         if (channel != null) channel.close();
         eventLoopGroup.shutdownGracefully();
