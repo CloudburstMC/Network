@@ -13,6 +13,8 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
 import java.net.URI;
 import java.nio.channels.ClosedChannelException;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -26,6 +28,18 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     /** Interval for proactively re-fetching TURN credentials so peer
      * connections created on a long-lived socket never receive expired ones. */
     private static final long TURN_REFRESH_INTERVAL_SECONDS = 30 * 60;
+
+    /** Interval for the self addressed route probe. The service only routes it
+     * back to us while our registration is alive, so it exercises the path a
+     * joining client uses. Protocol level pings and System_Ping never touch
+     * that path: a socket whose registration died keeps answering them. */
+    private static final long ROUTE_PROBE_INTERVAL_SECONDS = 30;
+
+    private volatile long lastRouteProvenAt;
+    private volatile String routeFailure;
+    private volatile boolean routeProbeUnsupported;
+    private volatile int routeProbesSent;
+    private volatile boolean routeUnansweredWarned;
 
     /**
      * An in-flight JSON-RPC request, tagged with the WebSocket channel it was
@@ -76,8 +90,17 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
+        lastRouteProvenAt = 0;
+        routeFailure = null;
+        routeProbeUnsupported = false;
+        routeProbesSent = 0;
+        routeUnansweredWarned = false;
+
         scheduleRecurring(ctx, "rpc-ping", () ->
                 sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_PING, new JsonObject()), 30, 50);
+
+        scheduleRecurring(ctx, "route-probe", this::sendRouteProbe,
+                ROUTE_PROBE_INTERVAL_SECONDS, ROUTE_PROBE_INTERVAL_SECONDS);
 
         scheduleRecurring(ctx, "turn-refresh", this::refreshTurnCredentials,
                 TURN_REFRESH_INTERVAL_SECONDS, TURN_REFRESH_INTERVAL_SECONDS);
@@ -188,6 +211,28 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         String rawInner = msgObj.get("Message").getAsString();
         String msgId = msgObj.has("Id") ? msgObj.get("Id").getAsString() : UUID.randomUUID().toString();
 
+        JsonObject innerJson = null;
+        String innerMethod = null;
+        try {
+            innerJson = JsonParser.parseString(rawInner).getAsJsonObject();
+            if (innerJson.has("method")) {
+                innerMethod = innerJson.get("method").getAsString();
+            }
+        } catch (Exception e) {
+            log.error("Failed to parse inner signaling message from " + from, e);
+        }
+
+        // Our own route probe came back, so the registration is routable. It gets
+        // no delivery notification: that would be routed back to us as well.
+        if (NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE.equals(innerMethod) && isSelf(from)) {
+            if (lastRouteProvenAt == 0) {
+                log.debug("Signaling route probe confirmed, the registration is routable");
+            }
+            lastRouteProvenAt = System.currentTimeMillis();
+            routeFailure = null;
+            return;
+        }
+
         JsonObject innerParams = new JsonObject();
         innerParams.addProperty("messageId", msgId);
         JsonObject innerMsg = new JsonObject();
@@ -196,15 +241,102 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         innerMsg.addProperty("method", NetherNetConstants.XBOX_RPC_INNER_METHOD_DELIVERY);
         sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_SEND_MESSAGE, createSendParams(from, innerMsg.toString()));
 
-        try {
-            JsonObject innerJson = JsonParser.parseString(rawInner).getAsJsonObject();
-            if (innerJson.has("method") && NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC.equals(innerJson.get("method").getAsString())) {
+        if (innerJson != null && NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC.equals(innerMethod)) {
+            try {
                 String payload = innerJson.getAsJsonObject("params").get("message").getAsString();
                 dispatchSignalToPipeline(from, payload);
+            } catch (Exception e) {
+                log.error("Failed to parse inner signaling message from " + from, e);
             }
-        } catch (Exception e) {
-            log.error("Failed to parse inner signaling message from " + from, e);
         }
+    }
+
+    /**
+     * The RPC transport addresses players by their PlayFab id, the pmid claim of
+     * the MCToken, not by the numeric network id. Read from the current token
+     * because a reconnect can install a fresh one.
+     *
+     * @return our own player id, or null if the token carries none
+     */
+    private String localPlayerId() {
+        String token = this.xboxToken;
+        if (token == null) return null;
+        String[] parts = token.split(" ", 2);
+        if (parts.length < 2) return null;
+        String[] jwt = parts[1].split("\\.");
+        if (jwt.length < 2) return null;
+        try {
+            String payload = new String(Base64.getUrlDecoder().decode(jwt[1]), StandardCharsets.UTF_8);
+            JsonObject claims = JsonParser.parseString(payload).getAsJsonObject();
+            return claims.has("pmid") ? claims.get("pmid").getAsString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isSelf(String from) {
+        if (from.equals(localNetworkId)) return true;
+        String playerId = localPlayerId();
+        return playerId != null && playerId.equalsIgnoreCase(from);
+    }
+
+    /**
+     * Sends a signal to our own player id. A live registration routes it back
+     * through processIncomingMessage. A dead one answers with an error or, as
+     * observed with real joins, makes the service close the socket. Either way
+     * the watchdog gets something it can see, which is the point: this is the
+     * one liveness check that fails when the registration is gone.
+     */
+    private void sendRouteProbe() {
+        if (routeProbeUnsupported) return;
+
+        String playerId = localPlayerId();
+        if (playerId == null) {
+            routeProbeUnsupported = true;
+            log.warn("Signaling route probe disabled, the MCToken carries no pmid to address ourselves by");
+            return;
+        }
+
+        if (lastRouteProvenAt == 0 && routeProbesSent >= 3 && !routeUnansweredWarned) {
+            routeUnansweredWarned = true;
+            log.warn("Signaling route probe unanswered after {} probes, route liveness cannot be verified on this socket", routeProbesSent);
+        }
+        routeProbesSent++;
+
+        JsonObject innerMsg = new JsonObject();
+        innerMsg.add("params", new JsonObject());
+        innerMsg.addProperty("jsonrpc", "2.0");
+        innerMsg.addProperty("method", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE);
+        sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_SEND_MESSAGE, createSendParams(playerId, innerMsg.toString()))
+            .exceptionally(t -> {
+                if (t instanceof ClosedChannelException) return null;
+                if (lastRouteProvenAt == 0) {
+                    // A fresh socket has a live registration by definition, so a
+                    // rejected first probe means self addressed messages are not
+                    // accepted at all. Without a proof the accessor stays optimistic.
+                    routeProbeUnsupported = true;
+                    log.warn("Signaling route probe rejected on a fresh socket, route liveness disabled: {}", t.getMessage());
+                } else {
+                    routeFailure = t.getMessage();
+                    log.warn("Signaling route probe rejected: {}", t.getMessage());
+                }
+                return null;
+            });
+    }
+
+    /**
+     * @param maxSilenceMillis max tolerated time since the last probe came back.
+     * @return false if the service rejected a probe on a socket that had a
+     *         proven route, or if no probe came back within the window. A
+     *         socket without any proof yet counts as alive: it is either still
+     *         warming up or the service does not route self addressed messages,
+     *         and neither is evidence of a dead registration.
+     */
+    public boolean isRouteAlive(long maxSilenceMillis) {
+        if (routeFailure != null) return false;
+        long proven = lastRouteProvenAt;
+        if (proven == 0) return true;
+        return System.currentTimeMillis() - proven <= maxSilenceMillis;
     }
 
     @Override

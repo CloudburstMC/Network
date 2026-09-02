@@ -45,6 +45,8 @@ public class NetherNetConstants {
     public static final String XBOX_RPC_METHOD_PONG = "System_Pong_v1_0";
     public static final String XBOX_RPC_INNER_METHOD_WEBRTC = "Signaling_WebRtc_v1_0";
     public static final String XBOX_RPC_INNER_METHOD_DELIVERY = "Signaling_DeliveryNotification_V1_0";
+    /** Fork addition: a self addressed message that proves our registration is routable. */
+    public static final String XBOX_RPC_INNER_METHOD_ROUTE_PROBE = "RouteProbe_v1_0";
 
     // SCTP Constants
     public static final int MAX_SCTP_MESSAGE_SIZE = 10000;

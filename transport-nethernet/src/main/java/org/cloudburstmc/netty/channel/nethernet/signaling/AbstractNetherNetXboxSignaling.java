@@ -18,6 +18,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
@@ -169,7 +170,9 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                      p.addLast(new HttpClientCodec(), new HttpObjectAggregator(8192));
                      // dropPongFrames=false: pongs must reach channelRead so they
                      // refresh lastMessageReceivedAt for liveness detection.
-                     p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker, true, false));
+                     // Close frames are handled in channelRead, not by the protocol
+                     // handler, so the reason the service closed us gets logged.
+                     p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker, false, false));
                      p.addLast("ws-aggregator", new WebSocketFrameAggregator(128 * 1024));
                      p.addLast("handler", AbstractNetherNetXboxSignaling.this);
                  }
@@ -243,6 +246,16 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         // answering our protocol-level pings. Used by isChannelAlive(long)
         // to detect silent half-closed TCP where channel.isActive() lies.
         lastMessageReceivedAt = System.currentTimeMillis();
+        if (msg instanceof CloseWebSocketFrame) {
+            CloseWebSocketFrame close = (CloseWebSocketFrame) msg;
+            try {
+                log.warn("Signaling socket closed by the service: {} {}", close.statusCode(), close.reasonText());
+            } finally {
+                close.release();
+            }
+            ctx.close();
+            return;
+        }
         super.channelRead(ctx, msg);
     }
 
