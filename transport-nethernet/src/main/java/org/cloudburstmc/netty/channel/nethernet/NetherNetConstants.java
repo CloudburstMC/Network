@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -54,17 +55,27 @@ public class NetherNetConstants {
     public static final String UNRELIABLE_CHANNEL_LABEL = "UnreliableDataChannel";
 
     private static final byte[] KEY_BYTES;
+    private static final SecretKeySpec ENCRYPTION_KEY;
+    private static final SecretKeySpec INTEGRITY_KEY;
+    private static final int SIGNATURE_SIZE = 32;
+    private static final FastThreadLocal<DiscoveryCrypto> DISCOVERY_CRYPTO = new FastThreadLocal<>() {
+        @Override
+        protected DiscoveryCrypto initialValue() throws Exception {
+            return new DiscoveryCrypto();
+        }
+    };
 
     static {
         try {
-            ByteBuf buf = Unpooled.buffer(8);
-            buf.writeLongLE(APPLICATION_ID);
             byte[] input = new byte[8];
-            buf.readBytes(input);
-            buf.release();
+            for (int i = 0; i < input.length; i++) {
+                input[i] = (byte) (APPLICATION_ID >>> (i * 8));
+            }
 
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             KEY_BYTES = digest.digest(input);
+            ENCRYPTION_KEY = new SecretKeySpec(KEY_BYTES, "AES");
+            INTEGRITY_KEY = new SecretKeySpec(KEY_BYTES, "HmacSHA256");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -78,33 +89,23 @@ public class NetherNetConstants {
      * @throws Exception if encryption fails.
      */
     public static byte[] encryptDiscoveryPacket(ByteBuf packet) throws Exception {
+        if (packet.readableBytes() > 0xffff - 2) {
+            throw new IllegalArgumentException("Discovery payload exceeds its 16-bit length field");
+        }
         int len = packet.readableBytes() + 2;
-        ByteBuf payload = Unpooled.buffer(len);
-        payload.writeShortLE(len);
-        payload.writeBytes(packet);
+        byte[] payload = new byte[len];
+        payload[0] = (byte) len;
+        payload[1] = (byte) (len >>> 8);
+        packet.readBytes(payload, 2, len - 2);
 
-        byte[] payloadBytes = new byte[payload.readableBytes()];
-        payload.readBytes(payloadBytes);
-        payload.release();
-
-        SecretKeySpec secretKey = new SecretKeySpec(KEY_BYTES, "AES");
-        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-        byte[] encrypted = cipher.doFinal(payloadBytes);
-
-        Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
-        SecretKeySpec secret_key = new SecretKeySpec(KEY_BYTES, "HmacSHA256");
-        sha256_HMAC.init(secret_key);
-        byte[] signature = sha256_HMAC.doFinal(payloadBytes);
-
-        ByteBuf result = Unpooled.buffer(signature.length + encrypted.length);
-        result.writeBytes(signature);
-        result.writeBytes(encrypted);
-
-        byte[] out = new byte[result.readableBytes()];
-        result.readBytes(out);
-        result.release();
-        return out;
+        DiscoveryCrypto crypto = DISCOVERY_CRYPTO.get();
+        crypto.cipher.init(Cipher.ENCRYPT_MODE, ENCRYPTION_KEY);
+        byte[] result = new byte[SIGNATURE_SIZE + crypto.cipher.getOutputSize(len)];
+        crypto.cipher.doFinal(payload, 0, len, result, SIGNATURE_SIZE);
+        crypto.mac.reset();
+        crypto.mac.update(payload);
+        crypto.mac.doFinal(result, 0);
+        return result;
     }
 
     /**
@@ -115,36 +116,53 @@ public class NetherNetConstants {
      * @throws Exception if decryption fails.
      */
     public static ByteBuf decryptDiscoveryPacket(ByteBuf input) throws Exception {
-        if (input.readableBytes() < 32) {
-            log.debug("Discovery packet too short to contain valid signature");
+        int encryptedLength = input.readableBytes() - SIGNATURE_SIZE;
+        if (encryptedLength < 16 || (encryptedLength & 15) != 0 || encryptedLength > 0x10000) {
+            log.debug("Invalid discovery ciphertext length: {}", encryptedLength);
             return null;
-        };
+        }
 
-        byte[] signature = new byte[32];
+        byte[] signature = new byte[SIGNATURE_SIZE];
         input.readBytes(signature);
 
-        byte[] encrypted = new byte[input.readableBytes()];
+        byte[] encrypted = new byte[encryptedLength];
         input.readBytes(encrypted);
 
-        SecretKeySpec secretKey = new SecretKeySpec(KEY_BYTES, "AES");
-        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        cipher.init(Cipher.DECRYPT_MODE, secretKey);
-        byte[] payloadBytes = cipher.doFinal(encrypted);
-
-        Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
-        SecretKeySpec secret_key = new SecretKeySpec(KEY_BYTES, "HmacSHA256");
-        sha256_HMAC.init(secret_key);
-        byte[] calculatedSignature = sha256_HMAC.doFinal(payloadBytes);
+        DiscoveryCrypto crypto = DISCOVERY_CRYPTO.get();
+        crypto.cipher.init(Cipher.DECRYPT_MODE, ENCRYPTION_KEY);
+        byte[] payloadBytes = crypto.cipher.doFinal(encrypted);
+        if (payloadBytes.length < 2) {
+            return null;
+        }
+        crypto.mac.reset();
+        byte[] calculatedSignature = crypto.mac.doFinal(payloadBytes);
 
         if (!MessageDigest.isEqual(signature, calculatedSignature)) {
             log.debug("Invalid discovery packet signature");
             return null;
         }
 
+        int declaredLength = (payloadBytes[0] & 0xff) | ((payloadBytes[1] & 0xff) << 8);
+        // Both length conventions are used: including the prefix, or only its following body.
+        if (declaredLength != payloadBytes.length && declaredLength != payloadBytes.length - 2) {
+            log.debug("Invalid discovery plaintext length: {} (actual: {})", declaredLength, payloadBytes.length);
+            return null;
+        }
         ByteBuf payload = Unpooled.wrappedBuffer(payloadBytes);
-        payload.readUnsignedShortLE(); // Length prefix
+        payload.skipBytes(2);
 
         return payload;
+    }
+
+    // JCE engines are mutable. Reuse them per thread and reset before each operation,
+    // including after a malformed packet caused the preceding operation to fail.
+    private static final class DiscoveryCrypto {
+        final Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+        final Mac mac = Mac.getInstance("HmacSHA256");
+
+        DiscoveryCrypto() throws Exception {
+            mac.init(INTEGRITY_KEY);
+        }
     }
 
     /**
