@@ -34,6 +34,12 @@ public class ServerIdentity {
         this.privateKey = privateKey;
         this.domain = domain;
         this.token = buildToken(publicKey, expiry);
+        JsonWebSignature verification = new JsonWebSignature();
+        verification.setCompactSerialization(this.token);
+        verification.setKey(publicKey);
+        if (!verification.verifySignature()) {
+            throw new JoseException("Server identity private and public keys do not match");
+        }
     }
 
     /**

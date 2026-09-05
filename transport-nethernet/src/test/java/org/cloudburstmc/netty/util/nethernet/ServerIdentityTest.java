@@ -8,6 +8,7 @@ import org.jose4j.jws.AlgorithmIdentifiers;
 import org.jose4j.jws.JsonWebSignature;
 import org.jose4j.jwt.JwtClaims;
 import org.jose4j.keys.EllipticCurves;
+import org.jose4j.lang.JoseException;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -15,9 +16,21 @@ import java.time.Instant;
 import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ServerIdentityTest {
+    @Test
+    void mismatchedPrivateAndPublicKeysAreRejectedAtConstruction() throws Exception {
+        EllipticCurveJsonWebKey first = EcJwkGenerator.generateJwk(EllipticCurves.P384);
+        EllipticCurveJsonWebKey second = EcJwkGenerator.generateJwk(EllipticCurves.P384);
+
+        JoseException failure = assertThrows(JoseException.class,
+                () -> new ServerIdentity(first.getPrivateKey(), second.getPublicKey(), null, "test.invalid"));
+
+        assertTrue(failure.getMessage().contains("do not match"));
+    }
+
     @Test
     void serializedIdentityPreservesBothSignatures() throws Exception {
         EllipticCurveJsonWebKey key = EcJwkGenerator.generateJwk(EllipticCurves.P384);
