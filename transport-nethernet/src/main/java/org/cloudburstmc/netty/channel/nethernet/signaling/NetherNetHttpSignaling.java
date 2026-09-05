@@ -9,6 +9,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -30,9 +31,11 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.internal.logging.InternalLogger;
@@ -182,16 +185,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            connections.add(ch);
-                            if (closed) {
-                                ch.close();
-                                return;
-                            }
-                            ch.pipeline().addLast(new ReadTimeoutHandler(READ_TIMEOUT_SECONDS));
-                            ch.pipeline().addLast(new ProtocolSelectingHandler());
-                            ch.pipeline().addLast(new HttpServerCodec());
-                            ch.pipeline().addLast(new HttpObjectAggregator(MAX_OFFER_BYTES + 8192));
-                            ch.pipeline().addLast(new SignalingRequestHandler());
+                            initConnection(ch);
                         }
                     });
             bind = bootstrap.bind(localAddress);
@@ -226,6 +220,49 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                     close();
                 }
             }
+        }
+    }
+
+    void initConnection(Channel channel) {
+        connections.add(channel);
+        if (closed) {
+            channel.close();
+            return;
+        }
+        ReadTimeoutHandler requestTimeout = new ReadTimeoutHandler(READ_TIMEOUT_SECONDS);
+        HttpServerCodec httpCodec = new HttpServerCodec();
+        channel.pipeline().addLast(requestTimeout);
+        channel.pipeline().addLast(new ProtocolSelectingHandler());
+        channel.pipeline().addLast(httpCodec);
+        channel.pipeline().addLast(new SingleRequestHandler(requestTimeout, httpCodec));
+        channel.pipeline().addLast(new HttpObjectAggregator(MAX_OFFER_BYTES + 8192));
+        channel.pipeline().addLast(new SignalingRequestHandler());
+    }
+
+    private static final class SingleRequestHandler extends ChannelInboundHandlerAdapter {
+        private final ReadTimeoutHandler requestTimeout;
+        private final HttpServerCodec httpCodec;
+        private boolean complete;
+
+        private SingleRequestHandler(ReadTimeoutHandler requestTimeout, HttpServerCodec httpCodec) {
+            this.requestTimeout = requestTimeout;
+            this.httpCodec = httpCodec;
+        }
+
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object message) {
+            if (complete) {
+                ReferenceCountUtil.release(message);
+                return;
+            }
+            if (message instanceof LastHttpContent) {
+                complete = true;
+                ctx.pipeline().remove(requestTimeout);
+                // Keep the response encoder while discarding subsequent pipelined input.
+                // The pending offer now has its own negotiation deadline.
+                httpCodec.removeInboundHandler();
+            }
+            ctx.fireChannelRead(message);
         }
     }
 
