@@ -50,10 +50,16 @@ public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig
     }
 
     void setClientHandshakeTimeoutMs(int clientHandshakeTimeoutMs) {
+        if (clientHandshakeTimeoutMs <= 0) {
+            throw new IllegalArgumentException("clientHandshakeTimeoutMs must be positive");
+        }
         this.clientHandshakeTimeoutMs = clientHandshakeTimeoutMs;
     }
 
     void setMaxHandshakeAttempts(int maxHandshakeAttempts) {
+        if (maxHandshakeAttempts < 0) {
+            throw new IllegalArgumentException("maxHandshakeAttempts must not be negative");
+        }
         this.maxHandshakeAttempts = maxHandshakeAttempts;
     }
 }

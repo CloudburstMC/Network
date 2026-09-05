@@ -25,7 +25,6 @@ import dev.kastle.webrtc.RTCSdpType;
 import dev.kastle.webrtc.RTCSessionDescription;
 import dev.kastle.webrtc.SetSessionDescriptionObserver;
 import io.netty.channel.ChannelPromise;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -34,16 +33,22 @@ import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
+import java.nio.channels.AlreadyConnectedException;
+import java.nio.channels.ConnectionPendingException;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleConsumer;
+import java.util.function.Supplier;
 
 public class NetherNetClientChannel extends NetherNetChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetClientChannel.class);
 
-    private final PeerConnectionFactory factory;
+    private PeerConnectionFactory factory;
+    private final boolean ownsFactory;
     private final NetherNetClientSignaling signaling;
+    private final Object attemptLock = new Object();
 
     // The client channel talks to libwebrtc directly (it predates the server
     // side backend seam); its data channel handling mirrors the seam's
@@ -64,7 +69,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private int retryCount = 0;
 
-    // Monotonic attempt marker, bumped on every handshake retry. Async engine
+    // Monotonic attempt marker, bumped on every handshake retry and close. Async engine
     // callbacks belonging to a previous attempt (offer creation, description
     // observers, data channel state changes) capture their generation and
     // bail once a retry has moved past them, so a delayed stale callback can
@@ -79,23 +84,28 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private java.util.List<String> pendingRemoteCandidates = new java.util.ArrayList<>();
 
     /**
-     * Creates a NetherNetClientChannel with a new PeerConnectionFactory.
+     * Creates a client that allocates its PeerConnectionFactory when WebRTC starts and disposes it on close.
      *
      * @param signaling The NetherNetClientSignaling instance for signaling.
      */
     public NetherNetClientChannel(NetherNetClientSignaling signaling) {
-        this(new PeerConnectionFactory(), signaling);
+        this(null, signaling, true);
     }
 
     /**
      * Creates a NetherNetClientChannel.
      *
-     * @param factory   The PeerConnectionFactory to use. Should be reused where possible.
+     * @param factory   The caller-owned PeerConnectionFactory, which this channel will not dispose.
      * @param signaling The NetherNetClientSignaling instance for signaling.
      */
     public NetherNetClientChannel(PeerConnectionFactory factory, NetherNetClientSignaling signaling) {
+        this(factory, signaling, false);
+    }
+
+    private NetherNetClientChannel(PeerConnectionFactory factory, NetherNetClientSignaling signaling, boolean ownsFactory) {
         super(null, null, null);
         this.factory = factory;
+        this.ownsFactory = ownsFactory;
         this.signaling = signaling;
         this.connectionId = this.cycleConnectionId();
         this.config = new DefaultNetherClientChannelConfig(this);
@@ -117,29 +127,64 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     @Override
     protected void doClose() throws Exception {
-        super.doClose();
+        if (!isOpen()) {
+            return;
+        }
+        synchronized (attemptLock) {
+            attemptGeneration++;
+            handshakeComplete = false;
+            super.doClose();
+        }
+        cancelHandshakeTimeout();
+        try {
+            closeAttemptTransport();
+        } finally {
+            try {
+                if (signaling != null) {
+                    try {
+                        signaling.removeSignalHandler(this.connectionId);
+                    } finally {
+                        signaling.close();
+                    }
+                }
+            } finally {
+                if (connectPromise != null) {
+                    connectPromise.tryFailure(new ClosedChannelException());
+                }
+                if (ownsFactory && factory != null) {
+                    PeerConnectionFactory owned = factory;
+                    factory = null;
+                    owned.dispose();
+                }
+            }
+        }
+    }
+
+    private void closeAttemptTransport() {
         RTCDataChannel reliable = this.reliableChannel;
-        if (reliable != null) {
-            reliable.unregisterObserver();
-            reliable.close();
-        }
         RTCDataChannel unreliable = this.unreliableChannel;
-        if (unreliable != null) {
-            unreliable.close();
-        }
         RTCPeerConnection pc = this.peerConnection;
-        if (pc != null) {
-            pc.close();
-        }
-        if (handshakeTimeoutTask != null) {
-            handshakeTimeoutTask.cancel(false);
-        }
-        if (signaling != null) {
-            signaling.removeSignalHandler(this.connectionId);
-            signaling.close();
-        }
-        if (connectPromise != null && !connectPromise.isDone()) {
-            connectPromise.tryFailure(new ClosedChannelException());
+        this.reliableChannel = null;
+        this.unreliableChannel = null;
+        this.peerConnection = null;
+        try {
+            if (reliable != null) {
+                try {
+                    reliable.unregisterObserver();
+                } finally {
+                    reliable.close();
+                }
+            }
+        } finally {
+            try {
+                if (unreliable != null) {
+                    unreliable.close();
+                }
+            } finally {
+                if (pc != null) {
+                    pc.close();
+                }
+            }
         }
     }
 
@@ -152,7 +197,14 @@ public class NetherNetClientChannel extends NetherNetChannel {
         @Override
         public void connect(SocketAddress remote, SocketAddress local, ChannelPromise promise) {
             if (!promise.setUncancellable() || !ensureOpen(promise)) return;
-            NetherNetClientChannel.this.connectPromise = promise;
+            if (handshakeComplete) {
+                promise.tryFailure(new AlreadyConnectedException());
+                return;
+            }
+            if (connectPromise != null) {
+                promise.tryFailure(new ConnectionPendingException());
+                return;
+            }
 
             if (remote instanceof NetherNetAddress) {
                 String targetId = ((NetherNetAddress) remote).getNetworkId();
@@ -166,54 +218,95 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 return;
             }
 
+            NetherNetClientChannel.this.connectPromise = promise;
             eventLoop().execute(() -> startHandshake());
         }
     }
 
     private void startHandshake() {
-        if (!isOpen() || handshakeComplete) return;
+        if (!isOpen() || handshakeComplete || connectPromise == null || connectPromise.isDone()) return;
+        final int gen = attemptGeneration;
 
         log.debug("Starting Handshake with Connection ID: {}", Long.toUnsignedString(this.connectionId));
 
-        if (handshakeTimeoutTask != null) handshakeTimeoutTask.cancel(false);
-
-        signaling.setNotFoundHandler(reason -> {
-            if (connectPromise != null && !connectPromise.isDone()) {
-                connectPromise.tryFailure(new ConnectException("Target Network ID " + this.targetNetworkId + " not found or offline."));
-            }
-            close();
-        });
+        cancelHandshakeTimeout();
 
         int handshakeTimeout = this.config().getOption(NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS);
         handshakeTimeoutTask = eventLoop().schedule(() -> {
-            resetAndRetryHandshake();
+            if (isCurrentHandshake(gen)) {
+                resetAndRetryHandshake();
+            }
         }, handshakeTimeout, TimeUnit.MILLISECONDS);
 
-        signaling.setSignalHandler(this.connectionId, this::handleSignal);
-
-        signaling.connect(remoteAddress).thenAcceptAsync(iceServers -> {
-            if (handshakeComplete) return;
-            try {
-                // If this is a retry, peerConnection might be null, so we recreate it
-                if (peerConnection == null) {
-                    initWebRTC(iceServers);
-                    createAndSendOffer();
+        try {
+            signaling.setNotFoundHandler(reason -> executeForAttempt(gen, () ->
+                    failHandshake(gen, "Target Network ID " + this.targetNetworkId + " not found or offline", null)));
+            signaling.setSignalHandler(this.connectionId, signal -> {
+                if (isCurrentAttempt(gen)) {
+                    handleSignal(signal);
                 }
-            } catch (Exception e) {
-                ConnectException ce = new ConnectException("Failed to start WebRTC handshake: " + e.getMessage());
-                ce.initCause(e);
-                if (connectPromise != null && !connectPromise.isDone()) connectPromise.tryFailure(ce);
-                if (handshakeTimeoutTask != null) handshakeTimeoutTask.cancel(false);
-                close();
+            });
+            signaling.connect(remoteAddress).whenComplete((iceServers, failure) -> executeForAttempt(gen, () -> {
+                if (!isCurrentHandshake(gen)) return;
+                if (failure != null) {
+                    failHandshake(gen, "Signaling connection failed", failure);
+                    return;
+                }
+                try {
+                    if (peerConnection == null) {
+                        initWebRTC(iceServers);
+                        createAndSendOffer();
+                    }
+                } catch (Exception e) {
+                    failHandshake(gen, "Failed to start WebRTC handshake", e);
+                }
+            }));
+        } catch (Exception e) {
+            failHandshake(gen, "Signaling connection failed", e);
+        }
+    }
+
+    private boolean isCurrentAttempt(int generation) {
+        return generation == attemptGeneration && isOpen();
+    }
+
+    private boolean isCurrentHandshake(int generation) {
+        return isCurrentAttempt(generation) && !handshakeComplete && connectPromise != null && !connectPromise.isDone();
+    }
+
+    private void executeForAttempt(int generation, Runnable callback) {
+        if (!isCurrentAttempt(generation)) return;
+        try {
+            eventLoop().execute(() -> {
+                if (isCurrentAttempt(generation)) {
+                    callback.run();
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            // Shutdown can race a native or signaling callback after the channel closes.
+            if (isCurrentAttempt(generation) && connectPromise != null) {
+                connectPromise.tryFailure(e);
             }
-        }, eventLoop()).exceptionally(e -> {
-            ConnectException ce = new ConnectException("Signaling connection failed: " + e.getMessage());
-            ce.initCause(e);
-            if (connectPromise != null && !connectPromise.isDone()) connectPromise.tryFailure(ce);
-            if (handshakeTimeoutTask != null) handshakeTimeoutTask.cancel(false);
-            close();
-            return null;
-        });
+        }
+    }
+
+    private void failHandshake(int generation, String message, Throwable cause) {
+        if (!isCurrentHandshake(generation)) return;
+        ConnectException failure = new ConnectException(message);
+        if (cause != null) {
+            failure.initCause(cause);
+        }
+        connectPromise.tryFailure(failure);
+        cancelHandshakeTimeout();
+        close();
+    }
+
+    private void cancelHandshakeTimeout() {
+        ScheduledFuture<?> timeout = handshakeTimeoutTask;
+        handshakeTimeoutTask = null;
+        if (timeout != null) {
+            timeout.cancel(false);
+        }
     }
 
     private void resetAndRetryHandshake() {
@@ -232,18 +325,20 @@ public class NetherNetClientChannel extends NetherNetChannel {
         }
 
         retryCount++;
-        attemptGeneration++;
-
-        if (peerConnection != null) {
-            peerConnection.close();
-            peerConnection = null;
+        synchronized (attemptLock) {
+            attemptGeneration++;
+            discardPendingInbound();
         }
-
-        signaling.removeSignalHandler(this.connectionId);
-        this.cycleConnectionId();
-        remoteDescriptionSet = false;
-        pendingRemoteCandidates = new java.util.ArrayList<>();
-        startHandshake();
+        try {
+            closeAttemptTransport();
+            signaling.removeSignalHandler(this.connectionId);
+            this.cycleConnectionId();
+            remoteDescriptionSet = false;
+            pendingRemoteCandidates = new java.util.ArrayList<>();
+            startHandshake();
+        } catch (Exception e) {
+            failHandshake(attemptGeneration, "Failed to retry WebRTC handshake", e);
+        }
     }
 
     private void initWebRTC(List<NetherNetSignaling.IceServerInfo> iceServers) {
@@ -264,40 +359,35 @@ public class NetherNetClientChannel extends NetherNetChannel {
         final int gen = attemptGeneration;
         final long attemptConnectionId = this.connectionId;
 
+        if (factory == null && ownsFactory) {
+            factory = new PeerConnectionFactory();
+        }
         RTCPeerConnection pc = factory.createPeerConnection(rtcConfig, new PeerConnectionObserver() {
             @Override
             public void onIceCandidate(RTCIceCandidate candidate) {
-                if (gen != attemptGeneration) {
-                    return;
-                }
-                try {
-                    signaling.sendSignal(
-                        targetNetworkId,
-                        NetherNetConstants.buildSignalCandidateAdd(attemptConnectionId, candidate.sdp)
-                    );
-                } catch (Exception e) {
-                    log.error("Failed to send ICE candidate", e);
-                    eventLoop().execute(() -> {
-                        if (gen == attemptGeneration) {
-                            resetAndRetryHandshake();
-                        }
-                    });
-                }
+                executeForAttempt(gen, () -> {
+                    try {
+                        signaling.sendSignal(targetNetworkId,
+                                NetherNetConstants.buildSignalCandidateAdd(attemptConnectionId, candidate.sdp));
+                    } catch (Exception e) {
+                        log.debug("Failed to send ICE candidate", e);
+                        resetAndRetryHandshake();
+                    }
+                });
             }
 
             @Override
             public void onConnectionChange(RTCPeerConnectionState state) {
-                if (state == RTCPeerConnectionState.FAILED) {
-                    // Fast fail trigger: retry immediately instead of waiting for timeout
-                    log.warn("PeerConnection entered FAILED state, resetting and retrying handshake.");
-                    eventLoop().execute(() -> {
-                        if (gen == attemptGeneration) {
+                executeForAttempt(gen, () -> {
+                    if (state == RTCPeerConnectionState.FAILED) {
+                        if (!handshakeComplete) {
+                            log.debug("PeerConnection failed during handshake; retrying");
                             resetAndRetryHandshake();
                         }
-                    });
-                } else {
-                    log.trace("PeerConnection state changed to {}", state);
-                }
+                    } else {
+                        log.trace("PeerConnection state changed to {}", state);
+                    }
+                });
             }
 
             @Override public void onDataChannel(RTCDataChannel dataChannel) { }
@@ -315,33 +405,28 @@ public class NetherNetClientChannel extends NetherNetChannel {
         pc.createOffer(new RTCOfferOptions(), new CreateSessionDescriptionObserver() {
             @Override
             public void onSuccess(RTCSessionDescription description) {
-                if (gen != attemptGeneration) return;
-                pc.setLocalDescription(description, new SetSessionDescriptionObserver() {
+                executeForAttempt(gen, () -> pc.setLocalDescription(description, new SetSessionDescriptionObserver() {
                     @Override
                     public void onSuccess() {
-                        if (gen != attemptGeneration) return;
-                        try {
-                            signaling.sendSignal(
-                                targetNetworkId,
-                                NetherNetConstants.buildSignalConnectRequest(attemptConnectionId, description.sdp)
-                            );
-                        } catch (Exception e) {
-                            log.error("Failed to send Connect Request", e);
-                            eventLoop().execute(() -> {
-                                if (gen == attemptGeneration) {
-                                    resetAndRetryHandshake();
-                                }
-                            });
-                        }
+                        executeForAttempt(gen, () -> {
+                            try {
+                                signaling.sendSignal(targetNetworkId,
+                                        NetherNetConstants.buildSignalConnectRequest(attemptConnectionId, description.sdp));
+                            } catch (Exception e) {
+                                log.debug("Failed to send connect request", e);
+                                resetAndRetryHandshake();
+                            }
+                        });
                     }
                     @Override public void onFailure(String error) { /* Retry handled by timeout */ }
-                });
+                }));
             }
             @Override public void onFailure(String error) { /* Retry handled by timeout */ }
         });
     }
 
     private void handleSignal(String signal) {
+        final int generation = attemptGeneration;
         String[] parts = signal.split(" ", 3);
         if (parts.length < 2) return; // Allow length 2 for ERROR packets without payload
         String type = parts[0];
@@ -360,7 +445,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
             return;
         }
 
-        eventLoop().execute(() -> {
+        executeForAttempt(generation, () -> {
             // Re-validate on the event loop: a retry may have cycled the
             // connection id between the check above (signaling thread) and
             // this task running. Inside the task the id, generation, and
@@ -384,8 +469,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
                         @Override public void onSuccess() {
                             // Apply candidates that arrived before the answer
                             // finished applying, in arrival order.
-                            eventLoop().execute(() -> {
-                                if (gen != attemptGeneration) return;
+                            executeForAttempt(gen, () -> {
                                 remoteDescriptionSet = true;
                                 java.util.List<String> drained = pendingRemoteCandidates;
                                 pendingRemoteCandidates = new java.util.ArrayList<>();
@@ -419,72 +503,61 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     private void setupDataChannels(RTCPeerConnection pc, int gen) {
-        RTCDataChannelInit reliableInit = new RTCDataChannelInit();
-        reliableInit.ordered = true;
-        reliableInit.protocol = NetherNetConstants.RELIABLE_CHANNEL_LABEL;
-
-        RTCDataChannelInit unreliableInit = new RTCDataChannelInit();
-        unreliableInit.ordered = false;
-        unreliableInit.maxRetransmits = 0;
-
-        RTCDataChannel reliable = pc.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, reliableInit);
-        RTCDataChannel unreliable = pc.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, unreliableInit);
-
-        reliable.registerObserver(new RTCDataChannelObserver() {
-            @Override
-            public void onStateChange() {
-                if (reliable.getState() == RTCDataChannelState.OPEN) {
-                    eventLoop().execute(() -> {
-                        if (gen != attemptGeneration) {
-                            return;
-                        }
-                        if (!handshakeComplete) {
-                            log.debug("NetherNet Connection Established!");
-                            handshakeComplete = true;
-
-                            // Cancel timeout now that we are done
-                            if (handshakeTimeoutTask != null) {
-                                handshakeTimeoutTask.cancel(false);
-                            }
-
-                            setDataChannels(reliable, unreliable);
-                            if (connectPromise != null && !connectPromise.isDone()) {
-                                connectPromise.trySuccess();
-                            }
-                            fireChannelActiveIfReady();
-                        }
-                    });
-                }
-            }
-            @Override public void onBufferedAmountChange(long previousAmount) {}
-            @Override public void onMessage(RTCDataChannelBuffer buffer) {
-                ReferenceCountUtil.release(buffer);
-            }
-        });
+        RTCDataChannel reliable = pc.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, dataChannelInit(true));
+        this.reliableChannel = reliable;
+        this.unreliableChannel = pc.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, dataChannelInit(false));
+        reliable.registerObserver(createReliableObserver(reliable::getState, gen));
     }
 
-    /**
-     * Adopts the negotiated data channels: watches the reliable channel and
-     * delivers its raw framed messages into the pipeline. Reliable only, as
-     * on the server side; the unreliable channel is stored but never
-     * observed.
-     */
-    private void setDataChannels(RTCDataChannel reliable, RTCDataChannel unreliable) {
-        this.reliableChannel = reliable;
-        this.unreliableChannel = unreliable;
+    static RTCDataChannelInit dataChannelInit(boolean reliable) {
+        RTCDataChannelInit init = new RTCDataChannelInit();
+        init.ordered = reliable;
+        init.protocol = "";
+        if (!reliable) {
+            init.maxRetransmits = 0;
+        }
+        return init;
+    }
 
-        reliable.registerObserver(new RTCDataChannelObserver() {
+    RTCDataChannelObserver createReliableObserver(Supplier<RTCDataChannelState> state, int generation) {
+        return new RTCDataChannelObserver() {
             @Override
             public void onStateChange() {
-                if (reliable.getState() == RTCDataChannelState.CLOSED) {
-                    markTransportClosed();
-                    close();
-                }
+                executeForAttempt(generation, () -> {
+                    RTCDataChannelState observed = state.get();
+                    if (observed == RTCDataChannelState.OPEN && isCurrentHandshake(generation)) {
+                        handshakeComplete = true;
+                        cancelHandshakeTimeout();
+                        markTransportOpen();
+                        if (connectPromise != null) {
+                            connectPromise.trySuccess();
+                        }
+                        fireChannelActiveIfReady();
+                    } else if (observed == RTCDataChannelState.CLOSED) {
+                        if (handshakeComplete) {
+                            markTransportClosed();
+                            close();
+                        } else {
+                            resetAndRetryHandshake();
+                        }
+                    }
+                });
             }
 
             @Override
             public void onMessage(RTCDataChannelBuffer buffer) {
-                deliverInbound(buffer.data);
+                // The loop already serializes attempts, and overflow may close the native transport inline.
+                if (eventLoop().inEventLoop()) {
+                    if (isCurrentAttempt(generation)) {
+                        deliverInbound(buffer.data);
+                    }
+                    return;
+                }
+                synchronized (attemptLock) {
+                    if (isCurrentAttempt(generation)) {
+                        deliverInbound(buffer.data);
+                    }
+                }
             }
 
             @Override
@@ -494,11 +567,13 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 // bytes that were just written to the wire. Without this
                 // report the base class write gate would pause forever once
                 // the high water mark is crossed.
-                onEngineBytesSent(previousAmount);
+                synchronized (attemptLock) {
+                    if (isCurrentAttempt(generation)) {
+                        onEngineBytesSent(previousAmount);
+                    }
+                }
             }
-        });
-
-        markTransportOpen();
+        };
     }
 
     @Override
