@@ -1,0 +1,425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nethernet:external-signalling:v1",
+  "title": "NetherNet External Signalling v1",
+  "type": "object",
+  "required": [
+    "protocol",
+    "mode",
+    "profile",
+    "publicKeyJwk"
+  ],
+  "properties": {
+    "protocol": {
+      "const": "nethernet-external-signalling-v1"
+    },
+    "mode": {
+      "enum": [
+        "new-service",
+        "attach-instance"
+      ]
+    },
+    "profile": {
+      "type": "string"
+    },
+    "publicKeyJwk": {
+      "type": "object",
+      "required": [
+        "crv",
+        "kty",
+        "x",
+        "y"
+      ],
+      "not": {
+        "required": [
+          "d"
+        ]
+      },
+      "properties": {
+        "crv": {
+          "const": "P-384"
+        },
+        "kty": {
+          "const": "EC"
+        },
+        "x": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{64}$"
+        },
+        "y": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{64}$"
+        }
+      }
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scheme"
+      ],
+      "properties": {
+        "scheme": {
+          "enum": [
+            "anonymous-proof-of-work",
+            "bearer-token"
+          ]
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "region",
+        "pool"
+      ],
+      "properties": {
+        "region": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,32}$"
+        },
+        "pool": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "tags": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_.-]{1,32}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxProperties": 16
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "attach-instance"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "placement",
+          "authorization"
+        ],
+        "properties": {
+          "authorization": {
+            "properties": {
+              "scheme": {
+                "const": "bearer-token"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "discovery": {
+      "type": "object",
+      "required": [
+        "provider",
+        "controlOrigin",
+        "protocols",
+        "signatures",
+        "modes",
+        "profiles",
+        "operations",
+        "authorization",
+        "limits"
+      ],
+      "properties": {
+        "authorization": {
+          "type": "object",
+          "required": [
+            "header",
+            "schemes"
+          ],
+          "properties": {
+            "header": {
+              "const": "Authorization"
+            },
+            "schemes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "scheme",
+                  "modes"
+                ],
+                "properties": {
+                  "scheme": {
+                    "enum": [
+                      "anonymous-proof-of-work",
+                      "bearer-token"
+                    ]
+                  },
+                  "modes": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "new-service",
+                        "attach-instance"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "signature",
+        "challengeId",
+        "nonce",
+        "audience",
+        "thumbprint",
+        "context",
+        "contextDigest",
+        "expiresAt",
+        "serverTime",
+        "pow"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        },
+        "signature": {
+          "const": "nxs-es384-v1"
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "serverTime": {
+          "type": "integer"
+        },
+        "authorization": {
+          "type": "object",
+          "required": [
+            "scheme",
+            "reference"
+          ],
+          "properties": {
+            "scheme": {
+              "enum": [
+                "anonymous-proof-of-work",
+                "bearer-token"
+              ]
+            },
+            "reference": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "challengeId",
+        "proofNonce",
+        "signature",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        }
+      }
+    },
+    "registration": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "provider",
+        "registrationId",
+        "serviceId",
+        "instanceId",
+        "keyId",
+        "profile",
+        "publicAddress",
+        "placement",
+        "heartbeatIntervalMs",
+        "leaseGeneration",
+        "leaseDeadline",
+        "readiness"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "required": [
+        "serverTime",
+        "serviceId",
+        "instanceId",
+        "serviceAvailable",
+        "instanceRoutable",
+        "readiness",
+        "leaseGeneration",
+        "leaseDeadline",
+        "placement"
+      ]
+    },
+    "activation": {
+      "type": "object",
+      "required": [
+        "profile"
+      ],
+      "properties": {
+        "profile": {
+          "const": "nxs-admission-v1"
+        }
+      }
+    },
+    "rotation": {
+      "type": "object",
+      "required": [
+        "publicKeyJwk",
+        "proof"
+      ]
+    },
+    "ticketKey": {
+      "type": "object",
+      "required": [
+        "keyId",
+        "secret"
+      ]
+    },
+    "pendingAction": {
+      "type": "object",
+      "required": [
+        "url",
+        "expiresAt",
+        "text"
+      ]
+    },
+    "extensions": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*){1,7}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "version",
+          "critical",
+          "data"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999999999
+          },
+          "critical": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object"
+          }
+        }
+      },
+      "x-max-utf8-bytes": 16384
+    },
+    "recovery": {
+      "type": "object",
+      "required": [
+        "registrationId",
+        "protocol",
+        "profile"
+      ],
+      "properties": {
+        "registrationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        },
+        "profile": {
+          "const": "nxs-admission-v1"
+        }
+      }
+    }
+  },
+  "x-context-order": [
+    "mode",
+    "profile",
+    "label",
+    "authorizationId",
+    "serviceId",
+    "region",
+    "pool",
+    "registrationId"
+  ],
+  "x-optional-context-order": [
+    "tagsDigest"
+  ],
+  "x-signature-format": "ES384 P1363 r||s 96 bytes unpadded base64url",
+  "x-canonicalization": "UTF-8 JSON arrays, no whitespace, no Unicode normalization, epoch milliseconds as integers, absent context strings are empty",
+  "description": "Canonical registration and lifecycle metadata for the nxs-admission-v1 profile.",
+  "x-profile": "nxs-admission-v1",
+  "x-discovery-path": "/.well-known/nethernet-external-signalling",
+  "x-headers": [
+    "nxs-instance-id",
+    "nxs-key-id",
+    "nxs-timestamp",
+    "nxs-signature-version",
+    "nxs-generation",
+    "nxs-sequence",
+    "nxs-signature",
+    "idempotency-key"
+  ],
+  "x-operations": [
+    "challenges",
+    "complete",
+    "recover",
+    "activate",
+    "drain",
+    "deregister",
+    "rotate",
+    "retire",
+    "ticket-keys",
+    "ticket-keys/ack",
+    "readiness",
+    "heartbeat",
+    "host-profile",
+    "control",
+    "control/ack",
+    "ticket-events",
+    "events"
+  ]
+}

@@ -220,3 +220,6 @@ gradle-app.setting
 *.hprof
 
 # End of https://www.toptal.com/developers/gitignore/api/java,gradle,eclipse,netbeans,intellij+all
+
+# Locally rebuilt immutable native development artifacts
+.native-deps/

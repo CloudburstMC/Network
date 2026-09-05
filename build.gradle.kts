@@ -14,6 +14,13 @@
  * under the License.
  */
 
+val nativeDependencies = java.util.Properties().apply {
+    rootProject.file("native-dependencies.properties").inputStream().use { load(it) }
+}
+for (key in listOf("nativeJavaGroup", "nativeJavaVersion")) {
+    if (!rootProject.hasProperty(key)) rootProject.extra[key] = nativeDependencies.getProperty(key)
+}
+
 val networkVersion = System.getenv("NETWORK_PUBLISH_VERSION")
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
@@ -28,6 +35,12 @@ subprojects {
     version = networkVersion
 
     repositories {
+        maven {
+            name = "maintainedNativeDevelopment"
+            url = uri(rootProject.providers.gradleProperty("nativeMavenRepository")
+                .getOrElse(rootProject.file(".native-deps/maven").toURI().toString()))
+            content { includeGroup("io.github.teamziax") }
+        }
         mavenLocal()
         mavenCentral()
     }
