@@ -22,3 +22,4 @@ plugins {
 
 include("transport-raknet")
 include("transport-nethernet")
+include("external-signalling")

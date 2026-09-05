@@ -1,0 +1,36 @@
+name: External signalling conformance
+on:
+  push:
+    branches: [nxs-dev]
+  pull_request:
+    branches: [upstream, nxs-dev]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            17
+            21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Verify canonical protocol fixtures
+        run: node docs/external-signalling/fixtures.mjs
+      - name: Build exact native dependency chain
+        run: bash scripts/bootstrap-native-admission.sh
+      - name: Validate transport and independent provider
+        run: ./gradlew --max-workers=2 build :external-signalling:nativeAdmissionTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nxs-conformance
+          path: |
+            **/build/test-results/**
+            **/build/reports/tests/**
+            .native-deps/maven/**/provenance.json
