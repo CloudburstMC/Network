@@ -74,6 +74,8 @@ public class RakThrottleTests {
                 .channelFactory(RakChannelFactory.client(NioDatagramChannel.class))
                 .group(group)
                 .option(RakChannelOption.RAK_PROTOCOL_VERSION, PROTOCOL_VERSION)
+                // Observe the throttle decision before automatic retries outlive its window.
+                .option(RakChannelOption.RAK_MAX_CONNECTION_ATTEMPTS, 1)
                 .handler(new ChannelInitializer<RakClientChannel>() {
                     @Override
                     protected void initChannel(RakClientChannel ch) {
