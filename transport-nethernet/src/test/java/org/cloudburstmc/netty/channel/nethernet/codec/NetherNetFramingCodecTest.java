@@ -2,18 +2,24 @@ package org.cloudburstmc.netty.channel.nethernet.codec;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -116,6 +122,22 @@ class NetherNetFramingCodecTest {
     }
 
     @Test
+    void oversizedSingleMessageIsDroppedAndReleased() {
+        ByteBuf oversized = Unpooled.buffer(NetherNetFramingCodec.MAX_REASSEMBLED_SIZE + 2);
+        oversized.writeZero(oversized.capacity());
+
+        assertFalse(channel.writeInbound(oversized));
+        assertEquals(0, oversized.refCnt());
+        assertNull(channel.readInbound());
+    }
+
+    @Test
+    void rejectsMessageSizesThatCannotCarryPayload() {
+        assertThrows(IllegalArgumentException.class, () -> new NetherNetFramingCodec(1));
+        assertThrows(IllegalArgumentException.class, () -> new NetherNetFramingCodec(-1));
+    }
+
+    @Test
     void smallOutboundGetsZeroHeader() {
         byte[] payload = bytes(42, 8);
         assertTrue(channel.writeOutbound(Unpooled.wrappedBuffer(payload)));
@@ -145,6 +167,55 @@ class NetherNetFramingCodecTest {
         }
         assertEquals(payload.length, offset);
         assertNull(channel.readOutbound());
+    }
+
+    @Test
+    void fragmentedWriteWaitsForEveryFragment() {
+        AtomicReference<ChannelPromise> first = new AtomicReference<>();
+        channel.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+            @Override
+            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                if (first.compareAndSet(null, promise)) {
+                    ReferenceCountUtil.release(msg);
+                } else {
+                    ctx.write(msg, promise);
+                }
+            }
+        });
+
+        ChannelPromise aggregate = channel.newPromise();
+        channel.writeAndFlush(Unpooled.wrappedBuffer(bytes(250, 14)), aggregate);
+
+        assertNotNull(first.get());
+        assertFalse(aggregate.isDone(), "The last fragment completing does not finish earlier writes");
+        first.get().setSuccess();
+        assertTrue(aggregate.isSuccess());
+    }
+
+    @Test
+    void earlierFragmentFailureFailsTheMessagePromise() {
+        IllegalStateException failure = new IllegalStateException("first fragment rejected");
+        channel.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+            private boolean first = true;
+
+            @Override
+            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                if (first) {
+                    first = false;
+                    ReferenceCountUtil.release(msg);
+                    promise.setFailure(failure);
+                } else {
+                    ctx.write(msg, promise);
+                }
+            }
+        });
+
+        ChannelPromise aggregate = channel.newPromise();
+        channel.writeAndFlush(Unpooled.wrappedBuffer(bytes(250, 15)), aggregate);
+
+        assertTrue(aggregate.isDone());
+        assertFalse(aggregate.isSuccess());
+        assertSame(failure, aggregate.cause());
     }
 
     @Test

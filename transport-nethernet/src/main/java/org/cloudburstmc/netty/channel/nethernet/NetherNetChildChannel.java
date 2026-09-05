@@ -5,9 +5,11 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfi
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
+import io.netty.channel.EventLoop;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.Objects;
 import java.util.function.DoubleConsumer;
 
 /**
@@ -31,7 +33,31 @@ public class NetherNetChildChannel extends NetherNetChannel {
      * open.
      */
     public void attachSession(WebRtcSession session) {
-        this.session = session;
+        Objects.requireNonNull(session, "session");
+        synchronized (this) {
+            if (isOpen()) {
+                if (this.session != null) {
+                    throw new IllegalStateException("A session is already attached");
+                }
+                this.session = session;
+                return;
+            }
+        }
+        session.close();
+    }
+
+    @Override
+    public EventLoop eventLoop() {
+        try {
+            return super.eventLoop();
+        } catch (IllegalStateException e) {
+            // Negotiation can fail before ServerBootstrap registers the child.
+            // Its close and close-future listeners still need an executor.
+            if (parent() == null) {
+                throw e;
+            }
+            return parent().eventLoop();
+        }
     }
 
     @Override
@@ -69,8 +95,12 @@ public class NetherNetChildChannel extends NetherNetChannel {
 
     @Override
     protected void doClose() throws Exception {
-        super.doClose();
-        WebRtcSession session = this.session;
+        WebRtcSession session;
+        synchronized (this) {
+            super.doClose();
+            session = this.session;
+            this.session = null;
+        }
         if (session != null) {
             session.close();
         }

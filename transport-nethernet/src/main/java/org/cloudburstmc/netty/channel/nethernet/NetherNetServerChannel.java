@@ -13,6 +13,9 @@ import io.netty.channel.AbstractServerChannel;
 import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelMetadata;
 import io.netty.channel.EventLoop;
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.DefaultChannelGroup;
+import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -39,6 +42,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private final DefaultNetherServerChannelConfig config;
     private final Supplier<? extends WebRtcServerBackend> backendSupplier;
     private final NetherNetServerSignaling signaling;
+    private final ChannelGroup children = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE, true);
 
     /**
      * The WebRTC backend. Set at construction for the eager constructors;
@@ -187,9 +191,17 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * service open.
      */
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
+        if (!isOpen()) {
+            return;
+        }
         PendingConnection pending = new PendingConnection(connectionId);
         signaling.setSignalHandler(connectionId, signal -> eventLoop().execute(() -> pending.handleSignal(signal)));
-        eventLoop().execute(() -> establishConnection(pending, connectionId, offerSdp, remoteNetworkId));
+        try {
+            eventLoop().execute(() -> establishConnection(pending, connectionId, offerSdp, remoteNetworkId));
+        } catch (RuntimeException e) {
+            signaling.removeSignalHandler(connectionId);
+            throw e;
+        }
     }
 
     /**
@@ -200,8 +212,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private void establishConnection(PendingConnection pending, long connectionId, String offerSdp, String remoteNetworkId) {
         // Offers racing a failed doBind: signaling briefly accepted
         // connections but the backend never materialized.
-        if (backend == null) {
-            log.debug("Dropping offer {} received before the backend existed", Long.toUnsignedString(connectionId));
+        if (!isOpen() || backend == null) {
+            log.debug("Dropping offer {} while the server backend is unavailable", Long.toUnsignedString(connectionId));
             signaling.removeSignalHandler(connectionId);
             return;
         }
@@ -211,6 +223,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             InetSocketAddress signaledAddress = signaling.remoteAddressOf(connectionId);
             NetherNetChildChannel child = new NetherNetChildChannel(this,
                     signaledAddress != null ? signaledAddress : generatePlaceholderAddress(), localAddress);
+            pending.child = child;
+            children.add(child);
             // Fragment outbound data no larger than the client advertised it
             // can receive (a=max-message-size in its offer), falling back to
             // the conservative default when the client does not advertise one.
@@ -239,6 +253,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         } catch (Exception e) {
             log.error("Failed to establish connection {}: {}", Long.toUnsignedString(connectionId), e.getMessage(), e);
             signaling.removeSignalHandler(connectionId);
+            if (pending.child != null) {
+                pending.child.close();
+            }
         }
     }
 
@@ -261,6 +278,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         @Override
         public void onAnswerReady(String answerSdp) {
+            if (!isOpen() || !child.isOpen()) {
+                return;
+            }
             String finalAnswer = answerSdp;
             // The built in self signed identity keeps answers acceptable to
             // 26.40 clients out of the box; consumers replace it to own the
@@ -422,6 +442,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     @Override
     protected void doClose() throws Exception {
         this.open = false;
+        children.close();
 
         try {
             signaling.close();

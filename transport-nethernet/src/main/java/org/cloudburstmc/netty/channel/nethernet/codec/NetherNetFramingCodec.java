@@ -7,6 +7,8 @@ import io.netty.buffer.CompositeByteBuf;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.PromiseCombiner;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -65,6 +67,9 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
      *                            it from the channel
      */
     public NetherNetFramingCodec(int fixedMaxMessageSize) {
+        if (fixedMaxMessageSize < 0 || fixedMaxMessageSize == 1) {
+            throw new IllegalArgumentException("fixedMaxMessageSize must be 0 or at least 2");
+        }
         this.fixedMaxMessageSize = fixedMaxMessageSize;
     }
 
@@ -91,6 +96,11 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
             }
 
             int header = buf.readUnsignedByte();
+            if (buf.readableBytes() > MAX_REASSEMBLED_SIZE) {
+                log.warn("Inbound message exceeds {} bytes, dropping", MAX_REASSEMBLED_SIZE);
+                resetAssembly();
+                return;
+            }
 
             if (header == 0) {
                 if (assembly != null) {
@@ -99,7 +109,7 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
                         resetAssembly();
                         return;
                     }
-                    if (assembly.readableBytes() + buf.readableBytes() > MAX_REASSEMBLED_SIZE) {
+                    if (assembly.readableBytes() > MAX_REASSEMBLED_SIZE - buf.readableBytes()) {
                         log.warn("Reassembled message exceeds {} bytes, dropping", MAX_REASSEMBLED_SIZE);
                         resetAssembly();
                         return;
@@ -125,7 +135,7 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
                 }
                 expectedCountdown = header - 1;
 
-                if (assembly.readableBytes() + buf.readableBytes() > MAX_REASSEMBLED_SIZE) {
+                if (assembly.readableBytes() > MAX_REASSEMBLED_SIZE - buf.readableBytes()) {
                     log.warn("Reassembled message exceeds {} bytes, dropping", MAX_REASSEMBLED_SIZE);
                     resetAssembly();
                     return;
@@ -158,7 +168,7 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
                 return;
             }
 
-            int fragments = (total + maxPayload - 1) / maxPayload;
+            int fragments = 1 + (total - 1) / maxPayload;
             if (fragments > MAX_FRAGMENT_COUNT) {
                 // Effectively unreachable with a sane negotiated size; fail
                 // loudly instead of wrapping the header byte and corrupting
@@ -170,6 +180,7 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
                 return;
             }
 
+            PromiseCombiner combiner = promise.isVoid() ? null : new PromiseCombiner(ctx.executor());
             int countdown = fragments - 1;
             for (int i = 0; i < fragments; i++) {
                 int chunkSize = Math.min(maxPayload, payload.readableBytes());
@@ -178,8 +189,14 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
                 framed.writeBytes(payload, chunkSize);
                 countdown--;
 
-                ChannelPromise fragmentPromise = (i == fragments - 1) ? promise : ctx.voidPromise();
+                ChannelPromise fragmentPromise = combiner == null ? ctx.voidPromise() : ctx.newPromise();
+                if (combiner != null) {
+                    combiner.add((Future<?>) fragmentPromise);
+                }
                 ctx.write(framed, fragmentPromise);
+            }
+            if (combiner != null) {
+                combiner.finish(promise);
             }
         } finally {
             payload.release();

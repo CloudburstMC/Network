@@ -3,11 +3,13 @@ package org.cloudburstmc.netty.channel.nethernet;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSession;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSessionListener;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
@@ -17,9 +19,14 @@ import org.junit.jupiter.api.Test;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,7 +46,7 @@ class NetherNetServerChannelLazyBackendTest {
 
     @AfterEach
     void tearDown() {
-        group.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+        group.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
     }
 
     @Test
@@ -81,6 +88,87 @@ class NetherNetServerChannelLazyBackendTest {
         assertTrue(signaling.closed);
     }
 
+    @Test
+    void handshakeTimeoutClosesSessionBeforeChildRegistration() throws Exception {
+        StubBackend backend = new StubBackend();
+        StubSignaling signaling = new StubSignaling(false);
+        NetherNetServerChannel server = (NetherNetServerChannel) bootstrap(() -> backend, signaling)
+                .option(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS, 0)
+                .bind(new InetSocketAddress(0)).sync().channel();
+        try {
+            server.acceptConnection(1, "v=0\r\n", "1");
+
+            assertTrue(backend.session.closed.await(2, TimeUnit.SECONDS));
+            server.eventLoop().submit(() -> {}).sync();
+            assertEquals(1, backend.session.closes.get());
+            assertTrue(signaling.handlers.isEmpty());
+        } finally {
+            server.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void sessionClosedBeforeAcceptReturnsIsNotLeftAttached() throws Exception {
+        StubBackend backend = new StubBackend();
+        backend.closeBeforeReturn = true;
+        StubSignaling signaling = new StubSignaling(false);
+        NetherNetServerChannel server = (NetherNetServerChannel) bootstrap(() -> backend, signaling)
+                .bind(new InetSocketAddress(0)).sync().channel();
+        try {
+            server.acceptConnection(2, "v=0\r\n", "2");
+
+            assertTrue(backend.session.closed.await(2, TimeUnit.SECONDS));
+            server.eventLoop().submit(() -> {}).sync();
+            assertEquals(1, backend.session.closes.get());
+            assertTrue(signaling.handlers.isEmpty());
+        } finally {
+            server.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void serverCloseClosesAcceptedChannelsAsWellAsTheBackend() throws Exception {
+        StubBackend backend = new StubBackend();
+        StubSignaling signaling = new StubSignaling(false);
+        AtomicReference<Channel> accepted = new AtomicReference<>();
+        CountDownLatch registered = new CountDownLatch(1);
+        NetherNetServerChannel server = (NetherNetServerChannel) bootstrap(() -> backend, signaling)
+                .option(NetherChannelOption.NETHER_SERVER_ANSWER_DECORATOR, answer -> answer)
+                .childHandler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelRegistered(ChannelHandlerContext ctx) {
+                        accepted.set(ctx.channel());
+                        registered.countDown();
+                        ctx.fireChannelRegistered();
+                    }
+                })
+                .bind(new InetSocketAddress(0)).sync().channel();
+        try {
+            server.acceptConnection(3, "v=0\r\n", "3");
+            server.eventLoop().submit(() -> {}).sync();
+            backend.listener.onAnswerReady("v=0\r\n");
+            backend.listener.onTransportOpen();
+            assertTrue(registered.await(2, TimeUnit.SECONDS));
+            Channel child = accepted.get();
+            child.eventLoop().submit(() -> {}).sync();
+            assertTrue(child.isActive());
+
+            server.close().sync();
+
+            assertTrue(child.closeFuture().await(2, TimeUnit.SECONDS));
+            assertFalse(child.isOpen());
+            assertEquals(1, backend.session.closes.get());
+            assertTrue(backend.closed);
+            assertTrue(signaling.handlers.isEmpty());
+        } finally {
+            server.close().syncUninterruptibly();
+            Channel child = accepted.get();
+            if (child != null) {
+                child.close().syncUninterruptibly();
+            }
+        }
+    }
+
     private ServerBootstrap bootstrap(java.util.function.Supplier<WebRtcServerBackend> backendSupplier,
                                       NetherNetServerSignaling signaling) {
         return new ServerBootstrap()
@@ -93,6 +181,7 @@ class NetherNetServerChannelLazyBackendTest {
         private final boolean failBind;
         volatile boolean bound;
         volatile boolean closed;
+        final Map<Long, SignalHandler> handlers = new ConcurrentHashMap<>();
 
         private StubSignaling(boolean failBind) {
             this.failBind = failBind;
@@ -120,10 +209,12 @@ class NetherNetServerChannelLazyBackendTest {
 
         @Override
         public void setSignalHandler(long connectionId, SignalHandler handler) {
+            handlers.put(connectionId, handler);
         }
 
         @Override
         public void removeSignalHandler(long connectionId) {
+            handlers.remove(connectionId);
         }
 
         @Override
@@ -139,16 +230,37 @@ class NetherNetServerChannelLazyBackendTest {
 
     private static final class StubBackend implements WebRtcServerBackend {
         volatile boolean closed;
+        volatile WebRtcSessionListener listener;
+        boolean closeBeforeReturn;
+        final StubSession session = new StubSession();
 
         @Override
         public WebRtcSession accept(String offerSdp, List<IceServerInfo> iceServers,
                                     WebRtcSessionListener listener, boolean fullIceAnswer) {
-            throw new UnsupportedOperationException("not under test");
+            this.listener = listener;
+            if (closeBeforeReturn) {
+                listener.onTransportClosed();
+            }
+            return session;
         }
 
         @Override
         public void close() {
             closed = true;
+        }
+    }
+
+    private static final class StubSession implements WebRtcSession {
+        final AtomicInteger closes = new AtomicInteger();
+        final CountDownLatch closed = new CountDownLatch(1);
+
+        @Override public void send(ByteBuffer data) { }
+        @Override public void addRemoteCandidate(String candidateSdp) { }
+
+        @Override
+        public void close() {
+            closes.incrementAndGet();
+            closed.countDown();
         }
     }
 }

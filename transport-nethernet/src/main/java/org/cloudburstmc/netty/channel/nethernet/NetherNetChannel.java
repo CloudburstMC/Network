@@ -8,16 +8,16 @@ import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.EventLoop;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleConsumer;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -54,13 +54,17 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * slow; close deterministically instead of queueing without bound.
      */
     private static final long MAX_BACKLOG_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_PENDING_INBOUND_MESSAGES = 256;
 
     protected DefaultNetherChannelConfig config;
     protected volatile SocketAddress remoteAddress;
     protected volatile SocketAddress localAddress;
 
-    private final Queue<Object> pendingWrites = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean channelActiveFired = new AtomicBoolean();
+    private final Object inboundLock = new Object();
+    private volatile boolean inboundReady;
+    private volatile Queue<ByteBuf> pendingInbound;
+    private int pendingInboundBytes;
 
     // Bytes handed to the engine and not yet reported sent via
     // onEngineBytesSent. Incremented on the event loop, decremented on engine
@@ -139,15 +143,90 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
         ByteBuf copy = config.getAllocator().buffer(data.remaining());
         copy.writeBytes(data);
+        if (queueInboundIfNotReady(copy)) {
+            return;
+        }
+        dispatchInbound(copy);
+    }
+
+    private void dispatchInbound(ByteBuf copy) {
         try {
-            eventLoop().execute(() -> {
-                fireChannelActiveIfReady();
-                pipeline().fireChannelRead(copy);
-                pipeline().fireChannelReadComplete();
-            });
+            eventLoop().execute(() -> deliverInboundOnEventLoop(copy));
         } catch (Exception e) {
             // Event loop rejected the task (shutdown race); do not leak.
             copy.release();
+        }
+    }
+
+    private void deliverInboundOnEventLoop(ByteBuf copy) {
+        if (!isOpen()) {
+            copy.release();
+            return;
+        }
+        // Registration can replace the fallback parent executor after a callback was queued.
+        if (!eventLoop().inEventLoop()) {
+            dispatchInbound(copy);
+            return;
+        }
+        if (queueInboundIfNotReady(copy)) {
+            return;
+        }
+        fireChannelActiveIfReady();
+        if (!isOpen()) {
+            copy.release();
+            return;
+        }
+        pipeline().fireChannelRead(copy);
+        pipeline().fireChannelReadComplete();
+    }
+
+    private boolean queueInboundIfNotReady(ByteBuf copy) {
+        if (inboundReady && isRegistered() && isActive()) {
+            return false;
+        }
+        synchronized (inboundLock) {
+            if (!isOpen()) {
+                copy.release();
+                return true;
+            }
+            if (inboundReady && isRegistered() && isActive()) {
+                return false;
+            }
+            if (copy.readableBytes() <= MAX_BACKLOG_BYTES - pendingInboundBytes
+                    && (pendingInbound == null || pendingInbound.size() < MAX_PENDING_INBOUND_MESSAGES)) {
+                if (pendingInbound == null) {
+                    pendingInbound = new ArrayDeque<>();
+                }
+                pendingInbound.add(copy);
+                pendingInboundBytes += copy.readableBytes();
+                return true;
+            }
+        }
+        copy.release();
+        log.warn("Closing {}: too much inbound data arrived before channel activation", remoteAddress);
+        close();
+        return true;
+    }
+
+    private Queue<ByteBuf> takePendingInbound() {
+        synchronized (inboundLock) {
+            Queue<ByteBuf> pending = pendingInbound;
+            pendingInbound = null;
+            pendingInboundBytes = 0;
+            return pending;
+        }
+    }
+
+    private void drainPendingInbound() {
+        if (pendingInbound == null || !inboundReady || !isRegistered() || !isActive()) {
+            return;
+        }
+        Queue<ByteBuf> pending = takePendingInbound();
+        if (pending != null) {
+            ByteBuf copy;
+            while ((copy = pending.poll()) != null) {
+                deliverInboundOnEventLoop(copy);
+            }
         }
     }
 
@@ -156,9 +235,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return;
         }
 
-        // Callers include native WebRTC callback threads (data channel state
-        // changes). The pipeline fire methods would marshal themselves, but
-        // unsafe().flush() is event loop only, so hop for the whole body.
+        // Activation state and the sampler are owned by the event loop.
         EventLoop loop = eventLoop();
         if (!loop.inEventLoop()) {
             loop.execute(this::fireChannelActiveIfReady);
@@ -172,37 +249,19 @@ public abstract class NetherNetChannel extends AbstractChannel {
             startRttSampler();
             pipeline().fireChannelActive();
         }
+        drainPendingInbound();
+    }
 
-        if (!pendingWrites.isEmpty()) {
-            pipeline().fireChannelWritabilityChanged();
-            unsafe().flush();
+    @Override
+    protected Object filterOutboundMessage(Object msg) {
+        if (!(msg instanceof ByteBuf)) {
+            throw new UnsupportedOperationException("NetherNet writes require a ByteBuf");
         }
+        return msg;
     }
 
     @Override
     protected void doWrite(ChannelOutboundBuffer in) throws Exception {
-        if (!isActive()) {
-            Object msg;
-            while ((msg = in.current()) != null) {
-                ReferenceCountUtil.retain(msg);
-                pendingWrites.add(msg);
-                in.remove();
-            }
-            return;
-        }
-
-        while (!pendingWrites.isEmpty()) {
-            if (engineSaturated(in)) {
-                return;
-            }
-            Object msg = pendingWrites.poll();
-            try {
-                writeFramed(msg);
-            } finally {
-                ReferenceCountUtil.release(msg);
-            }
-        }
-
         Object msg;
         while ((msg = in.current()) != null) {
             if (engineSaturated(in)) {
@@ -215,8 +274,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     /**
      * True while the engine's send buffer holds too much unsent data to
-     * accept more. Leaves the remaining messages queued (netty's outbound
-     * buffer plus the pre-activation queue); {@link #onEngineBytesSent}
+     * accept more. Leaves the remaining messages in netty's outbound
+     * buffer; {@link #onEngineBytesSent}
      * resumes the flush once the buffer drains. A peer whose backlog also
      * exceeds the hard cap is closed instead.
      */
@@ -263,10 +322,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
     }
 
-    private void writeFramed(Object msg) {
-        if (!(msg instanceof ByteBuf)) {
-            return;
-        }
+    private void writeFramed(Object msg) throws Exception {
         ByteBuf framed = (ByteBuf) msg;
         int bytes = framed.readableBytes();
         // Count before handing to the engine: its bytes sent callback fires
@@ -277,8 +333,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
         try {
             sendFramed(framed);
         } catch (Exception e) {
-            engineOutstanding.addAndGet(-bytes);
-            pipeline().fireExceptionCaught(e);
+            engineOutstanding.updateAndGet(outstanding -> Math.max(0, outstanding - bytes));
+            throw new IOException("Failed to send NetherNet message", e);
         }
     }
 
@@ -316,10 +372,19 @@ public abstract class NetherNetChannel extends AbstractChannel {
             channelActiveFired.set(true);
             startRttSampler();
         }
+        // Handler initialization and Netty's initial channelActive run after doRegister returns.
+        eventLoop().execute(() -> {
+            if (!isOpen()) {
+                return;
+            }
+            inboundReady = true;
+            fireChannelActiveIfReady();
+        });
     }
 
     @Override
     protected void doDeregister() throws Exception {
+        inboundReady = false;
     }
 
     @Override
@@ -369,15 +434,18 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.transportOpen = false;
         this.writesPaused = false;
         this.engineOutstanding.set(0);
+        inboundReady = false;
+        Queue<ByteBuf> pending = takePendingInbound();
+        if (pending != null) {
+            ByteBuf copy;
+            while ((copy = pending.poll()) != null) {
+                copy.release();
+            }
+        }
 
         if (rttSampler != null) {
             rttSampler.cancel(false);
             rttSampler = null;
-        }
-
-        Object msg;
-        while ((msg = pendingWrites.poll()) != null) {
-            ReferenceCountUtil.release(msg);
         }
     }
 
