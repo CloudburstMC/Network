@@ -10,6 +10,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.util.concurrent.ScheduledFuture;
 
 import java.net.URI;
 import java.nio.channels.ClosedChannelException;
@@ -20,6 +21,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Sharable
 public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
@@ -50,10 +53,32 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     private static final class PendingRequest {
         final CompletableFuture<JsonObject> future;
         final Channel channel;
+        private ScheduledFuture<?> timeout;
 
         PendingRequest(CompletableFuture<JsonObject> future, Channel channel) {
             this.future = future;
             this.channel = channel;
+        }
+
+        synchronized void setTimeout(ScheduledFuture<?> timeout) {
+            if (future.isDone()) {
+                timeout.cancel(false);
+            } else {
+                this.timeout = timeout;
+            }
+        }
+
+        synchronized void cancelTimeout() {
+            if (timeout != null) {
+                timeout.cancel(false);
+                timeout = null;
+            }
+        }
+    }
+
+    private static final class RpcResponseException extends RuntimeException {
+        RpcResponseException(String message) {
+            super(message);
         }
     }
 
@@ -114,11 +139,15 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
      * refreshes a failure only logs; the previous credentials stay in place.
      */
     private void refreshTurnCredentials() {
+        Channel source = channel;
         sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH, new JsonObject())
-            .thenAccept(response -> updateIceServers(parseTurnServers(response)))
+            .thenAccept(response -> updateIceServers(source, parseTurnServers(response)))
             .exceptionally(t -> {
-                log.error("Failed to fetch TURN credentials", t);
                 synchronized (this) {
+                    if (!isCurrentChannel(source)) {
+                        return null;
+                    }
+                    log.error("Failed to fetch TURN credentials", t);
                     if (connectFuture != null && !connectFuture.isDone()) connectFuture.completeExceptionally(t);
                 }
                 return null;
@@ -131,13 +160,20 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         // callers see a prompt error instead of a future that never completes.
         // Only requests written to THIS channel: during a reconnect the old
         // channel's inactive event must not fail the new socket's requests.
-        pendingRequests.entrySet().removeIf(entry -> {
-            if (entry.getValue().channel == ctx.channel()) {
-                entry.getValue().future.completeExceptionally(new ClosedChannelException());
-                return true;
+        pendingRequests.forEach((id, request) -> {
+            if (request.channel == ctx.channel()) {
+                request.future.completeExceptionally(new ClosedChannelException());
             }
-            return false;
         });
+    }
+
+    @Override
+    public void close() {
+        try {
+            super.close();
+        } finally {
+            pendingRequests.forEach((id, request) -> request.future.completeExceptionally(new ClosedChannelException()));
+        }
     }
 
     @Override
@@ -147,7 +183,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
             JsonObject json = JsonParser.parseString(text).getAsJsonObject();
 
             if (json.has("result") || (json.has("error") && json.has("id"))) {
-                handleResponse(json);
+                handleResponse(ctx.channel(), json);
             } else if (json.has("method")) {
                 handleRequest(json);
             }
@@ -156,13 +192,16 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         }
     }
 
-    private void handleResponse(JsonObject json) {
+    private void handleResponse(Channel source, JsonObject json) {
         if (!json.has("id") || json.get("id").isJsonNull()) return;
         String id = json.get("id").getAsString();
-        PendingRequest pending = pendingRequests.remove(id);
-        CompletableFuture<JsonObject> future = pending != null ? pending.future : null;
+        PendingRequest pending = pendingRequests.get(id);
+        if (pending == null || pending.channel != source) {
+            return;
+        }
+        CompletableFuture<JsonObject> future = pending.future;
 
-        if (future != null) {
+        try {
             if (json.has("error") && !json.get("error").isJsonNull()) {
                 JsonObject error = json.getAsJsonObject("error");
                 String msg = error.has("message") ? error.get("message").getAsString() : error.toString();
@@ -175,13 +214,15 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
                     }
                 }
 
-                if (isNotFound && notFoundHandler != null) {
+                boolean completed = future.completeExceptionally(new RpcResponseException(msg));
+                if (completed && isNotFound && isCurrentChannel(source) && notFoundHandler != null) {
                     notFoundHandler.onNotFound(msg);
                 }
-                future.completeExceptionally(new RuntimeException(msg));
             } else {
                 future.complete(json.has("result") && !json.get("result").isJsonNull() ? json.getAsJsonObject("result") : new JsonObject());
             }
+        } catch (RuntimeException e) {
+            future.completeExceptionally(new IllegalArgumentException("Invalid signaling RPC response", e));
         }
     }
 
@@ -220,6 +261,11 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
             }
         } catch (Exception e) {
             log.error("Failed to parse inner signaling message from " + from, e);
+        }
+
+        // Receipts terminate the exchange; acknowledging them creates an endless receipt loop.
+        if (NetherNetConstants.XBOX_RPC_INNER_METHOD_DELIVERY.equals(innerMethod)) {
+            return;
         }
 
         // Our own route probe came back, so the registration is routable. It gets
@@ -288,6 +334,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
      * one liveness check that fails when the registration is gone.
      */
     private void sendRouteProbe() {
+        Channel source = channel;
         if (routeProbeUnsupported) return;
 
         String playerId = localPlayerId();
@@ -309,16 +356,17 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         innerMsg.addProperty("method", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE);
         sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_SEND_MESSAGE, createSendParams(playerId, innerMsg.toString()))
             .exceptionally(t -> {
-                if (t instanceof ClosedChannelException) return null;
-                if (lastRouteProvenAt == 0) {
-                    // A fresh socket has a live registration by definition, so a
-                    // rejected first probe means self addressed messages are not
-                    // accepted at all. Without a proof the accessor stays optimistic.
-                    routeProbeUnsupported = true;
-                    log.warn("Signaling route probe rejected on a fresh socket, route liveness disabled: {}", t.getMessage());
-                } else {
-                    routeFailure = t.getMessage();
-                    log.warn("Signaling route probe rejected: {}", t.getMessage());
+                synchronized (this) {
+                    // A lost reply or local write failure does not prove that the service rejected this route.
+                    if (!isCurrentChannel(source) || !(t instanceof RpcResponseException)) return null;
+                    if (lastRouteProvenAt == 0) {
+                        // Without a successful self-probe, refusal does not prove that peer routing is broken.
+                        routeProbeUnsupported = true;
+                        log.warn("Signaling route probe rejected on a fresh socket, route liveness disabled: {}", t.getMessage());
+                    } else {
+                        routeFailure = t.getMessage();
+                        log.warn("Signaling route probe rejected: {}", t.getMessage());
+                    }
                 }
                 return null;
             });
@@ -364,7 +412,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         return params;
     }
 
-    private CompletableFuture<JsonObject> sendJsonRpcRequest(String method, JsonObject params) {
+    synchronized CompletableFuture<JsonObject> sendJsonRpcRequest(String method, JsonObject params) {
         String id = UUID.randomUUID().toString();
         JsonObject rpc = new JsonObject();
         rpc.add("params", params);
@@ -374,10 +422,33 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
 
-        var channel = this.channel;
-        if (channel != null && channel.isActive()) {
-            pendingRequests.put(id, new PendingRequest(future, channel));
-            channel.writeAndFlush(new TextWebSocketFrame(gson.toJson(rpc)));
+        Channel source = this.channel;
+        if (isCurrentChannel(source) && source.isActive()) {
+            PendingRequest pending = new PendingRequest(future, source);
+            pendingRequests.put(id, pending);
+            future.whenComplete((result, error) -> {
+                pendingRequests.remove(id, pending);
+                pending.cancelTimeout();
+            });
+            TextWebSocketFrame frame = null;
+            try {
+                pending.setTimeout(source.eventLoop().schedule(() -> {
+                    future.completeExceptionally(new TimeoutException("Signaling RPC timed out: " + method));
+                }, CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                frame = new TextWebSocketFrame(gson.toJson(rpc));
+                source.writeAndFlush(frame).addListener(write -> {
+                    if (write.isCancelled()) {
+                        future.cancel(false);
+                    } else if (!write.isSuccess()) {
+                        future.completeExceptionally(write.cause());
+                    }
+                });
+            } catch (RuntimeException e) {
+                if (frame != null && frame.refCnt() > 0) {
+                    frame.release();
+                }
+                future.completeExceptionally(e);
+            }
         } else {
             future.completeExceptionally(new ClosedChannelException());
         }

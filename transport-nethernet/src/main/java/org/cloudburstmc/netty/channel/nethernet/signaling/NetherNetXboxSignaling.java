@@ -90,7 +90,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
                         // service pushes refreshed TURN credentials over the
                         // lifetime of the socket, and peer connections created
                         // later must not be handed the expired originals.
-                        updateIceServers(parseTurnServers(credentials));
+                        updateIceServers(ctx.channel(), parseTurnServers(credentials));
                     }
                 }
                 case NetherNetConstants.XBOX_SIGNAL_ACCEPTED, NetherNetConstants.XBOX_SIGNAL_ACK -> log.trace("Signal Ack: {}", text);

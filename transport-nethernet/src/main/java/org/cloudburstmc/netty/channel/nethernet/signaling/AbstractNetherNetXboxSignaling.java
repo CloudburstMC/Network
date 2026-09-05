@@ -30,6 +30,7 @@ import io.netty.handler.codec.http.websocketx.WebSocketVersion;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.AttributeKey;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -51,7 +52,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         implements NetherNetClientSignaling, NetherNetServerSignaling {
 
     /** Time to wait for the connect plus credential exchange before giving up. */
-    private static final long CONNECT_TIMEOUT_SECONDS = 20;
+    protected static final long CONNECT_TIMEOUT_SECONDS = 20;
     /** Interval for WebSocket protocol-level pings. The RFC obliges the server to
      * answer with a pong, so these guarantee inbound traffic on a healthy socket
      * and make {@link #isChannelAlive(long)} reliable even on idle servers. */
@@ -147,7 +148,13 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
         CompletableFuture<List<IceServerInfo>> future = new CompletableFuture<>();
         connectFuture = future;
-        future.thenAccept(servers -> this.iceServers = servers);
+        future.thenAccept(servers -> {
+            synchronized (this) {
+                if (connectFuture == future) {
+                    this.iceServers = servers;
+                }
+            }
+        });
 
         try {
             SslContext sslCtx = SslContextBuilder.forClient()
@@ -209,7 +216,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
             future.orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
         } catch (Exception e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            abortConnect();
+            abortConnect(future);
             if (cause instanceof ConnectException) throw (ConnectException) cause;
             ConnectException ce = new ConnectException("Failed to connect to Xbox Signaling: " + cause.getMessage());
             ce.initCause(cause);
@@ -217,7 +224,10 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         }
     }
 
-    private synchronized void abortConnect() {
+    private synchronized void abortConnect(CompletableFuture<List<IceServerInfo>> expected) {
+        if (connectFuture != expected) {
+            return;
+        }
         Channel c = this.channel;
         this.channel = null;
         CompletableFuture<List<IceServerInfo>> pending = this.connectFuture;
@@ -233,11 +243,16 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     @Override
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt == WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE) {
-            log.debug("{} WebSocket Connected", getClass().getSimpleName());
-            lastMessageReceivedAt = System.currentTimeMillis();
-            scheduleRecurring(ctx, "ws-ping", () -> ctx.writeAndFlush(new PingWebSocketFrame()),
-                    WS_PING_INTERVAL_SECONDS, WS_PING_INTERVAL_SECONDS);
-            onConnected(ctx);
+            synchronized (this) {
+                if (!isCurrentChannel(ctx.channel())) {
+                    return;
+                }
+                log.debug("{} WebSocket Connected", getClass().getSimpleName());
+                lastMessageReceivedAt = System.currentTimeMillis();
+                scheduleRecurring(ctx, "ws-ping", () -> ctx.writeAndFlush(new PingWebSocketFrame()),
+                        WS_PING_INTERVAL_SECONDS, WS_PING_INTERVAL_SECONDS);
+                onConnected(ctx);
+            }
         } else {
             super.userEventTriggered(ctx, evt);
         }
@@ -245,21 +260,29 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        // Track liveness: every inbound frame counts, including pong frames
-        // answering our protocol-level pings. Used by isChannelAlive(long)
-        // to detect silent half-closed TCP where channel.isActive() lies.
-        lastMessageReceivedAt = System.currentTimeMillis();
-        if (msg instanceof CloseWebSocketFrame) {
-            CloseWebSocketFrame close = (CloseWebSocketFrame) msg;
-            try {
-                log.warn("Signaling socket closed by the service: {} {}", close.statusCode(), close.reasonText());
-            } finally {
-                close.release();
+        synchronized (this) {
+            if (!isCurrentChannel(ctx.channel())) {
+                ReferenceCountUtil.release(msg);
+                return;
             }
-            ctx.close();
-            return;
+            // Includes protocol pongs so idle sockets still prove their liveness.
+            lastMessageReceivedAt = System.currentTimeMillis();
+            if (msg instanceof CloseWebSocketFrame) {
+                CloseWebSocketFrame close = (CloseWebSocketFrame) msg;
+                try {
+                    log.warn("Signaling socket closed by the service: {} {}", close.statusCode(), close.reasonText());
+                } finally {
+                    close.release();
+                }
+                ctx.close();
+                return;
+            }
+            super.channelRead(ctx, msg);
         }
-        super.channelRead(ctx, msg);
+    }
+
+    protected final synchronized boolean isCurrentChannel(Channel source) {
+        return !closed && source != null && source == channel;
     }
 
     /**
@@ -272,10 +295,12 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                                      long initialDelaySeconds, long periodSeconds) {
         ScheduledFuture<?> future = ctx.executor().scheduleAtFixedRate(() -> {
             try {
-                if (!ctx.channel().isActive()) {
-                    return;
+                synchronized (this) {
+                    if (!isCurrentChannel(ctx.channel()) || !ctx.channel().isActive()) {
+                        return;
+                    }
+                    task.run();
                 }
-                task.run();
             } catch (Throwable t) {
                 log.warn("{} task threw; loop continues: {}", name, t.getMessage());
             }
@@ -371,12 +396,16 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        boolean current;
         synchronized (this) {
-            if (connectFuture != null && !connectFuture.isDone()) {
+            current = isCurrentChannel(ctx.channel());
+            if (current && connectFuture != null && !connectFuture.isDone()) {
                 connectFuture.completeExceptionally(cause);
             }
         }
-        log.error("Signaling Exception: {}", cause.getMessage(), cause);
+        if (current) {
+            log.error("Signaling Exception: {}", cause.getMessage(), cause);
+        }
         ctx.close();
     }
 
@@ -497,8 +526,15 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
      * any point get unexpired TURN credentials.
      */
     protected void updateIceServers(List<IceServerInfo> servers) {
-        this.iceServers = servers;
+        updateIceServers(channel, servers);
+    }
+
+    protected void updateIceServers(Channel source, List<IceServerInfo> servers) {
         synchronized (this) {
+            if (!isCurrentChannel(source)) {
+                return;
+            }
+            this.iceServers = servers;
             if (connectFuture != null && !connectFuture.isDone()) {
                 connectFuture.complete(servers);
             }
