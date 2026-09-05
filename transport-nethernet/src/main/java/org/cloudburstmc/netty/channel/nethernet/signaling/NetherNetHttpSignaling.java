@@ -12,7 +12,8 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -101,7 +102,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     // channel's event loop, so registering the listener on a caller supplied
     // group and waiting for the bind would deadlock a single threaded group
     // against itself (netty rejects it as a blocking call on the event loop).
-    private volatile NioEventLoopGroup acceptGroup;
+    private volatile MultiThreadIoEventLoopGroup acceptGroup;
     private volatile boolean closed;
 
     /**
@@ -145,7 +146,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     @Override
     public void bind(SocketAddress localAddress) throws ConnectException {
         try {
-            this.acceptGroup = new NioEventLoopGroup(1);
+            this.acceptGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(acceptGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
@@ -265,7 +266,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
             channel.close();
             this.serverChannel = null;
         }
-        NioEventLoopGroup accept = this.acceptGroup;
+        MultiThreadIoEventLoopGroup accept = this.acceptGroup;
         if (accept != null) {
             accept.shutdownGracefully(0, 3, TimeUnit.SECONDS);
             this.acceptGroup = null;

@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import org.junit.jupiter.api.AfterEach;
@@ -29,11 +30,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class NetherNetHttpSignalingProtocolTest {
 
-    private NioEventLoopGroup group;
+    private MultiThreadIoEventLoopGroup group;
     private NetherNetHttpSignaling signaling;
 
     private InetSocketAddress bind(SslContext sslContext) throws Exception {
-        group = new NioEventLoopGroup(2);
+        group = new MultiThreadIoEventLoopGroup(2, NioIoHandler.newFactory());
         signaling = new NetherNetHttpSignaling(sslContext, group);
         signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp) -> {
         });

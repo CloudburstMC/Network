@@ -5,6 +5,7 @@ plugins {
 description = "NetherNet transport for Netty"
 
 dependencies {
+    api(platform(libs.netty.bom))
     api(libs.bundles.netty)
     api(libs.netty.codec.http)
     api(libs.expiringmap)

@@ -4,7 +4,8 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfi
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelPromise;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -19,7 +20,7 @@ class NetherNetBackpressureTest {
     @Test
     @Timeout(15)
     void concurrentEngineDrainsDoNotStrandPendingWrites() throws Exception {
-        NioEventLoopGroup group = new NioEventLoopGroup(1);
+        MultiThreadIoEventLoopGroup group = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         DrainingChannel channel = new DrainingChannel();
         Thread engine = new Thread(() -> {
             try {

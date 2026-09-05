@@ -14,7 +14,8 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
@@ -83,7 +84,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         this.localNetworkId = localNetworkId;
         this.xboxToken = xboxToken;
         this.uri = uri;
-        this.eventLoopGroup = new NioEventLoopGroup(1);
+        this.eventLoopGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
     }
 
     @Override
@@ -149,7 +150,9 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         future.thenAccept(servers -> this.iceServers = servers);
 
         try {
-            SslContext sslCtx = SslContextBuilder.forClient().build();
+            SslContext sslCtx = SslContextBuilder.forClient()
+                    .endpointIdentificationAlgorithm("HTTPS")
+                    .build();
             WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
                 uri, WebSocketVersion.V13, null, false,
                 new DefaultHttpHeaders()

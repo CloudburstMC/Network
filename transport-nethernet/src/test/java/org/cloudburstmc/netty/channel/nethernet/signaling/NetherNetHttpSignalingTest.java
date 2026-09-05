@@ -8,7 +8,8 @@ import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSessionListener;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.handler.ssl.SslContext;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -38,7 +39,7 @@ class NetherNetHttpSignalingTest {
 
     private static final String CANNED_ANSWER = "v=0\r\no=- 0 2 IN IP4 127.0.0.1\r\na=candidate:1 1 udp 2122260223 127.0.0.1 55555 typ host\r\n";
 
-    private static NioEventLoopGroup group;
+    private static MultiThreadIoEventLoopGroup group;
     private static NetherNetHttpSignaling signaling;
     private static Channel serverChannel;
     private static ScriptedBackend backend;
@@ -80,7 +81,7 @@ class NetherNetHttpSignalingTest {
 
     @BeforeAll
     static void setUp() throws Exception {
-        group = new NioEventLoopGroup(2);
+        group = new MultiThreadIoEventLoopGroup(2, NioIoHandler.newFactory());
         backend = new ScriptedBackend();
         signaling = new NetherNetHttpSignaling((SslContext) null, group);
 
