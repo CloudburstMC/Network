@@ -13,16 +13,9 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.jose4j)
 
+    testImplementation(platform(libs.junit.bom))
     testImplementation(libs.bundles.junit)
     testRuntimeOnly(libs.junit.platform.launcher)
-}
-
-configure<JavaPluginExtension> {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
-    }
-    withJavadocJar()
-    withSourcesJar()
 }
 
 tasks.jar {

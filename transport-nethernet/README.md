@@ -1,6 +1,6 @@
 # netty-transport-nethernet
 
-In NetworkM this module targets Java 17 and uses
+In NetworkM this module targets Java 21 and uses
 `dev.kastle.webrtc:webrtc-java:1.0.4-edu.3`. Consumers need the custom
 [WebRTC artifact repository](https://raw.githubusercontent.com/SendableMetatype/webrtc-java/maven-repo/)
 in addition to Maven Central, plus matching platform native libraries. The root
