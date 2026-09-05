@@ -6,6 +6,7 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
@@ -14,6 +15,8 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -31,6 +34,7 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.concurrent.ScheduledFuture;
+import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -40,6 +44,7 @@ import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -88,6 +93,9 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
 
     private final Supplier<SslContext> sslContextSupplier;
     private final EventLoopGroup workerGroup;
+    private final Supplier<? extends EventLoopGroup> acceptGroupFactory;
+    private final Object lifecycleLock = new Object();
+    private final ChannelGroup connections = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE, true);
     private final String localNetworkId = Long.toUnsignedString(ThreadLocalRandom.current().nextLong());
 
     private final Map<Long, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
@@ -102,7 +110,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     // channel's event loop, so registering the listener on a caller supplied
     // group and waiting for the bind would deadlock a single threaded group
     // against itself (netty rejects it as a blocking call on the event loop).
-    private volatile MultiThreadIoEventLoopGroup acceptGroup;
+    private EventLoopGroup acceptGroup;
     private volatile boolean closed;
 
     /**
@@ -124,8 +132,14 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
      *                           down here
      */
     public NetherNetHttpSignaling(Supplier<SslContext> sslContextSupplier, EventLoopGroup workerGroup) {
-        this.sslContextSupplier = sslContextSupplier;
-        this.workerGroup = workerGroup;
+        this(sslContextSupplier, workerGroup, () -> new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory()));
+    }
+
+    NetherNetHttpSignaling(Supplier<SslContext> sslContextSupplier, EventLoopGroup workerGroup,
+                          Supplier<? extends EventLoopGroup> acceptGroupFactory) {
+        this.sslContextSupplier = Objects.requireNonNull(sslContextSupplier, "sslContextSupplier");
+        this.workerGroup = Objects.requireNonNull(workerGroup, "workerGroup");
+        this.acceptGroupFactory = Objects.requireNonNull(acceptGroupFactory, "acceptGroupFactory");
     }
 
     /**
@@ -145,15 +159,34 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
 
     @Override
     public void bind(SocketAddress localAddress) throws ConnectException {
+        Objects.requireNonNull(localAddress, "localAddress");
+        EventLoopGroup accept;
+        synchronized (lifecycleLock) {
+            if (closed) {
+                throw new ConnectException("HTTP signaling is closed");
+            }
+            if (acceptGroup != null) {
+                throw new ConnectException("HTTP signaling is already bound or binding");
+            }
+            accept = Objects.requireNonNull(acceptGroupFactory.get(), "acceptGroupFactory returned null");
+            acceptGroup = accept;
+        }
+
+        ChannelFuture bind = null;
+        boolean bound = false;
         try {
-            this.acceptGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
             ServerBootstrap bootstrap = new ServerBootstrap();
-            bootstrap.group(acceptGroup, workerGroup)
+            bootstrap.group(accept, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
+                            connections.add(ch);
+                            if (closed) {
+                                ch.close();
+                                return;
+                            }
                             ch.pipeline().addLast(new ReadTimeoutHandler(READ_TIMEOUT_SECONDS));
                             ch.pipeline().addLast(new ProtocolSelectingHandler());
                             ch.pipeline().addLast(new HttpServerCodec());
@@ -161,13 +194,38 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                             ch.pipeline().addLast(new SignalingRequestHandler());
                         }
                     });
-            this.serverChannel = bootstrap.bind(localAddress).sync().channel();
-            log.info("HTTP signaling listening on {} ({})", localAddress,
-                    sslContextSupplier.get() != null ? "TLS, plaintext fallback" : "plaintext");
+            bind = bootstrap.bind(localAddress);
+            synchronized (lifecycleLock) {
+                if (closed) {
+                    throw new ConnectException("HTTP signaling closed during bind");
+                }
+                serverChannel = bind.channel();
+            }
+            bind.sync();
+            synchronized (lifecycleLock) {
+                if (closed) {
+                    throw new ConnectException("HTTP signaling closed during bind");
+                }
+                bound = true;
+            }
+            log.info("HTTP signaling listening on {}", bind.channel().localAddress());
         } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             ConnectException ce = new ConnectException("Failed to bind HTTP signaling listener: " + e.getMessage());
             ce.initCause(e);
             throw ce;
+        } finally {
+            if (!bound) {
+                try {
+                    if (bind != null) {
+                        bind.channel().close();
+                    }
+                } finally {
+                    close();
+                }
+            }
         }
     }
 
@@ -258,47 +316,73 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
         return exchange != null ? exchange.remoteAddress : null;
     }
 
+    /** Closes the listener and accepted connections. This instance cannot be rebound. */
     @Override
     public void close() {
-        closed = true;
-        Channel channel = this.serverChannel;
-        if (channel != null) {
-            channel.close();
+        Channel channel;
+        EventLoopGroup accept;
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            channel = serverChannel;
+            accept = acceptGroup;
             this.serverChannel = null;
-        }
-        MultiThreadIoEventLoopGroup accept = this.acceptGroup;
-        if (accept != null) {
-            accept.shutdownGracefully(0, 3, TimeUnit.SECONDS);
             this.acceptGroup = null;
         }
-        for (Long connectionId : pendingExchanges.keySet()) {
-            PendingExchange exchange = pendingExchanges.remove(connectionId);
-            if (exchange != null) {
-                exchange.cancelTimeout();
-                respond(exchange.ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "text/plain", "Server shutting down");
+        try {
+            if (channel != null) {
+                channel.close();
+            }
+            for (Long connectionId : pendingExchanges.keySet()) {
+                PendingExchange exchange = pendingExchanges.remove(connectionId);
+                if (exchange != null) {
+                    exchange.cancelTimeout();
+                    respond(exchange.ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "text/plain", "Server shutting down");
+                }
+            }
+            signalHandlers.clear();
+        } finally {
+            try {
+                connections.close();
+            } finally {
+                if (accept != null) {
+                    accept.shutdownGracefully(0, 3, TimeUnit.SECONDS);
+                }
             }
         }
-        signalHandlers.clear();
     }
 
     /**
      * One in flight offer/answer exchange: the HTTP context awaiting the
      * answer, the peer's address, and the negotiation timeout reaping it.
      */
-    private static final class PendingExchange {
+    static final class PendingExchange {
         final ChannelHandlerContext ctx;
         final InetSocketAddress remoteAddress;
-        volatile ScheduledFuture<?> timeout;
+        private ScheduledFuture<?> timeout;
+        private boolean completed;
 
         PendingExchange(ChannelHandlerContext ctx, InetSocketAddress remoteAddress) {
             this.ctx = ctx;
             this.remoteAddress = remoteAddress;
         }
 
-        void cancelTimeout() {
-            ScheduledFuture<?> t = this.timeout;
-            if (t != null) {
-                t.cancel(false);
+        synchronized void setTimeout(ScheduledFuture<?> timeout) {
+            // Close can complete an exchange between its map insertion and timer assignment.
+            if (completed) {
+                timeout.cancel(false);
+            } else {
+                this.timeout = timeout;
+            }
+        }
+
+        synchronized void cancelTimeout() {
+            completed = true;
+            if (timeout != null) {
+                timeout.cancel(false);
+                timeout = null;
             }
         }
     }
@@ -359,7 +443,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
             // Reap a negotiation that produces no answer in time: 502 to the
             // client, CONNECTERROR inward so the server channel closes the
             // half negotiated child.
-            exchange.timeout = ctx.channel().eventLoop().schedule(() -> {
+            exchange.setTimeout(ctx.channel().eventLoop().schedule(() -> {
                 if (pendingExchanges.remove(connectionId) != null) {
                     log.debug("Negotiation for {} timed out waiting for the answer", Long.toUnsignedString(connectionId));
                     respond(ctx, HttpResponseStatus.BAD_GATEWAY, "text/plain", "Timed out waiting for answer");
@@ -369,7 +453,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                                 + Long.toUnsignedString(connectionId) + " negotiation timeout");
                     }
                 }
-            }, NEGOTIATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            }, NEGOTIATION_TIMEOUT_SECONDS, TimeUnit.SECONDS));
 
             // A client that disconnects mid negotiation leaves the answer with
             // nowhere to go; drop the exchange so the timeout does not fire a

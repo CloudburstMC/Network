@@ -1,16 +1,21 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import io.netty.buffer.ByteBuf;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.channels.ClosedChannelException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
 public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, NetherNetServerSignaling {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscoverySignaling.class);
@@ -18,13 +23,17 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     private final NetherNetDiscovery discovery;
     private final InetSocketAddress bindAddress;
     private final String localNetworkId;
+    private final long discoveryTimeoutMillis;
+    private final Object lifecycleLock = new Object();
+    private DiscoveryAttempt pendingConnect;
+    private volatile boolean closed;
 
     // State captured after connect
     private volatile InetSocketAddress remoteAddress;
     private final AtomicReference<String> discoveredServerId = new AtomicReference<>(null);
 
     /**
-     * Creates a NetherNetDiscoverySignaling with a random local Network ID and binds to an ephemeral port.     *
+     * Creates a NetherNetDiscoverySignaling with a random local Network ID and binds to an ephemeral port.
      */
     public NetherNetDiscoverySignaling() {
         this(ThreadLocalRandom.current().nextLong(), new InetSocketAddress(0));
@@ -46,9 +55,18 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
      * @param bindAddress    The address to bind the discovery socket to.
      */
     public NetherNetDiscoverySignaling(long localNetworkId, InetSocketAddress bindAddress) {
+        this(localNetworkId, bindAddress, new NetherNetDiscovery(localNetworkId), 10_000);
+    }
+
+    NetherNetDiscoverySignaling(long localNetworkId, InetSocketAddress bindAddress,
+                               NetherNetDiscovery discovery, long discoveryTimeoutMillis) {
+        if (discoveryTimeoutMillis <= 0) {
+            throw new IllegalArgumentException("discoveryTimeoutMillis must be positive");
+        }
         this.localNetworkId = Long.toUnsignedString(localNetworkId);
-        this.discovery = new NetherNetDiscovery(localNetworkId);
-        this.bindAddress = bindAddress;
+        this.discovery = Objects.requireNonNull(discovery, "discovery");
+        this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
+        this.discoveryTimeoutMillis = discoveryTimeoutMillis;
     }
 
     @Override
@@ -56,16 +74,52 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
         return this.localNetworkId;
     }
 
+    /**
+     * Discovers the remote server with a deadline of ten seconds. Calls for the
+     * same pending target resend the request and share its completion future.
+     */
     @Override
     public CompletableFuture<List<IceServerInfo>> connect(SocketAddress remote) {
-        CompletableFuture<List<IceServerInfo>> future = new CompletableFuture<>();
-
         if (!(remote instanceof InetSocketAddress)) {
-            future.completeExceptionally(new IllegalArgumentException("Discovery requires InetSocketAddress"));
-            return future;
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Discovery requires InetSocketAddress"));
         }
 
-        this.remoteAddress = (InetSocketAddress) remote;
+        DiscoveryAttempt attempt;
+        boolean newAttempt;
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return CompletableFuture.failedFuture(new ClosedChannelException());
+            }
+            if (pendingConnect != null) {
+                if (!remote.equals(remoteAddress)) {
+                    return CompletableFuture.failedFuture(new IllegalStateException("Discovery is already connecting"));
+                }
+                if (!pendingConnect.requestSent) {
+                    return pendingConnect.result;
+                }
+                attempt = pendingConnect;
+                newAttempt = false;
+            } else {
+                this.remoteAddress = (InetSocketAddress) remote;
+                discoveredServerId.set(null);
+                attempt = new DiscoveryAttempt();
+                pendingConnect = attempt;
+                newAttempt = true;
+            }
+        }
+        if (newAttempt) {
+            attempt.timeout.orTimeout(discoveryTimeoutMillis, TimeUnit.MILLISECONDS)
+                    .whenComplete((unused, error) -> {
+                        if (error != null) {
+                            completeAttempt(attempt, null, error);
+                        }
+                    });
+            attempt.result.whenComplete((result, error) -> {
+                if (attempt.result.isCancelled()) {
+                    completeAttempt(attempt, null, error);
+                }
+            });
+        }
 
         try {
             if (!this.discovery.isActive()) {
@@ -73,34 +127,62 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
                 this.discovery.bind(bindAddress);
             }
 
-            log.debug("Sending Discovery Request to {}", remote);
-
-            // Send request and register the callback to capture the ID
-            this.discovery.sendDiscoveryRequest(this.remoteAddress, (serverNetworkId, payload) -> {
-                try {
-                    log.info("Discovery Response Received! Server NetworkID: {}", serverNetworkId);
-
-                    // Capture the ID so we can use it for signaling later
-                    discoveredServerId.set(Long.toUnsignedString(serverNetworkId));
-
-                    future.complete(Collections.emptyList());
-                } catch (Exception e) {
-                    log.error("Error processing discovery response", e);
-                    future.completeExceptionally(e);
-                } finally {
-                    ReferenceCountUtil.release(payload);
+            synchronized (lifecycleLock) {
+                if (pendingConnect == attempt && !closed) {
+                    log.debug("Sending Discovery Request to {}", remote);
+                    this.discovery.sendDiscoveryRequestToPeer((InetSocketAddress) remote, attempt.callback);
+                    attempt.requestSent = true;
                 }
-            });
+            }
         } catch (Exception e) {
             log.error("Failed to send discovery request", e);
-            future.completeExceptionally(e);
+            completeAttempt(attempt, null, e);
         }
 
-        return future;
+        return attempt.result;
+    }
+
+    private void completeAttempt(DiscoveryAttempt attempt, Long serverNetworkId, Throwable failure) {
+        synchronized (lifecycleLock) {
+            if (pendingConnect != attempt) {
+                return;
+            }
+            if (closed) {
+                serverNetworkId = null;
+                failure = new ClosedChannelException();
+            }
+            pendingConnect = null;
+            if (serverNetworkId != null) {
+                discoveredServerId.set(Long.toUnsignedString(serverNetworkId));
+            }
+        }
+        discovery.clearDiscoveryCallback(attempt.callback);
+        attempt.timeout.cancel(false);
+        if (failure == null) {
+            attempt.result.complete(Collections.emptyList());
+        } else {
+            attempt.result.completeExceptionally(failure);
+        }
+    }
+
+    private final class DiscoveryAttempt {
+        private boolean requestSent;
+        private final CompletableFuture<List<IceServerInfo>> result = new CompletableFuture<>();
+        private final CompletableFuture<Void> timeout = new CompletableFuture<>();
+        private final BiConsumer<Long, ByteBuf> callback = (serverNetworkId, payload) -> {
+            try {
+                completeAttempt(this, serverNetworkId, null);
+            } finally {
+                ReferenceCountUtil.release(payload);
+            }
+        };
     }
 
     @Override
     public void bind(SocketAddress localAddress) {
+        if (closed) {
+            throw new IllegalStateException("Discovery signaling is closed");
+        }
         if (!this.discovery.isActive()) {
             if (localAddress instanceof InetSocketAddress) {
                 this.discovery.bind((InetSocketAddress) localAddress);
@@ -166,6 +248,20 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
 
     @Override
     public void close() {
-        this.discovery.close();
+        DiscoveryAttempt attempt;
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            attempt = pendingConnect;
+        }
+        try {
+            if (attempt != null) {
+                completeAttempt(attempt, null, new ClosedChannelException());
+            }
+        } finally {
+            this.discovery.close();
+        }
     }
 }
