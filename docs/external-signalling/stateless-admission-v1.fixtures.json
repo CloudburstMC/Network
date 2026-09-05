@@ -1,0 +1,47 @@
+{
+  "kind": "nxs-stateless-admission-vectors",
+  "version": 1,
+  "experimental": true,
+  "warning": "Public deterministic test material only. Never use fixture keys/nonces in production.",
+  "context": {
+    "keyId": "K001",
+    "secret": "stateless-fixture-secret-32-bytes-minimum",
+    "audience": "nxs-stateless-host-v1/0123456789abcdef0123456789abcdef"
+  },
+  "claims": {
+    "expiresAt": 1788484830000,
+    "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "clientIcePwd": "clientPassword01234567890",
+    "clientSctpPort": 5000,
+    "clientMaxMessageSize": 262144,
+    "callerContextHashHex": "abcdef0123456789abcdef0123456789",
+    "networkId": "18446744073709551615"
+  },
+  "clientIceUfrag": "clientFixtureUf",
+  "nonceHex": "000102030405060708090a0b",
+  "now": 1788484800000,
+  "maxTtlMs": 60000,
+  "expected": {
+    "localUfrag": "NXS1K001AAECAwQFBgcICQoLVMAD+DMWY8K/TmtjsFluCDDdBa2hZL+TXNNyTD2z2mk9pDlsv7HZSWUQcYeCwa1spGxF25/EdEU8Qa7XN2qhYd9Ha7UENSp5AIMknX1jCS8Mw4joQSTW9M1qq5G/t+T8agkcuu9qluHVT/Am",
+    "icePwd": "hLPAsKmOEIGguJ3cJoj7OQqkkbLN6RWH",
+    "ufragLength": 168
+  },
+  "budget": {
+    "headerAscii": 8,
+    "nonceBytes": 12,
+    "fixedPlaintextBytes": 67,
+    "tagBytes": 16,
+    "maxUfragChars": 256,
+    "maxPasswordBytes": 91
+  },
+  "rejections": [
+    "tampered-ciphertext",
+    "expired",
+    "wrong-host",
+    "wrong-profile-incarnation",
+    "wrong-key",
+    "wrong-client-ufrag",
+    "password-over-budget",
+    "noncanonical-base64"
+  ]
+}

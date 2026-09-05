@@ -1,0 +1,7 @@
+{
+  "specification": "urn:nethernet:external-signalling:v1",
+  "files": {
+    "stateless-admission-v1.fixtures.json": "f84db8b78018cf3f5b910625414701f7c41bca1a5fa8056ff22c0d17df99301a",
+    "cloudburst-protocol-vectors.v1.json": "2bd4c3305a0911f2d4a1166f1c6760ed6979c5af551cbd9660e9badd1f7fb993"
+  }
+}

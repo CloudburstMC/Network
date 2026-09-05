@@ -4,7 +4,8 @@ dependencies {
     api(libs.bundles.netty)
     api(libs.netty.codec.http)
     api(libs.expiringmap)
-    api(libs.libdatachannel.java)
+    api("${rootProject.property("nativeJavaGroup")}:libdatachannel-java:${rootProject.property("nativeJavaVersion")}")
+    testRuntimeOnly("${rootProject.property("nativeJavaGroup")}:libdatachannel-java:${rootProject.property("nativeJavaVersion")}:x86_64")
 
     implementation(libs.gson)
     implementation(libs.jose4j)
