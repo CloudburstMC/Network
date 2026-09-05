@@ -2,7 +2,9 @@ package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSession;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
+import org.cloudburstmc.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -24,13 +26,16 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Timeout(10)
@@ -275,9 +280,9 @@ class NetherNetChannelLifecycleTest {
         try {
             group.register(parent).sync();
             if (exceedByteLimit) {
-                child.deliverInbound(ByteBuffer.allocate(8 * 1024 * 1024));
+                child.deliverInbound(ByteBuffer.allocate(32 * 1024 * 1024 + 512));
             } else {
-                for (int i = 0; i < 256; i++) {
+                for (int i = 0; i < 512; i++) {
                     child.deliverInbound(ByteBuffer.wrap(new byte[]{1}));
                 }
             }
@@ -293,6 +298,163 @@ class NetherNetChannelLifecycleTest {
         } finally {
             child.close().syncUninterruptibly();
             parent.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void remoteAddressTracksIceChangesAfterAnEarlyLookup() {
+        TestChannel channel = new TestChannel();
+        try {
+            assertEquals(new InetSocketAddress("127.0.0.1", 19132), channel.remoteAddress());
+            InetSocketAddress nominated = new InetSocketAddress("192.0.2.8", 32000);
+            channel.remoteAddress = nominated;
+            assertSame(nominated, channel.remoteAddress());
+            InetSocketAddress replacement = new InetSocketAddress("192.0.2.9", 32001);
+            channel.remoteAddress = replacement;
+            assertSame(replacement, channel.remoteAddress());
+        } finally {
+            channel.unsafe().closeForcibly();
+        }
+    }
+
+    @Test
+    void manualReadFinishesOneMessageAndLeavesTheNextQueued() throws Exception {
+        TestChannel channel = new TestChannel();
+        channel.config().setAutoRead(false);
+        LinkedBlockingQueue<byte[]> messages = new LinkedBlockingQueue<>();
+        channel.pipeline().addLast(new NetherNetFramingCodec(), new ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object message) {
+                ByteBuf buffer = (ByteBuf) message;
+                try {
+                    messages.add(ByteBufUtil.getBytes(buffer));
+                } finally {
+                    buffer.release();
+                }
+            }
+        });
+        try {
+            group.register(channel).sync();
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{1, 11}));
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 12}));
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 13}));
+            channel.eventLoop().submit(() -> { }).sync();
+            assertTrue(messages.isEmpty());
+
+            channel.read();
+            assertArrayEquals(new byte[]{11, 12}, messages.poll(2, TimeUnit.SECONDS));
+            assertNull(messages.poll(100, TimeUnit.MILLISECONDS));
+
+            channel.read();
+            assertArrayEquals(new byte[]{13}, messages.poll(2, TimeUnit.SECONDS));
+            assertTrue(messages.isEmpty());
+        } finally {
+            channel.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void enablingAutoReadDrainsQueuedFramesInFairBatches() throws Exception {
+        TestChannel channel = new TestChannel();
+        channel.config().setAutoRead(false);
+        List<Integer> messages = new ArrayList<>();
+        AtomicInteger completions = new AtomicInteger();
+        AtomicInteger countAtMarker = new AtomicInteger();
+        CountDownLatch received = new CountDownLatch(192);
+        channel.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object message) {
+                ByteBuf buffer = (ByteBuf) message;
+                try {
+                    messages.add(buffer.readInt());
+                } finally {
+                    buffer.release();
+                    received.countDown();
+                }
+            }
+
+            @Override
+            public void channelReadComplete(ChannelHandlerContext ctx) {
+                completions.incrementAndGet();
+            }
+        });
+        try {
+            group.register(channel).sync();
+            for (int i = 0; i < 192; i++) {
+                ByteBuffer frame = ByteBuffer.allocate(4).putInt(i).flip();
+                channel.deliverInbound(frame);
+            }
+            channel.eventLoop().submit(() -> {
+                channel.config().setAutoRead(true);
+                channel.eventLoop().execute(() -> countAtMarker.set(messages.size()));
+            }).sync();
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            channel.eventLoop().submit(() -> { }).sync();
+
+            assertEquals(java.util.stream.IntStream.range(0, 192).boxed().toList(), messages);
+            assertTrue(countAtMarker.get() > 0 && countAtMarker.get() < 192);
+            assertTrue(completions.get() > 1 && completions.get() < 192);
+        } finally {
+            channel.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void activePausedReaderCannotAccumulateAnUnboundedBacklog() throws Exception {
+        TestChannel channel = new TestChannel();
+        UnpooledByteBufAllocator allocator = new UnpooledByteBufAllocator(false);
+        channel.config().setAllocator(allocator).setAutoRead(false);
+        try {
+            group.register(channel).sync();
+            for (int i = 0; i < 513; i++) {
+                channel.deliverInbound(ByteBuffer.wrap(new byte[]{1}));
+            }
+            assertTrue(channel.closeFuture().await(2, TimeUnit.SECONDS));
+            assertFalse(channel.isOpen());
+            assertEquals(0, allocator.metric().usedHeapMemory());
+        } finally {
+            channel.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void pausedReaderCanQueueTwoMaximumReassembledMessages() throws Exception {
+        TestChannel channel = new TestChannel();
+        UnpooledByteBufAllocator allocator = new UnpooledByteBufAllocator(false);
+        channel.config().setAllocator(allocator).setAutoRead(false);
+        LinkedBlockingQueue<ByteBuf> messages = new LinkedBlockingQueue<>();
+        channel.pipeline().addLast(new NetherNetFramingCodec(), new ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object message) {
+                messages.add((ByteBuf) message);
+            }
+        });
+        try {
+            group.register(channel).sync();
+            for (int message = 0; message < 2; message++) {
+                for (int countdown = 255; countdown >= 0; countdown--) {
+                    ByteBuffer frame = ByteBuffer.allocate(65537);
+                    frame.put((byte) countdown).position(0);
+                    channel.deliverInbound(frame);
+                }
+            }
+            assertTrue(channel.isOpen());
+            assertTrue(messages.isEmpty());
+            for (int message = 0; message < 2; message++) {
+                channel.read();
+                ByteBuf received = messages.poll(3, TimeUnit.SECONDS);
+                assertTrue(received != null);
+                try {
+                    assertEquals(16 * 1024 * 1024, received.readableBytes());
+                } finally {
+                    received.release();
+                }
+            }
+            channel.eventLoop().submit(() -> { }).sync();
+            assertEquals(0, allocator.metric().usedHeapMemory());
+        } finally {
+            channel.close().syncUninterruptibly();
+            messages.forEach(ByteBuf::release);
         }
     }
 

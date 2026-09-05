@@ -50,6 +50,8 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
 
     private CompositeByteBuf assembly;
     private int expectedCountdown = -1;
+    private boolean receivedFrame;
+    private boolean deliveredMessage;
 
     /**
      * Creates a codec that reads the negotiated max message size from the
@@ -86,10 +88,12 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (!(msg instanceof ByteBuf)) {
+            deliveredMessage = true;
             ctx.fireChannelRead(msg);
             return;
         }
         ByteBuf buf = (ByteBuf) msg;
+        receivedFrame = true;
         try {
             if (!buf.isReadable()) {
                 return;
@@ -120,9 +124,11 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
                     ByteBuf complete = assembly;
                     assembly = null;
                     expectedCountdown = -1;
+                    deliveredMessage = true;
                     ctx.fireChannelRead(complete);
                 } else if (buf.isReadable()) {
                     // Complete single message, the common case.
+                    deliveredMessage = true;
                     ctx.fireChannelRead(buf.readRetainedSlice(buf.readableBytes()));
                 }
             } else {
@@ -147,6 +153,18 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
         } finally {
             buf.release();
         }
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        boolean needsAnotherFrame = receivedFrame && !deliveredMessage;
+        receivedFrame = false;
+        deliveredMessage = false;
+        // One application read must be able to finish a fragmented message.
+        if (needsAnotherFrame && !ctx.channel().config().isAutoRead() && ctx.channel().isActive()) {
+            ctx.read();
+        }
+        ctx.fireChannelReadComplete();
     }
 
     @Override
@@ -206,6 +224,8 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         resetAssembly();
+        receivedFrame = false;
+        deliveredMessage = false;
         super.channelInactive(ctx);
     }
 

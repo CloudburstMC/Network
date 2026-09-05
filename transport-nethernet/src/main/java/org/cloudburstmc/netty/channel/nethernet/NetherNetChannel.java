@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
+import org.cloudburstmc.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.AbstractChannel;
 import io.netty.channel.Channel;
@@ -54,7 +55,11 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * slow; close deterministically instead of queueing without bound.
      */
     private static final long MAX_BACKLOG_BYTES = 8 * 1024 * 1024;
-    private static final int MAX_PENDING_INBOUND_MESSAGES = 256;
+    // Leave room for two maximum-sized messages, including their fragment headers.
+    private static final int MAX_PENDING_INBOUND_MESSAGES = 2 * NetherNetFramingCodec.MAX_FRAGMENT_COUNT;
+    private static final long MAX_PENDING_INBOUND_BYTES = 2L * NetherNetFramingCodec.MAX_REASSEMBLED_SIZE
+            + MAX_PENDING_INBOUND_MESSAGES;
+    private static final int MAX_MESSAGES_PER_DRAIN = 64;
 
     protected DefaultNetherChannelConfig config;
     protected volatile SocketAddress remoteAddress;
@@ -62,9 +67,13 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     private final AtomicBoolean channelActiveFired = new AtomicBoolean();
     private final Object inboundLock = new Object();
+    private final Runnable inboundDrainTask = this::drainInbound;
     private volatile boolean inboundReady;
-    private volatile Queue<ByteBuf> pendingInbound;
+    private volatile boolean inboundClosed;
+    private volatile boolean readPending;
+    private Queue<ByteBuf> pendingInbound;
     private int pendingInboundBytes;
+    private boolean inboundDrainScheduled;
 
     // Bytes handed to the engine and not yet reported sent via
     // onEngineBytesSent. Incremented on the event loop, decremented on engine
@@ -138,95 +147,120 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * exactly once here, then handed to the event loop in arrival order.
      */
     protected void deliverInbound(ByteBuffer data) {
-        if (!open || !data.hasRemaining()) {
+        if (!open || inboundClosed || !data.hasRemaining()) {
             return;
         }
-        ByteBuf copy = config.getAllocator().buffer(data.remaining());
-        copy.writeBytes(data);
-        if (queueInboundIfNotReady(copy)) {
-            return;
-        }
-        dispatchInbound(copy);
-    }
-
-    private void dispatchInbound(ByteBuf copy) {
-        try {
-            eventLoop().execute(() -> deliverInboundOnEventLoop(copy));
-        } catch (Exception e) {
-            // Event loop rejected the task (shutdown race); do not leak.
-            copy.release();
-        }
-    }
-
-    private void deliverInboundOnEventLoop(ByteBuf copy) {
-        if (!isOpen()) {
-            copy.release();
-            return;
-        }
-        // Registration can replace the fallback parent executor after a callback was queued.
-        if (!eventLoop().inEventLoop()) {
-            dispatchInbound(copy);
-            return;
-        }
-        if (queueInboundIfNotReady(copy)) {
-            return;
-        }
-        fireChannelActiveIfReady();
-        if (!isOpen()) {
-            copy.release();
-            return;
-        }
-        pipeline().fireChannelRead(copy);
-        pipeline().fireChannelReadComplete();
-    }
-
-    private boolean queueInboundIfNotReady(ByteBuf copy) {
-        if (inboundReady && isRegistered() && isActive()) {
-            return false;
-        }
+        boolean overflow = false;
         synchronized (inboundLock) {
-            if (!isOpen()) {
-                copy.release();
-                return true;
+            if (!isOpen() || inboundClosed) {
+                return;
             }
-            if (inboundReady && isRegistered() && isActive()) {
-                return false;
-            }
-            if (copy.readableBytes() <= MAX_BACKLOG_BYTES - pendingInboundBytes
+            int bytes = data.remaining();
+            if (bytes <= MAX_PENDING_INBOUND_BYTES - pendingInboundBytes
                     && (pendingInbound == null || pendingInbound.size() < MAX_PENDING_INBOUND_MESSAGES)) {
+                ByteBuf copy = config.getAllocator().buffer(bytes);
+                try {
+                    copy.writeBytes(data);
+                } catch (Throwable cause) {
+                    copy.release();
+                    throw cause;
+                }
                 if (pendingInbound == null) {
                     pendingInbound = new ArrayDeque<>();
                 }
                 pendingInbound.add(copy);
-                pendingInboundBytes += copy.readableBytes();
-                return true;
+                pendingInboundBytes += bytes;
+            } else {
+                inboundClosed = true;
+                overflow = true;
             }
         }
-        copy.release();
-        log.warn("Closing {}: too much inbound data arrived before channel activation", remoteAddress);
-        close();
-        return true;
+        if (overflow) {
+            discardPendingInbound();
+            log.warn("Closing {}: inbound backlog exceeded {} frames or {} bytes",
+                    remoteAddress, MAX_PENDING_INBOUND_MESSAGES, MAX_PENDING_INBOUND_BYTES);
+            close();
+        } else {
+            requestInboundDrain();
+        }
     }
 
-    private Queue<ByteBuf> takePendingInbound() {
+    /** Drops frames belonging to an abandoned transport attempt. */
+    protected final void discardPendingInbound() {
+        Queue<ByteBuf> pending;
         synchronized (inboundLock) {
-            Queue<ByteBuf> pending = pendingInbound;
+            pending = pendingInbound;
             pendingInbound = null;
             pendingInboundBytes = 0;
-            return pending;
         }
-    }
-
-    private void drainPendingInbound() {
-        if (pendingInbound == null || !inboundReady || !isRegistered() || !isActive()) {
-            return;
-        }
-        Queue<ByteBuf> pending = takePendingInbound();
         if (pending != null) {
             ByteBuf copy;
             while ((copy = pending.poll()) != null) {
-                deliverInboundOnEventLoop(copy);
+                copy.release();
             }
+        }
+    }
+
+    private boolean canReadInbound() {
+        return inboundReady && !inboundClosed && isRegistered() && isActive()
+                && (config.isAutoRead() || readPending);
+    }
+
+    private void requestInboundDrain() {
+        synchronized (inboundLock) {
+            if (inboundDrainScheduled || pendingInbound == null || pendingInbound.isEmpty() || !canReadInbound()) {
+                return;
+            }
+            inboundDrainScheduled = true;
+        }
+        scheduleInboundDrain();
+    }
+
+    private void scheduleInboundDrain() {
+        try {
+            eventLoop().execute(inboundDrainTask);
+        } catch (RuntimeException e) {
+            synchronized (inboundLock) {
+                inboundClosed = true;
+                inboundDrainScheduled = false;
+            }
+            discardPendingInbound();
+        }
+    }
+
+    private void drainInbound() {
+        // Re-registration can move the channel after this task was queued.
+        if (!eventLoop().inEventLoop()) {
+            scheduleInboundDrain();
+            return;
+        }
+        int messages = 0;
+        try {
+            fireChannelActiveIfReady();
+            while (messages < MAX_MESSAGES_PER_DRAIN && canReadInbound()) {
+                ByteBuf copy;
+                synchronized (inboundLock) {
+                    copy = pendingInbound == null ? null : pendingInbound.poll();
+                    if (copy == null) {
+                        break;
+                    }
+                    pendingInboundBytes -= copy.readableBytes();
+                }
+                readPending = false;
+                pipeline().fireChannelRead(copy);
+                messages++;
+                if (!config.isAutoRead()) {
+                    break;
+                }
+            }
+            if (messages != 0) {
+                pipeline().fireChannelReadComplete();
+            }
+        } finally {
+            synchronized (inboundLock) {
+                inboundDrainScheduled = false;
+            }
+            requestInboundDrain();
         }
     }
 
@@ -249,7 +283,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
             startRttSampler();
             pipeline().fireChannelActive();
         }
-        drainPendingInbound();
+        requestInboundDrain();
     }
 
     @Override
@@ -435,13 +469,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.writesPaused = false;
         this.engineOutstanding.set(0);
         inboundReady = false;
-        Queue<ByteBuf> pending = takePendingInbound();
-        if (pending != null) {
-            ByteBuf copy;
-            while ((copy = pending.poll()) != null) {
-                copy.release();
-            }
-        }
+        inboundClosed = true;
+        readPending = false;
+        discardPendingInbound();
 
         if (rttSampler != null) {
             rttSampler.cancel(false);
@@ -451,6 +481,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     protected void doBeginRead() throws Exception {
+        readPending = true;
+        requestInboundDrain();
     }
 
     @Override
@@ -465,6 +497,12 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     protected SocketAddress remoteAddress0() {
+        return this.remoteAddress;
+    }
+
+    @Override
+    public SocketAddress remoteAddress() {
+        // ICE nomination can replace an address already observed by a handler.
         return this.remoteAddress;
     }
 
