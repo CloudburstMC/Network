@@ -68,9 +68,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
     private final AtomicLong engineOutstanding = new AtomicLong();
     // Set on the event loop when doWrite pauses on the high water mark; the
     // engine thread that drains below the low water mark clears it and
-    // schedules the resume flush. While at least ENGINE_HIGH_WATER_MARK bytes
-    // are outstanding, more sent callbacks are guaranteed, so a set flag is
-    // always observed.
+    // schedules the resume flush. The writer rechecks the counter after
+    // setting the flag so a concurrent drain cannot lose the wakeup.
     private volatile boolean writesPaused;
 
     private volatile boolean transportOpen;
@@ -226,6 +225,10 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return false;
         }
         writesPaused = true;
+        if (engineOutstanding.get() <= ENGINE_RESUME_LOW_WATER_MARK) {
+            writesPaused = false;
+            return false;
+        }
         if (in.totalPendingWriteBytes() > MAX_BACKLOG_BYTES) {
             log.warn("Closing {}: peer cannot keep up ({} bytes unsent in the engine, {} bytes backlogged)",
                 remoteAddress, engineOutstanding.get(), in.totalPendingWriteBytes());

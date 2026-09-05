@@ -29,7 +29,7 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
     @Override
     public Map<ChannelOption<?>, Object> getOptions() {
         return this.getOptions(
-                super.getOptions(), 
+                super.getOptions(),
                 NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG
         );
     }

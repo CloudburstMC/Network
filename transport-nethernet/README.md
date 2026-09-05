@@ -1,5 +1,12 @@
 # netty-transport-nethernet
 
+In NetworkM this module targets Java 17 and uses
+`dev.kastle.webrtc:webrtc-java:1.0.4-edu.3`. Consumers need the custom
+[WebRTC artifact repository](https://raw.githubusercontent.com/SendableMetatype/webrtc-java/maven-repo/)
+in addition to Maven Central, plus matching platform native libraries. The root
+NetworkM build already configures that repository. The release links below refer
+to the upstream library, not a published NetworkM release.
+
 ## Downloads
 
 ### Releases ![Maven Central Version](https://img.shields.io/maven-central/v/org.cloudburstmc.netty/netty-transport-nethernet?label=Maven%20Central&color=%233fb950)

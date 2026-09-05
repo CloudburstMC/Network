@@ -7,7 +7,7 @@ import java.util.concurrent.CompletableFuture;
 public interface NetherNetClientSignaling extends NetherNetSignaling {
     /**
      * Connects to the signaling medium (Client mode).
-     * 
+     *
      * @param remoteAddress The address of the signaling server to connect to.
      */
     CompletableFuture<List<IceServerInfo>> connect(SocketAddress remoteAddress);
@@ -26,7 +26,7 @@ public interface NetherNetClientSignaling extends NetherNetSignaling {
     interface NotFoundHandler {
         /**
          * Called when the signaling service indicates the target peer was not found.
-         * 
+         *
          * @param reason The reason or raw message payload regarding the failure.
          */
         void onNotFound(String reason);

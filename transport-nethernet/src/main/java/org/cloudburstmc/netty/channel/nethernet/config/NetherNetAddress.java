@@ -7,7 +7,7 @@ public class NetherNetAddress extends SocketAddress {
 
     /**
      * Creates a NetherNetAddress from a numeric Network ID.
-     * 
+     *
      * @param networkId The numeric Network ID.
      */
     public NetherNetAddress(long networkId) {
@@ -16,7 +16,7 @@ public class NetherNetAddress extends SocketAddress {
 
     /**
      * Creates a NetherNetAddress from a string Network ID.
-     * 
+     *
      * @param networkId The string Network ID.
      */
     public NetherNetAddress(String networkId) {
@@ -25,7 +25,7 @@ public class NetherNetAddress extends SocketAddress {
 
     /**
      * Gets the Network ID as a String.
-     * 
+     *
      * @return the Network ID
      */
     public String getNetworkId() {
@@ -34,17 +34,17 @@ public class NetherNetAddress extends SocketAddress {
 
     /**
      * Tries to parse the Network ID as a long.
-     * 
+     *
      * @return the long value
      * @throws NumberFormatException if the ID is not a valid unsigned long string (e.g. Realms ID).
      */
     public long getNetworkIdAsLong() {
         return Long.parseUnsignedLong(networkId);
     }
-    
+
     /**
      * Returns the string representation of the Network ID.
-     * 
+     *
      * @return the Network ID as a string
      */
     @Override

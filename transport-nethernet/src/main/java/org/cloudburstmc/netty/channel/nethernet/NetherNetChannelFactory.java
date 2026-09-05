@@ -26,7 +26,7 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
 
     /**
      * Creates a NetherNet Server Channel Factory.
-     * 
+     *
      * @param factory The PeerConnectionFactory to use for creating peer connections. Should be reused where possible.
      * @param signaling The NetherNetServerSignaling instance for signaling.
      * @return A ChannelFactory for NetherNetServerChannel.
@@ -86,7 +86,7 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
 
     /**
      * Creates a NetherNet Client Channel Factory.
-     * 
+     *
      * @param factory The PeerConnectionFactory to use for creating peer connections. Should be reused where possible.
      * @param signaling The NetherNetClientSignaling instance for signaling.
      * @return A ChannelFactory for NetherNetClientChannel.

@@ -14,7 +14,7 @@ public interface NetherNetSignaling extends AutoCloseable {
 
     /**
      * Sets a handler to receive signaling messages for a specific connection ID.
-     * 
+     *
      * @param connectionId The connection ID to listen for.
      * @param handler      The handler to process incoming signaling messages.
      */
@@ -22,7 +22,7 @@ public interface NetherNetSignaling extends AutoCloseable {
 
     /**
      * Removes the signaling handler for a specific connection ID.
-     * 
+     *
      * @param connectionId The connection ID whose handler should be removed.
      */
     void removeSignalHandler(long connectionId);
@@ -46,7 +46,7 @@ public interface NetherNetSignaling extends AutoCloseable {
     interface SignalHandler {
         /**
          * Called when a signal is received for the registered connection ID.
-         * 
+         *
          * @param signal The raw signal payload.
          */
         void onSignal(String signal);

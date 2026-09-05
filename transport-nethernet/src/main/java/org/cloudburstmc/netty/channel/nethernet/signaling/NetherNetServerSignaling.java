@@ -8,22 +8,22 @@ import java.util.List;
 public interface NetherNetServerSignaling extends NetherNetSignaling {
     /**
      * Binds the signaling medium to listen for incoming connections (Server mode).
-     * 
+     *
      * @param localAddress The local address to bind to.
-     * @throws ConnectException 
+     * @throws ConnectException
      */
     void bind(SocketAddress localAddress) throws ConnectException;
 
     /**
      * Handler for new connections.
-     * 
+     *
      * @param handler Functional interface receiving (ConnectionID, RemoteNetworkID, Payload)
      */
     void setNewConnectionHandler(NewConnectionHandler handler);
 
     /**
      * Sets the advertisement data for the discovery mechanism (e.g. LAN Pong).
-     * 
+     *
      * @param pongData The Pong advertisement data.
      */
     void setAdvertisementData(PongData pongData);
@@ -74,7 +74,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
 
     /**
      * Data structure for Pong advertisement data.
-     * 
+     *
      * @param serverName      The name of the server.
      * @param levelName       The name of the level/world.
      * @param gameType        The game type (e.g. Survival, Creative).
@@ -85,7 +85,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * @param transportLayer  The transport layer identifier (e.g. NetherNet).
      * @param connectionType  The connection type identifier (e.g. LAN, Online).
      */
-    public record PongData(String serverName, String levelName, int gameType, int playerCount, int maxPlayerCount, 
+    public record PongData(String serverName, String levelName, int gameType, int playerCount, int maxPlayerCount,
             boolean isEditorWorld, boolean isHardcore, int transportLayer, int connectionType) {
         public static class Builder {
             private String serverName = "Server";
@@ -144,7 +144,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
             }
 
             public PongData build() {
-                return new PongData(serverName, levelName, gameType, playerCount, maxPlayerCount, 
+                return new PongData(serverName, levelName, gameType, playerCount, maxPlayerCount,
                     isEditorWorld, isHardcore, transportLayer, connectionType);
             }
         }

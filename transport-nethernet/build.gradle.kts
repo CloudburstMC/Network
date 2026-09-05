@@ -14,7 +14,7 @@ dependencies {
     implementation(libs.jose4j)
 
     testImplementation(libs.bundles.junit)
-    testRuntimeOnly(libs.junit.platform.launcher) 
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 configure<JavaPluginExtension> {
@@ -30,6 +30,6 @@ tasks.jar {
 }
 
 tasks.register<JavaExec>("runDiscovery") {
-    mainClass.set("org.cloudburstmc.netty.util.nethernet.NetherNetScanner") 
-    classpath = sourceSets["main"].runtimeClasspath 
+    mainClass.set("org.cloudburstmc.netty.util.nethernet.NetherNetScanner")
+    classpath = sourceSets["main"].runtimeClasspath
 }

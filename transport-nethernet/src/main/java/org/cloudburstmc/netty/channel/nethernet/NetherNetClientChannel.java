@@ -55,7 +55,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private volatile long connectionId; // Session ID (Long)
     private volatile String targetNetworkId; // Peer ID (String, for Realms)
-    
+
     private volatile boolean handshakeComplete = false;
 
     private ChannelPromise connectPromise;
@@ -80,7 +80,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     /**
      * Creates a NetherNetClientChannel with a new PeerConnectionFactory.
-     * 
+     *
      * @param signaling The NetherNetClientSignaling instance for signaling.
      */
     public NetherNetClientChannel(NetherNetClientSignaling signaling) {
@@ -89,7 +89,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     /**
      * Creates a NetherNetClientChannel.
-     * 
+     *
      * @param factory   The PeerConnectionFactory to use. Should be reused where possible.
      * @param signaling The NetherNetClientSignaling instance for signaling.
      */
@@ -192,7 +192,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         signaling.setSignalHandler(this.connectionId, this::handleSignal);
 
         signaling.connect(remoteAddress).thenAcceptAsync(iceServers -> {
-            if (handshakeComplete) return; 
+            if (handshakeComplete) return;
             try {
                 // If this is a retry, peerConnection might be null, so we recreate it
                 if (peerConnection == null) {
@@ -441,12 +441,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
                         if (!handshakeComplete) {
                             log.debug("NetherNet Connection Established!");
                             handshakeComplete = true;
-                            
+
                             // Cancel timeout now that we are done
                             if (handshakeTimeoutTask != null) {
                                 handshakeTimeoutTask.cancel(false);
                             }
-                            
+
                             setDataChannels(reliable, unreliable);
                             if (connectPromise != null && !connectPromise.isDone()) {
                                 connectPromise.trySuccess();
