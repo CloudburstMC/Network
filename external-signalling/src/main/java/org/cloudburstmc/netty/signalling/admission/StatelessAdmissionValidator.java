@@ -1,7 +1,7 @@
 package org.cloudburstmc.netty.signalling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.admission.AdmissionValidator;
-import org.cloudburstmc.netty.channel.nethernet.admission.StunBinding;
+import org.cloudburstmc.netty.channel.nethernet.admission.AdmissionRequest;
 import org.cloudburstmc.netty.channel.nethernet.admission.VerifiedAdmission;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 
-/** NXS1 validation using only a background key snapshot and raw client STUN. */
+/** NXS1 token validation using locally installed keys and the incoming ICE username. */
 public final class StatelessAdmissionValidator implements AdmissionValidator {
     public record TicketKey(String keyId, String secret, long notBefore, long retireAfter) {
         public TicketKey(String keyId, String secret) { this(keyId, secret, 0, Long.MAX_VALUE); }
@@ -57,11 +57,11 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
     public Set<String> keyIds() { return keys.keySet(); }
     public synchronized void clear() { keys.values().forEach(Material::erase); keys = Map.of(); }
 
-    @Override public synchronized VerifiedAdmission validate(byte[] packet, StunBinding binding, long nowMillis) {
-        if (binding == null) return null;
+    @Override public synchronized VerifiedAdmission validate(AdmissionRequest request, long nowMillis) {
+        if (request == null) return null;
         byte[] plaintext = null;
         try {
-            String token = binding.localUfrag();
+            String token = request.localUfrag();
             if (token.length() < 8 || !token.startsWith("NXS1")) return null;
             String keyId = token.substring(4, 8);
             Material key = keys.get(keyId);
@@ -71,7 +71,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             if (envelope.length < 117 || envelope.length > 186 || !BASE64.encodeToString(envelope).equals(encoded)) return null;
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key.encryption(), "AES"), new GCMParameterSpec(128, Arrays.copyOf(envelope, 12)));
-            cipher.updateAAD(utf8("nxs-stateless-admission-v1\0" + token.substring(0, 8) + "\0" + audience + "\0" + binding.remoteUfrag()));
+            cipher.updateAAD(utf8("nxs-stateless-admission-v1\0" + token.substring(0, 8) + "\0" + audience + "\0" + request.remoteUfrag()));
             plaintext = cipher.doFinal(Arrays.copyOfRange(envelope, 12, envelope.length));
             if (plaintext.length < 89) return null;
             ByteBuffer body = ByteBuffer.wrap(plaintext);
@@ -86,8 +86,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             String remotePassword = new String(plaintext, 67, length, StandardCharsets.US_ASCII);
             if (sctp < 1 || max < 1 || max > 262144 || !remotePassword.matches("[A-Za-z0-9+/]{22,91}")) return null;
             String localPassword = BASE64.encodeToString(Arrays.copyOf(hmac("HmacSHA256", key.secret(), utf8("nxs-stateless-ice-v1\0" + audience + "\0" + token)), 24));
-            if (!binding.verify(packet, localPassword)) return null;
-            return new VerifiedAdmission(tokenId(token), token, localPassword, binding.remoteUfrag(), remotePassword,
+            return new VerifiedAdmission(tokenId(token), token, localPassword, request.remoteUfrag(), remotePassword,
                 "sha-256 " + HexFormat.ofDelimiter(":").withUpperCase().formatHex(fingerprint), sctp, max, expiresAt,
                 networkId, HexFormat.of().formatHex(identity), keyId);
         } catch (Exception invalid) { return null; }

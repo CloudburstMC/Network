@@ -65,7 +65,8 @@ class NativeAdmissionIntegrationTest {
             try (var socket = new DatagramSocket()) {
                 byte[] packet = new byte[40]; socket.send(new DatagramPacket(packet, packet.length, advertised));
             }
-            var endpoint = host.channel(); await(() -> endpoint.admissionStats().invalid() > 0);
+            var endpoint = host.channel(); await(() -> endpoint.nativeStats()[0] > 0);
+            assertEquals(0, endpoint.nativeStats()[5], "Malformed UDP stays native");
             assertEquals(0, endpoint.creationAttempts());
         } finally {
             if (host != null) host.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
@@ -78,7 +79,13 @@ class NativeAdmissionIntegrationTest {
         var validator = new StatelessAdmissionValidator(TestSignallingProvider.AUDIENCE, 60_000);
         validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignallingProvider.SECRET)));
         var group = new DefaultEventLoopGroup(1);
-        var endpoint = new NativeAdmissionServerChannel(id, validator, new AdmissionGate.Limits(2, 4, 1, 10_000));
+        AtomicInteger validations = new AtomicInteger();
+        AdmissionValidator delayed = (metadata, now) -> {
+            validations.incrementAndGet();
+            try { Thread.sleep(200); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return null; }
+            return validator.validate(metadata, now);
+        };
+        var endpoint = new NativeAdmissionServerChannel(id, delayed, new AdmissionGate.Limits(2, 4, 1, 10_000));
         try (var socket = new DatagramSocket(new InetSocketAddress(loopback, 0));
              var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withBindAddress(loopback), Runnable::run)) {
             new ServerBootstrap().group(group).channelFactory(() -> endpoint)
@@ -99,11 +106,54 @@ class NativeAdmissionIntegrationTest {
             assertEquals(0x0101, Short.toUnsignedInt(ByteBuffer.wrap(bytes).getShort()));
             assertArrayEquals(Arrays.copyOfRange(request, 8, 20), Arrays.copyOfRange(bytes, 8, 20));
             assertEquals(1, endpoint.creationAttempts()); assertEquals(1, endpoint.nativeStats()[3]);
+            assertEquals(1, validations.get()); assertEquals(1, endpoint.nativeStats()[5]);
+            // Authenticated retransmissions on the established tuple never return to admission.
+            for (int i = 0; i < 40; i++) socket.send(new DatagramPacket(request, request.length, loopback, port));
+            await(() -> endpoint.nativeStats()[0] >= 41);
+            assertEquals(1, validations.get()); assertEquals(1, endpoint.nativeStats()[5]);
             System.out.printf(Locale.ROOT, "first-stun PASS requestsSent=1 matchingSuccess=true responseMs=%.3f%n", elapsedMs);
         } finally {
-            endpoint.close().awaitUninterruptibly(); endpoint.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
+            if (endpoint.isRegistered()) endpoint.close().awaitUninterruptibly(); else endpoint.unsafe().closeForcibly();
+            endpoint.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
             group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
         }
+    }
+    @Test @Timeout(20) void expiredDecisionCreatesNoPeerAndReleasesItsReservation() throws Exception {
+        var id = identity(); var loopback = InetAddress.getByName("127.0.0.1"); int port = 49200;
+        var validator = new StatelessAdmissionValidator(TestSignallingProvider.AUDIENCE, 60_000);
+        validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignallingProvider.SECRET)));
+        AdmissionValidator delayed = (metadata, now) -> {
+            var admission = validator.validate(metadata, now);
+            try { Thread.sleep(2500); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return null; }
+            return admission;
+        };
+        var group = new DefaultEventLoopGroup(1);
+        var endpoint = new NativeAdmissionServerChannel(id, delayed, new AdmissionGate.Limits(2, 4, 1, 10_000));
+        try (var socket = new DatagramSocket(new InetSocketAddress(loopback, 0));
+             var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withBindAddress(loopback), Runnable::run)) {
+            new ServerBootstrap().group(group).channelFactory(() -> endpoint)
+                .childHandler(new ChannelInboundHandlerAdapter()).bind(loopback, port).sync();
+            client.createDataChannel("ReliableDataChannel");
+            client.setLocalDescription("offer", "expiredDecisionClient", "p".repeat(32));
+            var answer = TestSignallingProvider.answer(client.localDescription(), id.fingerprint(), port,
+                System.currentTimeMillis() + 2000, TestSignallingProvider.AUDIENCE, false);
+            byte[] request = nominatedBinding(answer.token() + ":expiredDecisionClient", answer.password());
+            long before = PeerConnection.nativeCreationAttempts();
+            socket.send(new DatagramPacket(request, request.length, loopback, port));
+            await(() -> endpoint.admissionStats().invalid() > 0);
+            assertEquals(before, PeerConnection.nativeCreationAttempts()); assertEquals(0, endpoint.creationAttempts());
+            assertEquals(0, endpoint.nativeStats()[2]); assertEquals(0, endpoint.nativeStats()[3]);
+            assertEquals(0, endpoint.admissionStats().claims()); assertEquals(0, endpoint.admissionStats().sessions());
+        } finally {
+            if (endpoint.isRegistered()) endpoint.close().awaitUninterruptibly(); else endpoint.unsafe().closeForcibly();
+            endpoint.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+    @Test @Timeout(60) void tokenLengthBoundsAndClientFingerprintAreEnforcedByRealTransport() throws Exception {
+        var id = identity();
+        for (int passwordLength : new int[]{24, 32, 91}) AdmissionPrimitiveProbe.run(id, passwordLength, false);
+        AdmissionPrimitiveProbe.run(id, 24, true);
     }
     private static byte[] nominatedBinding(String username, String password) throws Exception {
         byte[] minimal = AdmissionFixture.binding(username, password);
@@ -155,9 +205,10 @@ class NativeAdmissionIntegrationTest {
             assertEquals(0,endpoint.nativeStats()[2]);assertEquals(0,endpoint.admissionStats().claims());
             long beforeInvalid=PeerConnection.nativeCreationAttempts();
             try(var noise=new DatagramSocket()) { byte[] packet=new byte[40];noise.send(new DatagramPacket(packet,packet.length,loopback,port)); }
-            await(()->endpoint.admissionStats().invalid()>0);
+            await(()->endpoint.nativeStats()[0]>0);
+            assertEquals(0, endpoint.nativeStats()[5], "Malformed UDP stays native");
             assertEquals(beforeInvalid,PeerConnection.nativeCreationAttempts());assertEquals(0,endpoint.nativeStats()[3]);
-            assertThrows(IllegalStateException.class,()->new RawUdpMuxListener(loopback,port,(p,a,n)->false));
+            assertThrows(IllegalStateException.class,()->new IceUdpMuxListener(loopback,port,Runnable::run,request -> CompletableFuture.completedFuture(null)));
             try(PeerConnection client=PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withBindAddress(loopback),Runnable::run)) {
                 CountDownLatch echoed = new CountDownLatch(2);List<DataChannel> channels=new ArrayList<>();
                 for(int index=0;index<2;index++) {
@@ -185,11 +236,14 @@ class NativeAdmissionIntegrationTest {
                     StatelessAdmissionValidatorTest.binding(altered+":clientFixtureUf",answer.password()),
                     StatelessAdmissionValidatorTest.binding(answer.token()+":clientFixtureUf","wrong-stun-integrity-password"),
                     StatelessAdmissionValidatorTest.binding(answer.token()+":differentClientUfrag",answer.password()));
-                long beforeNegatives=PeerConnection.nativeCreationAttempts(), rejectedBefore=endpoint.admissionStats().invalid();
+                long beforeNegatives=PeerConnection.nativeCreationAttempts();
                 try(var invalid=new DatagramSocket()) {
-                    for(byte[] packet:rejectedPackets) invalid.send(new DatagramPacket(packet,packet.length,loopback,port));
+                    for(byte[] packet:rejectedPackets) {
+                        long rejectedBefore = endpoint.admissionStats().invalid();
+                        invalid.send(new DatagramPacket(packet,packet.length,loopback,port));
+                        await(() -> endpoint.admissionStats().invalid() > rejectedBefore);
+                    }
                 }
-                await(()->endpoint.admissionStats().invalid()>=rejectedBefore+rejectedPackets.size());
                 assertEquals(beforeNegatives,PeerConnection.nativeCreationAttempts());
                 assertEquals(0,endpoint.admissionStats().claims());assertEquals(0,endpoint.nativeStats()[2]);assertEquals(0,endpoint.nativeStats()[3]);
 

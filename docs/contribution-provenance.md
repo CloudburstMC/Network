@@ -44,8 +44,12 @@ transient, bounded opaque data. An optional application adapter owns its own
 account actions. The independent provider exercises the full host lifecycle and
 four authorization/placement journeys without such an adapter.
 
-N4 authenticates raw STUN before promotion/allocation, bounds replay and capacity,
-keeps creation outside mux locks, and retains capacity until native teardown.
+N4 validates admission tokens in Java and STUN integrity in native code before
+creating a peer. It limits pending attempts, used tokens and active sessions.
+The native listener retains the first request during asynchronous validation,
+coalesces duplicates and continues after acceptance without a client retry.
+Peer creation runs outside the receive lock, and capacity remains reserved until
+native teardown finishes.
 The admission token binds the client fingerprint, ICE credentials, endpoint
 incarnation, expiry and opaque caller context. Native integration tests cover
 both data channels, first-datagram response, invalid ingress, replay, key retirement,

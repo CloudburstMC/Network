@@ -7,6 +7,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -28,6 +29,8 @@ class AdmissionFixture {
         return v;
     }
     StatelessAdmissionValidator validator() { return validator(f.getAsJsonObject("context").get("audience").getAsString()); }
+    AdmissionRequest request() { return request(token, remote); }
+    static AdmissionRequest request(String local, String remote) { return new AdmissionRequest(local, remote, new InetSocketAddress("127.0.0.1", 23450)); }
     static byte[] binding(String username, String password) {
         try {
             byte[] u = username.getBytes(StandardCharsets.US_ASCII);
@@ -43,9 +46,8 @@ class AdmissionFixture {
 }
 
 class StatelessAdmissionValidatorTest extends AdmissionFixture {
-    @Test void canonicalJavaScriptTokenAndPacketIntegrityAgree() {
-        byte[] packet = binding(token + ":" + remote, password);
-        var a = validator().validate(packet, StunBinding.parse(packet), now);
+    @Test void canonicalJavaScriptTokenMatchesJavaClaims() {
+        var a = validator().validate(request(), now);
         assertNotNull(a);
         var c = f.getAsJsonObject("claims");
         assertEquals(c.get("clientIcePwd").getAsString(), a.remotePassword());
@@ -58,30 +60,24 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         assertFalse(a.toString().contains(password));
     }
     @Test void negativeAdmissionHasNoTrustedOutput() {
-        byte[] valid = binding(token + ":" + remote, password);
         var v = validator();
-        assertNull(v.validate(valid, StunBinding.parse(valid), now + 60_000));
-        assertNull(v.validate(valid, StunBinding.parse(valid), now - 60_000));
+        assertNull(v.validate(request(), now + 60_000));
+        assertNull(v.validate(request(), now - 60_000));
         for (String audience : List.of("sig_fixture/gs_two/profile_boot_001", "sig_fixture/gs_one/profile_boot_002"))
-            assertNull(validator(audience).validate(valid, StunBinding.parse(valid), now));
-        for (byte[] p : List.of(binding(token + ":" + remote, "forgedIntegrityPassword000"),
-            binding(token.substring(0, 90) + (token.charAt(90)=='A'?'B':'A') + token.substring(91) + ":" + remote, password),
-            binding(token + ":clientOtherUfrag", password), binding(token + "=:" + remote, password)))
-            assertNull(v.validate(p, StunBinding.parse(p), now));
+            assertNull(validator(audience).validate(request(), now));
+        String altered = token.substring(0, 90) + (token.charAt(90)=='A'?'B':'A') + token.substring(91);
+        assertNull(v.validate(request(altered, remote), now));
+        assertNull(v.validate(request(token, "clientOtherUfrag"), now));
+        assertThrows(IllegalArgumentException.class, () -> request(token + "=", remote));
         v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", "a-different-secret-that-has-32-characters")));
-        assertNull(v.validate(valid, StunBinding.parse(valid), now));
-        v.clear();assertFalse(v.ready());
-        assertNull(v.validate(valid, StunBinding.parse(valid), now));
+        assertNull(v.validate(request(), now));
+        v.clear(); assertFalse(v.ready());
+        assertNull(v.validate(request(), now));
     }
-    @Test void canonicalRfcStunFixtureVerifies() {
-        var stun = fixture("cloudburst-protocol-vectors.v1.json").getAsJsonObject("stun");
-        // The RFC5769 vector independently verifies the header-length/HMAC rule.
-        var vector = stun.getAsJsonObject("rfc5769");
-        assertNotNull(vector, stun.keySet().toString());
-        byte[] packet = HexFormat.of().parseHex(vector.get("packetHex").getAsString());
-        var parsed = StunBinding.parse(packet);assertNotNull(parsed);
-        assertTrue(parsed.verify(packet, vector.get("passwordUtf8").getAsString()));
-        packet[40] ^= 1;assertFalse(parsed.verify(packet, vector.get("passwordUtf8").getAsString()));
+    @Test void callbackMetadataAndClaimsDoNotPrintCredentials() {
+        assertFalse(request().toString().contains(token));
+        assertFalse(request().toString().contains(remote));
+        assertNotNull(validator().validate(request(), now)); // Native code owns STUN integrity verification.
     }
     @Test void keyUpdatesAreBoundedAtomicAndRedacted() {
         var v = validator();
@@ -108,12 +104,12 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         }
     }
     @Test void backgroundKeyValidityBoundsDoNotExtendTokens() {
-        var v = validator(); byte[] packet = binding(token + ":" + remote, password);
+        var v = validator();
         String secret = f.getAsJsonObject("context").get("secret").getAsString();
         v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", secret, now + 1, now + 20_000)));
-        assertNull(v.validate(packet, StunBinding.parse(packet), now));
-        assertNotNull(v.validate(packet, StunBinding.parse(packet), now + 1));
-        assertNull(v.validate(packet, StunBinding.parse(packet), now + 20_000));
+        assertNull(v.validate(request(), now));
+        assertNotNull(v.validate(request(), now + 1));
+        assertNull(v.validate(request(), now + 20_000));
     }
 
 }
