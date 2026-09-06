@@ -67,6 +67,16 @@ public interface WebRtcSessionListener {
     }
 
     /**
+     * SDP negotiation failed and the session has been closed. The default
+     * preserves the transport-close notification for existing listeners.
+     *
+     * @param reason the negotiation step that failed
+     */
+    default void onNegotiationFailed(String reason) {
+        onTransportClosed();
+    }
+
+    /**
      * The transport failed or was closed by the remote peer. Not fired for
      * local {@link WebRtcSession#close()} calls.
      */

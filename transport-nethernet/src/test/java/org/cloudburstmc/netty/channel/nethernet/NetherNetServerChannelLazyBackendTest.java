@@ -15,6 +15,8 @@ import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
@@ -24,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -126,6 +129,35 @@ class NetherNetServerChannelLazyBackendTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"false, false", "true, false", "false, true", "true, true"})
+    void negotiationFailureSignalsAnErrorAndClosesTheChild(boolean failureBeforeReturn, boolean signalingFails) throws Exception {
+        StubBackend backend = new StubBackend();
+        backend.failBeforeReturn = failureBeforeReturn;
+        StubSignaling signaling = new StubSignaling(false);
+        signaling.failSend = signalingFails;
+        NetherNetServerChannel server = (NetherNetServerChannel) bootstrap(() -> backend, signaling)
+                .bind(new InetSocketAddress(0)).sync().channel();
+        try {
+            server.acceptConnection(4, "v=0\r\n", "42");
+            server.eventLoop().submit(() -> {}).sync();
+            if (!failureBeforeReturn) {
+                backend.listener.onNegotiationFailed("SetRemoteDescription failed");
+            }
+
+            assertTrue(backend.session.closed.await(2, TimeUnit.SECONDS));
+            server.eventLoop().submit(() -> {}).sync();
+
+            assertEquals(new SentSignal("42", NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR
+                    + " 4 SetRemoteDescription failed"), signaling.sent.poll(2, TimeUnit.SECONDS));
+            assertTrue(signaling.sent.isEmpty());
+            assertEquals(1, backend.session.closes.get());
+            assertTrue(signaling.handlers.isEmpty());
+        } finally {
+            server.close().syncUninterruptibly();
+        }
+    }
+
     @Test
     void serverCloseClosesAcceptedChannelsAsWellAsTheBackend() throws Exception {
         StubBackend backend = new StubBackend();
@@ -181,7 +213,9 @@ class NetherNetServerChannelLazyBackendTest {
         private final boolean failBind;
         volatile boolean bound;
         volatile boolean closed;
+        boolean failSend;
         final Map<Long, SignalHandler> handlers = new ConcurrentHashMap<>();
+        final LinkedBlockingQueue<SentSignal> sent = new LinkedBlockingQueue<>();
 
         private StubSignaling(boolean failBind) {
             this.failBind = failBind;
@@ -205,6 +239,10 @@ class NetherNetServerChannelLazyBackendTest {
 
         @Override
         public void sendSignal(String targetNetworkId, String data) {
+            sent.add(new SentSignal(targetNetworkId, data));
+            if (failSend) {
+                throw new IllegalStateException("Signaling unavailable");
+            }
         }
 
         @Override
@@ -232,6 +270,7 @@ class NetherNetServerChannelLazyBackendTest {
         volatile boolean closed;
         volatile WebRtcSessionListener listener;
         boolean closeBeforeReturn;
+        boolean failBeforeReturn;
         final StubSession session = new StubSession();
 
         @Override
@@ -240,6 +279,9 @@ class NetherNetServerChannelLazyBackendTest {
             this.listener = listener;
             if (closeBeforeReturn) {
                 listener.onTransportClosed();
+            }
+            if (failBeforeReturn) {
+                listener.onNegotiationFailed("SetRemoteDescription failed");
             }
             return session;
         }
@@ -262,5 +304,8 @@ class NetherNetServerChannelLazyBackendTest {
             closes.incrementAndGet();
             closed.countDown();
         }
+    }
+
+    private record SentSignal(String targetNetworkId, String data) {
     }
 }

@@ -1,6 +1,5 @@
 package org.cloudburstmc.netty.channel.nethernet.backend;
 
-import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
 import dev.kastle.webrtc.CreateSessionDescriptionObserver;
 import dev.kastle.webrtc.PeerConnectionFactory;
@@ -189,19 +188,54 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         }
     }
 
-    private static final class Session implements WebRtcSession {
+    interface PeerOperations {
+        void setRemoteDescription(RTCSessionDescription description, SetSessionDescriptionObserver observer);
+        void createAnswer(CreateSessionDescriptionObserver observer);
+        void setLocalDescription(RTCSessionDescription description, SetSessionDescriptionObserver observer);
+        RTCSessionDescription localDescription();
+        void close();
+    }
+
+    private record NativePeerOperations(RTCPeerConnection peer) implements PeerOperations {
+        @Override
+        public void setRemoteDescription(RTCSessionDescription description, SetSessionDescriptionObserver observer) {
+            peer.setRemoteDescription(description, observer);
+        }
+
+        @Override
+        public void createAnswer(CreateSessionDescriptionObserver observer) {
+            peer.createAnswer(new RTCAnswerOptions(), observer);
+        }
+
+        @Override
+        public void setLocalDescription(RTCSessionDescription description, SetSessionDescriptionObserver observer) {
+            peer.setLocalDescription(description, observer);
+        }
+
+        @Override
+        public RTCSessionDescription localDescription() {
+            return peer.getLocalDescription();
+        }
+
+        @Override
+        public void close() {
+            peer.close();
+        }
+    }
+
+    static final class Session implements WebRtcSession {
         private final WebRtcSessionListener listener;
         private final Consumer<Session> onClosed;
         private final boolean fullIceAnswer;
 
         private volatile RTCPeerConnection pc;
-        private volatile RTCDataChannel reliable;
-        private volatile RTCDataChannel unreliable;
+        private volatile PeerOperations peerOperations;
+        private final DataChannelSlots<RTCDataChannel> dataChannels = new DataChannelSlots<>(Session::closeRejectedChannel);
 
         // Guarded by this: single fire of open/close transitions.
         private boolean observerRegistered;
         private boolean openFired;
-        private boolean closedFlag;
+        private volatile boolean closedFlag;
 
         // Full ICE answer state, guarded by this. The answer is reported only
         // once BOTH the local description has applied and candidate gathering
@@ -218,19 +252,19 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         private boolean remoteDescriptionSet;
         private List<String> pendingCandidates = new ArrayList<>();
 
-        private Session(WebRtcSessionListener listener, Consumer<Session> onClosed, boolean fullIceAnswer) {
+        Session(WebRtcSessionListener listener, Consumer<Session> onClosed, boolean fullIceAnswer) {
             this.listener = listener;
             this.onClosed = onClosed;
             this.fullIceAnswer = fullIceAnswer;
         }
 
         // Callbacks arrive on native engine threads.
-        private final PeerConnectionObserver observer = new PeerConnectionObserver() {
+        final PeerConnectionObserver observer = new PeerConnectionObserver() {
             @Override
             public void onIceCandidate(RTCIceCandidate candidate) {
                 // In full ICE mode candidates ride inside the answer; there is
                 // no trickle channel to signal them on.
-                if (!fullIceAnswer) {
+                if (!fullIceAnswer && !closedFlag) {
                     listener.onLocalCandidate(candidate.sdp);
                 }
             }
@@ -255,14 +289,19 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
 
             @Override
             public void onDataChannel(RTCDataChannel dataChannel) {
-                String label = dataChannel.getLabel();
-                log.debug("Received data channel: {}", label);
-                if (NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label)) {
-                    reliable = dataChannel;
-                } else if (NetherNetConstants.UNRELIABLE_CHANNEL_LABEL.equals(label)) {
-                    unreliable = dataChannel;
+                if (closedFlag) {
+                    closeRejectedChannel(dataChannel);
+                    return;
                 }
-                checkChannels();
+                DataChannelSlots.Parameters parameters = new DataChannelSlots.Parameters(
+                        dataChannel.getLabel(), dataChannel.isOrdered(), dataChannel.isReliable(),
+                        dataChannel.isNegotiated(), dataChannel.getMaxPacketLifeTime(), dataChannel.getMaxRetransmits());
+                if (dataChannels.admit(dataChannel, parameters)) {
+                    log.debug("Received data channel: {}", parameters.label());
+                    checkChannels();
+                } else {
+                    log.debug("Ignored duplicate or invalid data channel: {}", parameters.label());
+                }
             }
 
             @Override
@@ -276,16 +315,28 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         };
 
         private void start(RTCPeerConnection pc, String offerSdp) {
+            start(pc, new NativePeerOperations(pc), offerSdp);
+        }
+
+        void start(PeerOperations operations, String offerSdp) {
+            start(null, operations, offerSdp);
+        }
+
+        private void start(RTCPeerConnection pc, PeerOperations operations, String offerSdp) {
+            boolean closed;
             synchronized (this) {
-                if (closedFlag) {
-                    // Session was closed before negotiation began; do not
-                    // leave the freshly created peer connection behind.
-                    pc.close();
-                    return;
+                closed = closedFlag;
+                if (!closed) {
+                    this.pc = pc;
+                    this.peerOperations = operations;
                 }
-                this.pc = pc;
             }
-            pc.setRemoteDescription(new RTCSessionDescription(RTCSdpType.OFFER, stripIdentityAttributes(offerSdp)), new SetSessionDescriptionObserver() {
+            if (closed) {
+                operations.close();
+                return;
+            }
+            runNegotiation("SetRemoteDescription", () -> operations.setRemoteDescription(
+                    new RTCSessionDescription(RTCSdpType.OFFER, stripIdentityAttributes(offerSdp)), new SetSessionDescriptionObserver() {
                 @Override
                 public void onSuccess() {
                     // A session closed during the handshake (timeout, connect
@@ -298,6 +349,9 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                     // whatever candidates were buffered while it was pending.
                     List<String> drained;
                     synchronized (Session.this) {
+                        if (closedFlag) {
+                            return;
+                        }
                         remoteDescriptionSet = true;
                         drained = pendingCandidates;
                         pendingCandidates = null;
@@ -307,13 +361,13 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                             applyCandidate(candidate);
                         }
                     }
-                    pc.createAnswer(new RTCAnswerOptions(), new CreateSessionDescriptionObserver() {
+                    runNegotiation("CreateAnswer", () -> operations.createAnswer(new CreateSessionDescriptionObserver() {
                         @Override
                         public void onSuccess(RTCSessionDescription description) {
                             if (isClosed()) {
                                 return;
                             }
-                            pc.setLocalDescription(description, new SetSessionDescriptionObserver() {
+                            runNegotiation("SetLocalDescription", () -> operations.setLocalDescription(description, new SetSessionDescriptionObserver() {
                                 @Override
                                 public void onSuccess() {
                                     if (isClosed()) {
@@ -331,23 +385,41 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
 
                                 @Override
                                 public void onFailure(String error) {
-                                    log.error("SetLocalDescription failed: {}", error);
+                                    negotiationFailed("SetLocalDescription", error);
                                 }
-                            });
+                            }));
                         }
 
                         @Override
                         public void onFailure(String error) {
-                            log.error("CreateAnswer failed: {}", error);
+                            negotiationFailed("CreateAnswer", error);
                         }
-                    });
+                    }));
                 }
 
                 @Override
                 public void onFailure(String error) {
-                    log.error("SetRemoteDescription failed: {}", error);
+                    negotiationFailed("SetRemoteDescription", error);
                 }
-            });
+            }));
+        }
+
+        private void runNegotiation(String operation, Runnable action) {
+            if (closedFlag) {
+                return;
+            }
+            try {
+                action.run();
+            } catch (RuntimeException cause) {
+                negotiationFailed(operation, cause.toString());
+            }
+        }
+
+        private void negotiationFailed(String operation, String error) {
+            if (closeInternal(false)) {
+                log.error("{} failed: {}", operation, error);
+                listener.onNegotiationFailed(operation + " failed");
+            }
         }
 
         private synchronized boolean isClosed() {
@@ -367,13 +439,19 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                 }
                 fullAnswerDelivered = true;
             }
-            RTCPeerConnection pc = this.pc;
-            if (pc == null) {
+            PeerOperations operations = this.peerOperations;
+            if (operations == null) {
                 return;
             }
-            RTCSessionDescription local = pc.getLocalDescription();
+            RTCSessionDescription local;
+            try {
+                local = operations.localDescription();
+            } catch (RuntimeException cause) {
+                negotiationFailed("GetLocalDescription", cause.toString());
+                return;
+            }
             if (local == null || local.sdp == null) {
-                log.error("Full ICE answer unavailable after gathering completed");
+                negotiationFailed("GetLocalDescription", "Full ICE answer unavailable after gathering completed");
                 return;
             }
             listener.onAnswerReady(markEndOfCandidates(local.sdp));
@@ -399,8 +477,8 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
          * unobserved (reliable only transport).
          */
         private void checkChannels() {
-            RTCDataChannel r = this.reliable;
-            if (r == null || this.unreliable == null) {
+            RTCDataChannel r = this.dataChannels.reliable();
+            if (r == null || this.dataChannels.unreliable() == null) {
                 return;
             }
             synchronized (this) {
@@ -452,7 +530,7 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
 
         @Override
         public void send(ByteBuffer data) {
-            RTCDataChannel r = this.reliable;
+            RTCDataChannel r = this.dataChannels.reliable();
             if (r == null || closedFlag) {
                 log.debug("Dropping send on unopened or closed session");
                 return;
@@ -504,17 +582,19 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
             closeInternal(false);
         }
 
-        private void closeInternal(boolean notify) {
+        private boolean closeInternal(boolean notify) {
             synchronized (this) {
                 if (closedFlag) {
-                    return;
+                    return false;
                 }
                 closedFlag = true;
+                dataChannels.stopAccepting();
+                pendingCandidates = null;
             }
             // One guard per resource: a throwing close must not skip the
             // closes behind it, or the skipped resources leak until the
             // backend disposes its factories.
-            RTCDataChannel r = this.reliable;
+            RTCDataChannel r = this.dataChannels.reliable();
             if (r != null) {
                 try {
                     r.unregisterObserver();
@@ -527,7 +607,7 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                     log.debug("Error closing reliable channel: {}", e.getMessage());
                 }
             }
-            RTCDataChannel u = this.unreliable;
+            RTCDataChannel u = this.dataChannels.unreliable();
             if (u != null) {
                 try {
                     u.close();
@@ -535,10 +615,10 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                     log.debug("Error closing unreliable channel: {}", e.getMessage());
                 }
             }
-            RTCPeerConnection pc = this.pc;
-            if (pc != null) {
+            PeerOperations operations = this.peerOperations;
+            if (operations != null) {
                 try {
-                    pc.close();
+                    operations.close();
                 } catch (Exception e) {
                     log.debug("Error closing peer connection: {}", e.getMessage());
                 }
@@ -546,6 +626,15 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
             onClosed.accept(this);
             if (notify) {
                 listener.onTransportClosed();
+            }
+            return true;
+        }
+
+        private static void closeRejectedChannel(RTCDataChannel channel) {
+            try {
+                channel.close();
+            } catch (Exception e) {
+                log.debug("Error closing rejected data channel: {}", e.getMessage());
             }
         }
     }

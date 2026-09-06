@@ -367,6 +367,23 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         @Override
+        public void onNegotiationFailed(String reason) {
+            if (!isOpen() || !child.isOpen()) {
+                return;
+            }
+            try {
+                signaling.sendSignal(remoteNetworkId, NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR
+                        + " " + Long.toUnsignedString(connectionId) + " " + reason);
+            } catch (Exception e) {
+                log.debug("Could not signal negotiation failure for {}: {}",
+                        Long.toUnsignedString(connectionId), e.getMessage());
+            } finally {
+                child.markTransportClosed();
+                child.close();
+            }
+        }
+
+        @Override
         public void onTransportClosed() {
             child.markTransportClosed();
             child.close();
