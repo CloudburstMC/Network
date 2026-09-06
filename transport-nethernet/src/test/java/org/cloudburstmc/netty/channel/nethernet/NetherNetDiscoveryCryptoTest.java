@@ -43,10 +43,10 @@ class NetherNetDiscoveryCryptoTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {0, 2})
-    void acceptsBothEstablishedLengthConventions(int prefixSize) throws Exception {
+    @ValueSource(ints = {0, 1, 64, 128, 129, 130})
+    void acceptsLengthsUpToActualSizeWithoutTruncatingPayload(int declaredLength) throws Exception {
         byte[] bytes = payload(128);
-        assertDecoded(bytes, referencePacket(bytes, bytes.length + prefixSize));
+        assertDecoded(bytes, referencePacket(bytes, declaredLength));
     }
 
     @ParameterizedTest
@@ -62,12 +62,15 @@ class NetherNetDiscoveryCryptoTest {
     }
 
     @Test
-    void rejectsSignedLengthMismatchAndTampering() throws Exception {
+    void rejectsOverstatedLengthAndTampering() throws Exception {
         byte[] bytes = payload(80);
         byte[] mismatch = referencePacket(bytes, 400);
+        byte[] offByOne = referencePacket(bytes, bytes.length + 3);
         byte[] tampered = referencePacket(bytes, bytes.length + 2);
         tampered[0] ^= 1;
-        for (byte[] wire : new byte[][]{mismatch, tampered}) {
+        byte[] understatedTampered = referencePacket(bytes, 0);
+        understatedTampered[0] ^= 1;
+        for (byte[] wire : new byte[][]{mismatch, offByOne, tampered, understatedTampered}) {
             ByteBuf source = Unpooled.wrappedBuffer(wire);
             try {
                 assertNull(NetherNetConstants.decryptDiscoveryPacket(source));

@@ -143,8 +143,8 @@ public class NetherNetConstants {
         }
 
         int declaredLength = (payloadBytes[0] & 0xff) | ((payloadBytes[1] & 0xff) << 8);
-        // Both length conventions are used: including the prefix, or only its following body.
-        if (declaredLength != payloadBytes.length && declaredLength != payloadBytes.length - 2) {
+        // Match vanilla's minimum-length check; parse the complete datagram even when understated.
+        if (declaredLength > payloadBytes.length) {
             log.debug("Invalid discovery plaintext length: {} (actual: {})", declaredLength, payloadBytes.length);
             return null;
         }
