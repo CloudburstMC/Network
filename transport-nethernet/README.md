@@ -4,22 +4,11 @@ In NetworkM this module targets Java 21 and uses
 `dev.kastle.webrtc:webrtc-java:1.0.4-edu.3`. Consumers need the custom
 [WebRTC artifact repository](https://raw.githubusercontent.com/SendableMetatype/webrtc-java/maven-repo/)
 in addition to Maven Central, plus matching platform native libraries. The root
-NetworkM build already configures that repository. The release links below refer
-to the upstream library, not a published NetworkM release.
+NetworkM build already configures that repository.
 
 NetherNet's identity library uses SLF4J 2.0. Applications that use SLF4J logging
 must provide a backend compatible with the 2.0 API. NetworkM leaves backend
 selection to the application; its tests use the SLF4J bridge to Java logging.
-
-## Downloads
-
-### Releases ![Maven Central Version](https://img.shields.io/maven-central/v/org.cloudburstmc.netty/netty-transport-nethernet?label=Maven%20Central&color=%233fb950)
-
-The library is published to Maven Central. See the [latest release](https://github.com/Kas-tle/NetworkCompatible/releases/latest) for the latest version.
-
-### Snapshots [![](https://jitpack.io/v/dev.kastle/NetworkCompatible.svg)](https://jitpack.io/#dev.kastle/NetworkCompatible)
-
-Snapshots are available from [jitpack](https://jitpack.io/#dev.kastle/NetworkCompatible). Note the package group for jitpack is `dev.kastle.NetworkCompatible` witht the name `netty-transport-nethernet`.
 
 ## Usage
 
