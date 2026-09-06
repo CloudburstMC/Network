@@ -1,6 +1,9 @@
 package org.cloudburstmc.netty.channel.nethernet.backend;
 
 import dev.kastle.webrtc.CreateSessionDescriptionObserver;
+import dev.kastle.webrtc.RTCDataChannelBuffer;
+import dev.kastle.webrtc.RTCDataChannelObserver;
+import dev.kastle.webrtc.RTCDataChannelState;
 import dev.kastle.webrtc.RTCIceGatheringState;
 import dev.kastle.webrtc.RTCPeerConnectionState;
 import dev.kastle.webrtc.RTCSdpType;
@@ -300,6 +303,42 @@ class LibWebRtcSessionNegotiationTest {
         @Override public void onMessage(ByteBuffer data) { }
         @Override public void onRemoteAddress(InetSocketAddress address, String candidateType) { }
         @Override public void onTransportClosed() { transportCloses++; }
+    }
+
+    @Test
+    void dataChannelObserversSeparateMessagesAndIgnoreUnreliableStateAndSendAccounting() {
+        List<String> events = new ArrayList<>();
+        LegacyListener listener = new LegacyListener() {
+            @Override public void onTransportOpen() { events.add("open"); }
+            @Override public void onMessage(ByteBuffer data) { events.add("reliable:" + data.get()); }
+            @Override public void onUnreliableMessage(ByteBuffer data) { events.add("unreliable:" + data.get()); }
+            @Override public void onBytesSent(long bytes) { events.add("sent:" + bytes); }
+        };
+        LibWebRtcServerBackend.Session session = new LibWebRtcServerBackend.Session(listener, ignored -> {}, false);
+        RTCDataChannelObserver reliable = session.createDataChannelObserver(true, () -> RTCDataChannelState.OPEN);
+        RTCDataChannelObserver unreliable = session.createDataChannelObserver(false, () -> {
+            throw new AssertionError("Unreliable state must not control the transport lifecycle");
+        });
+        try {
+            unreliable.onStateChange();
+            unreliable.onBufferedAmountChange(200);
+            unreliable.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{1}), true));
+            assertEquals(List.of("unreliable:1"), events);
+
+            reliable.onStateChange();
+            reliable.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{2}), true));
+            reliable.onBufferedAmountChange(100);
+            assertEquals(List.of("unreliable:1", "reliable:2", "sent:100"), events);
+
+            session.close();
+            unreliable.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{3}), true));
+            reliable.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{4}), true));
+            reliable.onBufferedAmountChange(300);
+            reliable.onStateChange();
+            assertEquals(List.of("unreliable:1", "reliable:2", "sent:100"), events);
+        } finally {
+            session.close();
+        }
     }
 
     private static final class RecordingListener extends LegacyListener {

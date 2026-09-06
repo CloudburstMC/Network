@@ -5,8 +5,8 @@ import java.util.function.DoubleConsumer;
 
 /**
  * One negotiated WebRTC connection as seen by the NetherNet transport: a
- * reliable ordered byte-message stream plus lifecycle control. Counterpart
- * events arrive on the {@link WebRtcSessionListener} passed to
+ * reliable ordered outbound stream plus inbound data and lifecycle control.
+ * Counterpart events arrive on the {@link WebRtcSessionListener} passed to
  * {@link WebRtcServerBackend#accept}.
  */
 public interface WebRtcSession {

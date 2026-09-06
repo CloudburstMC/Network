@@ -82,8 +82,9 @@ class NetherNetChannelLifecycleTest {
         }
     }
 
-    @Test
-    void inboundCallbackQueuedBehindCloseIsReleasedWithoutDelivery() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void inboundCallbackQueuedBehindCloseIsReleasedWithoutDelivery(boolean reliable) throws Exception {
         TestChannel channel = new TestChannel();
         UnpooledByteBufAllocator allocator = new UnpooledByteBufAllocator(false);
         channel.config().setAllocator(allocator);
@@ -109,7 +110,7 @@ class NetherNetChannelLifecycleTest {
             });
             assertTrue(blocked.await(2, TimeUnit.SECONDS));
             ChannelFuture close = channel.close();
-            channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 1}));
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 1}), reliable);
             assertTrue(allocator.metric().usedHeapMemory() > 0);
             resume.countDown();
             close.sync();
@@ -512,6 +513,29 @@ class NetherNetChannelLifecycleTest {
             release.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    @Test
+    void bothDataChannelsShareTheInboundQueueBudget() throws Exception {
+        TestChannel channel = new TestChannel();
+        UnpooledByteBufAllocator allocator = new UnpooledByteBufAllocator(false);
+        channel.config().setAllocator(allocator).setAutoRead(false);
+        try {
+            group.register(channel).sync();
+            for (int frame = 0; frame < 512; frame++) {
+                channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 1}), frame % 2 == 0);
+            }
+            assertTrue(channel.isOpen());
+            assertTrue(allocator.metric().usedHeapMemory() > 0);
+
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 2}), false);
+            assertTrue(channel.closeFuture().await(2, TimeUnit.SECONDS));
+            assertEquals(0, allocator.metric().usedHeapMemory());
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 3}), false);
+            assertEquals(0, allocator.metric().usedHeapMemory());
+        } finally {
+            channel.close().syncUninterruptibly();
         }
     }
 

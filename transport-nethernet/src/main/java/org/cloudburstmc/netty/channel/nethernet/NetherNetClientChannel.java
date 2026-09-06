@@ -178,7 +178,11 @@ public class NetherNetClientChannel extends NetherNetChannel {
         } finally {
             try {
                 if (unreliable != null) {
-                    unreliable.close();
+                    try {
+                        unreliable.unregisterObserver();
+                    } finally {
+                        unreliable.close();
+                    }
                 }
             } finally {
                 if (pc != null) {
@@ -505,8 +509,10 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private void setupDataChannels(RTCPeerConnection pc, int gen) {
         RTCDataChannel reliable = pc.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, dataChannelInit(true));
         this.reliableChannel = reliable;
-        this.unreliableChannel = pc.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, dataChannelInit(false));
         reliable.registerObserver(createReliableObserver(reliable::getState, gen));
+        RTCDataChannel unreliable = pc.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, dataChannelInit(false));
+        this.unreliableChannel = unreliable;
+        unreliable.registerObserver(createUnreliableObserver(gen));
     }
 
     static RTCDataChannelInit dataChannelInit(boolean reliable) {
@@ -520,9 +526,21 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     RTCDataChannelObserver createReliableObserver(Supplier<RTCDataChannelState> state, int generation) {
+        return createDataChannelObserver(state, generation, true);
+    }
+
+    RTCDataChannelObserver createUnreliableObserver(int generation) {
+        return createDataChannelObserver(null, generation, false);
+    }
+
+    private RTCDataChannelObserver createDataChannelObserver(Supplier<RTCDataChannelState> state,
+                                                           int generation, boolean reliable) {
         return new RTCDataChannelObserver() {
             @Override
             public void onStateChange() {
+                if (!reliable) {
+                    return;
+                }
                 executeForAttempt(generation, () -> {
                     RTCDataChannelState observed = state.get();
                     if (observed == RTCDataChannelState.OPEN && isCurrentHandshake(generation)) {
@@ -549,19 +567,22 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 // The loop already serializes attempts, and overflow may close the native transport inline.
                 if (eventLoop().inEventLoop()) {
                     if (isCurrentAttempt(generation)) {
-                        deliverInbound(buffer.data);
+                        deliverInbound(buffer.data, reliable);
                     }
                     return;
                 }
                 synchronized (attemptLock) {
                     if (isCurrentAttempt(generation)) {
-                        deliverInbound(buffer.data);
+                        deliverInbound(buffer.data, reliable);
                     }
                 }
             }
 
             @Override
             public void onBufferedAmountChange(long previousAmount) {
+                if (!reliable) {
+                    return;
+                }
                 // Despite the legacy parameter name, webrtc-java passes
                 // libwebrtc's sent_data_size here: the number of buffered
                 // bytes that were just written to the wire. Without this

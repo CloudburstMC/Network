@@ -3,14 +3,19 @@ package org.cloudburstmc.netty.channel.nethernet;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSession;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSessionListener;
+import org.cloudburstmc.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import org.junit.jupiter.api.AfterEach;
@@ -32,6 +37,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -201,6 +207,72 @@ class NetherNetServerChannelLazyBackendTest {
         }
     }
 
+    @Test
+    void unreliableFramesReachTheApplicationWithoutJoiningReliableFragmentsOrChangingReplies() throws Exception {
+        StubBackend backend = new StubBackend();
+        StubSignaling signaling = new StubSignaling(false);
+        AtomicReference<Channel> accepted = new AtomicReference<>();
+        CountDownLatch registered = new CountDownLatch(1);
+        LinkedBlockingQueue<byte[]> messages = new LinkedBlockingQueue<>();
+        NetherNetServerChannel server = (NetherNetServerChannel) bootstrap(() -> backend, signaling)
+                .option(NetherChannelOption.NETHER_SERVER_ANSWER_DECORATOR, answer -> answer)
+                .childOption(ChannelOption.AUTO_READ, false)
+                .childHandler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel child) {
+                        accepted.set(child);
+                        child.pipeline().addLast(new NetherNetFramingCodec(), new ChannelInboundHandlerAdapter() {
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object message) {
+                                ByteBuf buffer = (ByteBuf) message;
+                                try {
+                                    byte[] payload = new byte[buffer.readableBytes()];
+                                    buffer.readBytes(payload);
+                                    messages.add(payload);
+                                } finally {
+                                    buffer.release();
+                                }
+                            }
+                        });
+                        registered.countDown();
+                    }
+                })
+                .bind(new InetSocketAddress(0)).sync().channel();
+        try {
+            server.acceptConnection(5, "v=0\r\n", "5");
+            server.eventLoop().submit(() -> {}).sync();
+            backend.listener.onMessage(ByteBuffer.wrap(new byte[]{1, 11}));
+            ByteBuffer callback = ByteBuffer.wrap(new byte[]{99, 0, 42, 99});
+            callback.position(1).limit(3);
+            backend.listener.onUnreliableMessage(callback);
+            callback.put(2, (byte) 43);
+            backend.listener.onMessage(ByteBuffer.wrap(new byte[]{0, 12}));
+            backend.listener.onAnswerReady("v=0\r\n");
+            backend.listener.onTransportOpen();
+            assertTrue(registered.await(2, TimeUnit.SECONDS));
+            Channel child = accepted.get();
+            child.eventLoop().submit(() -> {}).sync();
+            assertTrue(child.isActive());
+            assertTrue(messages.isEmpty());
+
+            child.read();
+            assertArrayEquals(new byte[]{42}, messages.poll(2, TimeUnit.SECONDS));
+            child.eventLoop().submit(() -> {}).sync();
+            assertTrue(messages.isEmpty());
+            child.read();
+            assertArrayEquals(new byte[]{11, 12}, messages.poll(2, TimeUnit.SECONDS));
+
+            child.writeAndFlush(Unpooled.wrappedBuffer(new byte[]{9})).sync();
+            assertArrayEquals(new byte[]{0, 9}, backend.session.sent.poll(2, TimeUnit.SECONDS));
+            child.close().sync();
+            backend.listener.onUnreliableMessage(ByteBuffer.wrap(new byte[]{0, 44}));
+            child.eventLoop().submit(() -> {}).sync();
+            assertTrue(messages.isEmpty());
+        } finally {
+            server.close().syncUninterruptibly();
+        }
+    }
+
     private ServerBootstrap bootstrap(java.util.function.Supplier<WebRtcServerBackend> backendSupplier,
                                       NetherNetServerSignaling signaling) {
         return new ServerBootstrap()
@@ -295,8 +367,14 @@ class NetherNetServerChannelLazyBackendTest {
     private static final class StubSession implements WebRtcSession {
         final AtomicInteger closes = new AtomicInteger();
         final CountDownLatch closed = new CountDownLatch(1);
+        final LinkedBlockingQueue<byte[]> sent = new LinkedBlockingQueue<>();
 
-        @Override public void send(ByteBuffer data) { }
+        @Override
+        public void send(ByteBuffer data) {
+            byte[] payload = new byte[data.remaining()];
+            data.get(payload);
+            sent.add(payload);
+        }
         @Override public void addRemoteCandidate(String candidateSdp) { }
 
         @Override

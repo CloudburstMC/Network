@@ -9,6 +9,7 @@ import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.EventLoop;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -34,7 +35,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * which performs fragmentation and reassembly. Messages written to this
  * channel are therefore expected to already carry their framing header and
  * fit within the negotiated maximum message size, and messages fired into
- * the pipeline still carry their header byte.
+ * the pipeline still carry their header byte. Reliable frames are byte buffers;
+ * unreliable frames use {@link NetherNetUnreliableFrame} until the codec decodes
+ * them into independent messages. All outbound writes remain reliable.
  */
 public abstract class NetherNetChannel extends AbstractChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
@@ -73,7 +76,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
     private volatile boolean inboundReady;
     private volatile boolean inboundClosed;
     private volatile boolean readPending;
-    private Queue<ByteBuf> pendingInbound;
+    private Queue<Object> pendingInbound;
     private int pendingInboundBytes;
     private boolean inboundDrainScheduled;
 
@@ -149,6 +152,14 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * exactly once here, then handed to the event loop in arrival order.
      */
     protected void deliverInbound(ByteBuffer data) {
+        deliverInbound(data, true);
+    }
+
+    /**
+     * Copies a callback-scoped frame, preserving its data channel until decoding.
+     * Both channels share read demand and the same inbound queue budget.
+     */
+    protected void deliverInbound(ByteBuffer data, boolean reliable) {
         if (!open || inboundClosed || !data.hasRemaining()) {
             return;
         }
@@ -170,7 +181,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
                 if (pendingInbound == null) {
                     pendingInbound = new ArrayDeque<>();
                 }
-                pendingInbound.add(copy);
+                pendingInbound.add(reliable ? copy : new NetherNetUnreliableFrame(copy));
                 pendingInboundBytes += bytes;
             } else {
                 inboundClosed = true;
@@ -189,16 +200,16 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     /** Drops frames belonging to an abandoned transport attempt. */
     protected final void discardPendingInbound() {
-        Queue<ByteBuf> pending;
+        Queue<Object> pending;
         synchronized (inboundLock) {
             pending = pendingInbound;
             pendingInbound = null;
             pendingInboundBytes = 0;
         }
         if (pending != null) {
-            ByteBuf copy;
-            while ((copy = pending.poll()) != null) {
-                copy.release();
+            Object frame;
+            while ((frame = pending.poll()) != null) {
+                ReferenceCountUtil.release(frame);
             }
         }
     }
@@ -240,16 +251,18 @@ public abstract class NetherNetChannel extends AbstractChannel {
         try {
             fireChannelActiveIfReady();
             while (messages < MAX_MESSAGES_PER_DRAIN && canReadInbound()) {
-                ByteBuf copy;
+                Object frame;
                 synchronized (inboundLock) {
-                    copy = pendingInbound == null ? null : pendingInbound.poll();
-                    if (copy == null) {
+                    frame = pendingInbound == null ? null : pendingInbound.poll();
+                    if (frame == null) {
                         break;
                     }
-                    pendingInboundBytes -= copy.readableBytes();
+                    ByteBuf content = frame instanceof ByteBuf buffer ? buffer
+                            : ((NetherNetUnreliableFrame) frame).content();
+                    pendingInboundBytes -= content.readableBytes();
                 }
                 readPending = false;
-                pipeline().fireChannelRead(copy);
+                pipeline().fireChannelRead(frame);
                 messages++;
                 if (!config.isAutoRead()) {
                     break;

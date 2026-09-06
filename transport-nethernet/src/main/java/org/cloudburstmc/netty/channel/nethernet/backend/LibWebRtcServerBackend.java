@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 import java.util.function.DoubleConsumer;
+import java.util.function.Supplier;
 
 /**
  * The one class where libwebrtc lives. Implements the backend seam against
@@ -233,7 +234,6 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         private final DataChannelSlots<RTCDataChannel> dataChannels = new DataChannelSlots<>(Session::closeRejectedChannel);
 
         // Guarded by this: single fire of open/close transitions.
-        private boolean observerRegistered;
         private boolean openFired;
         private volatile boolean closedFlag;
 
@@ -298,6 +298,8 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                         dataChannel.isNegotiated(), dataChannel.getMaxPacketLifeTime(), dataChannel.getMaxRetransmits());
                 if (dataChannels.admit(dataChannel, parameters)) {
                     log.debug("Received data channel: {}", parameters.label());
+                    dataChannel.registerObserver(createDataChannelObserver(
+                            parameters.reliable(), dataChannel::getState));
                     checkChannels();
                 } else {
                     log.debug("Ignored duplicate or invalid data channel: {}", parameters.label());
@@ -471,37 +473,45 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         }
 
         /**
-         * Once both expected channels have arrived, watch the reliable one:
-         * its messages are the session's inbound stream and its OPEN state is
-         * the session's open state. The unreliable channel is deliberately
-         * unobserved (reliable only transport).
+         * Activation requires both channels. Observers are attached as each
+         * arrives so early data can wait in the channel's activation queue.
          */
         private void checkChannels() {
             RTCDataChannel r = this.dataChannels.reliable();
-            if (r == null || this.dataChannels.unreliable() == null) {
+            RTCDataChannel u = this.dataChannels.unreliable();
+            if (r == null || u == null || closedFlag) {
                 return;
             }
-            synchronized (this) {
-                if (observerRegistered || closedFlag) {
-                    return;
-                }
-                observerRegistered = true;
-            }
 
-            r.registerObserver(new RTCDataChannelObserver() {
+            if (r.getState() == RTCDataChannelState.OPEN) {
+                fireOpenOnce();
+            }
+        }
+
+        RTCDataChannelObserver createDataChannelObserver(boolean reliable, Supplier<RTCDataChannelState> state) {
+            return new RTCDataChannelObserver() {
                 @Override
                 public void onStateChange() {
-                    RTCDataChannelState state = r.getState();
-                    if (state == RTCDataChannelState.OPEN) {
-                        fireOpenOnce();
-                    } else if (state == RTCDataChannelState.CLOSED) {
+                    if (!reliable || closedFlag) {
+                        return;
+                    }
+                    RTCDataChannelState observed = state.get();
+                    if (observed == RTCDataChannelState.OPEN) {
+                        checkChannels();
+                    } else if (observed == RTCDataChannelState.CLOSED) {
                         closeInternal(true);
                     }
                 }
 
                 @Override
                 public void onMessage(RTCDataChannelBuffer buffer) {
-                    listener.onMessage(buffer.data);
+                    if (!closedFlag) {
+                        if (reliable) {
+                            listener.onMessage(buffer.data);
+                        } else {
+                            listener.onUnreliableMessage(buffer.data);
+                        }
+                    }
                 }
 
                 @Override
@@ -509,13 +519,11 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                     // Despite the legacy parameter name, webrtc-java passes
                     // libwebrtc's sent_data_size here: the number of buffered
                     // bytes that were just written to the wire.
-                    listener.onBytesSent(previousAmount);
+                    if (reliable && !closedFlag) {
+                        listener.onBytesSent(previousAmount);
+                    }
                 }
-            });
-
-            if (r.getState() == RTCDataChannelState.OPEN) {
-                fireOpenOnce();
-            }
+            };
         }
 
         private void fireOpenOnce() {
@@ -609,6 +617,11 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
             }
             RTCDataChannel u = this.dataChannels.unreliable();
             if (u != null) {
+                try {
+                    u.unregisterObserver();
+                } catch (Exception e) {
+                    log.debug("Error unregistering unreliable channel observer: {}", e.getMessage());
+                }
                 try {
                     u.close();
                 } catch (Exception e) {

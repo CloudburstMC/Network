@@ -349,6 +349,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         @Override
+        public void onUnreliableMessage(java.nio.ByteBuffer data) {
+            child.deliverInbound(data, false);
+        }
+
+        @Override
         public void onBytesSent(long bytes) {
             child.onEngineBytesSent(bytes);
         }

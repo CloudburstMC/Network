@@ -28,9 +28,18 @@ Snapshots are available from [jitpack](https://jitpack.io/#dev.kastle/NetworkCom
 
 ### Reading and buffering
 
+Server and client channels receive messages from both data channels. Unreliable
+frames use `NetherNetUnreliableFrame` until `NetherNetFramingCodec` validates
+their zero header and emits the payload as a `ByteBuf`. Invalid unreliable
+frames are dropped without changing reliable reassembly. All outbound writes
+continue to use reliable delivery.
+
 `AUTO_READ=false` pauses inbound delivery. A raw channel `read()` consumes one
 transport frame. With `NetherNetFramingCodec` installed, that read
-continues through the fragments needed for one complete application message.
+continues until one complete application message from either channel is ready.
+An unreliable message can be delivered while a reliable message is incomplete;
+the reliable fragments are retained for reassembly. There is no ordering
+guarantee between the two data channels.
 The next message waits for another read. Enabling auto-read drains queued frames
 in batches of at most 64, yielding between batches.
 
@@ -38,7 +47,7 @@ The inbound queue is limited to 512 frames and 32 MiB plus 512 header bytes,
 enough for two messages at the codec's existing 16 MiB/256-fragment limits.
 Overflow closes the channel and releases queued buffers. The native API cannot
 pause reception, so disabling reads cannot allow an unlimited backlog. These
-limits apply before and after activation.
+limits apply to both data channels together, before and after activation.
 
 ### Examples
 

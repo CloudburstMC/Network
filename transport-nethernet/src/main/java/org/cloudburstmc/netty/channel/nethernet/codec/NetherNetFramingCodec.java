@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.channel.nethernet.codec;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChannel;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetUnreliableFrame;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.channel.ChannelDuplexHandler;
@@ -19,7 +20,9 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
  * fragments still to come after this one. A complete single message is
  * header 0 plus payload; a fragmented message counts down to a final
  * fragment with header 0, at which point the accumulated payload is one
- * complete Bedrock batch.
+ * complete Bedrock batch. Unreliable inbound frames must have header 0 and
+ * bypass reliable reassembly. Decoded messages from either channel are byte
+ * buffers; unreliable messages can arrive while a reliable message is incomplete.
  *
  * Inbound reassembly accumulates retained slices in a composite buffer, so
  * reassembly itself copies nothing. Outbound fragments at the maximum
@@ -87,12 +90,13 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (!(msg instanceof ByteBuf)) {
+        boolean unreliable = msg instanceof NetherNetUnreliableFrame;
+        if (!unreliable && !(msg instanceof ByteBuf)) {
             deliveredMessage = true;
             ctx.fireChannelRead(msg);
             return;
         }
-        ByteBuf buf = (ByteBuf) msg;
+        ByteBuf buf = unreliable ? ((NetherNetUnreliableFrame) msg).content() : (ByteBuf) msg;
         receivedFrame = true;
         try {
             if (!buf.isReadable()) {
@@ -100,6 +104,14 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
             }
 
             int header = buf.readUnsignedByte();
+            if (unreliable) {
+                // An unreliable message must never complete or reset a reliable assembly.
+                if (header == 0 && buf.isReadable() && buf.readableBytes() <= MAX_REASSEMBLED_SIZE) {
+                    deliveredMessage = true;
+                    ctx.fireChannelRead(buf.readRetainedSlice(buf.readableBytes()));
+                }
+                return;
+            }
             if (buf.readableBytes() > MAX_REASSEMBLED_SIZE) {
                 log.warn("Inbound message exceeds {} bytes, dropping", MAX_REASSEMBLED_SIZE);
                 resetAssembly();

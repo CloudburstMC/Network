@@ -42,6 +42,17 @@ public interface WebRtcSessionListener {
     void onMessage(ByteBuffer data);
 
     /**
+     * A raw message arrived on the unreliable data channel. The buffer is only
+     * valid during this callback and must be copied before returning. It must
+     * be decoded separately from reliable fragments. Existing listeners ignore
+     * this channel unless they override this callback.
+     *
+     * @param data the raw framed message
+     */
+    default void onUnreliableMessage(ByteBuffer data) {
+    }
+
+    /**
      * ICE selected (or re-selected) a candidate pair; the given address is
      * the remote transport address actually exchanging packets with us. For
      * relayed connections this is the TURN relay. Fires before

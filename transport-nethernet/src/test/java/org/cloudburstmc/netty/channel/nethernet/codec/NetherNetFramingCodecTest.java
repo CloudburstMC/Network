@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.codec;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetUnreliableFrame;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -90,6 +92,47 @@ class NetherNetFramingCodecTest {
         System.arraycopy(part2, 0, expected, part1.length, part2.length);
         System.arraycopy(part3, 0, expected, part1.length + part2.length, part3.length);
         assertArrayEquals(expected, readAll(out));
+    }
+
+    @Test
+    void unreliableMessagesDoNotCompleteReliableAssemblies() {
+        ByteBuf first = framed(2, new byte[]{1});
+        ByteBuf middle = framed(1, new byte[]{2});
+        ByteBuf last = framed(0, new byte[]{3});
+        ByteBuf unreliable = framed(0, new byte[]{42});
+        ByteBuf another = framed(0, new byte[]{43});
+
+        assertFalse(channel.writeInbound(first));
+        assertTrue(channel.writeInbound(new NetherNetUnreliableFrame(unreliable)));
+        assertArrayEquals(new byte[]{42}, readAll(channel.readInbound()));
+        assertEquals(0, unreliable.refCnt());
+        assertFalse(channel.writeInbound(middle));
+        assertTrue(channel.writeInbound(new NetherNetUnreliableFrame(another)));
+        assertArrayEquals(new byte[]{43}, readAll(channel.readInbound()));
+        assertEquals(0, another.refCnt());
+        assertTrue(channel.writeInbound(last));
+        assertArrayEquals(new byte[]{1, 2, 3}, readAll(channel.readInbound()));
+        assertEquals(0, first.refCnt());
+        assertEquals(0, middle.refCnt());
+        assertEquals(0, last.refCnt());
+        assertNull(channel.readInbound());
+    }
+
+    @Test
+    void invalidUnreliableMessagesAreReleasedWithoutDiscardingReliableAssembly() {
+        assertFalse(channel.writeInbound(framed(1, new byte[]{1})));
+        for (ByteBuf invalid : List.of(
+                Unpooled.buffer(1),
+                framed(0, new byte[0]),
+                framed(1, new byte[]{9}),
+                framed(255, new byte[]{9}),
+                framed(0, new byte[NetherNetFramingCodec.MAX_REASSEMBLED_SIZE + 1]))) {
+            assertFalse(channel.writeInbound(new NetherNetUnreliableFrame(invalid)));
+            assertEquals(0, invalid.refCnt());
+        }
+        assertTrue(channel.writeInbound(framed(0, new byte[]{2})));
+        assertArrayEquals(new byte[]{1, 2}, readAll(channel.readInbound()));
+        assertNull(channel.readInbound());
     }
 
     @Test

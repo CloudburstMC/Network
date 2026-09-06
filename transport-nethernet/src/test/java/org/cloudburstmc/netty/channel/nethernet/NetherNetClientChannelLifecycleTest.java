@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
+import org.cloudburstmc.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherClientChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
@@ -292,6 +293,63 @@ class NetherNetClientChannelLifecycleTest {
 
     private static RTCDataChannelBuffer message(int value) {
         return new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{(byte) value}), true);
+    }
+
+    @Test
+    void unreliableMessagesWaitForActivationAndApplicationReads() throws Exception {
+        try (Harness h = new Harness()) {
+            h.channel.pipeline().addFirst(new NetherNetFramingCodec());
+            h.channel.config().setAutoRead(false);
+            ChannelFuture connect = h.connect();
+            RTCDataChannelObserver unreliable = h.channel.createUnreliableObserver(
+                    (Integer) field(h.channel, "attemptGeneration"));
+            unreliable.onStateChange();
+            ByteBuffer callback = ByteBuffer.wrap(new byte[]{99, 0, 42, 99});
+            callback.position(1).limit(3);
+            unreliable.onMessage(new RTCDataChannelBuffer(callback, true));
+            callback.put(2, (byte) 43);
+            h.pump();
+            assertFalse(connect.isDone());
+            assertTrue(h.events.isEmpty());
+
+            h.observer(new AtomicReference<>(RTCDataChannelState.OPEN)).onStateChange();
+            h.pump();
+            assertTrue(connect.isSuccess());
+            assertEquals(List.of("active"), h.events);
+
+            h.channel.read();
+            h.pump();
+            assertEquals(List.of("active", "data:42"), h.events);
+            assertEquals(0, h.allocator.metric().usedHeapMemory());
+        }
+    }
+
+    @Test
+    void retryAndCloseDiscardUnreliableFramesAndRejectLateCallbacks() throws Exception {
+        try (Harness h = new Harness()) {
+            h.channel.pipeline().addFirst(new NetherNetFramingCodec());
+            h.connect();
+            RTCDataChannelObserver old = h.channel.createUnreliableObserver(
+                    (Integer) field(h.channel, "attemptGeneration"));
+            old.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{0, 41}), true));
+            assertTrue(h.allocator.metric().usedHeapMemory() > 0);
+            h.advance(100);
+            assertEquals(0, h.allocator.metric().usedHeapMemory());
+            old.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{0, 42}), true));
+
+            RTCDataChannelObserver current = h.channel.createUnreliableObserver(
+                    (Integer) field(h.channel, "attemptGeneration"));
+            current.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{0, 43}), true));
+            h.observer(new AtomicReference<>(RTCDataChannelState.OPEN)).onStateChange();
+            h.pump();
+            assertEquals(List.of("active", "data:43"), h.events);
+
+            h.channel.close().sync();
+            current.onMessage(new RTCDataChannelBuffer(ByteBuffer.wrap(new byte[]{0, 44}), true));
+            h.pump();
+            assertEquals(List.of("active", "data:43"), h.events);
+            assertEquals(0, h.allocator.metric().usedHeapMemory());
+        }
     }
 
     private static Object field(NetherNetClientChannel channel, String name) throws Exception {
