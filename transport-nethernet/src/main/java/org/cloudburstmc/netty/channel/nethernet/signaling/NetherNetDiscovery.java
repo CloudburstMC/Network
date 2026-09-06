@@ -11,6 +11,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
@@ -36,7 +37,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
     private final long networkId;
     private final Map<Long, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
-    private final Map<Long, InetSocketAddress> peerAddresses = new ConcurrentHashMap<>();
+    private final DiscoveryPeerRegistry peerAddresses;
     private final Object lifecycleLock = new Object();
     private final Supplier<? extends EventLoopGroup> eventLoopFactory;
     private final AtomicReference<DiscoveryCallback> discoveryCallback = new AtomicReference<>();
@@ -56,8 +57,13 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     }
 
     NetherNetDiscovery(long networkId, Supplier<? extends EventLoopGroup> eventLoopFactory) {
+        this(networkId, eventLoopFactory, new DiscoveryPeerRegistry());
+    }
+
+    NetherNetDiscovery(long networkId, Supplier<? extends EventLoopGroup> eventLoopFactory, DiscoveryPeerRegistry peerAddresses) {
         this.networkId = networkId;
         this.eventLoopFactory = Objects.requireNonNull(eventLoopFactory, "eventLoopFactory");
+        this.peerAddresses = Objects.requireNonNull(peerAddresses, "peerAddresses");
     }
 
     public void bind() {
@@ -89,6 +95,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             bootstrap.group(group)
              .channel(NioDatagramChannel.class)
              .option(ChannelOption.SO_BROADCAST, true)
+             .option(ChannelOption.RCVBUF_ALLOCATOR, new FixedRecvByteBufAllocator(65535))
              .handler(this);
 
             bind = bootstrap.bind(address);
@@ -169,13 +176,13 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             buf.writeByte(4); // Version
             writeString(buf, data.serverName());
             writeString(buf, data.levelName());
-            buf.writeByte(data.gameType() << 1);
+            writeSignedVarInt(buf, data.gameType());
             buf.writeIntLE(data.playerCount());
             buf.writeIntLE(data.maxPlayerCount());
             buf.writeBoolean(data.isEditorWorld());
             buf.writeBoolean(data.isHardcore());
-            buf.writeByte(data.transportLayer() << 1);
-            buf.writeByte(data.connectionType() << 1);
+            writeSignedVarInt(buf, data.transportLayer());
+            writeSignedVarInt(buf, data.connectionType());
             binaryData = new byte[buf.readableBytes()];
             buf.readBytes(binaryData);
         } finally {
@@ -198,11 +205,21 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     }
 
     public void registerSignalHandler(long connectionId, SignalHandler handler) {
-        this.signalHandlers.put(connectionId, handler);
+        Objects.requireNonNull(handler, "handler");
+        synchronized (lifecycleLock) {
+            if (closed) {
+                throw new IllegalStateException("Discovery is closed");
+            }
+            this.signalHandlers.put(connectionId, handler);
+            this.peerAddresses.register(connectionId);
+        }
     }
 
     public void unregisterSignalHandler(long connectionId) {
-        this.signalHandlers.remove(connectionId);
+        synchronized (lifecycleLock) {
+            this.signalHandlers.remove(connectionId);
+            this.peerAddresses.unregister(connectionId);
+        }
     }
 
     public void setNewConnectionHandler(NetherNetServerSignaling.NewConnectionHandler handler) {
@@ -280,6 +297,9 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         }
 
         try {
+            if (!decrypted.isReadable(18)) {
+                return;
+            }
             int packetId = decrypted.readUnsignedShortLE();
             long senderId = decrypted.readLongLE();
 
@@ -290,10 +310,11 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
                 return;
             }
 
-            peerAddresses.put(senderId, packet.sender());
-
             switch (packetId) {
                 case NetherNetConstants.ID_DISCOVERY_REQUEST -> {
+                    if (decrypted.isReadable() || !rememberPeer(senderId, packet.sender(), null)) {
+                        return;
+                    }
                     log.trace("Handled discovery request from {}", packet.sender());
                     handleRequest(senderId, packet.sender());
                 }
@@ -302,13 +323,14 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
                     if (log.isTraceEnabled()) {
                         log.trace("Message Data: {}", decrypted.toString(StandardCharsets.UTF_8));
                     }
-                    handleMessage(decrypted, senderId);
+                    handleMessage(decrypted, senderId, packet.sender());
                 }
                 case NetherNetConstants.ID_DISCOVERY_RESPONSE -> {
                     log.trace("Handled discovery response from {}", packet.sender());
                     DiscoveryCallback callback = discoveryCallback.get();
                     if (callback != null && (callback.expectedSender() == null
-                            || callback.expectedSender().equals(packet.sender()))) {
+                            || callback.expectedSender().equals(packet.sender()))
+                            && validResponse(decrypted) && rememberPeer(senderId, packet.sender(), null)) {
                         if (log.isTraceEnabled()) {
                             log.trace("Response Data: {}", decrypted.toString(StandardCharsets.UTF_8));
                         }
@@ -341,7 +363,10 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         sendPacket(buf, sender);
     }
 
-    private void handleMessage(ByteBuf data, long senderId) {
+    private void handleMessage(ByteBuf data, long senderId, InetSocketAddress sender) {
+        if (!data.isReadable(12)) {
+            return;
+        }
         long recipientId = data.readLongLE();
 
         if (recipientId != this.networkId && recipientId != 0) {
@@ -350,13 +375,15 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         }
 
         int len = data.readIntLE();
-        if (data.readableBytes() < len) {
+        if (len < 0 || data.readableBytes() < len) {
             log.trace("Malformed message: claimed length {} but only has {}", len, data.readableBytes());
             return;
         }
 
-        String messageData = data.readCharSequence(len, StandardCharsets.UTF_8).toString();
+        // Vanilla can understate this inner length; the outer envelope already bounds the full datagram.
+        String messageData = data.readCharSequence(data.readableBytes(), StandardCharsets.UTF_8).toString();
         if ("Ping".equals(messageData)) {
+            rememberPeer(senderId, sender, null);
             return;
         }
 
@@ -365,7 +392,20 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
         try {
             String type = parts[0];
+            if (!NetherNetConstants.RTC_NEGOTIATION_CONNECT_REQUEST.equals(type)
+                    && !NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE.equals(type)
+                    && !NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD.equals(type)
+                    && !NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR.equals(type)) {
+                return;
+            }
+            if (!NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR.equals(type)
+                    && (parts.length < 3 || parts[2].isEmpty())) {
+                return;
+            }
             long connectionId = Long.parseUnsignedLong(parts[1]);
+            if (!rememberPeer(senderId, sender, connectionId)) {
+                return;
+            }
 
             SignalHandler handler = signalHandlers.get(connectionId);
 
@@ -388,6 +428,39 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         }
     }
 
+    private boolean rememberPeer(long peerId, InetSocketAddress address, Long connectionId) {
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return false;
+            }
+            if (connectionId == null) {
+                peerAddresses.remember(peerId, address);
+            } else {
+                peerAddresses.rememberSignal(connectionId, peerId, address);
+            }
+            return true;
+        }
+    }
+
+    private static boolean validResponse(ByteBuf data) {
+        if (!data.isReadable(4)) {
+            return false;
+        }
+        int index = data.readerIndex();
+        int length = data.getIntLE(index);
+        if (length < 0 || length != data.readableBytes() - 4 || (length & 1) != 0) {
+            return false;
+        }
+        for (int i = index + 4; i < data.writerIndex(); i++) {
+            int value = data.getUnsignedByte(i);
+            if (!(value >= '0' && value <= '9') && !(value >= 'a' && value <= 'f')
+                    && !(value >= 'A' && value <= 'F')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Closes the socket and its event loop. A closed instance cannot be rebound. */
     public void close() {
         Channel channel;
@@ -399,11 +472,11 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             closed = true;
             channel = this.channel;
             group = eventLoops;
+            signalHandlers.clear();
+            peerAddresses.clear();
         }
         discoveryCallback.set(null);
         newConnectionHandler = null;
-        signalHandlers.clear();
-        peerAddresses.clear();
         try {
             if (channel != null) {
                 channel.close();
@@ -432,5 +505,9 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             value >>>= 7;
         }
         buf.writeByte((byte) value);
+    }
+
+    private void writeSignedVarInt(ByteBuf buf, int value) {
+        writeUnsignedVarInt(buf, (value << 1) ^ (value >> 31));
     }
 }
