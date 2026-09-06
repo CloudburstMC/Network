@@ -1,9 +1,12 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
+
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.List;
+import java.util.Objects;
 
 public interface NetherNetServerSignaling extends NetherNetSignaling {
     /**
@@ -73,7 +76,8 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     }
 
     /**
-     * Data structure for Pong advertisement data.
+     * LAN v6 advertisement fields. Authentication flags describe the consumer's
+     * admission policy; setting them does not enable authentication or nonce checks.
      *
      * @param serverName      The name of the server.
      * @param levelName       The name of the level/world.
@@ -84,9 +88,31 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * @param isHardcore      Whether the world is in hardcore mode.
      * @param transportLayer  The transport layer identifier (e.g. NetherNet).
      * @param connectionType  The connection type identifier (e.g. LAN, Online).
+     * @param acceptsOnlineAuth whether online-authenticated players may join
+     * @param acceptsSelfSignedAuth whether self-signed identities may join
+     * @param nonce the host's nonce, which clients echo in their Login data
      */
     public record PongData(String serverName, String levelName, int gameType, int playerCount, int maxPlayerCount,
-            boolean isEditorWorld, boolean isHardcore, int transportLayer, int connectionType) {
+            boolean isEditorWorld, boolean isHardcore, int transportLayer, int connectionType,
+            boolean acceptsOnlineAuth, boolean acceptsSelfSignedAuth, String nonce) {
+        private static final String DEFAULT_NONCE = NetherNetServerStatus.randomNonce();
+
+        public PongData {
+            Objects.requireNonNull(serverName, "serverName");
+            Objects.requireNonNull(levelName, "levelName");
+            Objects.requireNonNull(nonce, "nonce");
+        }
+
+        /**
+         * Preserves the original constructor. Both identity types are advertised
+         * as accepted, and the default nonce is generated once per process.
+         */
+        public PongData(String serverName, String levelName, int gameType, int playerCount, int maxPlayerCount,
+                        boolean isEditorWorld, boolean isHardcore, int transportLayer, int connectionType) {
+            this(serverName, levelName, gameType, playerCount, maxPlayerCount, isEditorWorld, isHardcore,
+                    transportLayer, connectionType, true, true, DEFAULT_NONCE);
+        }
+
         public static class Builder {
             private String serverName = "Server";
             private String levelName = "World";
@@ -97,6 +123,9 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
             private boolean isHardcore = false;
             private int transportLayer = 2; // Default to NetherNet
             private int connectionType = 4; // Default to LAN
+            private boolean acceptsOnlineAuth = true;
+            private boolean acceptsSelfSignedAuth = true;
+            private String nonce = DEFAULT_NONCE;
 
             public Builder setServerName(String serverName) {
                 this.serverName = serverName;
@@ -143,9 +172,26 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
                 return this;
             }
 
+            public Builder setAcceptsOnlineAuth(boolean acceptsOnlineAuth) {
+                this.acceptsOnlineAuth = acceptsOnlineAuth;
+                return this;
+            }
+
+            public Builder setAcceptsSelfSignedAuth(boolean acceptsSelfSignedAuth) {
+                this.acceptsSelfSignedAuth = acceptsSelfSignedAuth;
+                return this;
+            }
+
+            /** Supply the consumer's shared nonce when advertising through multiple endpoints. */
+            public Builder setNonce(String nonce) {
+                this.nonce = Objects.requireNonNull(nonce, "nonce");
+                return this;
+            }
+
             public PongData build() {
                 return new PongData(serverName, levelName, gameType, playerCount, maxPlayerCount,
-                    isEditorWorld, isHardcore, transportLayer, connectionType);
+                    isEditorWorld, isHardcore, transportLayer, connectionType,
+                    acceptsOnlineAuth, acceptsSelfSignedAuth, nonce);
             }
         }
     }

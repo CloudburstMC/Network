@@ -1,10 +1,12 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.codec.NetherNetServerDataCodec;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling.PongData;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.SignalHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -23,7 +25,6 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,6 +35,8 @@ import java.util.function.Supplier;
 
 public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPacket> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscovery.class);
+    // Hex expansion, 24 plaintext header bytes, a 32-byte MAC and AES padding must fit a 65,507-byte UDP payload.
+    private static final int MAX_SERVER_DATA_BYTES = 32_723;
 
     private final long networkId;
     private final Map<Long, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
@@ -170,27 +173,17 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     private record DiscoveryCallback(BiConsumer<Long, ByteBuf> consumer, InetSocketAddress expectedSender) { }
 
     public void setPongData(PongData data) {
-        ByteBuf buf = Unpooled.buffer();
-        byte[] binaryData;
+        Objects.requireNonNull(data, "data");
+        ByteBuf buf = Unpooled.buffer(128, MAX_SERVER_DATA_BYTES);
+        byte[] hexBytes;
         try {
-            buf.writeByte(4); // Version
-            writeString(buf, data.serverName());
-            writeString(buf, data.levelName());
-            writeSignedVarInt(buf, data.gameType());
-            buf.writeIntLE(data.playerCount());
-            buf.writeIntLE(data.maxPlayerCount());
-            buf.writeBoolean(data.isEditorWorld());
-            buf.writeBoolean(data.isHardcore());
-            writeSignedVarInt(buf, data.transportLayer());
-            writeSignedVarInt(buf, data.connectionType());
-            binaryData = new byte[buf.readableBytes()];
-            buf.readBytes(binaryData);
+            NetherNetServerDataCodec.encode(buf, data);
+            hexBytes = ByteBufUtil.hexDump(buf).getBytes(StandardCharsets.US_ASCII);
+        } catch (IndexOutOfBoundsException e) {
+            throw new IllegalArgumentException("LAN advertisement exceeds the UDP payload limit", e);
         } finally {
             buf.release();
         }
-
-        String hex = HexFormat.of().formatHex(binaryData);
-        byte[] hexBytes = hex.getBytes(StandardCharsets.UTF_8);
 
         ByteBuf response = Unpooled.buffer();
         try {
@@ -491,23 +484,5 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     public boolean isActive() {
         Channel channel = this.channel;
         return !closed && channel != null && channel.isActive();
-    }
-
-    private void writeString(ByteBuf buf, String s) {
-        byte[] b = s.getBytes(StandardCharsets.UTF_8);
-        this.writeUnsignedVarInt(buf, b.length);
-        buf.writeBytes(b);
-    }
-
-    private void writeUnsignedVarInt(ByteBuf buf, int value) {
-        while ((value & 0xFFFFFF80) != 0) {
-            buf.writeByte((byte) ((value & 0x7F) | 0x80));
-            value >>>= 7;
-        }
-        buf.writeByte((byte) value);
-    }
-
-    private void writeSignedVarInt(ByteBuf buf, int value) {
-        writeUnsignedVarInt(buf, (value << 1) ^ (value >> 31));
     }
 }

@@ -26,6 +26,38 @@ Snapshots are available from [jitpack](https://jitpack.io/#dev.kastle/NetworkCom
 > [!IMPORTANT]
 > This library requires the platform-specific WebRTC native libraries at runtime. See [Kas-tle/webrtc-java](https://github.com/Kas-tle/webrtc-java?tab=readme-ov-file#usage) for instructions on how to include the native libraries in your project.
 
+### LAN advertisements
+
+`NetherNetDiscovery` emits binary ServerData v6, matching stable Bedrock
+1.26.45.1. The scanner and `NetherNetServerDataCodec` decode v6 and reject
+unsupported versions or malformed records. Preview's v7 format is deferred
+until a stable release adopts it.
+
+`PongData` includes `acceptsOnlineAuth`, `acceptsSelfSignedAuth`, and `nonce`.
+The existing nine-argument constructor and builder methods remain available.
+Both authentication flags default to true; consumers with a different admission
+policy must set them explicitly. These fields describe policy and do not enable
+authentication or Login nonce checks.
+
+The default nonce is generated once for the process and reused across new
+builders and advertisement updates. Set it explicitly when sharing a nonce with
+another endpoint, such as HTTP server status:
+
+```java
+PongData data = new PongData.Builder()
+        .setServerName("My server")
+        .setLevelName("My world")
+        .setAcceptsOnlineAuth(true)
+        .setAcceptsSelfSignedAuth(false)
+        .setNonce(sharedNonce)
+        .build();
+signaling.setAdvertisementData(data);
+```
+
+Advertisements are encoded when updated and cached for discovery responses.
+An update that cannot fit a UDP datagram fails without replacing the previous
+advertisement. This library support does not enable a LAN listener in EduGeyser.
+
 ### Reading and buffering
 
 Server and client channels receive messages from both data channels. Unreliable
