@@ -2,14 +2,10 @@ package org.cloudburstmc.netty.util.nethernet;
 
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import tel.schich.libdatachannel.LibDataChannel;
+import java.util.Locale;
 
-/**
- * Controls how much of libdatachannel's own logging reaches your logs.
- * <p>
- * The native logger runs at its most verbose level and the binding maps that straight onto SLF4J, so a
- * connection emits a couple of dozen lines at INFO about ICE, DTLS and SCTP internals. Neither is
- * configurable, leaving the level of {@value #NATIVE_LOGGER} as the only place to filter.
- */
+/** Controls native logging before messages cross into Java, and configures supported Java backends. */
 public final class NetherNetLogging {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetLogging.class);
 
@@ -20,26 +16,31 @@ public final class NetherNetLogging {
     }
 
     /**
-     * Sets the level of the libdatachannel logger. SLF4J has no level API, so this is applied through
-     * Log4j2 or Logback; with any other backend it does nothing and you should configure it yourself.
+     * Sets the native threshold and, when available, the Log4j2 or Logback logger level.
      *
      * @param level One of OFF, ERROR, WARN, INFO, DEBUG, TRACE or ALL. WARN is a good default.
-     * @return true if the level was applied, false if the backend was not recognised.
+     * @return true if the native threshold was set, false if the level was invalid.
      */
     public static boolean setNativeLogLevel(String level) {
         if (level == null || level.isBlank()) {
             return false;
         }
 
-        String normalised = level.trim().toUpperCase();
-
-        if (applyLog4j2(normalised) || applyLogback(normalised)) {
-            log.debug("Set {} to {}", NATIVE_LOGGER, normalised);
-            return true;
-        }
-
-        log.debug("Could not set {} to {}, no supported logging backend found", NATIVE_LOGGER, normalised);
-        return false;
+        String normalised = level.trim().toUpperCase(Locale.ROOT);
+        LibDataChannel.LogLevel nativeLevel = switch (normalised) {
+            case "OFF" -> LibDataChannel.LogLevel.NONE;
+            case "ERROR" -> LibDataChannel.LogLevel.ERROR;
+            case "WARN" -> LibDataChannel.LogLevel.WARNING;
+            case "INFO" -> LibDataChannel.LogLevel.INFO;
+            case "DEBUG" -> LibDataChannel.LogLevel.DEBUG;
+            case "TRACE", "ALL" -> LibDataChannel.LogLevel.VERBOSE;
+            default -> null;
+        };
+        if (nativeLevel == null) return false;
+        LibDataChannel.setLogLevel(nativeLevel);
+        if (!applyLog4j2(normalised)) applyLogback(normalised);
+        log.debug("Set native transport log level to {}", normalised);
+        return true;
     }
 
     private static boolean applyLog4j2(String level) {

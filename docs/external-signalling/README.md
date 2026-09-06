@@ -378,21 +378,34 @@ ufrag, encoded as lowercase hex.
 
 ### Validate the first packet
 
-A token can be valid for at most 120 seconds. The supplied implementation uses
-60 seconds. Before assigning the UDP tuple to a peer or creating a native peer,
-the host checks expiry, field bounds, GCM authentication, client binding, and the
-raw STUN MESSAGE-INTEGRITY. The DTLS handshake MUST then verify the client
-fingerprint from the token.
+A token can be valid for at most 120 seconds. Before assigning the UDP tuple to a
+peer or allocating a peer connection, the host checks expiry, field bounds, GCM
+authentication, client binding, and STUN MESSAGE-INTEGRITY. The DTLS handshake
+MUST then verify the client fingerprint from the token.
 
 Only a retransmission of the identical token from the same UDP tuple can reuse
 a reservation. Reject the same token from another tuple. Also reject a conflicting
 admission on an occupied tuple.
 
-Limit the number of sessions, pending handshakes, replay-cache entries, callbacks,
-and queued datagrams. Create peers outside the UDP mux callback lock. After
-registering the native peer, deliver or replay the authenticated first datagram
-so that its STUN request receives a response. Release admission capacity only
-after native teardown has actually finished.
+Limit the number of sessions, pending handshakes, used-token records, queued
+validation tasks, and retained requests. Duplicate requests for the same pending
+attempt share one decision. Preserve enough of the first request to respond after
+acceptance: completing admission MUST NOT depend on the client retransmitting.
+Release admission capacity only after the connection's resources have been
+released. A failed integrity check MUST NOT consume the token, since a copied
+token alone does not prove that the sender has its ICE password.
+
+#### Reference implementation
+
+The supplied Network implementation uses a 60-second token limit. libjuice
+retains the first STUN packet and sends parsed metadata to Java for asynchronous
+token validation. libdatachannel verifies STUN integrity before creating the
+peer, outside the UDP receive lock. It then processes the retained request after
+the application has installed its callbacks. Established transport packets stay
+native, and capacity remains reserved until native teardown finishes.
+
+Other implementations may meet the requirements above using different languages,
+threading models, and transport libraries.
 
 ## Optional extensions and compatibility
 
