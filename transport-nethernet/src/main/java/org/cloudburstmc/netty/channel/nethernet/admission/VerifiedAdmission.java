@@ -7,8 +7,8 @@ public record VerifiedAdmission(String tokenId, String localUfrag, String localP
                                 String networkId, String callerContextHash, String keyId) {
     public VerifiedAdmission {
         if (tokenId == null || !tokenId.matches("[0-9a-f]{32}")) throw new IllegalArgumentException("tokenId");
-        if (!StunBinding.iceString(localUfrag, 4, 256) || !StunBinding.iceString(remoteUfrag, 4, 256) ||
-            !StunBinding.iceString(localPassword, 22, 256) || !StunBinding.iceString(remotePassword, 22, 256)) throw new IllegalArgumentException("ICE identity");
+        if (!AdmissionRequest.iceString(localUfrag, 4, 256) || !AdmissionRequest.iceString(remoteUfrag, 4, 256) ||
+            !AdmissionRequest.iceString(localPassword, 22, 256) || !AdmissionRequest.iceString(remotePassword, 22, 256)) throw new IllegalArgumentException("ICE identity");
         if (remoteFingerprint == null || !remoteFingerprint.matches("sha-256 ([0-9A-F]{2}:){31}[0-9A-F]{2}")) throw new IllegalArgumentException("DTLS fingerprint");
         if (remoteSctpPort < 1 || remoteSctpPort > 65535 || remoteMaxMessageSize < 1 || remoteMaxMessageSize > 262144) throw new IllegalArgumentException("SCTP parameters");
     }

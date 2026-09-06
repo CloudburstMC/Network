@@ -21,8 +21,10 @@ known namespaces and invoke only their advertised same-origin operations. The co
 performs product account/claim actions or stages individual joins from provider control.
 
 `NativeProviderTransport` publishes the actual bound UDP endpoint and certificate
-fingerprint before accepting clients. Its admission validator verifies an NXS1 token and
-raw STUN integrity before creating a native peer. The optional native test task is
+fingerprint before accepting clients. Java validates the NXS1 token from incoming
+ICE metadata; native code verifies STUN integrity before creating a peer. The
+first request stays native during asynchronous validation, and acceptance does
+not depend on a client retry. Established transport packets stay native. The optional native test task is
 `:external-signalling:nativeAdmissionTest`; native packaging must match the immutable JNI
 revision in `native-dependencies.properties`. Never combine new headers with older native
 binaries. Native tests prove transport conformance, not stock-client gameplay.
