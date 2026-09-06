@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetChannel;
 import dev.kastle.webrtc.PortAllocatorConfig;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
@@ -24,6 +25,13 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
 
     public DefaultNetherChannelConfig(Channel channel) {
         super(channel);
+    }
+
+    @Override
+    protected void autoReadCleared() {
+        if (channel instanceof NetherNetChannel netherNetChannel) {
+            netherNetChannel.clearReadPending();
+        }
     }
 
     @Override

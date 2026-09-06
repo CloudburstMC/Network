@@ -19,6 +19,7 @@ import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Queue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleConsumer;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -68,6 +69,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
     private final AtomicBoolean channelActiveFired = new AtomicBoolean();
     private final Object inboundLock = new Object();
     private final Runnable inboundDrainTask = this::drainInbound;
+    private final Runnable clearReadPendingTask = () -> this.readPending = false;
     private volatile boolean inboundReady;
     private volatile boolean inboundClosed;
     private volatile boolean readPending;
@@ -481,8 +483,22 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     protected void doBeginRead() throws Exception {
-        readPending = true;
+        readPending = !config.isAutoRead();
         requestInboundDrain();
+    }
+
+    /** Clears read demand when the channel configuration disables automatic reads. */
+    public final void clearReadPending() {
+        if (!isRegistered() || eventLoop().inEventLoop()) {
+            readPending = false;
+        } else {
+            try {
+                // Order this after any automatic read already queued by a configuration change.
+                eventLoop().execute(clearReadPendingTask);
+            } catch (RejectedExecutionException ignored) {
+                readPending = false;
+            }
+        }
     }
 
     @Override

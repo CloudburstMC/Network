@@ -353,6 +353,54 @@ class NetherNetChannelLifecycleTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void disablingAutoReadClearsAutomaticDemand(boolean queuedToggle) throws Exception {
+        TestChannel channel = new TestChannel();
+        LinkedBlockingQueue<Integer> messages = new LinkedBlockingQueue<>();
+        channel.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object message) {
+                ByteBuf buffer = (ByteBuf) message;
+                try {
+                    messages.add((int) buffer.readUnsignedByte());
+                } finally {
+                    buffer.release();
+                }
+            }
+        });
+        CountDownLatch blocked = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        try {
+            group.register(channel).sync();
+            channel.eventLoop().submit(() -> { }).sync();
+            if (queuedToggle) {
+                channel.config().setAutoRead(false);
+                channel.eventLoop().execute(() -> awaitRelease(blocked, resume));
+                assertTrue(blocked.await(2, TimeUnit.SECONDS));
+                channel.config().setAutoRead(true);
+                channel.config().setAutoRead(false);
+            } else {
+                channel.eventLoop().submit(() -> channel.config().setAutoRead(false)).sync();
+            }
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{21}));
+            channel.deliverInbound(ByteBuffer.wrap(new byte[]{22}));
+            resume.countDown();
+            channel.eventLoop().submit(() -> { }).sync();
+            channel.eventLoop().submit(() -> { }).sync();
+            assertTrue(messages.isEmpty());
+
+            channel.read();
+            assertEquals(21, messages.poll(2, TimeUnit.SECONDS));
+            assertNull(messages.poll(100, TimeUnit.MILLISECONDS));
+            channel.read();
+            assertEquals(22, messages.poll(2, TimeUnit.SECONDS));
+        } finally {
+            resume.countDown();
+            channel.close().syncUninterruptibly();
+        }
+    }
+
     @Test
     void enablingAutoReadDrainsQueuedFramesInFairBatches() throws Exception {
         TestChannel channel = new TestChannel();
