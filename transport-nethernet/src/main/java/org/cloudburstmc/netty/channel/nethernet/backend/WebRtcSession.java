@@ -16,10 +16,14 @@ public interface WebRtcSession {
      * transmission on the reliable data channel without blocking on the
      * engine's network processing. The data is copied out of the buffer
      * before this method returns, so the caller may reuse the buffer
-     * immediately. Messages sent before the transport is open, or after it
-     * has closed, are dropped.
+     * immediately. A known closed or unavailable transport must fail the call;
+     * synchronous binding failures propagate to the caller. Returning normally
+     * means the binding call completed, not that the native engine accepted the
+     * message or the peer received it. The current binding logs asynchronous
+     * send rejections; channel closures are reported separately through the listener.
      *
      * @param data the message payload, already NetherNet framed
+     * @throws IllegalStateException if the session is known to be closed or its data channel is unavailable
      */
     void send(ByteBuffer data);
 

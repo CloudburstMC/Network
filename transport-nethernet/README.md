@@ -81,6 +81,17 @@ Overflow closes the channel and releases queued buffers. The native API cannot
 pause reception, so disabling reads cannot allow an unlimited backlog. These
 limits apply to both data channels together, before and after activation.
 
+### Write failures
+
+A known closed or unavailable transport, or a synchronous binding failure,
+fails the Netty write and closes the channel through its normal write-error
+path. Queued buffers are released and their pending writes fail as well.
+
+A successful write means the binding call completed. It does not confirm
+native engine acceptance or peer receipt: the current WebRTC binding logs
+asynchronous send rejections without returning them to the write future.
+Channel closures are reported through the existing state callbacks.
+
 ### Examples
 
 These projects use this library to provide Nethernet support. You can see their source code for examples of how to use this library:

@@ -600,9 +600,10 @@ public class NetherNetClientChannel extends NetherNetChannel {
     @Override
     protected void sendFramed(io.netty.buffer.ByteBuf framed) {
         RTCDataChannel reliable = this.reliableChannel;
-        if (reliable != null) {
-            reliable.sendAsync(new RTCDataChannelBuffer(toNioBuffer(framed), true));
+        if (reliable == null) {
+            throw new IllegalStateException("Reliable data channel is unavailable");
         }
+        reliable.sendAsync(new RTCDataChannelBuffer(toNioBuffer(framed), true));
     }
 
     private void applyRemoteCandidate(String candidateSdp) {

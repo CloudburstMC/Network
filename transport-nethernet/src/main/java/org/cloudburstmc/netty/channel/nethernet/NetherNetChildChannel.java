@@ -63,9 +63,10 @@ public class NetherNetChildChannel extends NetherNetChannel {
     @Override
     protected void sendFramed(ByteBuf framed) {
         WebRtcSession session = this.session;
-        if (session != null) {
-            session.send(toNioBuffer(framed));
+        if (session == null) {
+            throw new IllegalStateException("WebRTC session is unavailable");
         }
+        session.send(toNioBuffer(framed));
     }
 
     @Override

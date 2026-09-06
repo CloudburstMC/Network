@@ -296,6 +296,27 @@ class NetherNetClientChannelLifecycleTest {
     }
 
     @Test
+    void aClientWithoutAReliableChannelCannotReportASuccessfulWrite() throws Exception {
+        try (Harness h = new Harness()) {
+            h.connect();
+            h.observer(new AtomicReference<>(RTCDataChannelState.OPEN)).onStateChange();
+            h.pump();
+            assertTrue(h.channel.isActive());
+            ByteBuf payload = h.channel.alloc().buffer().writeByte(0).writeByte(1);
+
+            ChannelFuture write = h.channel.writeAndFlush(payload);
+            h.pump();
+
+            assertTrue(write.isDone());
+            assertFalse(write.isSuccess());
+            assertInstanceOf(IllegalStateException.class, write.cause().getCause());
+            assertEquals(0, payload.refCnt());
+            assertFalse(h.channel.isOpen());
+            assertEquals(0, h.allocator.metric().usedHeapMemory());
+        }
+    }
+
+    @Test
     void unreliableMessagesWaitForActivationAndApplicationReads() throws Exception {
         try (Harness h = new Harness()) {
             h.channel.pipeline().addFirst(new NetherNetFramingCodec());

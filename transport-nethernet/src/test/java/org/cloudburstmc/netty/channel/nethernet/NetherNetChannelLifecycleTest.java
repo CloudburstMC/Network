@@ -82,6 +82,25 @@ class NetherNetChannelLifecycleTest {
         }
     }
 
+    @Test
+    void aChildWithoutAnAttachedSessionCannotReportASuccessfulWrite() throws Exception {
+        NetherNetChildChannel child = new NetherNetChildChannel(null,
+                new InetSocketAddress("127.0.0.1", 19132), new InetSocketAddress("127.0.0.1", 19133));
+        ByteBuf payload = Unpooled.buffer().writeByte(0).writeByte(1);
+        try {
+            child.markTransportOpen();
+            group.register(child).sync();
+            ChannelFuture write = child.writeAndFlush(payload).await();
+
+            assertFalse(write.isSuccess());
+            assertInstanceOf(IllegalStateException.class, write.cause().getCause());
+            assertEquals(0, payload.refCnt());
+            assertTrue(child.closeFuture().await(2, TimeUnit.SECONDS));
+        } finally {
+            child.close().syncUninterruptibly();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void inboundCallbackQueuedBehindCloseIsReleasedWithoutDelivery(boolean reliable) throws Exception {
