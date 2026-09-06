@@ -104,7 +104,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * remote peer advertised. Read live by the framing codec so a value
      * negotiated after pipeline construction is honored.
      */
-    private volatile int maxOutboundMessageSize = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE;
+    private volatile int maxOutboundMessageSize = NetherNetConstants.DEFAULT_SCTP_MESSAGE_SIZE;
 
     protected NetherNetChannel(Channel parent, InetSocketAddress remote, InetSocketAddress local) {
         super(parent);
@@ -115,15 +115,13 @@ public abstract class NetherNetChannel extends AbstractChannel {
     /**
      * Sets the maximum outbound SCTP message size, in bytes, for this channel.
      * Should be the {@code a=max-message-size} the remote peer advertised in
-     * its SDP. Values too small to leave room for the fragment header are
-     * ignored.
+     * its SDP. Zero means unlimited; our local outgoing ceiling still applies.
      *
      * @param size the negotiated maximum message size
+     * @throws IllegalArgumentException if negative or too small for a header and payload
      */
     public void setMaxOutboundMessageSize(int size) {
-        if (size > 1) {
-            this.maxOutboundMessageSize = size;
-        }
+        this.maxOutboundMessageSize = NetherNetConstants.outboundMessageSize(size);
     }
 
     public int getMaxOutboundMessageSize() {

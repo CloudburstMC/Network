@@ -81,6 +81,20 @@ Overflow closes the channel and releases queued buffers. The native API cannot
 pause reception, so disabling reads cannot allow an unlimited backlog. These
 limits apply to both data channels together, before and after activation.
 
+### Outgoing message sizes
+
+The remote SDP's SCTP media sections determine the outgoing fragment size,
+including the one-byte NetherNet header. An absent `a=max-message-size` uses
+65,536 bytes, as specified by RFC 8841. Zero means unlimited. A positive limit
+is respected, with a local ceiling of 262,144 bytes. This ceiling also applies
+to caller overrides and fixed-size framing codecs; it is local policy, not a
+NetherNet protocol limit. Malformed attributes and a one-byte limit fail negotiation.
+
+Attributes outside active SCTP application sections do not set this limit.
+If several applicable limits occur, the smallest is used. The existing
+256-fragment limit remains in place. Peers advertising 262,144 bytes keep the
+same framing as before.
+
 ### Write failures
 
 A known closed or unavailable transport, or a synchronous binding failure,

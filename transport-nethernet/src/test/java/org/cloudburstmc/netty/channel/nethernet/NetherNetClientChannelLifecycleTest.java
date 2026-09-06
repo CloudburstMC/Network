@@ -373,6 +373,28 @@ class NetherNetClientChannelLifecycleTest {
         }
     }
 
+    @Test
+    void invalidAnswerLimitFailsImmediatelyButStaleAnswersCannotFailARetry() throws Exception {
+        try (Harness h = new Harness()) {
+            ChannelFuture connect = h.connect();
+            long oldId = (Long) field(h.channel, "connectionId");
+            h.advance(100);
+            String sdp = "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=max-message-size:1\r\n";
+            h.signaling.signalHandlers.get(0).onSignal(NetherNetConstants.buildSignalConnectResponse(oldId, sdp));
+            h.pump();
+            assertFalse(connect.isDone());
+            long currentId = (Long) field(h.channel, "connectionId");
+            h.signaling.signalHandlers.get(1).onSignal(NetherNetConstants.buildSignalConnectResponse(currentId, sdp));
+            h.pump();
+            assertInstanceOf(ConnectException.class, connect.cause());
+            assertInstanceOf(IllegalArgumentException.class, connect.cause().getCause());
+            assertFalse(h.channel.isOpen());
+            h.advance(1000);
+            assertEquals(2, h.signaling.connections.size());
+            assertEquals(1, h.signaling.closes);
+        }
+    }
+
     private static Object field(NetherNetClientChannel channel, String name) throws Exception {
         Field field = NetherNetClientChannel.class.getDeclaredField(name);
         field.setAccessible(true);
@@ -468,6 +490,7 @@ class NetherNetClientChannelLifecycleTest {
     private static final class FakeSignaling implements NetherNetClientSignaling {
         private final List<CompletableFuture<List<IceServerInfo>>> connections = new ArrayList<>();
         private final List<NotFoundHandler> notFoundHandlers = new ArrayList<>();
+        private final List<SignalHandler> signalHandlers = new ArrayList<>();
         private RuntimeException connectFailure;
         private RuntimeException removeFailure;
         private int closes;
@@ -484,7 +507,7 @@ class NetherNetClientChannelLifecycleTest {
 
         @Override public void setNotFoundHandler(NotFoundHandler handler) { notFoundHandlers.add(handler); }
         @Override public void sendSignal(String targetNetworkId, String data) { }
-        @Override public void setSignalHandler(long connectionId, SignalHandler handler) { }
+        @Override public void setSignalHandler(long connectionId, SignalHandler handler) { signalHandlers.add(handler); }
         @Override
         public void removeSignalHandler(long connectionId) {
             RuntimeException failure = removeFailure;

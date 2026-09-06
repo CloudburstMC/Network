@@ -67,6 +67,7 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
     /**
      * Creates a codec with a fixed max message size, for tests or channels
      * that are not {@link NetherNetChannel}s.
+     * The local outgoing ceiling also applies to fixed sizes.
      *
      * @param fixedMaxMessageSize the max message size in bytes, or 0 to read
      *                            it from the channel
@@ -75,7 +76,7 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
         if (fixedMaxMessageSize < 0 || fixedMaxMessageSize == 1) {
             throw new IllegalArgumentException("fixedMaxMessageSize must be 0 or at least 2");
         }
-        this.fixedMaxMessageSize = fixedMaxMessageSize;
+        this.fixedMaxMessageSize = Math.min(fixedMaxMessageSize, NetherNetConstants.MAX_OUTBOUND_MESSAGE_SIZE);
     }
 
     private int maxMessageSize(ChannelHandlerContext ctx) {
@@ -85,7 +86,7 @@ public class NetherNetFramingCodec extends ChannelDuplexHandler {
         if (ctx.channel() instanceof NetherNetChannel) {
             return ((NetherNetChannel) ctx.channel()).getMaxOutboundMessageSize();
         }
-        return NetherNetConstants.MAX_SCTP_MESSAGE_SIZE;
+        return NetherNetConstants.DEFAULT_SCTP_MESSAGE_SIZE;
     }
 
     @Override

@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -74,6 +75,29 @@ class NetherNetServerChannelLazyBackendTest {
         // Closing the failed channel must not throw despite no backend existing.
         future.channel().close().syncUninterruptibly();
         assertTrue(signaling.closed, "doClose still closes the signaling endpoint");
+    }
+
+    @Test
+    void invalidOfferLimitSignalsFailureBeforeCreatingASession() throws Exception {
+        StubBackend backend = new StubBackend();
+        StubSignaling signaling = new StubSignaling(false);
+        NetherNetServerChannel server = (NetherNetServerChannel) bootstrap(() -> backend, signaling)
+                .bind(new InetSocketAddress(0)).sync().channel();
+        try {
+            for (boolean failSend : new boolean[]{false, true}) {
+                signaling.failSend = failSend;
+                server.acceptConnection(42, "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n"
+                        + "a=max-message-size:1\r\n", "7");
+                server.eventLoop().submit(() -> {}).sync();
+                assertEquals(new SentSignal("7", "CONNECTERROR 42 Failed to establish connection"),
+                        signaling.sent.poll(2, TimeUnit.SECONDS));
+                assertTrue(signaling.handlers.isEmpty());
+                assertNull(backend.listener);
+                assertTrue(server.isOpen());
+            }
+        } finally {
+            server.close().syncUninterruptibly();
+        }
     }
 
     @Test

@@ -218,6 +218,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             return;
         }
         try {
+            int maxMessageSize = NetherNetConstants.parseMaxMessageSize(offerSdp);
             // An HTTP front end knows the peer's address from the request; ICE
             // nomination later overwrites it with the actual candidate pair.
             InetSocketAddress signaledAddress = signaling.remoteAddressOf(connectionId);
@@ -225,10 +226,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                     signaledAddress != null ? signaledAddress : generatePlaceholderAddress(), localAddress);
             pending.child = child;
             children.add(child);
-            // Fragment outbound data no larger than the client advertised it
-            // can receive (a=max-message-size in its offer), falling back to
-            // the conservative default when the client does not advertise one.
-            child.setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(offerSdp, NetherNetConstants.MAX_SCTP_MESSAGE_SIZE));
+            child.setMaxOutboundMessageSize(maxMessageSize);
 
             child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
 
@@ -252,9 +250,20 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             child.closeFuture().addListener(future -> handshakeTimeout.cancel(false));
         } catch (Exception e) {
             log.error("Failed to establish connection {}: {}", Long.toUnsignedString(connectionId), e.getMessage(), e);
-            signaling.removeSignalHandler(connectionId);
-            if (pending.child != null) {
-                pending.child.close();
+            try {
+                signaling.sendSignal(remoteNetworkId, NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR
+                        + " " + Long.toUnsignedString(connectionId) + " Failed to establish connection");
+            } catch (Exception signalFailure) {
+                log.debug("Could not signal negotiation failure for {}: {}",
+                        Long.toUnsignedString(connectionId), signalFailure.getMessage());
+            } finally {
+                try {
+                    signaling.removeSignalHandler(connectionId);
+                } finally {
+                    if (pending.child != null) {
+                        pending.child.close();
+                    }
+                }
             }
         }
     }

@@ -459,14 +459,19 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 log.debug("Ignored stale signal for ID {} (attempt retried)", idStr);
                 return;
             }
-            if (peerConnection == null) return;
             if (!isOpen() || handshakeComplete) return;
+            if (NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE.equals(type)) {
+                try {
+                    setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(data));
+                } catch (IllegalArgumentException e) {
+                    failHandshake(generation, "Invalid remote max-message-size", e);
+                    return;
+                }
+            }
+            if (peerConnection == null) return;
 
             switch (type) {
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE -> {
-                    // Fragment outbound data no larger than the remote advertised
-                    // it can receive (a=max-message-size in its answer).
-                    setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(data, NetherNetConstants.MAX_SCTP_MESSAGE_SIZE));
                     final int gen = attemptGeneration;
                     final RTCPeerConnection pc = peerConnection;
                     pc.setRemoteDescription(new RTCSessionDescription(RTCSdpType.ANSWER, data), new SetSessionDescriptionObserver() {

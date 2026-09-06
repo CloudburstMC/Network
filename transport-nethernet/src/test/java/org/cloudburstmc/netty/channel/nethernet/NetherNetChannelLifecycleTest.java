@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Timeout(10)
 class NetherNetChannelLifecycleTest {
@@ -553,6 +554,26 @@ class NetherNetChannelLifecycleTest {
             assertEquals(0, allocator.metric().usedHeapMemory());
             channel.deliverInbound(ByteBuffer.wrap(new byte[]{0, 3}), false);
             assertEquals(0, allocator.metric().usedHeapMemory());
+        } finally {
+            channel.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void outgoingLimitUsesTheDefaultAndCapsCallerOverrides() {
+        TestChannel channel = new TestChannel();
+        try {
+            group.register(channel).syncUninterruptibly();
+            assertEquals(65536, channel.getMaxOutboundMessageSize());
+            channel.setMaxOutboundMessageSize(0);
+            assertEquals(262144, channel.getMaxOutboundMessageSize());
+            channel.setMaxOutboundMessageSize(Integer.MAX_VALUE);
+            assertEquals(262144, channel.getMaxOutboundMessageSize());
+            channel.setMaxOutboundMessageSize(2);
+            assertEquals(2, channel.getMaxOutboundMessageSize());
+            assertThrows(IllegalArgumentException.class, () -> channel.setMaxOutboundMessageSize(1));
+            assertThrows(IllegalArgumentException.class, () -> channel.setMaxOutboundMessageSize(-1));
+            assertEquals(2, channel.getMaxOutboundMessageSize());
         } finally {
             channel.close().syncUninterruptibly();
         }

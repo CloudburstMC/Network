@@ -63,6 +63,39 @@ class NetherNetFramingCodecTest {
     }
 
     @Test
+    void defaultAndCappedFramesIncludeTheHeaderAndRoundTripLargeMessages() {
+        for (int configured : new int[]{0, 262144, Integer.MAX_VALUE}) {
+            int limit = configured == 0 ? 65536 : 262144;
+            EmbeddedChannel frames = new EmbeddedChannel(new NetherNetFramingCodec(configured));
+            byte[] payload = bytes(3 * 1024 * 1024, 19);
+            try {
+                assertTrue(frames.writeOutbound(Unpooled.wrappedBuffer(payload)));
+                int count = 1 + (payload.length - 1) / (limit - 1);
+                for (int remaining = count - 1; remaining >= 0; remaining--) {
+                    ByteBuf fragment = frames.readOutbound();
+                    assertNotNull(fragment);
+                    try {
+                        assertEquals(remaining, fragment.getUnsignedByte(fragment.readerIndex()));
+                        assertTrue(fragment.readableBytes() <= limit);
+                        if (remaining > 0) {
+                            assertEquals(limit, fragment.readableBytes());
+                        }
+                        frames.writeInbound(fragment.retain());
+                    } finally {
+                        fragment.release();
+                    }
+                }
+                assertNull(frames.readOutbound());
+                ByteBuf decoded = frames.readInbound();
+                assertNotNull(decoded);
+                assertArrayEquals(payload, readAll(decoded));
+            } finally {
+                frames.finishAndReleaseAll();
+            }
+        }
+    }
+
+    @Test
     void singleMessagePassesThrough() {
         byte[] payload = bytes(50, 1);
         channel.writeInbound(framed(0, payload));

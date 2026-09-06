@@ -50,7 +50,13 @@ public class NetherNetConstants {
     public static final String XBOX_RPC_INNER_METHOD_ROUTE_PROBE = "RouteProbe_v1_0";
 
     // SCTP Constants
+    /** @deprecated Historical fallback. Use {@link #DEFAULT_SCTP_MESSAGE_SIZE}. */
+    @Deprecated
     public static final int MAX_SCTP_MESSAGE_SIZE = 10000;
+    /** RFC 8841 default when the peer omits max-message-size. */
+    public static final int DEFAULT_SCTP_MESSAGE_SIZE = 65536;
+    /** Local outgoing fragment ceiling, including the NetherNet header. */
+    public static final int MAX_OUTBOUND_MESSAGE_SIZE = 262144;
     public static final String RELIABLE_CHANNEL_LABEL = "ReliableDataChannel";
     public static final String UNRELIABLE_CHANNEL_LABEL = "UnreliableDataChannel";
 
@@ -199,32 +205,81 @@ public class NetherNetConstants {
     }
 
     /**
-     * Parses the {@code a=max-message-size} attribute from an SDP description.
-     * This is the maximum SCTP user message size, in bytes, that the describing
-     * endpoint is willing to receive, so outbound fragmentation must never
-     * exceed the value advertised by the remote peer.
+     * Returns the outgoing fragment limit for the peer's SCTP media sections.
+     * Missing attributes use the RFC 8841 default; zero means unlimited.
+     * All results are capped by our local outgoing ceiling. If multiple active
+     * SCTP sections or attributes are present, the smallest limit is safe for all.
      *
-     * @param sdp      the SDP description to scan, may be null
-     * @param fallback the value to return when the attribute is absent or invalid
-     * @return the advertised maximum message size, or {@code fallback} if not found
+     * @param sdp the remote description, or null for the default
+     * @return the effective limit, including the one-byte NetherNet header
+     * @throws IllegalArgumentException for malformed values or a limit of one byte
+     */
+    public static int parseMaxMessageSize(String sdp) {
+        return parseMaxMessageSize(sdp, DEFAULT_SCTP_MESSAGE_SIZE);
+    }
+
+    /**
+     * As {@link #parseMaxMessageSize(String)}, with a caller-selected absent-attribute default.
+     *
+     * @param sdp the remote description, or null for the fallback
+     * @param fallback absent-attribute limit, at least two bytes, or zero for unlimited
+     * @return the effective outgoing limit
+     * @throws IllegalArgumentException for unusable limits or malformed attributes
      */
     public static int parseMaxMessageSize(String sdp, int fallback) {
+        fallback = outboundMessageSize(fallback);
         if (sdp == null) {
             return fallback;
         }
+        boolean sctp = false;
+        boolean found = false;
+        int sectionLimit = -1;
+        int limit = MAX_OUTBOUND_MESSAGE_SIZE;
         for (String line : sdp.split("\\r?\\n")) {
             String trimmed = line.trim();
-            if (trimmed.startsWith("a=max-message-size:")) {
-                try {
-                    int value = Integer.parseInt(trimmed.substring("a=max-message-size:".length()).trim());
-                    if (value > 1) {
-                        return value;
-                    }
-                } catch (NumberFormatException ignored) {
-                    // Fall through to the fallback for a malformed attribute.
+            if (trimmed.startsWith("m=")) {
+                if (sctp) {
+                    limit = Math.min(limit, sectionLimit < 0 ? fallback : sectionLimit);
                 }
+                String[] media = trimmed.substring(2).split("\\s+");
+                sctp = media.length >= 4 && media[0].equals("application")
+                        && !media[1].equals("0") && media[2].endsWith("/SCTP");
+                found |= sctp;
+                sectionLimit = -1;
+            } else if (sctp && (trimmed.startsWith("a=max-message-size:")
+                    || trimmed.equals("a=max-message-size"))) {
+                String value = trimmed.substring("a=max-message-size".length());
+                value = value.startsWith(":") ? value.substring(1).trim() : "";
+                int parsed = parseMessageSize(value);
+                sectionLimit = sectionLimit < 0 ? parsed : Math.min(sectionLimit, parsed);
             }
         }
-        return fallback;
+        if (sctp) {
+            limit = Math.min(limit, sectionLimit < 0 ? fallback : sectionLimit);
+        }
+        return found ? limit : fallback;
+    }
+
+    private static int parseMessageSize(String value) {
+        if (value.isEmpty()) {
+            throw new IllegalArgumentException("Empty max-message-size attribute");
+        }
+        int size = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char digit = value.charAt(i);
+            if (digit < '0' || digit > '9') {
+                throw new IllegalArgumentException("max-message-size must contain only decimal digits");
+            }
+            // Saturate while still validating the entire value, without integer overflow.
+            size = Math.min(MAX_OUTBOUND_MESSAGE_SIZE, size * 10 + digit - '0');
+        }
+        return outboundMessageSize(size);
+    }
+
+    static int outboundMessageSize(int size) {
+        if (size < 0 || size == 1) {
+            throw new IllegalArgumentException("Message size must be zero (unlimited) or at least two bytes");
+        }
+        return size == 0 ? MAX_OUTBOUND_MESSAGE_SIZE : Math.min(size, MAX_OUTBOUND_MESSAGE_SIZE);
     }
 }
