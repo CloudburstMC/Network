@@ -103,6 +103,25 @@ class NetherNetClientChannelLifecycleTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void nativeLinkageFailureFailsTheCurrentHandshakeImmediately(boolean missingClass) {
+        try (Harness h = new Harness()) {
+            LinkageError failure = missingClass ? new NoClassDefFoundError("Native binding unavailable")
+                    : new UnsatisfiedLinkError("Native library unavailable");
+            h.channel.initializationLinkageFailure = failure;
+            ChannelFuture connect = h.connect();
+            h.signaling.connections.get(0).complete(List.of());
+            h.pump();
+            assertInstanceOf(ConnectException.class, connect.cause());
+            assertSame(failure, connect.cause().getCause());
+            assertFalse(h.channel.isOpen());
+            assertEquals(1, h.signaling.closes);
+            h.advance(1000);
+            assertEquals(1, h.signaling.connections.size(), "Linkage failures must not wait for handshake retries");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void signalingSuccessQueuedBeforeOrCompletedAfterCloseCannotStartWebRtc(boolean queuedBeforeClose) {
         try (Harness h = new Harness()) {
             ChannelFuture original = h.connect();
@@ -344,6 +363,7 @@ class NetherNetClientChannelLifecycleTest {
 
     private static final class ProbeClient extends NetherNetClientChannel {
         private int webRtcInitializations;
+        private LinkageError initializationLinkageFailure;
 
         private ProbeClient(NetherNetClientSignaling signaling) {
             super(null, signaling);
@@ -352,6 +372,9 @@ class NetherNetClientChannelLifecycleTest {
                 public <T> T getOption(ChannelOption<T> option) {
                     if (option == NetherChannelOption.NETHER_PORT_ALLOCATOR_CONFIG) {
                         webRtcInitializations++;
+                        if (initializationLinkageFailure != null) {
+                            throw initializationLinkageFailure;
+                        }
                         throw new InitializationProbe();
                     }
                     return super.getOption(option);

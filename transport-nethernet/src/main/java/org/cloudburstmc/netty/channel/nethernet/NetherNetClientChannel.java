@@ -257,7 +257,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
                         initWebRTC(iceServers);
                         createAndSendOffer();
                     }
-                } catch (Exception e) {
+                } catch (Exception | LinkageError e) {
                     failHandshake(gen, "Failed to start WebRTC handshake", e);
                 }
             }));
