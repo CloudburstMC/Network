@@ -1,8 +1,10 @@
 # netty-transport-nethernet
 
-In NetworkM this module targets Java 21 and uses
-`dev.kastle.webrtc:webrtc-java:1.0.4-edu.3`. Consumers need the custom
-[WebRTC artifact repository](https://raw.githubusercontent.com/SendableMetatype/webrtc-java/maven-repo/)
+In NetworkM this module targets Java 21 and uses the
+[EduGeyser webrtc-java fork](https://github.com/EduGeyser/webrtc-java), published
+as `dev.kastle.webrtc:webrtc-java:1.0.4-edu.3`. The fork retains the
+`dev.kastle.webrtc` Maven group and Java packages. Consumers need its custom
+[WebRTC artifact repository](https://raw.githubusercontent.com/EduGeyser/webrtc-java/maven-repo/)
 in addition to Maven Central, plus matching platform native libraries. The root
 NetworkM build already configures that repository.
 
@@ -13,7 +15,7 @@ selection to the application; its tests use the SLF4J bridge to Java logging.
 ## Usage
 
 > [!IMPORTANT]
-> This library requires the platform-specific WebRTC native libraries at runtime. See [Kas-tle/webrtc-java](https://github.com/Kas-tle/webrtc-java?tab=readme-ov-file#usage) for instructions on how to include the native libraries in your project.
+> This library requires the platform-specific WebRTC native libraries at runtime. See [EduGeyser/webrtc-java](https://github.com/EduGeyser/webrtc-java#usage) for instructions on how to include the native libraries in your project.
 
 ### LAN advertisements
 
