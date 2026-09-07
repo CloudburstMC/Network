@@ -97,9 +97,10 @@ native engine acceptance or peer receipt: the current WebRTC binding logs
 asynchronous send rejections without returning them to the write future.
 Channel closures are reported through the existing state callbacks.
 
-### Examples
+### Upstream integration examples
 
-These projects use this library to provide Nethernet support. You can see their source code for examples of how to use this library:
+These references were inherited from NetworkCompatible. They illustrate
+upstream API usage; adapt their imports and dependencies for NetworkM.
 
 - [Kas-tle/ProxyPass](https://github.com/Kas-tle/ProxyPass): Uses server and client to debug game packets over various connection types.
 - [MCXboxBroadcast/Broadcaster](https://github.com/MCXboxBroadcast/Broadcaster): Uses server to allow Bedrock clients to transfer to other Bedrock servers via Xbox Live.
