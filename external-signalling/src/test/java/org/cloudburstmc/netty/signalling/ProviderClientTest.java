@@ -8,9 +8,63 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderClientTest {
+    @Test void poolAttachmentsAndRemovedPublicEndpointsPreserveRuntimeIdentity(@TempDir Path path) throws Exception {
+        for (boolean standalone : List.of(false, true)) {
+            try (IndependentProviderStub stub = new IndependentProviderStub()) {
+                stub.poolOnlyRegistration = !standalone;
+                var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Fleet host",
+                    standalone ? ProviderClient.NEW_SERVICE : ProviderClient.ATTACH_INSTANCE, ProviderClient.BEARER_TOKEN,
+                    "independent-provider-token", standalone ? null : "EU", standalone ? null : "proxy", Map.of());
+                JsonObject first = null;
+                for (int generation = 1; generation <= 2; generation++) {
+                    ProviderClient client = new ProviderClient(config, new ProviderStateStore(path.resolve(standalone ? "standalone" : "pool")), new FakeTransport(), () -> null,
+                        () -> new ProviderClient.Health(true, 20, 0, "nethernet", "fixture"), message -> {});
+                    try {
+                        JsonObject current = client.start().get(20, TimeUnit.SECONDS);
+                        assertEquals(standalone && generation == 1, current.has("serviceId"));
+                        assertEquals(standalone && generation == 1, current.has("publicAddress"));
+                        assertEquals(generation, current.get("leaseGeneration").getAsInt());
+                        if (first == null) first = current;
+                        else for (String field : List.of("instanceId", "registrationId")) assertEquals(first.get(field), current.get(field));
+                        assertFalse(stub.lastHeartbeat.has("playerCount"), "Missing runtime telemetry is unknown, not zero");
+                    } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+                    stub.poolOnlyRegistration = true;
+                }
+                assertEquals(1, stub.registrations);
+            }
+        }
+    }
+
+    @Test void runtimeCountsWakeCheckInsWithoutChangingPublicTotalsAndRemainCountedDuringDrain(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.checkInMillis = 900000;
+            AtomicReference<ProviderClient.PlayerCount> sample = new AtomicReference<>(new ProviderClient.PlayerCount(3, System.currentTimeMillis()));
+            var transport = new FakeTransport(); transport.stateless = true;
+            ProviderClient client = new ProviderClient(new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Counts"),
+                new ProviderStateStore(path), transport, () -> new ServerStatus("Global listing", 1234, "fixture", "world", 25000, 30000, 0),
+                () -> new ProviderClient.Health(true, 20, .9, "nethernet", "fixture", sample.get()), message -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertEquals(3, stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt());
+                assertEquals(sample.get().sampledAt(), stub.lastHeartbeat.getAsJsonObject("playerCount").get("sampledAt").getAsLong());
+                assertEquals(20, stub.lastHeartbeat.get("capacity").getAsInt());
+                assertEquals(25000, stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt());
+                int before = stub.heartbeats;
+                sample.set(new ProviderClient.PlayerCount(3, System.currentTimeMillis())); client.requestStatusRefresh();
+                Thread.sleep(1200); assertEquals(before, stub.heartbeats, "Timestamp-only changes use the ordinary schedule");
+                sample.set(new ProviderClient.PlayerCount(4, System.currentTimeMillis())); client.requestStatusRefresh();
+                eventually(() -> stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt() == 4);
+                assertEquals(25000, stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt());
+            } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+            assertTrue(stub.draining);
+            assertEquals(4, stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt());
+        }
+    }
+
     @Test void usesProviderNeutralBearerAuthorizationWithoutPowOrPersistingTheToken(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Hosted customer",

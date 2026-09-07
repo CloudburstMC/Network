@@ -37,8 +37,17 @@ public final class ProviderClient implements AutoCloseable {
         }
         @Override public String toString() { return "Configuration[provider=" + provider + ", profile=" + profile + ", registrationMode=" + registrationMode + ", authorizationScheme=" + authorizationScheme + "]"; }
     }
-    public record Health(boolean healthy, int capacity, double load, String protocolVersion, String build) {
+    /** Sampled actual players on this runtime; keep counting existing players while draining. */
+    public record PlayerCount(int connectedPlayers, long sampledAt) {
+        public PlayerCount { if (connectedPlayers < 0 || connectedPlayers > 1000000 || sampledAt < 0 || sampledAt > 9007199254740991L) throw new IllegalArgumentException("Invalid player count sample"); }
+    }
+    /** Capacity and playerCount describe the same observation. Public server status is independent. */
+    public record Health(boolean healthy, int capacity, double load, String protocolVersion, String build, PlayerCount playerCount) {
         public Health { if (capacity < 0 || capacity > 1000000 || !Double.isFinite(load) || load < 0 || load > 1 || protocolVersion == null) throw new IllegalArgumentException("Invalid health"); }
+        /** Hosts without actual player telemetry report unknown, never a synthetic zero. */
+        public Health(boolean healthy, int capacity, double load, String protocolVersion, String build) {
+            this(healthy, capacity, load, protocolVersion, build, null);
+        }
     }
     public static final class ProviderException extends IOException {
         private final int status;
@@ -161,7 +170,7 @@ public final class ProviderClient implements AutoCloseable {
         completion.addProperty("proofNonce", "0"); completion.addProperty("idempotencyKey", intent); completion.addProperty("signature", ProviderCrypto.sign(key, ProviderCrypto.proof(challenge, "0", intent)));
         JsonObject recovered = unsigned("complete", completion); validateRegistration(recovered);
         if (!registrationId.equals(recovered.get("registrationId").getAsString())) throw new IOException("Recovered registration changed");
-        if (state.has("registration")) for (String field : List.of("instanceId", "serviceId", "registrationId"))
+        if (state.has("registration")) for (String field : List.of("instanceId", "registrationId"))
             if (!state.getAsJsonObject("registration").get(field).equals(recovered.get(field))) throw new IOException("Recovered instance identity changed");
         registrationExtensions = ProtocolExtensions.copy(recovered); recovered.remove("extensions"); recovered.remove("ticketKey");
         state.add("registration", recovered); state.addProperty("generation", recovered.get("leaseGeneration").getAsLong());
@@ -221,6 +230,12 @@ public final class ProviderClient implements AutoCloseable {
     private void validateRegistration(JsonObject registration) throws IOException {
         ProviderContract.require("registration", registration);
         ProtocolExtensions.validate(registration);
+        boolean hasService = registration.has("serviceId"), hasAddress = registration.has("publicAddress");
+        if (hasService != hasAddress) throw new IOException("Incomplete public endpoint metadata");
+        if (hasService) for (String field : List.of("serviceId", "publicAddress")) {
+            JsonElement value = registration.get(field);
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString() || value.getAsString().isBlank()) throw new IOException("Invalid public endpoint metadata");
+        }
         if (!origin.equals(registration.get("provider").getAsString()) || !config.profile().equals(registration.get("profile").getAsString())) throw new IOException("Registration provider or profile changed");
         JsonObject placement = registration.getAsJsonObject("placement");
         String expectedRegion = config.region() == null ? "" : config.region(), expectedPool = config.pool() == null ? "" : config.pool();
@@ -263,8 +278,10 @@ public final class ProviderClient implements AutoCloseable {
         ServerStatus status = currentStatus(); Health health = healthSupplier.get();
         return !Objects.equals(status, lastReportedStatus) || lastReportedHealth == null
             || health.healthy() != lastReportedHealth.healthy() || health.capacity() != lastReportedHealth.capacity()
+            || !Objects.equals(connectedPlayers(health), connectedPlayers(lastReportedHealth))
             || !Objects.equals(health.protocolVersion(), lastReportedHealth.protocolVersion()) || !Objects.equals(health.build(), lastReportedHealth.build());
     }
+    private static Integer connectedPlayers(Health health) { return health.playerCount() == null ? null : health.playerCount().connectedPlayers(); }
     private void heartbeat() throws Exception {
         // Key delivery and application acknowledgements can need an immediate second exchange.
         for (int exchange = 0; exchange < 3; exchange++) {
@@ -284,6 +301,7 @@ public final class ProviderClient implements AutoCloseable {
             Health health = healthSupplier.get();
             body.addProperty("healthy", health.healthy() && installedKeyId != null && hostState.equals("serving"));
             body.addProperty("capacity", health.capacity()); body.addProperty("load", health.load());
+            if (health.playerCount() != null) body.add("playerCount", JSON.toJsonTree(health.playerCount()));
             body.addProperty("protocolVersion", health.protocolVersion()); body.addProperty("build", health.build());
             if (config.region() != null) body.addProperty("region", config.region());
             snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);

@@ -301,11 +301,9 @@
         "protocol",
         "provider",
         "registrationId",
-        "serviceId",
         "instanceId",
         "keyId",
         "profile",
-        "publicAddress",
         "placement",
         "heartbeatIntervalMs",
         "leaseGeneration",
@@ -318,14 +316,30 @@
         },
         "extensions": {
           "$ref": "#/$defs/extensions"
+        },
+        "serviceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publicAddress": {
+          "type": "string",
+          "minLength": 1
         }
-      }
+      },
+      "dependentRequired": {
+        "serviceId": [
+          "publicAddress"
+        ],
+        "publicAddress": [
+          "serviceId"
+        ]
+      },
+      "description": "An independent runtime identity. Optional serviceId/publicAddress describe a public endpoint at this observation; they are not stable instance identity. Pool attachments may have no public endpoint or serve several endpoints."
     },
     "readiness": {
       "type": "object",
       "required": [
         "serverTime",
-        "serviceId",
         "instanceId",
         "serviceAvailable",
         "instanceRoutable",
@@ -596,6 +610,9 @@
         },
         "extensions": {
           "$ref": "#/$defs/extensions"
+        },
+        "playerCount": {
+          "$ref": "#/$defs/playerCount"
         }
       }
     },
@@ -789,6 +806,27 @@
         }
       },
       "additionalProperties": false
+    },
+    "playerCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connectedPlayers",
+        "sampledAt"
+      ],
+      "properties": {
+        "connectedPlayers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "sampledAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "Actual players connected to this runtime, including still-connected draining players. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Absence means unknown. Never derive this value from public serverStatus, load, tickets or reservations."
     }
   },
   "x-context-order": [
