@@ -11,6 +11,7 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Supplier;
 
 /** Profile adapter: background key/profile lifecycle only; no per-join metadata input is used. */
 public final class NativeProviderTransport implements ProviderTransport {
@@ -19,14 +20,14 @@ public final class NativeProviderTransport implements ProviderTransport {
     private final NativeAdmissionServerChannel channel;
     private final StatelessAdmissionValidator validator;
     private final String incarnation;
-    private final InetSocketAddress advertisedAddress;
+    private final Supplier<List<InetSocketAddress>> advertisedAddresses;
     private final ScheduledFuture<?> retireTask;
     private List<Epoch> epochs = List.of();
     private boolean draining, closed;
 
-    private NativeProviderTransport(NativeAdmissionServerChannel channel, StatelessAdmissionValidator validator, String incarnation, InetSocketAddress advertisedAddress) {
+    private NativeProviderTransport(NativeAdmissionServerChannel channel, StatelessAdmissionValidator validator, String incarnation, Supplier<List<InetSocketAddress>> advertisedAddresses) {
         this.channel = channel; this.validator = validator; this.incarnation = incarnation;
-        this.advertisedAddress = advertisedAddress;
+        this.advertisedAddresses = advertisedAddresses;
         retireTask = channel.eventLoop().scheduleWithFixedDelay(() -> validator.retireKeys(System.currentTimeMillis()), 1, 1, TimeUnit.SECONDS);
     }
     /** The caller provisions the host PEM identity before opening/registration. No client state is accepted. */
@@ -35,10 +36,13 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
     /** Explicit advertised candidate supports wildcard/local binds and operator-provisioned NAT mappings. */
     public static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind, InetSocketAddress advertised, Path certificate, Path privateKey, AdmissionGate.Limits limits) {
+        return open(bootstrap, bind, () -> List.of(advertised), certificate, privateKey, limits);
+    }
+    /** Refreshes the endpoint snapshot on background profile publication; packet handling stays native. */
+    public static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind, Supplier<List<InetSocketAddress>> advertised, Path certificate, Path privateKey, AdmissionGate.Limits limits) {
         CompletableFuture<NativeProviderTransport> result = new CompletableFuture<>();
         try {
-            if (advertised == null || advertised.isUnresolved() || advertised.getPort() == 0 || advertised.getAddress().isAnyLocalAddress())
-                throw new IllegalArgumentException("Concrete advertised UDP address and fixed port required");
+            checkedEndpoints(advertised.get());
             NativeHostIdentity identity = NativeHostIdentity.load(certificate, privateKey);
             byte[] nonce = new byte[16]; new SecureRandom().nextBytes(nonce);
             String incarnation = HexFormat.of().formatHex(nonce);
@@ -64,16 +68,32 @@ public final class NativeProviderTransport implements ProviderTransport {
         // The provider supplies keys oldest-to-newest and acknowledges its last epoch before publication.
         for (Epoch epoch : epochs) if (epoch.notBefore() <= now && epoch.retireAfter() > now && installed.contains(epoch.id())) keyId = epoch.id();
         if (keyId == null) return CompletableFuture.failedFuture(new IllegalStateException("No active background admission key"));
-        InetSocketAddress bind = advertisedAddress;
-        JsonObject candidate = new JsonObject(); candidate.addProperty("address", bind.getAddress().getHostAddress());
-        candidate.addProperty("port", bind.getPort()); candidate.addProperty("component", 1); candidate.addProperty("foundation", "1");
-        candidate.addProperty("priority", 2130706431); candidate.addProperty("protocol", "udp"); candidate.addProperty("type", "host");
-        JsonArray candidates = new JsonArray(); candidates.add(candidate);
+        List<InetSocketAddress> endpoints;
+        try { endpoints = checkedEndpoints(advertisedAddresses.get()); }
+        catch (RuntimeException unavailable) { return CompletableFuture.failedFuture(unavailable); }
+        JsonArray candidates = new JsonArray();
+        int index = 0;
+        for (InetSocketAddress endpoint : endpoints) {
+            JsonObject candidate = new JsonObject(); candidate.addProperty("address", endpoint.getAddress().getHostAddress());
+            candidate.addProperty("port", endpoint.getPort()); candidate.addProperty("component", 1); candidate.addProperty("foundation", Integer.toString(++index));
+            candidate.addProperty("priority", 2130706431 - (index - 1) * 256); candidate.addProperty("protocol", "udp"); candidate.addProperty("type", "host");
+            candidates.add(candidate);
+        }
         JsonObject capability = new JsonObject(); capability.addProperty("capability", CAPABILITY); capability.addProperty("incarnation", incarnation);
         JsonObject profile = new JsonObject(); profile.add("candidates", candidates); profile.add("statelessAdmission", capability);
         profile.addProperty("credentialKeyId", keyId); profile.addProperty("dtlsFingerprint", channel.identity().fingerprint());
         profile.addProperty("maxMessageSize", 262144); profile.addProperty("sctpPort", 5000);
         return CompletableFuture.completedFuture(profile);
+    }
+    private static List<InetSocketAddress> checkedEndpoints(List<InetSocketAddress> endpoints) {
+        List<InetSocketAddress> unique = endpoints.stream().distinct().toList();
+        if (unique.isEmpty() || unique.size() > 32) throw new IllegalArgumentException("Publish 1-32 UDP endpoints");
+        for (InetSocketAddress endpoint : unique) {
+            if (endpoint == null || endpoint.isUnresolved() || endpoint.getPort() == 0 || endpoint.getAddress().isAnyLocalAddress()
+                || endpoint.getAddress().isMulticastAddress() || endpoint.getAddress().isLinkLocalAddress())
+                throw new IllegalArgumentException("Concrete advertised UDP address and fixed port required");
+        }
+        return List.copyOf(unique);
     }
     @Override public synchronized CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Native endpoint closed"));
