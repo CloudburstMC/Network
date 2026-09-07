@@ -11,9 +11,11 @@ public interface ProviderTransport {
     CompletionStage<JsonObject> hostProfile();
     /** Atomic snapshot; completion means every supplied key is persisted and usable. */
     CompletionStage<Void> installTicketKeys(List<TicketKey> keys);
-    /** Existing complete AgentControlCommand envelope. PENDING holds whole-page acknowledgement. */
-    CompletionStage<ApplyResult> applyControl(JsonObject command);
-    /** Bounded events using existing ticket.* and separate authenticated game_joined semantics. */
+    /** Apply serving/draining/closed background state before acknowledging its revision. */
+    CompletionStage<ApplyResult> applyState(String state);
+    /** Whether this integration can observe the application join/rejection boundary. */
+    default boolean supportsGameOutcomes() { return false; }
+    /** Bounded ticket-correlated transport and application observations. */
     List<JsonObject> pollEvents();
     CompletionStage<Void> drain();
     CompletionStage<Void> close();
