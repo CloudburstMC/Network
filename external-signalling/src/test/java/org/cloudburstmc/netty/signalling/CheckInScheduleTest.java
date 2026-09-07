@@ -11,12 +11,12 @@ class CheckInScheduleTest {
         response.addProperty("receivedAt", java.time.Instant.ofEpochMilli(now).toString());
         schedule.addProperty("version", 1); schedule.addProperty("afterMillis", delay);
         schedule.addProperty("nextCheckInAt", now + delay); schedule.addProperty("leaseExpiresAt", now + delay + 30000);
-        schedule.addProperty("controlPollAfterMillis", delay); schedule.addProperty("minUpdateIntervalMillis", 1000);
+        schedule.addProperty("minUpdateIntervalMillis", 1000);
         response.add("checkIn", schedule); return response;
     }
     @Test void acceptsChangedPolicyWithoutHardCodedIdleThresholds() throws Exception {
         assertEquals(900000, CheckInSchedule.parse(response(900000)).afterMillis());
-        assertEquals(3600000, CheckInSchedule.parse(response(3600000)).controlPollAfterMillis());
+        assertEquals(3600000, CheckInSchedule.parse(response(3600000)).afterMillis());
         assertEquals(45000, CheckInSchedule.parse(response(45000)).afterMillis());
     }
     @Test void rejectsUnboundedFractionalAndInconsistentSchedules() {
