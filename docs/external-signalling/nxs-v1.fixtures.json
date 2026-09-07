@@ -32,7 +32,7 @@
     "context": {
       "mode": "attach-instance",
       "profile": "nxs-admission-v1",
-      "label": "EU café 🦊\n<proxy>",
+      "label": "EU caf\u00e9 \ud83e\udd8a\n<proxy>",
       "authorizationId": "auth_fixture",
       "serviceId": "service_neutral",
       "region": "EU",
@@ -69,9 +69,56 @@
       "idempotencyKey": "intent_fixture_0001",
       "generation": 2,
       "sequence": 17,
-      "body": "{\"name\":\"café 🦊\",\"players\":0}\n"
+      "body": "{\"name\":\"caf\u00e9 \ud83e\udd8a\",\"players\":0}\n"
     },
     "payload": "[\"nethernet-external-signalling-v1\",\"nxs-es384-v1\",\"https://provider.example\",\"POST\",\"/renew?region=EU&label=caf%C3%A9\",1788484200123,\"machine_neutral\",\"key_fixture\",\"intent_fixture_0001\",2,17,\"hW1_XbRZsu7XCnVbFpxNepqnGsOafEGkN_VFWwKb4jQ\"]",
     "signature": "SMg1I5sJM8nQMSLcGMx8ajKG2HuF2b0qXolYIyPNtuC4jRT89G_MKemggBUGNw1_CtwBhEJiZfdQsM5OTkIDZTFukS2pQdFmLYw8x8GkWeouETOl7CbRnVCAA3SpV3Un"
+  },
+  "fleetExamples": {
+    "registration": {
+      "protocol": "nethernet-external-signalling-v1",
+      "provider": "https://provider.example",
+      "registrationId": "reg_fleet_1",
+      "instanceId": "instance_fleet_1",
+      "keyId": "key_fleet_1",
+      "profile": "nxs-admission-v1",
+      "placement": {
+        "region": "EU",
+        "pool": "proxy"
+      },
+      "heartbeatIntervalMs": 10000,
+      "leaseGeneration": 1,
+      "leaseDeadline": 1788800000000,
+      "readiness": {
+        "routable": false,
+        "reasons": [
+          "no_public_endpoint"
+        ]
+      }
+    },
+    "heartbeat": {
+      "healthy": true,
+      "capacity": 20,
+      "load": 0.9,
+      "protocolVersion": "nethernet",
+      "clockUnixMillis": 1788799970100,
+      "checkInVersion": 1,
+      "state": "serving",
+      "appliedStateRevision": 1,
+      "gameOutcomes": "unavailable",
+      "playerCount": {
+        "connectedPlayers": 3,
+        "sampledAt": 1788799970000
+      },
+      "serverStatus": {
+        "name": "Network listing",
+        "version": "fixture",
+        "players": 25000,
+        "maxPlayers": 30000,
+        "gameType": 0,
+        "protocol": 1234,
+        "level": "world"
+      }
+    }
   }
 }
