@@ -40,7 +40,8 @@ issuance, ownership claims and fleet administration belong to the provider.
 Send a signed `heartbeat` immediately after startup and whenever its returned
 schedule says to check in. The request carries:
 
-- Health, capacity, load and optional public server status.
+- Health, admission capacity, load, optional actual player counts with sample time,
+  and independent optional public server status.
 - `hostProfile` when endpoint details change; otherwise `hostProfileRevision`.
 - `installedKeyIds`, listing installed admission epochs with the active one last.
 - Local `state` (`serving`, `draining` or `closed`), the applied provider-state

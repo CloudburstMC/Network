@@ -39,7 +39,7 @@ public final class ProviderBench {
             JsonObject registration = client.start().get(30, TimeUnit.SECONDS);
             String extensionsFile = System.getProperty("providerExtensionsFile");
             if (extensionsFile != null) ExtensionFixtureFile.write(Path.of(extensionsFile), client.extensions().get(10, TimeUnit.SECONDS));
-            System.out.println("instance=" + registration.get("instanceId").getAsString() + " service=" + registration.get("serviceId").getAsString());
+            System.out.println("instance=" + registration.get("instanceId").getAsString() + " service=" + (registration.has("serviceId") ? registration.get("serviceId").getAsString() : "unassigned"));
             JsonObject readiness = client.readiness().get(10, TimeUnit.SECONDS); readiness.remove("extensions"); System.out.println(readiness);
             long hold = Long.parseLong(System.getProperty("providerHoldSeconds", "0"));
             String stopFile = System.getProperty("providerStopFile");
