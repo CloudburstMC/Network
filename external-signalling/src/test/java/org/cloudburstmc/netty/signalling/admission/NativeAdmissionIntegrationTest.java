@@ -379,7 +379,7 @@ class NativeAdmissionIntegrationTest {
             String incarnation = first.getAsJsonObject("statelessAdmission").get("incarnation").getAsString();
             assertTrue(incarnation.matches("[0-9a-f]{32}"));
             var command = new com.google.gson.JsonObject();command.addProperty("kind","join-admission");
-            assertEquals(org.cloudburstmc.netty.signalling.ProviderTransport.ApplyResult.REJECTED,transport.applyControl(command).toCompletableFuture().get());
+            assertEquals(org.cloudburstmc.netty.signalling.ProviderTransport.ApplyResult.REJECTED,transport.applyState("join-admission").toCompletableFuture().get());
             assertEquals(0,transport.channel().admissionStats().claims());assertEquals(0,transport.channel().nativeStats()[2]);
             assertEquals(creations,PeerConnection.nativeCreationAttempts());
             transport.installTicketKeys(List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001",TestSignallingProvider.SECRET,0,System.currentTimeMillis()+60_000),
