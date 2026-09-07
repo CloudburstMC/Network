@@ -23,6 +23,99 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Tag("native")
 class NativeAdmissionIntegrationTest {
+    @Test @Timeout(30) void dualStackWildcardAcceptsBothFamiliesAndRetainsSingleTicketOwnership() throws Exception {
+        var id = identity(); var group = new DefaultEventLoopGroup(1);
+        int port = 49188;
+        var v4 = new InetSocketAddress("127.0.0.1", port);
+        var v6 = new InetSocketAddress("::1", port);
+        var advertised = new AtomicReference<>(List.of(v6, v4, v4));
+        NativeProviderTransport host = null;
+        try {
+            var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
+                @Override protected void initChannel(Channel channel) {}
+            });
+            host = NativeProviderTransport.open(bootstrap, new InetSocketAddress("::", port), advertised::get,
+                id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            host.installTicketKeys(List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001", TestSignallingProvider.SECRET))).toCompletableFuture().get();
+            var profile = host.hostProfile().toCompletableFuture().get();
+            assertEquals(2, profile.getAsJsonArray("candidates").size());
+            String incarnation = profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString();
+            String audience = NativeProviderTransport.audience(incarnation);
+            var endpoint = host.channel();
+            for (var destination : List.of(v4, v6)) {
+                var other = destination.equals(v4) ? v6 : v4;
+                try (var socket = new DatagramSocket(new InetSocketAddress(destination.getAddress(), 0));
+                     var duplicate = new DatagramSocket(new InetSocketAddress(other.getAddress(), 0));
+                     var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withBindAddress(destination.getAddress()), Runnable::run)) {
+                    client.createDataChannel("ReliableDataChannel");
+                    String ufrag = destination.equals(v4) ? "dualStackClient4" : "dualStackClient6";
+                    client.setLocalDescription("offer", ufrag, "p".repeat(32));
+                    var answer = TestSignallingProvider.answer(client.localDescription(), id.fingerprint(), port,
+                        System.currentTimeMillis() + 30_000, audience, false);
+                    byte[] request = nominatedBinding(answer.token() + ":" + ufrag, answer.password());
+                    socket.setSoTimeout(2000);
+                    socket.send(new DatagramPacket(request, request.length, destination));
+                    byte[] bytes = new byte[2048]; var response = new DatagramPacket(bytes, bytes.length);
+                    socket.receive(response);
+                    assertEquals(destination.getAddress(), response.getAddress()); assertEquals(port, response.getPort());
+                    assertEquals(0x0101, Short.toUnsignedInt(ByteBuffer.wrap(bytes).getShort()));
+                    assertArrayEquals(Arrays.copyOfRange(request, 8, 20), Arrays.copyOfRange(bytes, 8, 20));
+                    long creations = endpoint.creationAttempts();
+                    duplicate.setSoTimeout(250);
+                    duplicate.send(new DatagramPacket(request, request.length, other));
+                    assertThrows(SocketTimeoutException.class, () -> duplicate.receive(new DatagramPacket(new byte[2048], 2048)));
+                    assertEquals(creations, endpoint.creationAttempts(), "An alternate family cannot allocate a second peer with the same ticket");
+                }
+            }
+            assertEquals(2, endpoint.creationAttempts());
+            advertised.set(List.of(v4));
+            var changed = host.hostProfile().toCompletableFuture().get();
+            assertEquals(1, changed.getAsJsonArray("candidates").size());
+            assertEquals(incarnation, changed.getAsJsonObject("statelessAdmission").get("incarnation").getAsString());
+            advertised.set(List.of());
+            assertTrue(host.hostProfile().toCompletableFuture().isCompletedExceptionally());
+        } finally {
+            if (host != null) host.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+        try (var socket = new DatagramSocket(new InetSocketAddress("::", port))) { assertEquals(port, socket.getLocalPort()); }
+    }
+
+    @Test @Timeout(40) void clientsOfEitherFamilyOpenBothDataChannelsFromTheSameCandidateList() throws Exception {
+        var id = identity(); var group = new DefaultEventLoopGroup(1); int port = 49187;
+        NativeProviderTransport host = null;
+        try {
+            var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
+                @Override protected void initChannel(Channel channel) {}
+            });
+            host = NativeProviderTransport.open(bootstrap, new InetSocketAddress("::", port),
+                () -> List.of(new InetSocketAddress("::1", port), new InetSocketAddress("127.0.0.1", port)),
+                id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            host.installTicketKeys(List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001", TestSignallingProvider.SECRET))).toCompletableFuture().get();
+            String incarnation = host.hostProfile().toCompletableFuture().get().getAsJsonObject("statelessAdmission").get("incarnation").getAsString();
+            for (String ip : List.of("127.0.0.1", "::1")) {
+                try (var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withBindAddress(InetAddress.getByName(ip)), Runnable::run)) {
+                    AtomicInteger opened = new AtomicInteger();
+                    client.createDataChannel("ReliableDataChannel").onOpen.register(dc -> opened.incrementAndGet());
+                    client.createDataChannel("UnreliableDataChannel", DataChannelInitSettings.DEFAULT.withReliability(new DataChannelReliability(true, true, 0, 0)))
+                        .onOpen.register(dc -> opened.incrementAndGet());
+                    client.setLocalDescription("offer", ip.equals("::1") ? "clientWithIpv6" : "clientWithIpv4", "p".repeat(32));
+                    var answer = TestSignallingProvider.answer(client.localDescription(), id.fingerprint(), port,
+                        System.currentTimeMillis() + 30_000, NativeProviderTransport.audience(incarnation), false);
+                    String sdp = answer.sdp().replace("a=candidate:1 1 UDP 2130706431 127.0.0.1", "a=candidate:2 1 UDP 2130706175 127.0.0.1")
+                        .replace("a=end-of-candidates", "a=candidate:1 1 UDP 2130706431 ::1 " + port + " typ host\r\na=end-of-candidates");
+                    client.setRemoteDescription(sdp, SessionDescriptionType.ANSWER);
+                    await(() -> opened.get() == 2);
+                    assertTrue(client.closeAndAwait(Duration.ofSeconds(5)));
+                }
+            }
+            assertEquals(2, host.channel().creationAttempts());
+        } finally {
+            if (host != null) host.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
     @TempDir Path directory;
     NativeHostIdentity identity() throws Exception {
         Path cert = directory.resolve("host.crt"), key = directory.resolve("host.key");
