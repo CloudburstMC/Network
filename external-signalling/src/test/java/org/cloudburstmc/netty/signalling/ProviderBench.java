@@ -21,7 +21,7 @@ public final class ProviderBench {
                 JsonObject p = new JsonObject(); p.addProperty("credentialKeyId", keyId); p.addProperty("dtlsFingerprint", "sha-256 " + String.join(":", Collections.nCopies(32, "11"))); p.addProperty("sctpPort", 5000); p.addProperty("maxMessageSize", 262144);
                 JsonObject c = new JsonObject(); c.addProperty("address", "127.0.0.1"); c.addProperty("port", 19133); c.addProperty("foundation", "fixture"); c.addProperty("component", 1); c.addProperty("priority", 100); c.addProperty("protocol", "udp"); c.addProperty("type", "host"); JsonArray candidates = new JsonArray(); candidates.add(c); p.add("candidates", candidates); JsonObject capability = new JsonObject(); capability.addProperty("capability", "nethernet.stateless-admission.v1"); capability.addProperty("incarnation", incarnation); p.add("statelessAdmission", capability); return CompletableFuture.completedFuture(p);
             }
-            public CompletionStage<ApplyResult> applyControl(JsonObject c) { return CompletableFuture.completedFuture(ApplyResult.REJECTED); }
+            public CompletionStage<ApplyResult> applyState(String state) { return CompletableFuture.completedFuture(ApplyResult.REJECTED); }
             public List<JsonObject> pollEvents() { return List.of(); }
             public CompletionStage<Void> drain() { return CompletableFuture.completedFuture(null); }
             public CompletionStage<Void> close() { return CompletableFuture.completedFuture(null); }

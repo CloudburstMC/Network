@@ -15,6 +15,8 @@ public final class IndependentProviderStub implements AutoCloseable {
     final Map<String, JsonObject> challenges = new HashMap<>(), keys = new HashMap<>(), placements = new HashMap<>();
     JsonObject registration; volatile JsonObject lastHeartbeat;
     volatile int failHeartbeats;
+    volatile boolean failOutcomes;
+    volatile int outcomeAttempts;
     volatile boolean loseCompletionResponse;
     volatile long checkInMillis;
     volatile int controlPolls;
@@ -26,7 +28,11 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile JsonObject extensionMetadata;
     volatile int extensionRequests, keyAcknowledgements;
     boolean draining;
-    volatile JsonArray commands = new JsonArray();
+    volatile String desiredState = "serving";
+    volatile long desiredRevision = 1, appliedRevision;
+    String keyRequestId; JsonObject requestedKey;
+    int epoch = 1, profileRevision;
+    final List<String> operationsSeen = new java.util.concurrent.CopyOnWriteArrayList<>();
     public IndependentProviderStub() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0); origin = "http://127.0.0.1:" + server.getAddress().getPort();
         server.createContext("/", this::handle); server.start();
@@ -44,14 +50,15 @@ public final class IndependentProviderStub implements AutoCloseable {
         if (path.equals("/.well-known/nethernet-external-signalling")) {
             JsonObject d = new JsonObject(); d.addProperty("provider", origin); d.addProperty("controlOrigin", origin);
             d.add("protocols", strings(ProviderCrypto.PROTOCOL)); d.add("signatures", strings(ProviderCrypto.SIGNATURE)); d.add("modes", strings("new-service", "attach-instance")); d.add("profiles", strings("nxs-admission-v1"));
-            JsonObject operations = new JsonObject(); for (String op : List.of("challenges", "complete", "recover", "activate", "heartbeat", "host-profile", "readiness", "control", "control/ack", "drain", "rotate", "retire", "ticket-keys", "ticket-keys/ack", "ticket-events", "events", "deregister")) operations.addProperty(op, origin + "/example/" + op);
+            JsonObject operations = new JsonObject(); for (String op : List.of("register", "complete", "heartbeat", "outcomes", "rotate", "retire", "deregister")) operations.addProperty(op, origin + "/example/" + op);
             if (extensionMetadata != null) d.add("extensions", extensionMetadata.deepCopy());
-            d.add("operations", operations); JsonObject limits = new JsonObject(); limits.addProperty("heartbeatIntervalMs", 1000); if (checkInMillis > 0) limits.addProperty("checkInVersion", 1); limits.addProperty("maxControlPage", 100); limits.addProperty("leaseMs", 30000); limits.addProperty("maxBodyBytes", 65536); limits.addProperty("clockSkewMs", 60000); d.add("limits", limits);
+            d.add("operations", operations); JsonObject limits = new JsonObject(); limits.addProperty("heartbeatIntervalMs", 1000); if (checkInMillis > 0) limits.addProperty("checkInVersion", 1); limits.addProperty("leaseMs", 30000); limits.addProperty("maxBodyBytes", 65536); limits.addProperty("clockSkewMs", 60000); d.add("limits", limits);
             JsonObject authorization = new JsonObject(); authorization.addProperty("header", "Authorization"); JsonArray schemes = new JsonArray();
             schemes.add(authorizationScheme("anonymous-proof-of-work", "new-service")); schemes.add(authorizationScheme("bearer-token", "new-service", "attach-instance")); authorization.add("schemes", schemes); d.add("authorization", authorization); return d;
         }
-        if (path.equals("/example/challenges") || path.equals("/example/recover")) {
-            boolean recovery = path.endsWith("recover");
+        operationsSeen.add(path);
+        if (path.equals("/example/register")) {
+            boolean recovery = body.has("registrationId");
             if (!ProviderCrypto.PROTOCOL.equals(body.get("protocol").getAsString()) || !"nxs-admission-v1".equals(body.get("profile").getAsString())) throw new Failure(400, "unsupported_profile");
             if (recovery && (registration == null || !registration.get("registrationId").equals(body.get("registrationId")))) throw new Failure(403, "recovery_unavailable");
             JsonObject key = recovery ? keys.get(registration.get("keyId").getAsString()) : body.getAsJsonObject("publicKeyJwk");
@@ -75,38 +82,48 @@ public final class IndependentProviderStub implements AutoCloseable {
             if (c == null) throw new Failure(409, "challenge_consumed");
             String proof = ProviderCrypto.proof(c, body.get("proofNonce").getAsString(), body.get("idempotencyKey").getAsString());
             if (!ProviderCrypto.verify(keys.get(id), body.get("signature").getAsString(), proof) || !ProviderCrypto.meetsDifficulty(ProviderCrypto.digest(proof), c.getAsJsonObject("pow").get("difficulty").getAsInt())) throw new Failure(401, "proof_invalid");
-            challenges.remove(id);
+            challenges.remove(id); generation++; sequence = 0; draining = false; appliedRevision = 0; profileRevision = 0;
             if (c.getAsJsonObject("context").get("mode").getAsString().equals("recover")) { JsonObject r = registration.deepCopy(); r.remove("ticketKey"); r.addProperty("leaseGeneration", generation); return r; }
             if (registration != null) throw new Failure(409, "already_registered"); registrations++;
-            registration = new JsonObject(); registration.addProperty("protocol", ProviderCrypto.PROTOCOL); registration.addProperty("provider", origin); registration.addProperty("registrationId", id); registration.addProperty("instanceId", "example-machine-1"); registration.addProperty("serviceId", "example-service-1"); registration.addProperty("keyId", "example-key-1"); registration.addProperty("publicAddress", "https://play.example.invalid"); registration.addProperty("profile", "nxs-admission-v1"); registration.addProperty("leaseGeneration", 0); registration.addProperty("leaseDeadline", 0); registration.addProperty("heartbeatIntervalMs", 1000); JsonObject ready = new JsonObject(); ready.addProperty("routable", false); ready.add("reasons", new JsonArray()); registration.add("readiness", ready); JsonObject place = placements.getOrDefault(id, new JsonObject()).deepCopy(); if (!place.has("region")) place.addProperty("region", ""); if (!place.has("pool")) place.addProperty("pool", ""); registration.add("placement", place); registration.add("ticketKey", ticket()); if (extensionMetadata != null) registration.add("extensions", extensionMetadata.deepCopy()); keys.put("example-key-1", keys.get(id)); if (loseCompletionResponse) { loseCompletionResponse = false; e.close(); throw new Failure(503, "completion_response_lost"); } return registration.deepCopy();
+            registration = new JsonObject(); registration.addProperty("protocol", ProviderCrypto.PROTOCOL); registration.addProperty("provider", origin); registration.addProperty("registrationId", id); registration.addProperty("instanceId", "example-machine-1"); registration.addProperty("serviceId", "example-service-1"); registration.addProperty("keyId", "example-key-1"); registration.addProperty("publicAddress", "https://play.example.invalid"); registration.addProperty("profile", "nxs-admission-v1"); registration.addProperty("leaseGeneration", generation); registration.addProperty("leaseDeadline", System.currentTimeMillis() + 30000); registration.addProperty("heartbeatIntervalMs", 1000); JsonObject ready = new JsonObject(); ready.addProperty("routable", false); ready.add("reasons", new JsonArray()); registration.add("readiness", ready); JsonObject place = placements.getOrDefault(id, new JsonObject()).deepCopy(); if (!place.has("region")) place.addProperty("region", ""); if (!place.has("pool")) place.addProperty("pool", ""); registration.add("placement", place); registration.add("ticketKey", ticket()); if (extensionMetadata != null) registration.add("extensions", extensionMetadata.deepCopy()); keys.put("example-key-1", keys.get(id)); if (loseCompletionResponse) { loseCompletionResponse = false; e.close(); throw new Failure(503, "completion_response_lost"); } return registration.deepCopy();
         }
         if (path.equals("/example/heartbeat") && failHeartbeats-- > 0) throw new Failure(503, "fixture_transient");
         authenticate(e, raw);
         JsonObject ok = new JsonObject(); ok.addProperty("accepted", true);
         switch (path) {
-            case "/example/activate" -> { if (!"nxs-admission-v1".equals(body.get("profile").getAsString())) throw new Failure(400, "unsupported_profile"); generation++; sequence = 0; draining = false; ok.addProperty("leaseGeneration", generation); ok.addProperty("leaseDeadline", System.currentTimeMillis() + 30000); }
-            case "/example/host-profile" -> {
-                if (keyAcknowledgements == 0 || !"nethernet.stateless-admission.v1".equals(body.getAsJsonObject("statelessAdmission").get("capability").getAsString())
-                    || !body.get("dtlsFingerprint").getAsString().matches("sha-256 [0-9A-F]{2}(?::[0-9A-F]{2}){31}")) throw new Failure(400, "invalid_host_profile");
-                ok.addProperty("revision", "example-profile-revision");
-            }
-            case "/example/heartbeat" -> { if (draining) throw new Failure(403, "draining"); lastHeartbeat = body; heartbeats++;
+            case "/example/heartbeat" -> {
+                lastHeartbeat = body; heartbeats++;
+                if (body.has("installedKeyIds")) keyAcknowledgements++;
+                if (body.has("hostProfile")) {
+                    JsonObject profile = body.getAsJsonObject("hostProfile");
+                    if (keyAcknowledgements == 0 || !"nethernet.stateless-admission.v1".equals(profile.getAsJsonObject("statelessAdmission").get("capability").getAsString())
+                        || !profile.get("dtlsFingerprint").getAsString().matches("sha-256 [0-9A-F]{2}(?::[0-9A-F]{2}){31}")) throw new Failure(400, "invalid_host_profile");
+                    profileRevision++;
+                }
+                if (body.has("keyRequestId")) {
+                    String wanted = body.get("keyRequestId").getAsString();
+                    if (!wanted.equals(keyRequestId)) { keyRequestId = wanted; requestedKey = ticket(); requestedKey.addProperty("keyId", String.format("T%03d", ++epoch)); ok.add("ticketKey", requestedKey.deepCopy()); }
+                    JsonObject request = new JsonObject(); request.addProperty("id", keyRequestId); request.add("keyId", requestedKey.get("keyId")); ok.add("keyRequest", request);
+                }
+                draining = !body.get("state").getAsString().equals("serving");
+                long applied = body.get("appliedStateRevision").getAsLong();
+                if (applied > appliedRevision) { appliedRevision = applied; acknowledgements++; }
+                JsonObject desired = new JsonObject(); desired.addProperty("revision", desiredRevision); desired.addProperty("state", desiredState); ok.add("desiredState", desired);
+                ok.addProperty("hostProfileRevision", "example-profile-" + profileRevision);
+                ok.addProperty("routable", profileRevision > 0 && keyAcknowledgements > 0 && !draining);
+                JsonObject ready = new JsonObject(); ready.addProperty("routable", ok.get("routable").getAsBoolean()); ready.add("reasons", new JsonArray()); ok.add("readiness", ready);
+                if (extensionMetadata != null) ok.add("extensions", extensionMetadata.deepCopy());
                 if (checkInMillis > 0 && body.has("checkInVersion")) {
                     long now = System.currentTimeMillis(); JsonObject schedule = new JsonObject();
                     schedule.addProperty("version", 1); schedule.addProperty("afterMillis", checkInMillis);
                     schedule.addProperty("nextCheckInAt", now + checkInMillis); schedule.addProperty("leaseExpiresAt", now + checkInMillis + 30000);
-                    schedule.addProperty("minUpdateIntervalMillis", 1000); schedule.addProperty("controlPollAfterMillis", checkInMillis);
+                    schedule.addProperty("minUpdateIntervalMillis", 1000);
                     ok.add("checkIn", schedule); ok.addProperty("receivedAt", java.time.Instant.ofEpochMilli(now).toString());
-                } }
-            case "/example/control" -> { controlPolls++; ok.add("commands", commands.deepCopy()); ok.addProperty("cursor", "example-cursor"); ok.addProperty("serverTime", java.time.Instant.now().toString()); }
-            case "/example/control/ack" -> { acknowledgements++; commands = new JsonArray(); }
-            case "/example/readiness" -> { ok.addProperty("routable", heartbeats > 0 && !draining); if (extensionMetadata != null) ok.add("extensions", extensionMetadata.deepCopy()); }
+                }
+            }
             case "/example/extension" -> { extensionRequests++; }
             case "/example/deregister" -> { draining = true; }
-            case "/example/drain" -> draining = true;
-            case "/example/ticket-keys" -> ok.add("ticketKey", ticket());
-            case "/example/ticket-keys/ack" -> { keyAcknowledgements++; }
-            case "/example/ticket-events", "/example/events" -> { for (JsonElement event : body.getAsJsonArray("events")) events.add(event.getAsJsonObject()); }
+            case "/example/outcomes" -> { outcomeAttempts++; if (failOutcomes) throw new Failure(503, "fixture_outcome_unavailable"); for (JsonElement event : body.getAsJsonArray("events")) events.add(event.getAsJsonObject()); }
             case "/example/rotate" -> {
                 String old = e.getRequestHeaders().getFirst("nxs-key-id"), intent = e.getRequestHeaders().getFirst("idempotency-key"); JsonObject key = body.getAsJsonObject("publicKeyJwk");
                 if (!ProviderCrypto.verify(key, body.get("proof").getAsString(), ProviderCrypto.array(ProviderCrypto.PROTOCOL, "rotate", origin, "example-machine-1", old, ProviderCrypto.thumbprint(key), generation, intent))) throw new Failure(401, "replacement_proof_invalid");

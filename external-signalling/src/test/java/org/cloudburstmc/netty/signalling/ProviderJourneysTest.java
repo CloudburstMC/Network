@@ -39,7 +39,7 @@ class ProviderJourneysTest {
                     assertTrue(stub.keyAcknowledgements > 0);
                     assertTrue(instance.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
                     if (attach) assertEquals("london", result.getAsJsonObject("placement").getAsJsonObject("tags").get("location").getAsString());
-                    JsonObject event = new JsonObject(); event.addProperty("stage", "ticket.transport_established");
+                    JsonObject event = new JsonObject(); event.addProperty("stage", "ticket.data_channels_open");
                     event.addProperty("ticketId", "opaque-correlation"); event.addProperty("occurredAt", java.time.Instant.now().toString());
                     event.addProperty("reason", "connected"); event.addProperty("privatePayload", "must-not-be-persisted"); transport.events.add(event);
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -119,7 +119,7 @@ class ProviderJourneysTest {
             try {
                 JsonObject registration = resumed.start().get(20, TimeUnit.SECONDS);
                 assertEquals(stub.registration.get("registrationId"), registration.get("registrationId"));
-                assertEquals(1, stub.registrations); assertEquals(1, stub.generation);
+                assertEquals(1, stub.registrations); assertEquals(2, stub.generation);
                 assertTrue(resumed.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
                 assertTrue(stub.keyAcknowledgements > 0, "Lost one-time key material is freshly provisioned");
             } finally { resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }

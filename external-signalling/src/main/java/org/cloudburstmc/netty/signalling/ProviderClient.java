@@ -63,7 +63,9 @@ public final class ProviderClient implements AutoCloseable {
     private JsonObject lastProfile;
     private long intervalMs = 10000, nextHeartbeat, snapshotClock;
     private boolean started, closed, scheduledCheckIns;
-    private long nextControl, nextStatusUpdate, controlIntervalMs = 1000, minUpdateIntervalMs = 1000;
+    private long nextOutcomes, nextStatusUpdate, minUpdateIntervalMs = 1000, appliedStateRevision;
+    private String hostState = "serving", installedKeyId;
+    private JsonObject lastHeartbeat = new JsonObject();
     private ServerStatus lastReportedStatus;
     private Health lastReportedHealth;
     private final AtomicBoolean closing = new AtomicBoolean();
@@ -86,13 +88,10 @@ public final class ProviderClient implements AutoCloseable {
         else recoverExisting();
         JsonObject registration = state.getAsJsonObject("registration");
         if (!registration.get("provider").getAsString().equals(origin)) throw new IOException("Registration audience changed");
-        JsonObject activationRequest = new JsonObject(); activationRequest.addProperty("profile", config.profile());
-        JsonObject activation = signed("activate", "POST", activationRequest);
         state.addProperty("protocol", ProviderCrypto.PROTOCOL); state.addProperty("profile", config.profile());
-        state.addProperty("generation", activation.get("leaseGeneration").getAsLong()); state.addProperty("sequence", 0); state.remove("cursor"); save();
+        state.addProperty("generation", registration.get("leaseGeneration").getAsLong()); state.addProperty("sequence", 0);
+        state.remove("cursor"); state.remove("pendingAdmissions"); save();
         installKeys();
-        // Volatile admissions from an earlier profile cannot be restored by a stateless endpoint.
-        state.remove("pendingAdmissions"); save();
         started = true; heartbeat();
         timer = executor.scheduleWithFixedDelay(() -> {
             if (closed) return;
@@ -103,11 +102,10 @@ public final class ProviderClient implements AutoCloseable {
                 nextStatusUpdate = nextHeartbeat;
                 diagnostics.accept("provider_status_unavailable: " + safeFailure(e));
             }
-            if (System.nanoTime() >= nextControl) {
-                nextControl = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(controlIntervalMs);
-                try { control(); } catch (Exception e) { diagnostics.accept("provider_control_unavailable: " + safeFailure(e)); }
+            if (System.nanoTime() >= nextOutcomes) {
+                try { flushEvents(); }
+                catch (Exception e) { nextOutcomes = System.nanoTime() + TimeUnit.SECONDS.toNanos(10); diagnostics.accept("provider_events_unavailable: " + safeFailure(e)); }
             }
-            try { flushEvents(); } catch (Exception e) { diagnostics.accept("provider_events_unavailable: " + safeFailure(e)); }
         }, 1000, 1000, TimeUnit.MILLISECONDS);
         return redactedRegistration();
     }); }
@@ -130,7 +128,6 @@ public final class ProviderClient implements AutoCloseable {
         if (intervalMs < 1000 || intervalMs > 30000) throw new IOException("Unsupported heartbeat interval");
         JsonObject limits = discovery.getAsJsonObject("limits");
         if (limits.get("maxBodyBytes").getAsLong() < 1 || limits.get("maxBodyBytes").getAsLong() > 65536
-            || limits.get("maxControlPage").getAsLong() < 1 || limits.get("maxControlPage").getAsLong() > 100
             || limits.get("clockSkewMs").getAsLong() < 0 || limits.get("clockSkewMs").getAsLong() > 60000)
             throw new IOException("Unsupported provider limits");
     }
@@ -141,7 +138,7 @@ public final class ProviderClient implements AutoCloseable {
     }
     private void recoverExisting() throws Exception {
         String registrationId = registration("registrationId");
-        completeRecovery(unsigned("recover", recoveryRequest(registrationId)), registrationId);
+        completeRecovery(unsigned("register", recoveryRequest(registrationId)), registrationId);
     }
     private void completeRecovery(JsonObject challenge, String registrationId) throws Exception {
         ProviderContract.require("challenge", challenge);
@@ -167,10 +164,10 @@ public final class ProviderClient implements AutoCloseable {
             if (!state.getAsJsonObject("registration").get(field).equals(recovered.get(field))) throw new IOException("Recovered instance identity changed");
         registrationExtensions = ProtocolExtensions.copy(recovered); recovered.remove("extensions"); recovered.remove("ticketKey");
         state.add("registration", recovered); state.addProperty("generation", recovered.get("leaseGeneration").getAsLong());
-        if (!state.has("sequence")) state.addProperty("sequence", 0);
+        state.addProperty("sequence", 0);
         if (!state.has("ticketKeys")) state.add("ticketKeys", new JsonArray());
         state.remove("challenge");
-        // Sequence is monotonic within a generation; the previous durable reservation is retained.
+        // Completion starts a fresh fenced generation; operational sequencing starts at zero.
         if (pending) { state.add("privateKey", state.remove("pendingPrivateKey")); state.add("publicKeyJwk", state.remove("pendingPublicKeyJwk")); privateKey = key; }
         save();
     }
@@ -179,7 +176,7 @@ public final class ProviderClient implements AutoCloseable {
         if (state.has("challenge")) {
             String registrationId = state.getAsJsonObject("challenge").get("challengeId").getAsString();
             JsonObject recoveredChallenge = null;
-            try { recoveredChallenge = unsigned("recover", recoveryRequest(registrationId)); }
+            try { recoveredChallenge = unsigned("register", recoveryRequest(registrationId)); }
             catch (ProviderException e) { if (e.status != 403) throw e; }
             if (recoveredChallenge != null) { completeRecovery(recoveredChallenge, registrationId); return; }
             challenge = state.getAsJsonObject("challenge");
@@ -188,7 +185,7 @@ public final class ProviderClient implements AutoCloseable {
             request.addProperty("profile", config.profile()); request.add("publicKeyJwk", state.get("publicKeyJwk")); if (config.label() != null) request.addProperty("label", config.label());
             JsonObject authorization = new JsonObject(); authorization.addProperty("scheme", config.authorizationScheme()); request.add("authorization", authorization);
             if (config.region() != null) { JsonObject p = new JsonObject(); p.addProperty("region", config.region()); p.addProperty("pool", config.pool()); if (!config.tags().isEmpty()) p.add("tags", JSON.toJsonTree(config.tags())); request.add("placement", p); }
-            challenge = unsigned("challenges", request, config.authorizationToken()); state.add("challenge", challenge); save();
+            challenge = unsigned("register", request, config.authorizationToken()); state.add("challenge", challenge); save();
         }
         ProviderContract.require("challenge", challenge);
         if (!ProviderCrypto.PROTOCOL.equals(challenge.get("protocol").getAsString()) || !ProviderCrypto.SIGNATURE.equals(challenge.get("signature").getAsString()) || !origin.equals(challenge.get("audience").getAsString()) || !ProviderCrypto.thumbprint(state.getAsJsonObject("publicKeyJwk")).equals(challenge.get("thumbprint").getAsString()) || !ProviderCrypto.contextDigest(challenge.getAsJsonObject("context")).equals(challenge.get("contextDigest").getAsString())) throw new IOException("Unbound registration challenge");
@@ -228,27 +225,25 @@ public final class ProviderClient implements AutoCloseable {
         if (!expectedTags.equals(actualTags)) throw new IOException("Registration placement tags changed");
     }
     private void installKeys() throws Exception {
-        if (!state.has("ticketKeys")) state.add("ticketKeys", new JsonArray());
-        JsonArray unexpired = new JsonArray(); for (JsonElement e : state.getAsJsonArray("ticketKeys")) if (!e.getAsJsonObject().has("retireAfter") || e.getAsJsonObject().get("retireAfter").getAsLong() > System.currentTimeMillis()) unexpired.add(e);
-        state.add("ticketKeys", unexpired); save();
-        if (state.getAsJsonArray("ticketKeys").isEmpty()) {
-            JsonObject fresh = signed("ticket-keys", "POST", new JsonObject());
-            if (!fresh.has("ticketKey")) throw new IOException("Ticket response was lost; retry fresh provisioning");
-            state.getAsJsonArray("ticketKeys").add(fresh.get("ticketKey")); save();
+        JsonArray retained = new JsonArray();
+        if (state.has("ticketKeys")) for (JsonElement entry : state.getAsJsonArray("ticketKeys")) {
+            JsonObject key = entry.getAsJsonObject();
+            if (!key.has("retireAfter") || key.get("retireAfter").getAsLong() > System.currentTimeMillis()) retained.add(key);
+        }
+        if (retained.size() > 8) throw new IOException("Too many admission key epochs");
+        state.add("ticketKeys", retained); save();
+        if (retained.isEmpty()) {
+            installedKeyId = null;
+            if (!state.has("keyRequestId")) { state.addProperty("keyRequestId", UUID.randomUUID().toString()); save(); }
+            return;
         }
         List<ProviderTransport.TicketKey> keys = new ArrayList<>();
-        for (JsonElement e : state.getAsJsonArray("ticketKeys")) { JsonObject k = e.getAsJsonObject(); keys.add(new ProviderTransport.TicketKey(k.get("keyId").getAsString(), k.get("secret").getAsString(), k.has("notBefore") ? k.get("notBefore").getAsLong() : 0, k.has("retireAfter") ? k.get("retireAfter").getAsLong() : Long.MAX_VALUE)); }
-        transport.installTicketKeys(List.copyOf(keys)).toCompletableFuture().get(10, TimeUnit.SECONDS);
-        JsonObject ack = new JsonObject(); ack.addProperty("keyId", keys.getLast().keyId()); JsonObject acknowledgement = signed("ticket-keys/ack", "POST", ack);
-        if (acknowledgement.has("retirements")) {
-            for (JsonElement retired : acknowledgement.getAsJsonArray("retirements")) for (JsonElement stored : state.getAsJsonArray("ticketKeys")) {
-                JsonObject r = retired.getAsJsonObject(), k = stored.getAsJsonObject();
-                if (r.get("keyId").equals(k.get("keyId"))) k.addProperty("retireAfter", Math.min(k.has("retireAfter") ? k.get("retireAfter").getAsLong() : Long.MAX_VALUE, r.get("retireAfter").getAsLong()));
-            }
-            save(); List<ProviderTransport.TicketKey> bounded = new ArrayList<>();
-            for (JsonElement stored : state.getAsJsonArray("ticketKeys")) { JsonObject k = stored.getAsJsonObject(); long end = k.has("retireAfter") ? k.get("retireAfter").getAsLong() : Long.MAX_VALUE; if (end > System.currentTimeMillis()) bounded.add(new ProviderTransport.TicketKey(k.get("keyId").getAsString(), k.get("secret").getAsString(), k.has("notBefore") ? k.get("notBefore").getAsLong() : 0, end)); }
-            transport.installTicketKeys(List.copyOf(bounded)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        for (JsonElement entry : retained) { JsonObject key = entry.getAsJsonObject();
+            keys.add(new ProviderTransport.TicketKey(key.get("keyId").getAsString(), key.get("secret").getAsString(),
+                key.has("notBefore") ? key.get("notBefore").getAsLong() : 0, key.has("retireAfter") ? key.get("retireAfter").getAsLong() : Long.MAX_VALUE));
         }
+        transport.installTicketKeys(List.copyOf(keys)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        installedKeyId = keys.getLast().keyId();
     }
     /** A full immutable snapshot. Callers may update every one of the seven fields. */
     public void setServerStatus(ServerStatus status) { explicitStatus.set(Objects.requireNonNull(status)); requestStatusRefresh(); }
@@ -266,55 +261,92 @@ public final class ProviderClient implements AutoCloseable {
             || !Objects.equals(health.protocolVersion(), lastReportedHealth.protocolVersion()) || !Objects.equals(health.build(), lastReportedHealth.build());
     }
     private void heartbeat() throws Exception {
-        JsonObject profile = transport.hostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
-        if (profile == null) throw new IOException("Transport profile unavailable");
-        boolean supportsSchedule = discovery.getAsJsonObject("limits").has("checkInVersion")
-            && discovery.getAsJsonObject("limits").get("checkInVersion").getAsInt() == 1 && profile.has("statelessAdmission");
-        if (!profile.equals(lastProfile) || !state.has("profilePublishedAt") || (!supportsSchedule && System.currentTimeMillis() - state.get("profilePublishedAt").getAsLong() > 300000)) {
-            JsonObject published = signed("host-profile", "POST", profile); profileRevision = published.get("revision").getAsString(); lastProfile = profile.deepCopy(); state.addProperty("profilePublishedAt", System.currentTimeMillis()); save();
-        }
-        Health h = healthSupplier.get(); JsonObject body = new JsonObject(); body.addProperty("healthy", h.healthy()); body.addProperty("capacity", h.capacity()); body.addProperty("load", h.load()); body.addProperty("protocolVersion", h.protocolVersion()); body.addProperty("build", h.build()); body.addProperty("hostProfileRevision", profileRevision);
-        if (config.region() != null) body.addProperty("region", config.region());
-        snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1); body.addProperty("clockUnixMillis", snapshotClock);
-        ServerStatus status = null;
-        try { status = currentStatus(); if (status != null) body.add("serverStatus", JSON.toJsonTree(status)); }
-        catch (RuntimeException e) { diagnostics.accept("status_refresh_failed"); /* Omit snapshot; old report timestamp must expire. */ }
-        if (supportsSchedule) body.addProperty("checkInVersion", 1);
-        long requestStarted = System.nanoTime();
-        JsonObject response = signed("heartbeat", "POST", body);
-        if (supportsSchedule && response.has("checkIn")) {
-            CheckInSchedule schedule = CheckInSchedule.parse(response);
-            scheduledCheckIns = true; controlIntervalMs = schedule.controlPollAfterMillis(); minUpdateIntervalMs = schedule.minUpdateIntervalMillis();
-            // Count network time against the granted interval; retries cannot postpone an absolute lease.
-            long received = java.time.Instant.parse(response.get("receivedAt").getAsString()).toEpochMilli();
-            long remaining = Math.min(schedule.afterMillis(), Math.max(0, response.getAsJsonObject("checkIn").get("nextCheckInAt").getAsLong() - Math.max(received, System.currentTimeMillis())));
-            nextHeartbeat = Math.min(requestStarted + TimeUnit.MILLISECONDS.toNanos(schedule.afterMillis()), System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining));
-            nextControl = Math.min(nextControl, requestStarted + TimeUnit.MILLISECONDS.toNanos(controlIntervalMs));
-        } else {
-            scheduledCheckIns = false; controlIntervalMs = 1000;
-            nextHeartbeat = requestStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs + ThreadLocalRandom.current().nextLong(Math.max(1, intervalMs / 10)));
-            nextControl = Math.min(nextControl, System.nanoTime() + TimeUnit.SECONDS.toNanos(1));
-        }
-        nextStatusUpdate = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(scheduledCheckIns ? minUpdateIntervalMs : intervalMs);
-        lastReportedStatus = status; lastReportedHealth = h;
-    }
-    private void control() throws Exception {
-        JsonObject page = signed("control", "GET", null);
-        JsonArray commands = page.has("commands") ? page.getAsJsonArray("commands") : new JsonArray();
-        if (commands.size() > discovery.getAsJsonObject("limits").get("maxControlPage").getAsInt()) throw new IOException("Control page exceeds limit");
-        boolean terminal = true;
-        for (JsonElement item : commands) {
-            JsonObject command = item.getAsJsonObject(); String kind = command.has("kind") ? command.get("kind").getAsString() : "";
-            if (!Set.of("noop", "drain", "suspend", "revoke").contains(kind)) {
-                terminal = false; diagnostics.accept("unsupported_control_command"); continue;
+        // Key delivery and application acknowledgements can need an immediate second exchange.
+        for (int exchange = 0; exchange < 3; exchange++) {
+            JsonObject body = new JsonObject(), profile = null;
+            if (installedKeyId != null && hostState.equals("serving")) {
+                profile = transport.hostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                if (profile == null) throw new IOException("Transport profile unavailable");
+                if (!profile.equals(lastProfile)) body.add("hostProfile", profile);
+                else if (profileRevision != null) body.addProperty("hostProfileRevision", profileRevision);
+            } else if (profileRevision != null) body.addProperty("hostProfileRevision", profileRevision);
+            if (installedKeyId != null) {
+                JsonArray installed = new JsonArray();
+                for (JsonElement key : state.getAsJsonArray("ticketKeys")) installed.add(key.getAsJsonObject().get("keyId"));
+                body.add("installedKeyIds", installed);
             }
-            ProviderTransport.ApplyResult result = transport.applyControl(command.deepCopy()).toCompletableFuture().get(10, TimeUnit.SECONDS);
-            if (result == ProviderTransport.ApplyResult.PENDING) terminal = false;
+            if (state.has("keyRequestId")) body.add("keyRequestId", state.get("keyRequestId"));
+            Health health = healthSupplier.get();
+            body.addProperty("healthy", health.healthy() && installedKeyId != null && hostState.equals("serving"));
+            body.addProperty("capacity", health.capacity()); body.addProperty("load", health.load());
+            body.addProperty("protocolVersion", health.protocolVersion()); body.addProperty("build", health.build());
+            if (config.region() != null) body.addProperty("region", config.region());
+            snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
+            body.addProperty("clockUnixMillis", snapshotClock); body.addProperty("checkInVersion", 1);
+            body.addProperty("state", hostState); body.addProperty("appliedStateRevision", appliedStateRevision);
+            body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
+            ServerStatus status = null;
+            try { status = currentStatus(); if (status != null) body.add("serverStatus", JSON.toJsonTree(status)); }
+            catch (RuntimeException failure) { diagnostics.accept("status_refresh_failed"); }
+            long requestStarted = System.nanoTime();
+            JsonObject response = signed("heartbeat", "POST", body);
+            ProtocolExtensions.validate(response);
+            if (body.has("hostProfile")) {
+                if (!response.has("hostProfileRevision") || response.get("hostProfileRevision").isJsonNull()) throw new IOException("Profile acknowledgement missing");
+                profileRevision = response.get("hostProfileRevision").getAsString(); lastProfile = profile.deepCopy();
+                state.addProperty("profilePublishedAt", System.currentTimeMillis()); save();
+            }
+            boolean again = false;
+            if (response.has("ticketKey")) {
+                JsonObject key = response.remove("ticketKey").getAsJsonObject();
+                if (!state.has("keyRequestId") || !response.has("keyRequest") ||
+                    !state.get("keyRequestId").equals(response.getAsJsonObject("keyRequest").get("id")) ||
+                    !key.get("keyId").equals(response.getAsJsonObject("keyRequest").get("keyId"))) throw new IOException("Unbound admission key response");
+                state.getAsJsonArray("ticketKeys").add(key); state.remove("keyRequestId"); save();
+                installKeys(); lastProfile = null; again = true;
+            } else if (state.has("keyRequestId") && response.has("keyRequest") &&
+                state.get("keyRequestId").equals(response.getAsJsonObject("keyRequest").get("id"))) {
+                // The provider confirms delivery but the one-time response was lost.
+                state.addProperty("keyRequestId", UUID.randomUUID().toString()); save(); again = true;
+            }
+            if (response.has("retirements") && !response.getAsJsonArray("retirements").isEmpty()) {
+                for (JsonElement retirement : response.getAsJsonArray("retirements")) for (JsonElement stored : state.getAsJsonArray("ticketKeys")) {
+                    JsonObject retired = retirement.getAsJsonObject(), key = stored.getAsJsonObject();
+                    if (retired.get("keyId").equals(key.get("keyId"))) key.addProperty("retireAfter", Math.min(
+                        key.has("retireAfter") ? key.get("retireAfter").getAsLong() : Long.MAX_VALUE, retired.get("retireAfter").getAsLong()));
+                }
+                save(); installKeys();
+            }
+            if (response.has("checkIn")) {
+                CheckInSchedule schedule = CheckInSchedule.parse(response);
+                scheduledCheckIns = true; minUpdateIntervalMs = schedule.minUpdateIntervalMillis();
+                long received = java.time.Instant.parse(response.get("receivedAt").getAsString()).toEpochMilli();
+                long remaining = Math.min(schedule.afterMillis(), Math.max(0, response.getAsJsonObject("checkIn").get("nextCheckInAt").getAsLong() - Math.max(received, System.currentTimeMillis())));
+                nextHeartbeat = Math.min(requestStarted + TimeUnit.MILLISECONDS.toNanos(schedule.afterMillis()), System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining));
+            } else {
+                scheduledCheckIns = false;
+                nextHeartbeat = requestStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs);
+            }
+            nextStatusUpdate = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(scheduledCheckIns ? minUpdateIntervalMs : intervalMs);
+            lastReportedStatus = status; lastReportedHealth = health; lastHeartbeat = response.deepCopy();
+            JsonObject desired = response.getAsJsonObject("desiredState");
+            if (desired == null || !desired.has("revision") || !desired.has("state")) throw new IOException("Provider state missing");
+            long revision = desired.getAsJsonPrimitive("revision").getAsBigDecimal().longValueExact(); String target = desired.get("state").getAsString();
+            if (revision < appliedStateRevision || !Set.of("serving", "draining", "closed").contains(target)) throw new IOException("Unsupported provider state");
+            if (revision > appliedStateRevision) {
+                ProviderTransport.ApplyResult applied = target.equals("serving") ? ProviderTransport.ApplyResult.APPLIED
+                    : transport.applyState(target).toCompletableFuture().get(10, TimeUnit.SECONDS);
+                if (applied == ProviderTransport.ApplyResult.APPLIED) {
+                    appliedStateRevision = revision;
+                    if (!target.equals("serving")) { hostState = target; again = true; }
+                } else {
+                    diagnostics.accept("provider_state_not_applied");
+                    nextHeartbeat = Math.min(nextHeartbeat, System.nanoTime() + TimeUnit.SECONDS.toNanos(1));
+                }
+            }
+            if (!again) return;
         }
-        if (terminal && !commands.isEmpty() && page.has("cursor")) {
-            // Native terminal results are replay-safe; merely staged volatile admissions never reach here.
-            String cursor = page.get("cursor").getAsString(); JsonObject ack = new JsonObject(); ack.addProperty("cursor", cursor); signed("control/ack", "POST", ack); state.addProperty("cursor", cursor); save();
-        }
+        nextHeartbeat = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
     }
     private void flushEvents() throws Exception {
         if (!state.has("pendingEvents")) state.add("pendingEvents", new JsonArray());
@@ -324,23 +356,19 @@ public final class ProviderClient implements AutoCloseable {
         for (JsonObject event : fresh) {
             // Persist only the existing redacted telemetry fields, never native SDP or secret extensions.
             JsonObject safe = new JsonObject();
-            for (String field : List.of("stage", "type", "ticketId", "decisionId", "occurredAt", "reason")) if (event.has(field)) safe.add(field, event.get(field));
-            if ((!safe.has("stage") && !safe.has("type")) || !safe.has("occurredAt")) throw new IOException("Malformed transport event");
+            for (String field : List.of("stage", "ticketId", "occurredAt", "reason")) if (event.has(field)) safe.add(field, event.get(field));
+            if (!safe.has("stage") || !safe.has("ticketId") || !safe.has("occurredAt")) throw new IOException("Malformed transport event");
             pending.add(safe);
         }
         if (pending.isEmpty()) return;
         save();
-        for (String operation : List.of("ticket-events", "events")) {
-            JsonArray batch = new JsonArray();
-            for (JsonElement e : pending) if (e.getAsJsonObject().has(operation.equals("events") ? "type" : "stage") && batch.size() < 100) batch.add(e);
-            if (batch.isEmpty()) continue;
-            JsonObject body = new JsonObject(); body.add("events", batch); signed(operation, "POST", body);
-            for (JsonElement sent : batch) pending.remove(sent); save();
-        }
+        JsonArray batch = new JsonArray();
+        for (JsonElement event : pending) if (batch.size() < 100) batch.add(event);
+        JsonObject body = new JsonObject(); body.add("events", batch); signed("outcomes", "POST", body);
+        for (JsonElement sent : batch) pending.remove(sent); save();
     }
-    public CompletableFuture<JsonObject> readiness() { return submit(() -> {
-        JsonObject response = signed("readiness", "GET", null); ProtocolExtensions.validate(response); return response;
-    }); }
+    /** Refresh through the ordinary heartbeat and return its readiness observation. */
+    public CompletableFuture<JsonObject> readiness() { return submit(() -> { heartbeat(); return lastHeartbeat.deepCopy(); }); }
     /** Opaque optional extension metadata; the application decides what it means. */
     public CompletableFuture<JsonObject> extensions() { return submit(() -> registrationExtensions.deepCopy()); }
     /** Explicit application request to an advertised extension operation, never automatic execution. */
@@ -362,8 +390,9 @@ public final class ProviderClient implements AutoCloseable {
         signed("deregister", "POST", new JsonObject()); transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS); started = false; return null;
     }); }
     public CompletableFuture<JsonObject> rotateTicketKey() { return submit(() -> {
-        JsonObject result = signed("ticket-keys", "POST", new JsonObject()); if (!result.has("ticketKey")) throw new IOException("Fresh ticket provisioning required");
-        state.getAsJsonArray("ticketKeys").add(result.get("ticketKey")); save(); installKeys(); lastProfile = null; heartbeat(); return redactedRegistration();
+        installKeys();
+        if (state.getAsJsonArray("ticketKeys").size() >= 8) throw new IOException("Wait for retiring admission epochs before rotating again");
+        state.addProperty("keyRequestId", UUID.randomUUID().toString()); save(); heartbeat(); return redactedRegistration();
     }); }
     public CompletableFuture<JsonObject> rotateMachineKey() { return submit(() -> {
         KeyPair replacement = ProviderCrypto.generate(); JsonObject jwk = ProviderCrypto.publicJwk(replacement.getPublic());
@@ -374,15 +403,18 @@ public final class ProviderClient implements AutoCloseable {
         state.add("privateKey", state.remove("pendingPrivateKey")); state.add("publicKeyJwk", state.remove("pendingPublicKeyJwk")); state.getAsJsonObject("registration").addProperty("keyId", result.get("keyId").getAsString()); save(); privateKey = replacement.getPrivate();
         JsonObject retire = new JsonObject(); retire.addProperty("keyId", oldKey); signed("retire", "POST", retire); return result;
     }); }
-    public CompletableFuture<Void> drain() { return submit(() -> { signed("drain", "POST", new JsonObject()); transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS); started = false; return null; }); }
+    public CompletableFuture<Void> drain() { return submit(() -> { drainAndReport(); started = false; return null; }); }
+    private void drainAndReport() throws Exception {
+        if (!hostState.equals("closed")) { transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS); hostState = "draining"; }
+        heartbeat();
+    }
     private JsonObject unsigned(String op, JsonObject body) throws Exception { return unsigned(op, body, null); }
     private JsonObject unsigned(String op, JsonObject body, String bearerToken) throws Exception { return exchange(operation(op), "POST", JSON.toJson(body), false, null, bearerToken); }
     private JsonObject signed(String op, String method, JsonObject body) throws Exception { return signed(op, method, body, UUID.randomUUID().toString()); }
     private JsonObject signed(String op, String method, JsonObject body, String intent) throws Exception {
         long sequence = state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1; state.addProperty("sequence", sequence); save();
         URI uri = operation(op);
-        if (op.equals("control") && state.has("cursor")) uri = URI.create(uri + "?cursor=" + java.net.URLEncoder.encode(state.get("cursor").getAsString(), java.nio.charset.StandardCharsets.UTF_8));
-        return exchange(uri, method, body == null ? null : JSON.toJson(body), true, intent, null);
+        return exchange(uri, method, body == null ? null : JSON.toJson(body), true, intent, null, op.equals("outcomes") ? 3 : 15, op.equals("outcomes") ? 1 : 3);
     }
     private URI operation(String op) throws IOException { if (!discovery.getAsJsonObject("operations").has(op)) throw new IOException("Missing provider operation: " + op); return trusted(URI.create(discovery.getAsJsonObject("operations").get(op).getAsString())); }
     private URI trusted(URI uri) throws IOException {
@@ -390,9 +422,12 @@ public final class ProviderClient implements AutoCloseable {
         if (!ProviderCrypto.origin(authority).equals(origin) || uri.getUserInfo() != null || uri.getFragment() != null) throw new IOException("Untrusted provider operation"); return uri;
     }
     private JsonObject exchange(URI uri, String method, String body, boolean signed, String intent, String bearerToken) throws Exception {
+        return exchange(uri, method, body, signed, intent, bearerToken, 15, 3);
+    }
+    private JsonObject exchange(URI uri, String method, String body, boolean signed, String intent, String bearerToken, int timeoutSeconds, int attempts) throws Exception {
         trusted(uri); String raw = body == null ? "" : body;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(15)).header("accept", "application/json").method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(timeoutSeconds)).header("accept", "application/json").method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
             if (body != null) b.header("content-type", "application/json");
             if (bearerToken != null) b.header("authorization", "Bearer " + bearerToken);
             if (signed) {
@@ -402,15 +437,15 @@ public final class ProviderClient implements AutoCloseable {
             }
             HttpResponse<byte[]> response;
             var responseFuture = http.sendAsync(b.build(), info -> new LimitedBodySubscriber(65536));
-            try { response = responseFuture.get(20, TimeUnit.SECONDS); }
+            try { response = responseFuture.get(timeoutSeconds + 1, TimeUnit.SECONDS); }
             catch (ExecutionException | TimeoutException failure) {
                 responseFuture.cancel(true);
-                if (attempt == 2) throw new IOException("Provider transport unavailable", failure);
+                if (attempt == attempts - 1) throw new IOException("Provider transport unavailable", failure);
                 Thread.sleep((250L << attempt) + ThreadLocalRandom.current().nextLong(100)); continue;
             }
             String text = new String(response.body(), java.nio.charset.StandardCharsets.UTF_8);
             int status = response.statusCode();
-            if ((status == 429 || status == 503 || status == 502 || status == 504) && attempt < 2) { long delay = 250L << attempt;
+            if ((status == 429 || status == 503 || status == 502 || status == 504) && attempt < attempts - 1) { long delay = 250L << attempt;
                 try { delay = Math.max(delay, Long.parseLong(response.headers().firstValue("retry-after").orElse("0")) * 1000); } catch (NumberFormatException ignored) { }
                 if (delay > 10000) throw new ProviderException(status, "retry_later"); Thread.sleep(delay + ThreadLocalRandom.current().nextLong(100)); continue;
             }
@@ -431,7 +466,7 @@ public final class ProviderClient implements AutoCloseable {
     }
     public CompletionStage<Void> stop() {
         if (!closing.compareAndSet(false, true)) return stopped;
-        executor.execute(() -> { try { if (started) { signed("drain", "POST", new JsonObject()); transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS); } } catch (Exception e) { diagnostics.accept("provider_drain_unavailable"); }
+        executor.execute(() -> { try { if (started) { drainAndReport(); flushEvents(); } } catch (Exception e) { diagnostics.accept("provider_drain_unavailable"); }
             finally {
                 closed = true; started = false; if (timer != null) timer.cancel(false);
                 try { transport.close().toCompletableFuture().get(10, TimeUnit.SECONDS); }

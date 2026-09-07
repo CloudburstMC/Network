@@ -105,14 +105,12 @@ public final class NativeProviderTransport implements ProviderTransport {
             return CompletableFuture.completedFuture(null);
         } catch (Exception invalid) { return CompletableFuture.failedFuture(invalid); }
     }
-    @Override public CompletionStage<ApplyResult> applyControl(JsonObject command) {
-        if (command == null || !command.has("kind") || !command.get("kind").isJsonPrimitive() || !command.getAsJsonPrimitive("kind").isString())
-            return CompletableFuture.completedFuture(ApplyResult.REJECTED);
-        return switch (command.get("kind").getAsString()) {
-            case "noop" -> CompletableFuture.completedFuture(ApplyResult.APPLIED);
-            case "drain" -> drain().thenApply(ignored -> ApplyResult.APPLIED);
-            case "suspend", "revoke" -> close().thenApply(ignored -> ApplyResult.APPLIED);
-            // Native admission never stages a client from control. Unsupported lifecycle changes are explicit rejections.
+    @Override public CompletionStage<ApplyResult> applyState(String state) {
+        if (state == null) return CompletableFuture.completedFuture(ApplyResult.REJECTED);
+        return switch (state) {
+            case "serving" -> CompletableFuture.completedFuture(ApplyResult.APPLIED);
+            case "draining" -> drain().thenApply(ignored -> ApplyResult.APPLIED);
+            case "closed" -> close().thenApply(ignored -> ApplyResult.APPLIED);
             default -> CompletableFuture.completedFuture(ApplyResult.REJECTED);
         };
     }

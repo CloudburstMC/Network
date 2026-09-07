@@ -55,15 +55,15 @@ class ProviderClientTest {
                 () -> new ProviderClient.Health(true, 40, players.get() / 40.0, "nethernet", "fixture"), message -> {});
             try {
                 client.start().get(20, TimeUnit.SECONDS);
-                eventually(() -> stub.controlPolls == 1);
+                assertEquals(0, stub.controlPolls);
                 Thread.sleep(2200);
-                assertEquals(1, stub.heartbeats); assertEquals(1, stub.controlPolls);
+                assertEquals(1, stub.heartbeats); assertEquals(0, stub.controlPolls);
                 for (int i = 0; i < 100; i++) client.requestStatusRefresh();
                 Thread.sleep(1200); assertEquals(1, stub.heartbeats, "Unchanged local refreshes must not send requests");
                 stub.checkInMillis = 1000; players.set(1); client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt() == 1);
                 int busyBefore = stub.heartbeats;
-                eventually(() -> stub.heartbeats > busyBefore && stub.controlPolls > 1);
+                eventually(() -> stub.heartbeats > busyBefore && stub.controlPolls == 0);
                 stub.checkInMillis = 3600000; players.set(0); client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt() == 0);
                 Thread.sleep(2200); int before = stub.heartbeats; int polls = stub.controlPolls;
@@ -89,16 +89,16 @@ class ProviderClientTest {
         final CompletableFuture<Void> closed = new CompletableFuture<>();
         final java.util.Queue<JsonObject> events = new java.util.concurrent.ConcurrentLinkedQueue<>();
         volatile int installed, applied, admissions, drains;
-        boolean stateless = true;
+        boolean stateless = true; String ticketKeyId = "T001";
         volatile ApplyResult result = ApplyResult.APPLIED;
-        public CompletionStage<JsonObject> hostProfile() { JsonObject p = new JsonObject(); p.addProperty("credentialKeyId", "T001"); p.addProperty("dtlsFingerprint", "sha-256 " + String.join(":", Collections.nCopies(32, "11"))); p.addProperty("sctpPort", 5000); p.addProperty("maxMessageSize", 262144);
+        public CompletionStage<JsonObject> hostProfile() { JsonObject p = new JsonObject(); p.addProperty("credentialKeyId", ticketKeyId); p.addProperty("dtlsFingerprint", "sha-256 " + String.join(":", Collections.nCopies(32, "11"))); p.addProperty("sctpPort", 5000); p.addProperty("maxMessageSize", 262144);
             JsonObject c = new JsonObject(); c.addProperty("foundation", "fixture"); c.addProperty("component", 1); c.addProperty("protocol", "udp"); c.addProperty("priority", 100); c.addProperty("address", "127.0.0.1"); c.addProperty("port", 19133); c.addProperty("type", "host"); JsonArray candidates = new JsonArray(); candidates.add(c); p.add("candidates", candidates);
             if (stateless) { JsonObject cap = new JsonObject(); cap.addProperty("capability", "nethernet.stateless-admission.v1"); cap.addProperty("incarnation", "0123456789abcdef0123456789abcdef"); p.add("statelessAdmission", cap); } return CompletableFuture.completedFuture(p); }
-        public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) { installed = keys.size(); return CompletableFuture.completedFuture(null); }
-        public CompletionStage<ApplyResult> applyControl(JsonObject c) {
-            applied++; String kind = c.get("kind").getAsString();
+        public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) { installed = keys.size(); ticketKeyId = keys.getLast().keyId(); return CompletableFuture.completedFuture(null); }
+        public CompletionStage<ApplyResult> applyState(String state) {
+            applied++; String kind = state;
             if (kind.equals("join-admission")) admissions++;
-            if (kind.equals("drain")) drains++;
+            if (kind.equals("draining")) drains++;
             return CompletableFuture.completedFuture(kind.equals("join-admission") ? result : ApplyResult.APPLIED);
         }
         public List<JsonObject> pollEvents() { List<JsonObject> batch = new ArrayList<>(); for (JsonObject event; (event = events.poll()) != null;) batch.add(event); return batch; }
@@ -128,7 +128,7 @@ class ProviderClientTest {
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(40);
         assertTrue(condition.getAsBoolean(), "Timed out waiting for provider lifecycle");
     }
-    @Test void failedRefreshRetriesAndRejectsPerJoinControlWithoutBlockingDrain(@TempDir Path path) throws Exception {
+    @Test void failedRefreshRetriesAndRejectsUnknownStateWithoutAcknowledgingIt(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             AtomicInteger players = new AtomicInteger(2); FakeTransport host = new FakeTransport();
             var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example");
@@ -143,16 +143,36 @@ class ProviderClientTest {
             for (int i = 0; i < 500; i++) client.requestStatusRefresh();
             eventually(() -> stub.lastHeartbeat.has("serverStatus") && stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt() == 5);
             assertTrue(stub.heartbeats - before <= 2, "Burst must coalesce within heartbeat cadence");
-            JsonObject join = new JsonObject(); join.addProperty("kind", "join-admission");
-            JsonObject unknown = new JsonObject(); unknown.addProperty("kind", "future-command");
-            JsonObject drain = new JsonObject(); drain.addProperty("kind", "drain");
-            JsonArray commands = new JsonArray(); commands.add(join); commands.add(unknown); commands.add(drain); stub.commands = commands;
-            eventually(() -> host.drains > 0);
-            assertEquals(0, host.admissions, "NXS never stages a join from provider control");
-            assertEquals(0, stub.acknowledgements, "Unsupported control must not be silently acknowledged");
-            JsonArray known = new JsonArray(); known.add(drain); stub.commands = known;
-            eventually(() -> stub.acknowledgements == 1);
+            int beforeAck = stub.acknowledgements;
+            stub.desiredState = "future-state"; stub.desiredRevision = 2;
+            assertThrows(ExecutionException.class, () -> client.readiness().get(10, TimeUnit.SECONDS));
+            assertEquals(0, host.admissions, "NXS has no per-join provider state");
+            assertTrue(stub.appliedRevision < 2, "Unknown state cannot be acknowledged");
+            stub.desiredState = "draining";
+            client.readiness().get(10, TimeUnit.SECONDS);
+            assertTrue(host.drains > 0); assertEquals(2, stub.appliedRevision);
+            assertTrue(stub.acknowledgements > beforeAck);
             client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test void outcomeOutageBacksOffWhileHeartbeatsContinue(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport(); stub.failOutcomes = true;
+            var client = new ProviderClient(new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example"),
+                new ProviderStateStore(path), host, () -> null, () -> new ProviderClient.Health(true, 10, 0, "nethernet", "fixture"), message -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                host.events.add(JsonParser.parseString("{\"ticketId\":\"fixture-ticket\",\"stage\":\"ticket.failed\",\"occurredAt\":\"2026-09-07T00:00:00Z\"}").getAsJsonObject());
+                eventually(() -> stub.outcomeAttempts == 1);
+                int before = stub.heartbeats;
+                eventually(() -> stub.heartbeats >= before + 2);
+                assertEquals(1, stub.outcomeAttempts, "Outcome failure must back off independently of heartbeat");
+                JsonObject saved = JsonParser.parseString(java.nio.file.Files.readString(path.resolve("provider-state.json"))).getAsJsonObject();
+                assertEquals(1, saved.getAsJsonArray("pendingEvents").size());
+                assertTrue(saved.get("profilePublishedAt").getAsLong() > 0);
+            } finally { stub.failOutcomes = false; client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+            assertEquals(1, stub.events.size(), "Shutdown retries the durable outcome without losing it");
         }
     }
 
