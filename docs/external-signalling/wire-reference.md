@@ -156,8 +156,8 @@ and single-use completion atomically with resource creation.
 Retrying completion MUST NOT return one-time key secrets again. If completion
 was interrupted, recover the registration by proving ownership of the same key.
 
-Completion returns `protocol,provider,registrationId,serviceId,instanceId,keyId,
-profile,publicAddress,placement,heartbeatIntervalMs,leaseGeneration,leaseDeadline,
+Completion returns `protocol,provider,registrationId,instanceId,keyId,
+profile,placement,heartbeatIntervalMs,leaseGeneration,leaseDeadline,
 readiness`, plus optional one-time `ticketKey` and `extensions`. Completion atomically starts a new generation, clears previous readiness and
 resets the operational sequence to zero. Save the IDs and key material before
 heartbeat. Recovery uses `register {registrationId,protocol,profile}` and the
@@ -204,6 +204,15 @@ to identify which key is current.
 key. `deregister` carries `{}` and permanently ends registration. Neither is an
 admission-key rotation or an ordinary graceful drain.
 
+Registration may also return `serviceId` and `publicAddress`, always together.
+They describe a public endpoint at that observation and are not stable runtime
+identity. Pool attachments can return neither: a pool may have zero or several
+public endpoints. Providers bind the token's permitted placement to their pool;
+clients cannot choose arbitrary provider-owned resource IDs. Recovery preserves
+`instanceId` and `registrationId`; changes to public endpoints do not require a
+new runtime identity. The default standalone registration still creates a public
+endpoint alongside the runtime.
+
 ## `heartbeat`
 
 Required fields: `healthy,capacity,load,protocolVersion,clockUnixMillis,
@@ -226,6 +235,29 @@ installedKeyIds,keyRequestId,extensions`.
   `name,protocol,version,level,players,maxPlayers,gameType`; it is independent of
   routing capacity/load. Omitted or failed status publication does not refresh
   a previous status snapshot.
+
+### Actual player counts
+
+Optional `playerCount: {connectedPlayers, sampledAt}` reports the actual number of
+players connected to this runtime, including existing players while it is draining.
+`connectedPlayers` is an integer from 0 to 1000000; `sampledAt` is Unix milliseconds
+from the host clock. The heartbeat's admission `capacity` must come from the same
+observation. Count may exceed capacity after a capacity reduction. Capacity zero
+means no admission. `load` remains a separate health/load observation.
+
+This count is independent of the public `serverStatus.players` and its advertised
+`maxPlayers`. A public/global override must never change the count or admission
+capacity. Do not estimate connected players from load, successful tickets, reserved
+slots or public listing totals. Omit `playerCount` when it is unknown; omission and
+zero are distinct. Omission does not refresh the previous count. Providers fence
+samples by the authenticated lease generation and sequence, track sample and receipt
+times separately, and exclude stale/unknown samples from count-dependent routing
+unless an explicit fallback policy applies. A retry must not freshen a sample.
+
+The Java `Health` supplier accepts an optional `PlayerCount`. Sample the runtime and
+capacity together; preserve an old sample's timestamp if returning cached values.
+A changed connected count can wake a scheduled check-in even if public status is
+unchanged. A new timestamp alone does not cause extra network traffic.
 
 ### Publish the host profile
 

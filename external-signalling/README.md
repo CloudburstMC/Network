@@ -15,6 +15,9 @@ or bearer token, token-authorized instance attachment, durable recovery, generat
 activation, status/profile publication, scheduled heartbeats, key rotation, drain, and
 asynchronous outcomes. Tokens are enrollment-only and excluded from durable state/logs.
 One instance owns one private state directory; restarts preserve that directory.
+A pool attachment may have no public address. Public endpoints can change without
+changing the runtime identity. `Health` accepts an optional `PlayerCount` with actual
+connected players and sample time, separate from the public `ServerStatus` supplier.
 
 `ProtocolExtensions` carries bounded optional metadata. Applications explicitly interpret
 known namespaces and invoke only their advertised same-origin operations. The core never

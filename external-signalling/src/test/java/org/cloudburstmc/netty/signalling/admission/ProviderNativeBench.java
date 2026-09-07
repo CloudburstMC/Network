@@ -52,7 +52,10 @@ public final class ProviderNativeBench {
             JsonObject registration = provider.start().get(45, TimeUnit.SECONDS);
             if (args.length > 4) ExtensionFixtureFile.write(Path.of(args[4]), provider.extensions().get(10, TimeUnit.SECONDS));
             // Emit assigned IDs only; optional metadata and credentials are excluded.
-            emit("registered", Map.of("serviceId", registration.get("serviceId").getAsString(), "instanceId", registration.get("instanceId").getAsString()));
+            var assignedIds = new java.util.LinkedHashMap<String, String>();
+            assignedIds.put("instanceId", registration.get("instanceId").getAsString());
+            if (registration.has("serviceId")) assignedIds.put("serviceId", registration.get("serviceId").getAsString());
+            emit("registered", assignedIds);
             emit("profile", nativeHost.hostProfile().toCompletableFuture().get());
             JsonObject readiness = provider.readiness().get(10, TimeUnit.SECONDS); readiness.remove("extensions"); emit("readiness", readiness);
             long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(3);
