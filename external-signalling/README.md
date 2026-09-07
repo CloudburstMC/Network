@@ -20,8 +20,20 @@ One instance owns one private state directory; restarts preserve that directory.
 known namespaces and invoke only their advertised same-origin operations. The core never
 performs product account/claim actions or stages individual joins from provider control.
 
-`NativeProviderTransport` publishes the actual bound UDP endpoint and certificate
-fingerprint before accepting clients. Java validates the NXS1 token from incoming
+`NativeProviderTransport` publishes its UDP endpoints and certificate fingerprint
+before accepting clients. Its supplier overload of `open` refreshes a deduplicated
+snapshot of 1–32 numeric IP/port pairs at each background profile publication. Adapters
+can provide all suitable addresses of a wildcard listener plus operator-configured
+forwarding endpoints; the original single-endpoint overload remains available.
+`EndpointAddress` provides numeric parsing and public/private/special-purpose
+classification for adapters. Publication does not test network reachability or
+configure port forwarding. An IPv6 wildcard listener accepts IPv4 and IPv6 with the
+pinned native stack; a concrete IPv6 bind does not imply IPv4 coverage.
+
+All endpoints share one admission incarnation. The first authenticated source tuple
+owns its ticket, including when several address families are advertised; subsequent
+tuples cannot use that ticket to create another peer. This does not introduce path
+migration after admission. Java validates the NXS1 token from incoming
 ICE metadata; native code verifies STUN integrity before creating a peer. The
 first request stays native during asynchronous validation, and acceptance does
 not depend on a client retry. Established transport packets stay native. The optional native test task is
