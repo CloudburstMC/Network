@@ -24,6 +24,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     long generation, sequence;
     volatile int registrations, heartbeats, acknowledgements;
     volatile String challengeAuthorization;
+    volatile String selectedMode;
     volatile int challengeDifficulty = -1;
     volatile JsonObject extensionMetadata;
     volatile int extensionRequests, keyAcknowledgements;
@@ -49,12 +50,12 @@ public final class IndependentProviderStub implements AutoCloseable {
         JsonObject body = raw.isEmpty() ? new JsonObject() : JsonParser.parseString(raw).getAsJsonObject();
         if (path.equals("/.well-known/nethernet-external-signalling")) {
             JsonObject d = new JsonObject(); d.addProperty("provider", origin); d.addProperty("controlOrigin", origin);
-            d.add("protocols", strings(ProviderCrypto.PROTOCOL)); d.add("signatures", strings(ProviderCrypto.SIGNATURE)); d.add("modes", strings("new-service", "attach-instance")); d.add("profiles", strings("nxs-admission-v1"));
+            d.add("protocols", strings(ProviderCrypto.PROTOCOL)); d.add("signatures", strings(ProviderCrypto.SIGNATURE)); d.add("modes", strings("automatic", "new-service", "attach-instance")); d.add("profiles", strings("nxs-admission-v1"));
             JsonObject operations = new JsonObject(); for (String op : List.of("register", "complete", "heartbeat", "outcomes", "rotate", "retire", "deregister")) operations.addProperty(op, origin + "/example/" + op);
             if (extensionMetadata != null) d.add("extensions", extensionMetadata.deepCopy());
             d.add("operations", operations); JsonObject limits = new JsonObject(); limits.addProperty("heartbeatIntervalMs", 1000); if (checkInMillis > 0) limits.addProperty("checkInVersion", 1); limits.addProperty("leaseMs", 30000); limits.addProperty("maxBodyBytes", 65536); limits.addProperty("clockSkewMs", 60000); d.add("limits", limits);
             JsonObject authorization = new JsonObject(); authorization.addProperty("header", "Authorization"); JsonArray schemes = new JsonArray();
-            schemes.add(authorizationScheme("anonymous-proof-of-work", "new-service")); schemes.add(authorizationScheme("bearer-token", "new-service", "attach-instance")); authorization.add("schemes", schemes); d.add("authorization", authorization); return d;
+            schemes.add(authorizationScheme("anonymous-proof-of-work", "automatic", "new-service")); schemes.add(authorizationScheme("bearer-token", "automatic", "new-service", "attach-instance")); authorization.add("schemes", schemes); d.add("authorization", authorization); return d;
         }
         operationsSeen.add(path);
         if (path.equals("/example/register")) {
@@ -69,9 +70,10 @@ public final class IndependentProviderStub implements AutoCloseable {
                 if (!"Bearer independent-provider-token".equals(challengeAuthorization)) throw new Failure(401, "invalid_bearer_token");
             }
             JsonObject c = new JsonObject(); c.addProperty("protocol", ProviderCrypto.PROTOCOL); c.addProperty("signature", ProviderCrypto.SIGNATURE); c.addProperty("challengeId", UUID.randomUUID().toString()); c.addProperty("audience", origin); c.addProperty("nonce", UUID.randomUUID().toString()); c.addProperty("thumbprint", ProviderCrypto.thumbprint(key)); c.addProperty("expiresAt", System.currentTimeMillis() + 60000); c.addProperty("serverTime", System.currentTimeMillis());
-            JsonObject context = new JsonObject(); for (String f : List.of("label", "authorizationId", "serviceId", "region", "pool", "registrationId")) context.addProperty(f, ""); context.addProperty("mode", recovery ? "recover" : body.get("mode").getAsString()); context.addProperty("profile", "nxs-admission-v1"); if (recovery) context.add("registrationId", body.get("registrationId"));
+            JsonObject context = new JsonObject(); for (String f : List.of("label", "authorizationId", "serviceId", "region", "pool", "registrationId")) context.addProperty(f, ""); context.addProperty("mode", recovery ? "recover" : body.get("mode").getAsString()); if (!recovery && "automatic".equals(context.get("mode").getAsString())) context.addProperty("mode", authorization.equals("bearer-token") && body.has("placement") ? "attach-instance" : "new-service"); context.addProperty("profile", "nxs-admission-v1"); if (recovery) context.add("registrationId", body.get("registrationId"));
             if (!recovery && authorization.equals("bearer-token")) { context.addProperty("authorizationId", "independent-authority"); JsonObject selected = new JsonObject(); selected.addProperty("scheme", authorization); selected.addProperty("reference", "independent-authority"); c.add("authorization", selected); }
             if (!recovery && body.has("placement")) { JsonObject placement = body.getAsJsonObject("placement"); context.add("region", placement.get("region")); context.add("pool", placement.get("pool")); if (placement.has("tags")) { Map<String, String> tags = new TreeMap<>(); for (var tag : placement.getAsJsonObject("tags").entrySet()) tags.put(tag.getKey(), tag.getValue().getAsString()); context.addProperty("tagsDigest", ProviderCrypto.tagsDigest(tags)); } }
+            if (!recovery && selectedMode != null) context.addProperty("mode", selectedMode);
             c.add("context", context); c.addProperty("contextDigest", ProviderCrypto.contextDigest(context)); JsonObject pow = new JsonObject(); pow.addProperty("algorithm", "sha256-leading-zero-bits-v0"); challengeDifficulty = recovery || authorization.equals("bearer-token") ? 0 : 2; pow.addProperty("difficulty", challengeDifficulty); c.add("pow", pow);
             challenges.put(c.get("challengeId").getAsString(), c.deepCopy()); keys.put(c.get("challengeId").getAsString(), key);
             if (!recovery && body.has("placement")) placements.put(c.get("challengeId").getAsString(), body.getAsJsonObject("placement").deepCopy());
