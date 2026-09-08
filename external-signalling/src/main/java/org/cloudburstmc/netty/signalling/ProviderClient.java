@@ -13,6 +13,7 @@ import java.util.function.*;
 
 /** One asynchronous, serialized control lifecycle per backend, never one poller per player. */
 public final class ProviderClient implements AutoCloseable {
+    public static final String AUTOMATIC = "automatic";
     public static final String NEW_SERVICE = "new-service", ATTACH_INSTANCE = "attach-instance";
     public static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work", BEARER_TOKEN = "bearer-token";
     public record Configuration(URI provider, String profile, String label, String registrationMode, String authorizationScheme,
@@ -23,10 +24,10 @@ public final class ProviderClient implements AutoCloseable {
             ProviderCrypto.origin(provider);
             if (region != null && (!region.matches("[A-Za-z0-9_-]{1,32}") || pool == null || !pool.matches("[A-Za-z0-9_-]{1,64}"))) throw new IllegalArgumentException("Invalid placement");
             tags = tags == null ? Map.of() : Collections.unmodifiableMap(new TreeMap<>(tags));
-            if (!Set.of(NEW_SERVICE, ATTACH_INSTANCE).contains(registrationMode)) throw new IllegalArgumentException("Invalid provider registration mode");
+            if (!Set.of(AUTOMATIC, NEW_SERVICE, ATTACH_INSTANCE).contains(registrationMode)) throw new IllegalArgumentException("Invalid provider registration mode");
             if (!Set.of(ANONYMOUS_PROOF_OF_WORK, BEARER_TOKEN).contains(authorizationScheme)) throw new IllegalArgumentException("Invalid provider authorization scheme");
             if ((BEARER_TOKEN.equals(authorizationScheme)) != (authorizationToken != null && !authorizationToken.isBlank())) throw new IllegalArgumentException("Bearer authorization requires exactly one token");
-            if (ANONYMOUS_PROOF_OF_WORK.equals(authorizationScheme) && !NEW_SERVICE.equals(registrationMode)) throw new IllegalArgumentException("Anonymous proof of work can only create a service");
+            if (ANONYMOUS_PROOF_OF_WORK.equals(authorizationScheme) && !Set.of(AUTOMATIC, NEW_SERVICE).contains(registrationMode)) throw new IllegalArgumentException("Anonymous proof of work can only create a service");
             if (ATTACH_INSTANCE.equals(registrationMode) && (region == null || region.isBlank() || pool == null || pool.isBlank())) throw new IllegalArgumentException("Attached instances require region and pool");
             if ((region == null) != (pool == null) || (!tags.isEmpty() && region == null)) throw new IllegalArgumentException("Provider placement requires region and pool together");
             if (tags.size() > 16 || tags.entrySet().stream().anyMatch(e -> !e.getKey().matches("[A-Za-z0-9_.-]{1,32}") || e.getValue() == null || !e.getValue().equals(e.getValue().trim()) || e.getValue().isEmpty() || e.getValue().length() > 64 || e.getValue().codePoints().anyMatch(c -> c < 32 || c == 127))) throw new IllegalArgumentException("Invalid provider placement tags");
@@ -190,7 +191,7 @@ public final class ProviderClient implements AutoCloseable {
         ProviderContract.require("challenge", challenge);
         if (!ProviderCrypto.PROTOCOL.equals(challenge.get("protocol").getAsString()) || !ProviderCrypto.SIGNATURE.equals(challenge.get("signature").getAsString()) || !origin.equals(challenge.get("audience").getAsString()) || !ProviderCrypto.thumbprint(state.getAsJsonObject("publicKeyJwk")).equals(challenge.get("thumbprint").getAsString()) || !ProviderCrypto.contextDigest(challenge.getAsJsonObject("context")).equals(challenge.get("contextDigest").getAsString())) throw new IOException("Unbound registration challenge");
         JsonObject context = challenge.getAsJsonObject("context");
-        if (!config.profile().equals(context.get("profile").getAsString()) || !config.registrationMode().equals(context.get("mode").getAsString())) throw new IOException("Challenge registration context changed");
+        if (!config.profile().equals(context.get("profile").getAsString()) || !acceptsRegistrationMode(context.get("mode").getAsString())) throw new IOException("Challenge registration context changed");
         String expectedTagsDigest = ProviderCrypto.tagsDigest(config.tags());
         if (config.region() == null) {
             if (!context.get("region").getAsString().isEmpty() || !context.get("pool").getAsString().isEmpty() || context.has("tagsDigest")) throw new IOException("Challenge placement changed");
@@ -212,6 +213,10 @@ public final class ProviderClient implements AutoCloseable {
         state.add("ticketKeys", new JsonArray()); state.remove("challenge");
         if (registration.has("ticketKey")) { state.getAsJsonArray("ticketKeys").add(registration.remove("ticketKey")); }
         save();
+    }
+    private boolean acceptsRegistrationMode(String selected) {
+        if (!AUTOMATIC.equals(config.registrationMode())) return config.registrationMode().equals(selected);
+        return NEW_SERVICE.equals(selected) || (BEARER_TOKEN.equals(config.authorizationScheme()) && ATTACH_INSTANCE.equals(selected));
     }
     private void validateRegistration(JsonObject registration) throws IOException {
         ProviderContract.require("registration", registration);
