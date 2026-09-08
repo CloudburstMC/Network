@@ -17,14 +17,16 @@ class ProviderJourneysTest {
             () -> new ProviderClient.Health(true, 100, .01, "nethernet", "fixture"), message -> {});
     }
 
-    @Test void allFourOperatorJourneysUseOneNeutralLifecycle(@TempDir Path directory) throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void allFourOperatorJourneysUseOneNeutralLifecycle(boolean automatic, @TempDir Path directory) throws Exception {
         String[] journeys = {"anonymous-standalone", "token-new-service", "token-fleet-attachment", "custom-host-provider"};
         for (String journey : journeys) {
             try (IndependentProviderStub stub = new IndependentProviderStub()) {
                 boolean bearer = !journey.equals("anonymous-standalone");
                 boolean attach = journey.equals("token-fleet-attachment");
                 var configuration = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", journey,
-                    attach ? ProviderClient.ATTACH_INSTANCE : ProviderClient.NEW_SERVICE,
+                    automatic ? ProviderClient.AUTOMATIC : attach ? ProviderClient.ATTACH_INSTANCE : ProviderClient.NEW_SERVICE,
                     bearer ? ProviderClient.BEARER_TOKEN : ProviderClient.ANONYMOUS_PROOF_OF_WORK,
                     bearer ? "independent-provider-token" : null, attach ? "EU" : null, attach ? "proxy" : null,
                     attach ? Map.of("location", "london", "role", "proxy") : Map.of());
@@ -47,6 +49,21 @@ class ProviderJourneysTest {
                     assertEquals(1, stub.events.size()); assertFalse(stub.events.getFirst().has("privatePayload"));
                     assertEquals(0, transport.admissions, "Control-plane delivery cannot stage individual clients");
                     instance.deregister().get(10, TimeUnit.SECONDS); assertTrue(stub.draining);
+                } finally { instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+            }
+        }
+    }
+
+    @Test void automaticRejectsUnknownModesAndAnonymousAttachment(@TempDir Path directory) throws Exception {
+        for (String selected : new String[]{"automatic", "unknown", "attach-instance"}) {
+            try (IndependentProviderStub stub = new IndependentProviderStub()) {
+                stub.selectedMode = selected;
+                var configuration = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Mode test",
+                    ProviderClient.AUTOMATIC, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null, null, null, Map.of());
+                ProviderClient instance = client(stub, directory.resolve(selected), configuration, new ProviderClientTest.FakeTransport());
+                try {
+                    assertThrows(java.util.concurrent.ExecutionException.class, () -> instance.start().get(10, TimeUnit.SECONDS));
+                    assertFalse(stub.operationsSeen.contains("/example/complete"));
                 } finally { instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
             }
         }

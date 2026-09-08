@@ -110,3 +110,8 @@ request signature. URLs come from discovery.
 Machine-key maintenance is separate from admission-key updates. Exact signing,
 request fields, key handling, token layout, bounds and retries are in the
 [wire reference](wire-reference.md).
+
+Hosts can request automatic registration: the provider uses token authority to
+choose account provisioning or attachment. Anonymous hosts create new services.
+Geyser exposes only signalling mode, advertised endpoints, token, provider origin
+and registration metadata; see the [Geyser configuration](https://github.com/teamziax/GeyserNetherNet/blob/nxs-dev/PROVIDER.md).
