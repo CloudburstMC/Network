@@ -43,8 +43,8 @@ entry has a `scheme` and its supported `modes`:
 
 | Scheme | Allowed modes |
 | --- | --- |
-| `anonymous-proof-of-work` | `new-service` |
-| `bearer-token` | `new-service`, `attach-instance`, or both |
+| `anonymous-proof-of-work` | `automatic`, `new-service` |
+| `bearer-token` | `automatic`, `new-service`, `attach-instance` |
 
 A provider need only advertise the schemes it accepts. It decides how tokens
 are issued, what they authorize, and whether they can be reused. Every flow also
@@ -86,6 +86,17 @@ If saving state fails, stop advertising healthy readiness.
 
 The request contains `protocol`, `mode`, `profile`, `publicKeyJwk`, explicit
 `authorization: {scheme}`, and optional `label` and `placement`.
+
+`mode: "automatic"` lets the provider select `new-service` or `attach-instance`
+from the credential's authority. Without a bearer token it can only select
+`new-service`. Discovery must advertise automatic support for the selected scheme.
+The challenge contains the selected concrete mode, bound into its digest and proof;
+hosts reject unknown modes and anonymous attachment. Opaque token contents are never
+parsed by the host. Explicit modes remain available to protocol integrations.
+
+Metadata may be supplied on anonymous new-service registration when permitted by
+the provider. It applies only to the new service and cannot authorize attachment.
+Placement is still echoed and digest-bound, including every tag.
 
 Send a bearer credential only to the enrollment `register` operation, in
 `Authorization: Bearer <token>`. It MUST NOT appear in JSON, proofs, saved state,
