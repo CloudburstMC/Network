@@ -33,7 +33,8 @@ class AdmissionGateTest extends AdmissionFixture {
     @Test
     void concurrentAttemptsShareOneTokenReservation() throws Exception {
         var gate = gate();
-        try (var executor = Executors.newFixedThreadPool(8)) {
+        var executor = Executors.newFixedThreadPool(8);
+        try {
             List<Callable<AdmissionGate.Reservation>> calls = new ArrayList<>();
             for (int i = 0; i < 64; i++) {
                 calls.add(() -> gate.reserve(request(), now, 0));
@@ -45,6 +46,8 @@ class AdmissionGateTest extends AdmissionFixture {
                 }
             }
             assertEquals(1, reserved);
+        } finally {
+            executor.shutdown();
         }
         assertEquals(1, gate.stats().sessions());
         assertEquals(1, gate.stats().pending());
