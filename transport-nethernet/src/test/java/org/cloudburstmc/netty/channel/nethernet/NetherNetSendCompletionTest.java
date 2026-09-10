@@ -3,6 +3,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSession;
 import org.cloudburstmc.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufHolder;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.DefaultEventLoop;
@@ -26,6 +27,74 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(15)
 class NetherNetSendCompletionTest {
+    @Test
+    void failedSizeEstimateDoesNotLeaveAFrameInTheSubmissionQueue() {
+        try (Harness h = new Harness()) {
+            IllegalArgumentException failure = new IllegalArgumentException("size estimate failed");
+            h.channel.config().setMessageSizeEstimator(() -> message -> {
+                ByteBuf content = ((ByteBufHolder) message).content();
+                if (content.getUnsignedByte(content.readerIndex() + 1) == 2) {
+                    throw failure;
+                }
+                return content.readableBytes();
+            });
+            ChannelFuture first = h.channel.write(payload(1));
+            ByteBuf rejected = payload(2);
+            ChannelFuture rejectedWrite = h.channel.write(rejected);
+            ChannelFuture last = h.channel.writeAndFlush(payload(3));
+            assertSame(failure, rejectedWrite.cause());
+            assertEquals(0, rejected.refCnt());
+            assertEquals(2, h.session.messages.size());
+            assertArrayEquals(new byte[]{0, 1}, h.session.messages.get(0));
+            assertArrayEquals(new byte[]{0, 3}, h.session.messages.get(1));
+            h.session.callbacks.forEach(callback -> callback.accept(null));
+            h.run();
+            assertTrue(first.isSuccess());
+            assertTrue(last.isSuccess());
+        }
+    }
+
+    @Test
+    void cancelledTailPreservesTheFlushBoundaryDuringBackpressure() {
+        try (Harness h = new Harness()) {
+            h.channel.writeAndFlush(Unpooled.buffer(2 * 1024 * 1024).writeZero(2 * 1024 * 1024));
+            h.channel.write(payload(1));
+            ByteBuf cancelled = payload(2);
+            ChannelFuture cancellation = h.channel.write(cancelled);
+            assertTrue(cancellation.cancel(false));
+            h.channel.flush();
+            assertEquals(0, cancelled.refCnt());
+            ChannelFuture unflushed = h.channel.write(payload(3));
+            h.channel.onEngineBytesSent(2 * 1024 * 1024);
+            h.run();
+            assertEquals(2, h.session.messages.size());
+            assertArrayEquals(new byte[]{0, 1}, h.session.messages.get(1));
+            assertFalse(unflushed.isDone());
+            h.channel.flush();
+            assertEquals(3, h.session.messages.size());
+            assertArrayEquals(new byte[]{0, 3}, h.session.messages.get(2));
+        }
+    }
+
+    @Test
+    void completionListenerCanLeaveANewWriteUnflushed() {
+        try (Harness h = new Harness()) {
+            ChannelFuture first = h.channel.writeAndFlush(payload(1));
+            List<ChannelFuture> next = new ArrayList<>();
+            first.addListener(ignored -> next.add(h.channel.write(payload(2))));
+            h.session.complete(0, null);
+            h.run();
+            assertEquals(1, next.size());
+            assertEquals(1, h.session.messages.size());
+            assertFalse(next.get(0).isDone());
+            h.channel.flush();
+            assertEquals(2, h.session.messages.size());
+            h.session.complete(1, null);
+            h.run();
+            assertTrue(next.get(0).isSuccess());
+        }
+    }
+
     @Test
     void writesWaitForAcceptanceAndCompleteInOrder() {
         try (Harness h = new Harness()) {

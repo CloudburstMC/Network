@@ -105,7 +105,10 @@ public abstract class NetherNetChannel extends AbstractChannel {
                     : new IOException("Event loop stopped before NetherNet sends completed"));
         }
     };
-    private int pendingSends;
+    // Netty retains native-pending writes; keep unsent frames reachable without scanning them.
+    private PendingWrite unsubmittedHead;
+    private PendingWrite unsubmittedTail;
+    private PendingWrite flushedWriteTail;
     private boolean removingCompletedWrites;
     // Set on the event loop when doWrite pauses on the high water mark; the
     // engine thread that drains below the low water mark clears it and
@@ -336,7 +339,36 @@ public abstract class NetherNetChannel extends AbstractChannel {
         if (!(msg instanceof ByteBuf buffer)) {
             throw new UnsupportedOperationException("NetherNet writes require a ByteBuf");
         }
-        return new PendingWrite(this, buffer);
+        PendingWrite write = new PendingWrite(this, buffer);
+        write.previous = unsubmittedTail;
+        if (unsubmittedTail == null) {
+            unsubmittedHead = write;
+        } else {
+            unsubmittedTail.next = write;
+        }
+        unsubmittedTail = write;
+        return write;
+    }
+
+    private void removeUnsubmitted(PendingWrite write) {
+        if (write.previous == null && unsubmittedHead != write) {
+            return;
+        }
+        if (flushedWriteTail == write) {
+            flushedWriteTail = write.previous;
+        }
+        if (write.previous == null) {
+            unsubmittedHead = write.next;
+        } else {
+            write.previous.next = write.next;
+        }
+        if (write.next == null) {
+            unsubmittedTail = write.previous;
+        } else {
+            write.next.previous = write.previous;
+        }
+        write.previous = null;
+        write.next = null;
     }
 
     @Override
@@ -354,20 +386,13 @@ public abstract class NetherNetChannel extends AbstractChannel {
             ((NetherNetUnsafe) unsafe()).closeWithSendFailure(failure);
             return;
         }
-        if (in.size() == pendingSends) {
-            return;
-        }
         // Native acceptance and a queued recovery task must not gate an explicit flush.
-        in.forEachFlushedMessage(msg -> {
-            PendingWrite write = (PendingWrite) msg;
-            if (write.submitted) {
-                return true;
-            }
+        while (flushedWriteTail != null && isOpen()) {
             if (engineSaturated(in)) {
-                return false;
+                return;
             }
-            write.submitted = true;
-            pendingSends++;
+            PendingWrite write = unsubmittedHead;
+            removeUnsubmitted(write);
             // A drain notification can beat sendFramed's return.
             engineOutstanding.addAndGet(write.content().readableBytes());
             try {
@@ -379,10 +404,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
             IOException sendFailure = writeFailure.get();
             if (sendFailure != null) {
                 ((NetherNetUnsafe) unsafe()).closeWithSendFailure(sendFailure);
-                return false;
+                return;
             }
-            return isOpen();
-        });
+        }
     }
 
     /**
@@ -481,7 +505,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
             // Retrying a rejected fragment after later frames were submitted
             // could corrupt the reliable stream. Fail the connection instead.
             ((NetherNetUnsafe) unsafe()).closeWithSendFailure(failure);
-        } else if (isOpen() && in.size() > pendingSends) {
+        } else if (isOpen() && flushedWriteTail != null) {
             ((NetherNetUnsafe) unsafe()).flushPendingWrites();
         }
     }
@@ -495,7 +519,6 @@ public abstract class NetherNetChannel extends AbstractChannel {
                     if (write.result != PendingWrite.SUCCESS) {
                         break;
                     }
-                    pendingSends--;
                 }
                 // Netty replaces cancelled entries with an empty ByteBuf.
                 in.remove();
@@ -509,9 +532,16 @@ public abstract class NetherNetChannel extends AbstractChannel {
     protected abstract NetherNetUnsafe newUnsafe();
 
     protected abstract class NetherNetUnsafe extends AbstractUnsafe {
+        @Override
+        protected void flush0() {
+            // Netty has marked the current writes uncancellable before reaching here.
+            flushedWriteTail = unsubmittedTail;
+            super.flush0();
+        }
+
         private void flushPendingWrites() {
-            // Resume only entries the application already flushed.
-            flush0();
+            // Bypass the explicit-flush boundary update when resuming existing work.
+            super.flush0();
         }
 
         private void closeWithSendFailure(IOException failure) {
@@ -528,7 +558,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
         private final NetherNetChannel channel;
         private ByteBuf content;
         private volatile Object result;
-        private boolean submitted;
+        private PendingWrite previous;
+        private PendingWrite next;
 
         private PendingWrite(NetherNetChannel channel, ByteBuf content) {
             this.channel = channel;
@@ -551,7 +582,12 @@ public abstract class NetherNetChannel extends AbstractChannel {
             buffer.release();
         }
 
-        @Override protected void deallocate() { releaseContent(); }
+        @Override
+        protected void deallocate() {
+            // Cancellation or a failed size estimate can release a write before submission.
+            channel.removeUnsubmitted(this);
+            releaseContent();
+        }
         @Override public ByteBufHolder copy() { return replace(content().copy()); }
         @Override public ByteBufHolder duplicate() { return replace(content().duplicate()); }
         @Override public ByteBufHolder retainedDuplicate() { return replace(content().retainedDuplicate()); }
@@ -673,7 +709,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.transportOpen = false;
         this.writesPaused = false;
         this.engineOutstanding.set(0);
-        this.pendingSends = 0;
+        while (unsubmittedHead != null) {
+            removeUnsubmitted(unsubmittedHead);
+        }
         inboundReady = false;
         inboundClosed = true;
         readPending = false;
