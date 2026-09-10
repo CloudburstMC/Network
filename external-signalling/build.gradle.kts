@@ -5,7 +5,7 @@ val nativeVersion = rootProject.property("nativeJavaVersion")
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(17))
     }
 }
 
@@ -43,7 +43,7 @@ tasks.register<Test>("nativeAdmissionTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath = sourceSets.test.get().runtimeClasspath
     javaLauncher.set(javaToolchains.launcherFor {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(17))
     })
     useJUnitPlatform {
         includeTags("native")

@@ -254,7 +254,7 @@ class ProviderClientTest {
 
         public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
             installed = keys.size();
-            ticketKeyId = keys.getLast().keyId();
+            ticketKeyId = keys.get(keys.size() - 1).keyId();
             return CompletableFuture.completedFuture(null);
         }
 
