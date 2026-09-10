@@ -86,7 +86,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private class NetherNetClientUnsafe extends AbstractUnsafe {
         @Override
         public void connect(SocketAddress remote, SocketAddress local, ChannelPromise promise) {
-            if (!promise.setUncancellable() || !ensureOpen(promise)) return;
+            if (!promise.setUncancellable() || !ensureOpen(promise)) {
+                return;
+            }
             NetherNetClientChannel.this.connectPromise = promise;
 
             if (remote instanceof NetherNetAddress) {
@@ -106,15 +108,20 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     private void startHandshake() {
-        if (!isOpen() || handshakeComplete) return;
+        if (!isOpen() || handshakeComplete) {
+            return;
+        }
 
         log.debug("Starting Handshake with Connection ID: {}", Long.toUnsignedString(this.connectionId));
 
-        if (handshakeTimeoutTask != null) handshakeTimeoutTask.cancel(false);
+        if (handshakeTimeoutTask != null) {
+            handshakeTimeoutTask.cancel(false);
+        }
 
         signaling.setNotFoundHandler(reason -> {
             if (connectPromise != null && !connectPromise.isDone()) {
-                connectPromise.tryFailure(new ConnectException("Target Network ID " + this.targetNetworkId + " not found or offline."));
+                connectPromise.tryFailure(
+                        new ConnectException("Target Network ID " + this.targetNetworkId + " not found or offline."));
             }
             close();
         });
@@ -127,7 +134,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
         signaling.setSignalHandler(this.connectionId, this::handleSignal);
 
         signaling.connect(remoteAddress).thenAcceptAsync(iceServers -> {
-            if (handshakeComplete) return;
+            if (handshakeComplete) {
+                return;
+            }
             try {
                 // If this is a retry, peerConnection might be null, so we recreate it
                 if (peerConnection == null) {
@@ -137,30 +146,45 @@ public class NetherNetClientChannel extends NetherNetChannel {
             } catch (Exception e) {
                 ConnectException ce = new ConnectException("Failed to start WebRTC handshake: " + e.getMessage());
                 ce.initCause(e);
-                if (connectPromise != null && !connectPromise.isDone()) connectPromise.tryFailure(ce);
-                if (handshakeTimeoutTask != null) handshakeTimeoutTask.cancel(false);
+                if (connectPromise != null && !connectPromise.isDone()) {
+                    connectPromise.tryFailure(ce);
+                }
+                if (handshakeTimeoutTask != null) {
+                    handshakeTimeoutTask.cancel(false);
+                }
                 close();
             }
         }, eventLoop()).exceptionally(e -> {
             ConnectException ce = new ConnectException("Signaling connection failed: " + e.getMessage());
             ce.initCause(e);
-            if (connectPromise != null && !connectPromise.isDone()) connectPromise.tryFailure(ce);
-            if (handshakeTimeoutTask != null) handshakeTimeoutTask.cancel(false);
+            if (connectPromise != null && !connectPromise.isDone()) {
+                connectPromise.tryFailure(ce);
+            }
+            if (handshakeTimeoutTask != null) {
+                handshakeTimeoutTask.cancel(false);
+            }
             close();
             return null;
         });
     }
 
     private void resetAndRetryHandshake() {
-        if (!isOpen()) return;
-        if (connectPromise != null && connectPromise.isDone() && !connectPromise.isSuccess()) return;
-        if (handshakeComplete) return;
+        if (!isOpen()) {
+            return;
+        }
+        if (connectPromise != null && connectPromise.isDone() && !connectPromise.isSuccess()) {
+            return;
+        }
+        if (handshakeComplete) {
+            return;
+        }
 
         // fail exceptionally if max retries reached
         int maxRetries = this.config().getOption(NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS);
         if (retryCount >= maxRetries) {
             if (connectPromise != null && !connectPromise.isDone()) {
-                connectPromise.tryFailure(new ConnectException("Connection timed out after " + retryCount + " retries"));
+                connectPromise.tryFailure(
+                        new ConnectException("Connection timed out after " + retryCount + " retries"));
             }
             close();
             return;
@@ -176,8 +200,8 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private void initWebRTC(List<NetherNetSignaling.IceServerInfo> iceServers) {
         PeerConnectionConfiguration rtcConfig = this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG)
-            .withDisableAutoNegotiation(true)
-            .withIceServers(iceServers.stream().map(IceServerInfo::toUris).flatMap(List::stream).toList());
+                .withDisableAutoNegotiation(true)
+                .withIceServers(iceServers.stream().map(IceServerInfo::toUris).flatMap(List::stream).toList());
 
         peerConnection = PeerConnection.createPeer(rtcConfig);
 
@@ -185,8 +209,8 @@ public class NetherNetClientChannel extends NetherNetChannel {
         peerConnection.onLocalCandidate.register((peer, candidate, mediaId) -> {
             try {
                 signaling.sendSignal(
-                    targetNetworkId,
-                    NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate)
+                        targetNetworkId,
+                        NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate)
                 );
             } catch (Exception e) {
                 log.error("Failed to send ICE candidate", e);
@@ -208,14 +232,16 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     private void createAndSendOffer() {
-        if (peerConnection == null) return;
+        if (peerConnection == null) {
+            return;
+        }
 
         // Not null for autodetection, that path releases an unset string in JNI and crashes the JVM
         peerConnection.setLocalDescription("offer");
         try {
             signaling.sendSignal(
-                targetNetworkId,
-                NetherNetConstants.buildSignalConnectRequest(connectionId, peerConnection.localDescription())
+                    targetNetworkId,
+                    NetherNetConstants.buildSignalConnectRequest(connectionId, peerConnection.localDescription())
             );
         } catch (Exception e) {
             log.error("Failed to send Connect Request", e);
@@ -225,7 +251,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private void handleSignal(String signal) {
         String[] parts = signal.split(" ", 3);
-        if (parts.length < 2) return; // Allow length 2 for ERROR packets without payload
+        if (parts.length < 2) {
+            return; // Allow length 2 for ERROR packets without payload
+        }
         String type = parts[0];
         String idStr = parts[1].trim();
         String data = parts.length > 2 ? parts[2] : "";
@@ -242,22 +270,28 @@ public class NetherNetClientChannel extends NetherNetChannel {
         }
 
         eventLoop().execute(() -> {
-            if (peerConnection == null) return;
-            if (!isOpen() || handshakeComplete) return;
+            if (peerConnection == null) {
+                return;
+            }
+            if (!isOpen() || handshakeComplete) {
+                return;
+            }
 
             switch (type) {
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE -> {
                     try {
                         peerConnection.setRemoteDescription(data, SessionDescriptionType.ANSWER);
                     } catch (Exception e) {
-                        log.debug("Failed to apply answer for {}: {}", Long.toUnsignedString(connectionId), e.toString());
+                        log.debug("Failed to apply answer for {}: {}", Long.toUnsignedString(connectionId),
+                                e.toString());
                     }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
                     try {
                         peerConnection.addRemoteCandidate(data);
                     } catch (Exception e) {
-                        log.debug("Failed to apply ICE candidate for {}: {}", Long.toUnsignedString(connectionId), e.toString());
+                        log.debug("Failed to apply ICE candidate for {}: {}", Long.toUnsignedString(connectionId),
+                                e.toString());
                     }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
@@ -278,13 +312,17 @@ public class NetherNetClientChannel extends NetherNetChannel {
         DataChannelInitSettings reliableInit = DataChannelInitSettings.DEFAULT;
 
         DataChannelInitSettings unreliableInit = DataChannelInitSettings.DEFAULT
-            .withReliability(new DataChannelReliability(true, true, 0L, 0));
+                .withReliability(new DataChannelReliability(true, true, 0L, 0));
 
-        DataChannel reliable = peerConnection.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, reliableInit);
-        DataChannel unreliable = peerConnection.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, unreliableInit);
+        DataChannel reliable =
+                peerConnection.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL, reliableInit);
+        DataChannel unreliable =
+                peerConnection.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL, unreliableInit);
 
         reliable.onOpen.register(channel -> eventLoop().execute(() -> {
-            if (handshakeComplete) return;
+            if (handshakeComplete) {
+                return;
+            }
 
             log.debug("NetherNet Connection Established!");
             handshakeComplete = true;

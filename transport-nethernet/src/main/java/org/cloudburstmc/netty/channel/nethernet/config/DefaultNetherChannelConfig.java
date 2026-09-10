@@ -13,7 +13,7 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
     private final Map<ChannelOption<?>, Object> options = new ConcurrentHashMap<>();
 
     private volatile PeerConnectionConfiguration peerConnectionConfig = PeerConnectionConfiguration.DEFAULT
-        .withMaxMessageSize(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE);
+            .withMaxMessageSize(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE);
 
     public DefaultNetherChannelConfig(Channel channel) {
         super(channel);
@@ -22,7 +22,7 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
     @Override
     public Map<ChannelOption<?>, Object> getOptions() {
         return this.getOptions(
-                super.getOptions(), 
+                super.getOptions(),
                 NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG
         );
     }

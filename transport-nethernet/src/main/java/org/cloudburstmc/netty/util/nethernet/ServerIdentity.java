@@ -42,7 +42,8 @@ public class ServerIdentity {
     private final String domain;
     private final String token;
 
-    public ServerIdentity(PrivateKey privateKey, PublicKey publicKey, Instant expiry, String domain) throws JoseException {
+    public ServerIdentity(PrivateKey privateKey, PublicKey publicKey, Instant expiry,
+                          String domain) throws JoseException {
         this.privateKey = privateKey;
         this.domain = domain;
         this.token = buildToken(publicKey, expiry);
@@ -55,10 +56,11 @@ public class ServerIdentity {
      * @param password The keystore password
      * @return The loaded ServerIdentity
      * @throws GeneralSecurityException If there is a security error
-     * @throws IOException If there is an I/O error
-     * @throws JoseException If there is an error creating the JWT
+     * @throws IOException              If there is an I/O error
+     * @throws JoseException            If there is an error creating the JWT
      */
-    public static ServerIdentity fromKeystore(File keystore, String password) throws GeneralSecurityException, IOException, JoseException {
+    public static ServerIdentity fromKeystore(File keystore,
+                                              String password) throws GeneralSecurityException, IOException, JoseException {
         char[] pwd = password.toCharArray();
 
         KeyStore ks = KeyStore.getInstance("PKCS12");
@@ -113,7 +115,8 @@ public class ServerIdentity {
                     return rdn.getValue().toString();
                 }
             }
-        } catch (InvalidNameException ignored) { }
+        } catch (InvalidNameException ignored) {
+        }
         return "";
     }
 
@@ -133,13 +136,14 @@ public class ServerIdentity {
      * Build a JWT token with the given public key and expiry.
      *
      * @param publicKey The public key to include in the token
-     * @param expiry The expiration time of the token
+     * @param expiry    The expiration time of the token
      * @return The signed JWT token
      * @throws JoseException If there is an error signing the token
      */
     private String buildToken(PublicKey publicKey, Instant expiry) throws JoseException {
         JwtClaims claims = new JwtClaims();
-        claims.setClaim("cpk", Base64.getEncoder().encodeToString(publicKey.getEncoded())); // Custom claim required by the NetherNet spec
+        claims.setClaim("cpk", Base64.getEncoder()
+                .encodeToString(publicKey.getEncoded())); // Custom claim required by the NetherNet spec
         claims.setIssuedAtToNow();
 
         // If we have a domain set it as the isser as it could be shown to the user

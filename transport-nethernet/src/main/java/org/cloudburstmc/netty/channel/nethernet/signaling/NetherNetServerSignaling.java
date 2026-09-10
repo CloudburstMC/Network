@@ -13,21 +13,21 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * Binds the signaling medium to listen for incoming connections (Server mode).
      *
      * @param localAddress The local address to bind to.
-     * @param eventLoop The owning channel's event loop.
+     * @param eventLoop    The owning channel's event loop.
      * @throws ConnectException
      */
     void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException;
 
     /**
      * Handler for new connections.
-     * 
+     *
      * @param handler Functional interface receiving (ConnectionID, RemoteNetworkID, Payload)
      */
     void setNewConnectionHandler(NewConnectionHandler handler);
 
     /**
      * Sets the advertisement data for the discovery mechanism (e.g. LAN Pong).
-     * 
+     *
      * @param pongData The Pong advertisement data.
      */
     void setAdvertisementData(PongData pongData);
@@ -40,9 +40,9 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
         /**
          * Called when a new connection is initiated by a remote peer.
          *
-         * @param connectionId     The unique connection ID for this session.
-         * @param remoteNetworkId  The Network ID of the remote peer.
-         * @param payload          The initial signaling payload from the remote peer.
+         * @param connectionId    The unique connection ID for this session.
+         * @param remoteNetworkId The Network ID of the remote peer.
+         * @param payload         The initial signaling payload from the remote peer.
          */
         void onConnect(long connectionId, String remoteNetworkId, String payload);
     }
@@ -84,22 +84,23 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
 
     /**
      * Data structure for Pong advertisement data.
-     * 
-     * @param serverName      The name of the server.
-     * @param protocol        The Bedrock protocol version the server speaks.
-     * @param version         The Bedrock version string the server reports.
-     * @param levelName       The name of the level/world.
-     * @param gameType        The game type (e.g. Survival, Creative).
-     * @param playerCount     The current number of players.
-     * @param maxPlayerCount  The maximum number of players allowed.
-     * @param isEditorWorld   Whether the world is an editor world.
-     * @param isHardcore      Whether the world is in hardcore mode.
-     * @param transportLayer  The transport layer identifier (e.g. NetherNet).
-     * @param connectionType  The connection type identifier (e.g. LAN, Online).
+     *
+     * @param serverName     The name of the server.
+     * @param protocol       The Bedrock protocol version the server speaks.
+     * @param version        The Bedrock version string the server reports.
+     * @param levelName      The name of the level/world.
+     * @param gameType       The game type (e.g. Survival, Creative).
+     * @param playerCount    The current number of players.
+     * @param maxPlayerCount The maximum number of players allowed.
+     * @param isEditorWorld  Whether the world is an editor world.
+     * @param isHardcore     Whether the world is in hardcore mode.
+     * @param transportLayer The transport layer identifier (e.g. NetherNet).
+     * @param connectionType The connection type identifier (e.g. LAN, Online).
      */
     public record PongData(String serverName, int protocol, String version, String levelName, int gameType,
-            int playerCount, int maxPlayerCount, boolean isEditorWorld, boolean isHardcore, int transportLayer,
-            int connectionType) {
+                           int playerCount, int maxPlayerCount, boolean isEditorWorld, boolean isHardcore,
+                           int transportLayer,
+                           int connectionType) {
 
         public static final PongData DEFAULT = new Builder().build();
 
@@ -185,7 +186,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
 
             public PongData build() {
                 return new PongData(serverName, protocol, version, levelName, gameType, playerCount,
-                    maxPlayerCount, isEditorWorld, isHardcore, transportLayer, connectionType);
+                        maxPlayerCount, isEditorWorld, isHardcore, transportLayer, connectionType);
             }
         }
     }

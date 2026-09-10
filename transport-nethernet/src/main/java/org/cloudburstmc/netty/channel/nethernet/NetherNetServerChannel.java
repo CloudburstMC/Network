@@ -60,7 +60,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     @Override
     protected void doBind(SocketAddress localAddress) throws Exception {
-        if (!(localAddress instanceof InetSocketAddress)) throw new IllegalArgumentException("Unsupported address type");
+        if (!(localAddress instanceof InetSocketAddress)) {
+            throw new IllegalArgumentException("Unsupported address type");
+        }
         this.localAddress = (InetSocketAddress) localAddress;
 
         this.signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp) -> {
@@ -78,7 +80,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * @return The configuration with the bound address applied.
      */
     private PeerConnectionConfiguration bindIce(PeerConnectionConfiguration config) {
-        if (localAddress == null || !signaling.allowsIceOnLocalPort()) return config;
+        if (localAddress == null || !signaling.allowsIceOnLocalPort()) {
+            return config;
+        }
 
         // A wildcard bind is left unset so ICE keeps gathering on every interface
         InetAddress host = localAddress.getAddress();
@@ -87,19 +91,24 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         int port = localAddress.getPort();
-        if (port <= 0) return config;
+        if (port <= 0) {
+            return config;
+        }
 
         // Enable multiplexing and set the port
         return config
-            .withEnableIceUdpMux(true)
-            .withPortRangeBegin((short) port)
-            .withPortRangeEnd((short) port);
+                .withEnableIceUdpMux(true)
+                .withPortRangeBegin((short) port)
+                .withPortRangeEnd((short) port);
     }
 
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
-        PeerConnectionConfiguration rtcConfig = bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
-            .withDisableAutoNegotiation(true)
-            .withIceServers(this.signaling.getIceServers().stream().map(IceServerInfo::toUris).flatMap(List::stream).toList());
+        PeerConnectionConfiguration rtcConfig =
+                bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
+                        .withDisableAutoNegotiation(true)
+                        .withIceServers(
+                                this.signaling.getIceServers().stream().map(IceServerInfo::toUris).flatMap(List::stream)
+                                        .toList());
 
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId);
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);
@@ -110,10 +119,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
 
-        int handshakeTimeoutSeconds = this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
+        int handshakeTimeoutSeconds =
+                this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
         ScheduledFuture<?> timeoutTask = eventLoop().schedule(() -> {
             if (!child.isActive()) {
-                log.warn("Connection {} timed out during handshake ({}s)", Long.toUnsignedString(connectionId), handshakeTimeoutSeconds);
+                log.warn("Connection {} timed out during handshake ({}s)", Long.toUnsignedString(connectionId),
+                        handshakeTimeoutSeconds);
                 child.close();
                 pc.close();
             }
@@ -125,7 +136,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         // Register Signal Handler
         signaling.setSignalHandler(connectionId, (signal) -> {
             String[] parts = signal.split(" ", 3);
-            if (parts.length < 3) return;
+            if (parts.length < 3) {
+                return;
+            }
             String type = parts[0];
             String data = parts[2];
 
@@ -135,7 +148,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                     try {
                         pc.addRemoteCandidate(data);
                     } catch (Exception e) {
-                        log.debug("Failed to apply ICE candidate for {} (Connection likely closed): {}", Long.toUnsignedString(connectionId), e.toString());
+                        log.debug("Failed to apply ICE candidate for {} (Connection likely closed): {}",
+                                Long.toUnsignedString(connectionId), e.toString());
                     }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
@@ -161,8 +175,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             log.trace("Sending Answer SDP for {}", Long.toUnsignedString(connectionId));
             try {
                 signaling.sendSignal(
-                    remoteNetworkId,
-                    NetherNetConstants.buildSignalConnectResponse(connectionId, serverIdentity.augmentAnswer(pc.localDescription()))
+                        remoteNetworkId,
+                        NetherNetConstants.buildSignalConnectResponse(connectionId,
+                                serverIdentity.augmentAnswer(pc.localDescription()))
                 );
             } catch (JoseException e) {
                 log.error("Failed to send Answer SDP for {}", Long.toUnsignedString(connectionId), e);
@@ -233,7 +248,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private void onLocalCandidate(String candidate) {
             if (log.isTraceEnabled()) {
                 log.trace("Generated ICE Candidate for {}: {} (Type: {})",
-                    Long.toUnsignedString(this.connectionId), candidate, extractCandidateType(candidate));
+                        Long.toUnsignedString(this.connectionId), candidate, extractCandidateType(candidate));
             }
 
             // Skip sending candidate if the signaling doesn't support trickle ICE
@@ -242,15 +257,21 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
 
             signaling.sendSignal(
-                remoteNetworkId,
-                NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate)
+                    remoteNetworkId,
+                    NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate)
             );
         }
 
         private String extractCandidateType(String sdp) {
-            if (sdp.contains(" typ host")) return "host";
-            if (sdp.contains(" typ srflx")) return "srflx";
-            if (sdp.contains(" typ relay")) return "relay";
+            if (sdp.contains(" typ host")) {
+                return "host";
+            }
+            if (sdp.contains(" typ srflx")) {
+                return "srflx";
+            }
+            if (sdp.contains(" typ relay")) {
+                return "relay";
+            }
             return "unknown";
         }
 
@@ -263,7 +284,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) {
                 if (child != null && child.isOpen()) {
-                    log.debug("Closing connection {} due to state change: {}", Long.toUnsignedString(this.connectionId), state);
+                    log.debug("Closing connection {} due to state change: {}", Long.toUnsignedString(this.connectionId),
+                            state);
                     child.close();
                 }
                 if (handshakeTimeout != null) {
@@ -301,13 +323,16 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         private void onGatheringStateChange(GatheringState state) {
-            if (state != GatheringState.RTC_GATHERING_COMPLETE || fullSdpSent || signaling.usesTrickleIce()) return;
+            if (state != GatheringState.RTC_GATHERING_COMPLETE || fullSdpSent || signaling.usesTrickleIce()) {
+                return;
+            }
 
             String local;
             try {
                 local = peerConnection.localDescription();
             } catch (Exception e) {
-                log.warn("Gathering complete for {} but the local description is unavailable: {}", Long.toUnsignedString(connectionId), e.toString());
+                log.warn("Gathering complete for {} but the local description is unavailable: {}",
+                        Long.toUnsignedString(connectionId), e.toString());
                 return;
             }
 
@@ -344,7 +369,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     }
 
     @Override
-    public ChannelConfig config() { return config; }
+    public ChannelConfig config() {
+        return config;
+    }
 
     @Override
     public boolean isOpen() {
