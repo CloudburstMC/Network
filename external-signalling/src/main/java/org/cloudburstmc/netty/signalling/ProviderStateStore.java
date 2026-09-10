@@ -5,6 +5,7 @@ import com.google.gson.*;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermissions;
 
@@ -60,7 +61,7 @@ public final class ProviderStateStore implements AutoCloseable {
                 PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
         try {
             byte[] bytes = new GsonBuilder().disableHtmlEscaping().create().toJson(state)
-                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    .getBytes(StandardCharsets.UTF_8);
             try (FileChannel file = FileChannel.open(tmp, StandardOpenOption.WRITE)) {
                 ByteBuffer b = ByteBuffer.wrap(bytes);
                 while (b.hasRemaining()) {

@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.channel.nethernet.admission;
 
 import java.nio.file.*;
 import java.security.*;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.*;
@@ -14,7 +15,7 @@ public record NativeHostIdentity(Path certificate, Path privateKey, String finge
         if (Files.size(certificate) > 65536 || Files.size(privateKey) > 65536) {
             throw new IllegalArgumentException("Oversized PEM identity");
         }
-        java.security.cert.Certificate cert;
+        Certificate cert;
         try (var in = Files.newInputStream(certificate)) {
             cert = CertificateFactory.getInstance("X.509").generateCertificate(in);
         }

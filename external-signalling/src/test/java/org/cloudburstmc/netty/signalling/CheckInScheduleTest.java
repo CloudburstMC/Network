@@ -5,11 +5,14 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.IOException;
+import java.time.Instant;
+
 class CheckInScheduleTest {
     private JsonObject response(long delay) {
         long now = 1800000000000L;
         JsonObject response = new JsonObject(), schedule = new JsonObject();
-        response.addProperty("receivedAt", java.time.Instant.ofEpochMilli(now).toString());
+        response.addProperty("receivedAt", Instant.ofEpochMilli(now).toString());
         schedule.addProperty("version", 1);
         schedule.addProperty("afterMillis", delay);
         schedule.addProperty("nextCheckInAt", now + delay);
@@ -28,16 +31,16 @@ class CheckInScheduleTest {
 
     @Test
     void rejectsUnboundedFractionalAndInconsistentSchedules() {
-        assertThrows(java.io.IOException.class, () -> CheckInSchedule.parse(response(0)));
-        assertThrows(java.io.IOException.class, () -> CheckInSchedule.parse(response(86400001)));
+        assertThrows(IOException.class, () -> CheckInSchedule.parse(response(0)));
+        assertThrows(IOException.class, () -> CheckInSchedule.parse(response(86400001)));
         JsonObject fractional = response(900000);
         fractional.getAsJsonObject("checkIn").addProperty("afterMillis", 900000.5);
-        assertThrows(java.io.IOException.class, () -> CheckInSchedule.parse(fractional));
+        assertThrows(IOException.class, () -> CheckInSchedule.parse(fractional));
         JsonObject wrongDeadline = response(900000);
         wrongDeadline.getAsJsonObject("checkIn").addProperty("leaseExpiresAt", 1);
-        assertThrows(java.io.IOException.class, () -> CheckInSchedule.parse(wrongDeadline));
+        assertThrows(IOException.class, () -> CheckInSchedule.parse(wrongDeadline));
         JsonObject wrongVersion = response(900000);
         wrongVersion.getAsJsonObject("checkIn").addProperty("version", 2);
-        assertThrows(java.io.IOException.class, () -> CheckInSchedule.parse(wrongVersion));
+        assertThrows(IOException.class, () -> CheckInSchedule.parse(wrongVersion));
     }
 }

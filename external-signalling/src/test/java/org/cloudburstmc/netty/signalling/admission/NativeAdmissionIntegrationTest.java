@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.signalling.admission;
 
+import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.channel.nethernet.admission.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -8,18 +9,23 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakConstants;
+import org.cloudburstmc.netty.signalling.ProviderTransport;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import tel.schich.libdatachannel.*;
 
 import java.net.*;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.BooleanSupplier;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -44,7 +50,7 @@ class NativeAdmissionIntegrationTest {
             host = NativeProviderTransport.open(bootstrap, new InetSocketAddress("::", port), advertised::get,
                             id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
-            host.installTicketKeys(List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001",
+            host.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001",
                     TestSignallingProvider.SECRET))).toCompletableFuture().get();
             var profile = host.hostProfile().toCompletableFuture().get();
             assertEquals(2, profile.getAsJsonArray("candidates").size());
@@ -117,7 +123,7 @@ class NativeAdmissionIntegrationTest {
                             () -> List.of(new InetSocketAddress("::1", port), new InetSocketAddress("127.0.0.1", port)),
                             id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
-            host.installTicketKeys(List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001",
+            host.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001",
                     TestSignallingProvider.SECRET))).toCompletableFuture().get();
             String incarnation = host.hostProfile().toCompletableFuture().get().getAsJsonObject("statelessAdmission")
                     .get("incarnation").getAsString();
@@ -204,7 +210,7 @@ class NativeAdmissionIntegrationTest {
                     id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture().get());
             host = NativeProviderTransport.open(bootstrap, bind, advertised, id.certificate(), id.privateKey(),
                     AdmissionGate.Limits.defaults()).toCompletableFuture().get(10, TimeUnit.SECONDS);
-            host.installTicketKeys(List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey(
+            host.installTicketKeys(List.of(new ProviderTransport.TicketKey(
                     "K001", TestSignallingProvider.SECRET, 0, Long.MAX_VALUE))).toCompletableFuture().get();
             var profile = host.hostProfile().toCompletableFuture().get();
             var candidate = profile.getAsJsonArray("candidates").get(0).getAsJsonObject();
@@ -374,10 +380,10 @@ class NativeAdmissionIntegrationTest {
         packet.putShort((short) 8).putShort((short) 20);
         packet.putShort(2, (short) (packet.capacity() - 20));
         byte[] transaction = new byte[12];
-        new java.security.SecureRandom().nextBytes(transaction);
+        new SecureRandom().nextBytes(transaction);
         System.arraycopy(transaction, 0, packet.array(), 8, transaction.length);
-        var mac = javax.crypto.Mac.getInstance("HmacSHA1");
-        mac.init(new javax.crypto.spec.SecretKeySpec(password.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+        var mac = Mac.getInstance("HmacSHA1");
+        mac.init(new SecretKeySpec(password.getBytes(StandardCharsets.UTF_8),
                 "HmacSHA1"));
         packet.put(mac.doFinal(Arrays.copyOf(packet.array(), signedLength)));
         return packet.array();
@@ -576,24 +582,24 @@ class NativeAdmissionIntegrationTest {
                             .get(5, TimeUnit.SECONDS);
             assertTrue(transport.hostProfile().toCompletableFuture().isCompletedExceptionally());
             transport.installTicketKeys(
-                    List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001",
+                    List.of(new ProviderTransport.TicketKey("K001",
                             TestSignallingProvider.SECRET))).toCompletableFuture().get();
             var first = transport.hostProfile().toCompletableFuture().get();
             assertEquals(id.fingerprint(), first.get("dtlsFingerprint").getAsString());
             assertEquals(49196, first.getAsJsonArray("candidates").get(0).getAsJsonObject().get("port").getAsInt());
             String incarnation = first.getAsJsonObject("statelessAdmission").get("incarnation").getAsString();
             assertTrue(incarnation.matches("[0-9a-f]{32}"));
-            var command = new com.google.gson.JsonObject();
+            var command = new JsonObject();
             command.addProperty("kind", "join-admission");
-            assertEquals(org.cloudburstmc.netty.signalling.ProviderTransport.ApplyResult.REJECTED,
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
                     transport.applyState("join-admission").toCompletableFuture().get());
             assertEquals(0, transport.channel().admissionStats().claims());
             assertEquals(0, transport.channel().nativeStats()[2]);
             assertEquals(creations, PeerConnection.nativeCreationAttempts());
             transport.installTicketKeys(
-                    List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001",
+                    List.of(new ProviderTransport.TicketKey("K001",
                                     TestSignallingProvider.SECRET, 0, System.currentTimeMillis() + 60_000),
-                            new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K002",
+                            new ProviderTransport.TicketKey("K002",
                                     "next-background-key-of-at-least-32-bytes"))).toCompletableFuture().get();
             assertEquals("K002",
                     transport.hostProfile().toCompletableFuture().get().get("credentialKeyId").getAsString());
@@ -605,7 +611,7 @@ class NativeAdmissionIntegrationTest {
                                     id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
             transport.installTicketKeys(
-                    List.of(new org.cloudburstmc.netty.signalling.ProviderTransport.TicketKey("K001",
+                    List.of(new ProviderTransport.TicketKey("K001",
                             TestSignallingProvider.SECRET))).toCompletableFuture().get();
             String restarted = transport.hostProfile().toCompletableFuture().get().getAsJsonObject("statelessAdmission")
                     .get("incarnation").getAsString();

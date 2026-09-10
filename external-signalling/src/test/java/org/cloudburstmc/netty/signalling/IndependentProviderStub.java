@@ -6,6 +6,7 @@ import com.sun.net.httpserver.*;
 import java.net.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -24,7 +25,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile boolean loseCompletionResponse;
     volatile long checkInMillis;
     volatile int controlPolls;
-    final java.util.List<JsonObject> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+    final List<JsonObject> events = new CopyOnWriteArrayList<>();
     long generation, sequence;
     volatile boolean poolOnlyRegistration;
     volatile int registrations, heartbeats, acknowledgements;
@@ -39,7 +40,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     String keyRequestId;
     JsonObject requestedKey;
     int epoch = 1, profileRevision;
-    final List<String> operationsSeen = new java.util.concurrent.CopyOnWriteArrayList<>();
+    final List<String> operationsSeen = new CopyOnWriteArrayList<>();
 
     public IndependentProviderStub() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -333,7 +334,7 @@ public final class IndependentProviderStub implements AutoCloseable {
                     schedule.addProperty("leaseExpiresAt", now + checkInMillis + 30000);
                     schedule.addProperty("minUpdateIntervalMillis", 1000);
                     ok.add("checkIn", schedule);
-                    ok.addProperty("receivedAt", java.time.Instant.ofEpochMilli(now).toString());
+                    ok.addProperty("receivedAt", Instant.ofEpochMilli(now).toString());
                 }
             }
             case "/example/extension" -> {

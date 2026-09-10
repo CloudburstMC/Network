@@ -9,6 +9,7 @@ import tel.schich.libdatachannel.*;
 
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -254,7 +255,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     }
 
     private static void closeNativePeer(PeerConnection peer) {
-        if (peer != null && !peer.closeAndAwait(java.time.Duration.ofSeconds(5))) {
+        if (peer != null && !peer.closeAndAwait(Duration.ofSeconds(5))) {
             peer.close();
             throw new IllegalStateException("Native transport teardown did not complete within its deadline");
         }

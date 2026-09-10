@@ -4,7 +4,10 @@ import com.google.gson.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.*;
 import java.security.spec.*;
 import java.util.*;
@@ -15,7 +18,7 @@ class ProviderInteropTest {
     static JsonObject fixture(String name) throws Exception {
         try (var in = ProviderInteropTest.class.getResourceAsStream("/" + name)) {
             return JsonParser.parseString(
-                            new String(Objects.requireNonNull(in).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8))
+                            new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8))
                     .getAsJsonObject();
         }
     }
@@ -63,8 +66,8 @@ class ProviderInteropTest {
             data.addProperty("privateKey", "fixture-only");
             s.write(data);
             assertEquals(data, s.read());
-            assertThrows(java.io.IOException.class, () -> new ProviderStateStore(dir));
-            assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(
+            assertThrows(IOException.class, () -> new ProviderStateStore(dir));
+            assertEquals("rw-------", PosixFilePermissions.toString(
                     Files.getPosixFilePermissions(dir.resolve("provider-state.json"))));
         }
         try (ProviderStateStore s = new ProviderStateStore(dir)) {

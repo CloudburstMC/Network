@@ -4,6 +4,7 @@ import com.google.gson.*;
 import org.cloudburstmc.netty.channel.nethernet.admission.*;
 import org.junit.jupiter.api.Test;
 
+import java.security.MessageDigest;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.InputStreamReader;
@@ -131,7 +132,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         for (var entry : provenance.getAsJsonObject("files").entrySet()) {
             try (var in = Objects.requireNonNull(getClass().getResourceAsStream("/nxs/" + entry.getKey()))) {
                 assertEquals(entry.getValue().getAsString(), HexFormat.of()
-                        .formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(in.readAllBytes())));
+                        .formatHex(MessageDigest.getInstance("SHA-256").digest(in.readAllBytes())));
             }
         }
         for (var entry : fixture("cloudburst-protocol-vectors.v1.json").getAsJsonArray("nethernetFrames")) {

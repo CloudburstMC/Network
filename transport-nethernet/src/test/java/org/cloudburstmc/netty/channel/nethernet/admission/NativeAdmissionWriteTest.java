@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.*;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,7 +28,7 @@ class NativeAdmissionWriteTest {
             var terminal = channel.nativeTermination().toCompletableFuture();
             assertTrue(terminal.isCompletedExceptionally());
             assertSame(failure,
-                    assertThrows(java.util.concurrent.CompletionException.class, terminal::join).getCause());
+                    assertThrows(CompletionException.class, terminal::join).getCause());
             assertEquals(0, channel.queuedFrames());
             assertEquals(0, channel.retainedAssemblyBytes());
         } finally {

@@ -6,6 +6,7 @@ import io.netty.channel.EventLoop;
 
 import java.net.ConnectException;
 import java.net.SocketAddress;
+import java.util.Collections;
 import java.util.List;
 
 public interface NetherNetServerSignaling extends NetherNetSignaling {
@@ -52,7 +53,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * Returns empty list if none available or not applicable.
      */
     default List<IceServerInfo> getIceServers() {
-        return java.util.Collections.emptyList();
+        return Collections.emptyList();
     }
 
     /**

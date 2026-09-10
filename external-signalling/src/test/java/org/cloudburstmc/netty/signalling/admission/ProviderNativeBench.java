@@ -76,7 +76,7 @@ public final class ProviderNativeBench {
                 ExtensionFixtureFile.write(Path.of(args[4]), provider.extensions().get(10, TimeUnit.SECONDS));
             }
             // Emit assigned IDs only; optional metadata and credentials are excluded.
-            var assignedIds = new java.util.LinkedHashMap<String, String>();
+            var assignedIds = new LinkedHashMap<String, String>();
             assignedIds.put("instanceId", registration.get("instanceId").getAsString());
             if (registration.has("serviceId")) {
                 assignedIds.put("serviceId", registration.get("serviceId").getAsString());

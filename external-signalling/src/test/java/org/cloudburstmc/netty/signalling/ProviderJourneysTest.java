@@ -3,10 +3,14 @@ package org.cloudburstmc.netty.signalling;
 import com.google.gson.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -21,8 +25,8 @@ class ProviderJourneysTest {
         });
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void allFourOperatorJourneysUseOneNeutralLifecycle(boolean automatic, @TempDir Path directory) throws Exception {
         String[] journeys =
                 {"anonymous-standalone", "token-new-service", "token-fleet-attachment", "custom-host-provider"};
@@ -56,7 +60,7 @@ class ProviderJourneysTest {
                     JsonObject event = new JsonObject();
                     event.addProperty("stage", "ticket.data_channels_open");
                     event.addProperty("ticketId", "opaque-correlation");
-                    event.addProperty("occurredAt", java.time.Instant.now().toString());
+                    event.addProperty("occurredAt", Instant.now().toString());
                     event.addProperty("reason", "connected");
                     event.addProperty("privatePayload", "must-not-be-persisted");
                     transport.events.add(event);
@@ -88,7 +92,7 @@ class ProviderJourneysTest {
                 ProviderClient instance = client(stub, directory.resolve(selected), configuration,
                         new ProviderClientTest.FakeTransport());
                 try {
-                    assertThrows(java.util.concurrent.ExecutionException.class,
+                    assertThrows(ExecutionException.class,
                             () -> instance.start().get(10, TimeUnit.SECONDS));
                     assertFalse(stub.operationsSeen.contains("/example/complete"));
                 } finally {
@@ -151,7 +155,7 @@ class ProviderJourneysTest {
                     Map.of());
             ProviderClient instance = client(stub, directory, configuration, new ProviderClientTest.FakeTransport());
             try {
-                assertThrows(java.util.concurrent.ExecutionException.class,
+                assertThrows(ExecutionException.class,
                         () -> instance.start().get(20, TimeUnit.SECONDS));
                 assertNull(stub.challengeAuthorization);
                 assertEquals(0, stub.registrations);
@@ -178,7 +182,7 @@ class ProviderJourneysTest {
                 stub.loseCompletionResponse = true;
                 ProviderClient first = client(stub, statePath, configuration, new ProviderClientTest.FakeTransport());
                 try {
-                    assertThrows(java.util.concurrent.ExecutionException.class,
+                    assertThrows(ExecutionException.class,
                             () -> first.start().get(20, TimeUnit.SECONDS));
                 } finally {
                     first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);

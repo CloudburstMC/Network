@@ -5,8 +5,10 @@ import com.google.gson.*;
 import java.io.*;
 import java.net.URI;
 import java.net.http.*;
+import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -708,7 +710,7 @@ public final class ProviderClient implements AutoCloseable {
                 CheckInSchedule schedule = CheckInSchedule.parse(response);
                 scheduledCheckIns = true;
                 minUpdateIntervalMs = schedule.minUpdateIntervalMillis();
-                long received = java.time.Instant.parse(response.get("receivedAt").getAsString()).toEpochMilli();
+                long received = Instant.parse(response.get("receivedAt").getAsString()).toEpochMilli();
                 long remaining = Math.min(schedule.afterMillis(), Math.max(0,
                         response.getAsJsonObject("checkIn").get("nextCheckInAt").getAsLong() - Math.max(received,
                                 System.currentTimeMillis())));
@@ -988,7 +990,7 @@ public final class ProviderClient implements AutoCloseable {
                 Thread.sleep((250L << attempt) + ThreadLocalRandom.current().nextLong(100));
                 continue;
             }
-            String text = new String(response.body(), java.nio.charset.StandardCharsets.UTF_8);
+            String text = new String(response.body(), StandardCharsets.UTF_8);
             int status = response.statusCode();
             if ((status == 429 || status == 503 || status == 502 || status == 504) && attempt < attempts - 1) {
                 long delay = 250L << attempt;

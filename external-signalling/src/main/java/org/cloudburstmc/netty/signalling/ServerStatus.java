@@ -1,5 +1,7 @@
 package org.cloudburstmc.netty.signalling;
 
+import java.util.List;
+
 /**
  * Complete atomic snapshot. Advertised maxPlayers is independent of routing capacity.
  */
@@ -12,7 +14,7 @@ public record ServerStatus(String name, int protocol, String version, String lev
                 || players > 1_000_000 || maxPlayers < 0 || maxPlayers > 1_000_000 || gameType < 0 || gameType > 2) {
             throw new IllegalArgumentException("Invalid complete server status snapshot");
         }
-        for (String value : java.util.List.of(name, version, level)) {
+        for (String value : List.of(name, version, level)) {
             if (value.codePoints().anyMatch(
                     c -> Character.getType(c) == Character.CONTROL || Character.getType(c) == Character.SURROGATE)) {
                 throw new IllegalArgumentException("Invalid status text");

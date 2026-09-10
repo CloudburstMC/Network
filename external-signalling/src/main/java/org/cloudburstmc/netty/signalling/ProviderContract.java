@@ -37,7 +37,7 @@ final class ProviderContract {
         }
     }
 
-    static java.util.List<String> operations() {
+    static List<String> operations() {
         return SCHEMA.getAsJsonArray("x-operations").asList().stream().map(JsonElement::getAsString).toList();
     }
 

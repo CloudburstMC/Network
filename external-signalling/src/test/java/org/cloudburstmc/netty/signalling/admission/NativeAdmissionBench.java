@@ -13,6 +13,7 @@ import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.file.*;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -105,7 +106,7 @@ public final class NativeAdmissionBench {
                         endpoint.creationAttempts(), "deliveredChannels", delivered.get()));
                 for (var event : endpoint.pollEvents()) {
                     emit("stage", Map.of("stage", event.stage(), "ticketId", event.ticketId(),
-                            "occurredAt", java.time.Instant.ofEpochMilli(event.occurredAt()).toString(), "reason",
+                            "occurredAt", Instant.ofEpochMilli(event.occurredAt()).toString(), "reason",
                             event.reason(),
                             "validationToCreationNanos", event.validationToCreationNanos()));
                 }

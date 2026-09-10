@@ -5,11 +5,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -110,7 +113,7 @@ class ProviderClientTest {
                 assertEquals("example-machine-1", registration.get("instanceId").getAsString());
                 assertEquals("Bearer independent-provider-token", stub.challengeAuthorization);
                 assertEquals(0, stub.challengeDifficulty);
-                assertFalse(java.nio.file.Files.readString(path.resolve("provider-state.json"))
+                assertFalse(Files.readString(path.resolve("provider-state.json"))
                         .contains("independent-provider-token"));
                 assertFalse(config.toString().contains("independent-provider-token"));
             } finally {
@@ -134,7 +137,7 @@ class ProviderClientTest {
                 JsonObject result = client.start().get(20, TimeUnit.SECONDS);
                 assertFalse(result.has("ticketKey"));
                 assertEquals(stub.extensionMetadata, result.getAsJsonObject("extensions"));
-                assertFalse(java.nio.file.Files.readString(path.resolve("provider-state.json"))
+                assertFalse(Files.readString(path.resolve("provider-state.json"))
                         .contains("org.example.operator"));
                 assertEquals(0, stub.extensionRequests);
                 assertTrue(client.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
@@ -217,7 +220,7 @@ class ProviderClientTest {
 
     static final class FakeTransport implements ProviderTransport {
         final CompletableFuture<Void> closed = new CompletableFuture<>();
-        final java.util.Queue<JsonObject> events = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        final Queue<JsonObject> events = new ConcurrentLinkedQueue<>();
         volatile int installed, applied, admissions, drains;
         boolean stateless = true;
         String ticketKeyId = "T001";
@@ -327,7 +330,7 @@ class ProviderClientTest {
         }
     }
 
-    private static void eventually(java.util.function.BooleanSupplier condition) throws Exception {
+    private static void eventually(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(40);
@@ -342,7 +345,7 @@ class ProviderClientTest {
             FakeTransport host = new FakeTransport();
             var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example");
             var health =
-                    (java.util.function.Supplier<ProviderClient.Health>) () -> new ProviderClient.Health(true, 100, 0.1,
+                    (Supplier<ProviderClient.Health>) () -> new ProviderClient.Health(true, 100, 0.1,
                             "nethernet", "fixture");
             ProviderClient client = new ProviderClient(config, new ProviderStateStore(path), host, () -> {
                 if (players.get() < 0) {
@@ -398,7 +401,7 @@ class ProviderClientTest {
                 eventually(() -> stub.heartbeats >= before + 2);
                 assertEquals(1, stub.outcomeAttempts, "Outcome failure must back off independently of heartbeat");
                 JsonObject saved =
-                        JsonParser.parseString(java.nio.file.Files.readString(path.resolve("provider-state.json")))
+                        JsonParser.parseString(Files.readString(path.resolve("provider-state.json")))
                                 .getAsJsonObject();
                 assertEquals(1, saved.getAsJsonArray("pendingEvents").size());
                 assertTrue(saved.get("profilePublishedAt").getAsLong() > 0);
@@ -420,8 +423,8 @@ class ProviderClientTest {
                     () -> new ProviderClient.Health(true, 10, 0, "nethernet", "fixture"), message -> {
             });
             client.start().get(20, TimeUnit.SECONDS);
-            java.nio.file.Files.move(path.resolve("provider-state.json"), path.resolve("saved-state.json"));
-            java.nio.file.Files.createDirectory(path.resolve("provider-state.json"));
+            Files.move(path.resolve("provider-state.json"), path.resolve("saved-state.json"));
+            Files.createDirectory(path.resolve("provider-state.json"));
             assertThrows(ExecutionException.class, () -> client.readiness().get(10, TimeUnit.SECONDS));
             client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             assertTrue(host.closed.isDone());
