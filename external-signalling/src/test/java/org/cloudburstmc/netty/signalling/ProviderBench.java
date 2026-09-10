@@ -29,7 +29,7 @@ public final class ProviderBench {
             final String incarnation = UUID.randomUUID().toString().replace("-", "");
 
             public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
-                keyId = keys.getLast().keyId();
+                keyId = keys.get(keys.size() - 1).keyId();
                 return CompletableFuture.completedFuture(null);
             }
 
