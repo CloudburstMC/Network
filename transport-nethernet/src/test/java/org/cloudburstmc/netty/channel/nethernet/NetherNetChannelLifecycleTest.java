@@ -11,6 +11,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
+import io.netty.channel.DefaultEventLoop;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.util.ReferenceCountUtil;
@@ -27,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -47,6 +49,119 @@ class NetherNetChannelLifecycleTest {
     @AfterEach
     void tearDown() {
         group.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+    }
+
+    @Test
+    void rejectedInboundTaskIsRetriedForQuietConnection() throws Exception {
+        InboundRecoveryLoop loop = new InboundRecoveryLoop();
+        TestChannel channel = new TestChannel();
+        LinkedBlockingQueue<Integer> received = captureInboundValues(channel);
+        try {
+            loop.register(channel).sync();
+            loop.submit(() -> { }).sync();
+            deliverFromRejectedThread(channel);
+            assertEquals(1, received.poll(3, TimeUnit.SECONDS));
+            assertTrue(channel.isOpen());
+            assertTrue(channel.isActive());
+        } finally {
+            channel.close().syncUninterruptibly();
+            loop.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void freshInboundEventBypassesRejectedRecovery(boolean manualRead) throws Exception {
+        InboundRecoveryLoop loop = new InboundRecoveryLoop();
+        TestChannel channel = new TestChannel();
+        LinkedBlockingQueue<Integer> received = captureInboundValues(channel);
+        try {
+            loop.register(channel).sync();
+            loop.submit(() -> {
+                // Recovery cannot run while this task owns the event loop.
+                deliverFromRejectedThread(channel);
+                if (manualRead) {
+                    channel.config().setAutoRead(false);
+                    channel.deliverInbound(ByteBuffer.wrap(new byte[]{2}));
+                }
+                int scheduled = loop.ownerSubmissions;
+                if (manualRead) {
+                    channel.read();
+                } else {
+                    channel.deliverInbound(ByteBuffer.wrap(new byte[]{2}));
+                }
+                assertEquals(scheduled + 1, loop.ownerSubmissions);
+                return null;
+            }).sync();
+            assertEquals(1, received.poll(3, TimeUnit.SECONDS));
+            if (manualRead) {
+                loop.submit(() -> { }).sync();
+                assertTrue(received.isEmpty());
+                channel.read();
+            }
+            assertEquals(2, received.poll(3, TimeUnit.SECONDS));
+            assertTrue(channel.isOpen());
+        } finally {
+            channel.close().syncUninterruptibly();
+            loop.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void closeReleasesInboundFramesAwaitingRecovery() throws Exception {
+        InboundRecoveryLoop loop = new InboundRecoveryLoop();
+        TestChannel channel = new TestChannel();
+        UnpooledByteBufAllocator allocator = new UnpooledByteBufAllocator(false);
+        channel.config().setAllocator(allocator);
+        try {
+            loop.register(channel).sync();
+            loop.submit(() -> {
+                deliverFromRejectedThread(channel);
+                assertTrue(allocator.metric().usedHeapMemory() > 0);
+                channel.close();
+                assertEquals(0, allocator.metric().usedHeapMemory());
+                return null;
+            }).sync();
+            assertFalse(channel.isOpen());
+        } finally {
+            channel.close().syncUninterruptibly();
+            loop.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+        }
+    }
+
+    private static LinkedBlockingQueue<Integer> captureInboundValues(TestChannel channel) {
+        LinkedBlockingQueue<Integer> received = new LinkedBlockingQueue<>();
+        channel.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+            @Override public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                try {
+                    received.add((int) ((ByteBuf) msg).readUnsignedByte());
+                } finally {
+                    ReferenceCountUtil.release(msg);
+                }
+            }
+        });
+        return received;
+    }
+
+    private static void deliverFromRejectedThread(TestChannel channel) throws InterruptedException {
+        Thread engine = new Thread(() -> channel.deliverInbound(ByteBuffer.wrap(new byte[]{1})), "native-inbound");
+        engine.start();
+        engine.join(2000);
+        assertFalse(engine.isAlive());
+    }
+
+    private static final class InboundRecoveryLoop extends DefaultEventLoop {
+        int ownerSubmissions;
+
+        @Override public void execute(Runnable task) {
+            if (Thread.currentThread().getName().equals("native-inbound")) {
+                throw new RejectedExecutionException("task queue is full");
+            }
+            if (inEventLoop()) {
+                ownerSubmissions++;
+            }
+            super.execute(task);
+        }
     }
 
     @Test

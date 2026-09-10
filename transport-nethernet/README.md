@@ -96,6 +96,9 @@ An explicit flush submits queued frames as long as the engine has capacity,
 without waiting for earlier send results. If a bounded event loop rejects
 completion processing, a 10 ms retry prevents a quiet connection from getting
 stuck. Explicit flushes bypass that retry; it adds no batching window.
+Rejected inbound-delivery tasks retain their bounded queue and share this
+recovery wakeup. New incoming frames and manual reads can retry delivery
+immediately, without waiting for the fallback.
 
 A native rejection or a failure preparing a send closes the connection and
 fails pending writes, releasing their buffers. Retrying a missing fragment

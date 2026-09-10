@@ -90,6 +90,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
     private Queue<Object> pendingInbound;
     private int pendingInboundBytes;
     private boolean inboundDrainScheduled;
+    private volatile boolean inboundDrainRejected;
 
     // Native acceptance completes a write; only buffered-amount notifications
     // reduce this counter. Failed sends may also be included in those deltas.
@@ -250,14 +251,22 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     private void scheduleInboundDrain() {
+        EventLoop loop = eventLoop();
         try {
-            eventLoop().execute(inboundDrainTask);
-        } catch (RuntimeException e) {
+            loop.execute(inboundDrainTask);
+        } catch (RejectedExecutionException e) {
             synchronized (inboundLock) {
-                inboundClosed = true;
                 inboundDrainScheduled = false;
+                inboundDrainRejected = true;
             }
-            discardPendingInbound();
+            if (loop != eventLoop()) {
+                requestInboundDrain();
+            } else if (loop.isShuttingDown()) {
+                discardPendingInbound();
+            } else {
+                // Share the recovery wakeup, without making new reads wait for it.
+                requestWriteCompletion();
+            }
         }
     }
 
@@ -267,6 +276,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
             scheduleInboundDrain();
             return;
         }
+        inboundDrainRejected = false;
         int messages = 0;
         try {
             fireChannelActiveIfReady();
@@ -457,6 +467,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
         writeCompletionScheduled.set(false);
         if (!isOpen()) {
             return;
+        }
+        if (inboundDrainRejected) {
+            requestInboundDrain();
         }
         ChannelOutboundBuffer in = unsafe().outboundBuffer();
         if (in == null) {
