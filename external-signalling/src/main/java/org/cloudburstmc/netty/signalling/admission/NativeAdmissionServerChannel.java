@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.channel.nethernet.admission;
+package org.cloudburstmc.netty.signalling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import io.netty.channel.*;

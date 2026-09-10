@@ -11,7 +11,7 @@ java {
 
 dependencies {
     api(libs.gson)
-    implementation(project(":transport-nethernet"))
+    api(project(":transport-nethernet"))
     testImplementation(libs.bundles.junit)
     testImplementation(project(":transport-raknet"))
     testRuntimeOnly(libs.junit.platform.launcher)
