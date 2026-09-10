@@ -108,6 +108,34 @@ class NetherNetChannelLifecycleTest {
     }
 
     @Test
+    void inboundOverflowStillClosesWhenTheExecutorRejectsCallbacks() throws Exception {
+        InboundRecoveryLoop loop = new InboundRecoveryLoop();
+        TestChannel channel = new TestChannel();
+        UnpooledByteBufAllocator allocator = new UnpooledByteBufAllocator(false);
+        channel.config().setAllocator(allocator);
+        try {
+            loop.register(channel).sync();
+            loop.submit(() -> {
+                Thread engine = new Thread(() -> {
+                    for (int i = 0; i <= 512; i++) {
+                        channel.deliverInbound(ByteBuffer.wrap(new byte[]{1}));
+                    }
+                }, "native-inbound");
+                engine.start();
+                engine.join(2000);
+                assertFalse(engine.isAlive());
+                assertEquals(0, allocator.metric().usedHeapMemory());
+                return null;
+            }).sync();
+            assertTrue(channel.closeFuture().await(3, TimeUnit.SECONDS));
+            assertFalse(channel.isOpen());
+        } finally {
+            channel.close().syncUninterruptibly();
+            loop.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+        }
+    }
+
+    @Test
     void closeReleasesInboundFramesAwaitingRecovery() throws Exception {
         InboundRecoveryLoop loop = new InboundRecoveryLoop();
         TestChannel channel = new TestChannel();

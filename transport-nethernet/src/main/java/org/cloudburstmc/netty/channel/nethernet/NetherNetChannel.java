@@ -216,7 +216,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
             discardPendingInbound();
             log.warn("Closing {}: inbound backlog exceeded {} frames or {} bytes",
                     remoteAddress, MAX_PENDING_INBOUND_MESSAGES, MAX_PENDING_INBOUND_BYTES);
-            close();
+            // A direct close task can be rejected by the same full executor queue.
+            writeFailure.compareAndSet(null, new IOException("NetherNet inbound backlog exceeded its limit"));
+            requestWriteCompletion();
         } else {
             requestInboundDrain();
         }
