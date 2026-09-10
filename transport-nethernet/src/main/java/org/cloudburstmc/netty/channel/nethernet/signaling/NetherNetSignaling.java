@@ -35,7 +35,7 @@ public interface NetherNetSignaling extends AutoCloseable {
 
     /**
      * Sets a handler to receive signaling messages for a specific connection ID.
-     * 
+     *
      * @param connectionId The connection ID to listen for.
      * @param handler      The handler to process incoming signaling messages.
      */
@@ -43,7 +43,7 @@ public interface NetherNetSignaling extends AutoCloseable {
 
     /**
      * Removes the signaling handler for a specific connection ID.
-     * 
+     *
      * @param connectionId The connection ID whose handler should be removed.
      */
     void removeSignalHandler(long connectionId);
@@ -72,7 +72,7 @@ public interface NetherNetSignaling extends AutoCloseable {
     interface SignalHandler {
         /**
          * Called when a signal is received for the registered connection ID.
-         * 
+         *
          * @param signal The raw signal payload.
          */
         void onSignal(String signal);
@@ -96,10 +96,14 @@ public interface NetherNetSignaling extends AutoCloseable {
          */
         public List<URI> toUris() {
             List<URI> uris = new ArrayList<>();
-            if (urls == null) return uris;
+            if (urls == null) {
+                return uris;
+            }
 
             for (String url : urls) {
-                if (url == null || url.isBlank()) continue;
+                if (url == null || url.isBlank()) {
+                    continue;
+                }
 
                 try {
                     uris.add(new URI(withCredentials(url.trim())));
@@ -121,16 +125,21 @@ public interface NetherNetSignaling extends AutoCloseable {
             }
 
             int authority = url.startsWith("://", scheme) ? scheme + 3 : scheme + 1;
-            if (url.indexOf('@', authority) >= 0) return url;
+            if (url.indexOf('@', authority) >= 0) {
+                return url;
+            }
 
-            return url.substring(0, authority) + encode(username) + ":" + encode(password) + "@" + url.substring(authority);
+            return url.substring(0, authority) + encode(username) + ":" + encode(password) + "@" + url.substring(
+                    authority);
         }
 
         /**
          * Encodes the input using %20 for spaces instead of +, which is what libdatachannel expects.
          */
         private static String encode(String value) {
-            if (value == null) return "";
+            if (value == null) {
+                return "";
+            }
 
             return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
         }

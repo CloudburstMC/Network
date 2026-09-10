@@ -14,12 +14,14 @@ public record Identity(Idp idp, Assertion assertion) {
     }
 
     public static Identity fromBase64(String identityString) {
-        return Identity.fromJson(new String(Base64.getDecoder().decode(identityString.getBytes(StandardCharsets.UTF_8)), StandardCharsets.UTF_8));
+        return Identity.fromJson(new String(Base64.getDecoder().decode(identityString.getBytes(StandardCharsets.UTF_8)),
+                StandardCharsets.UTF_8));
     }
 
     public static Identity fromSdpOffer(String sdpOffer) {
         String prefix = "a=identity:";
-        String identity = Arrays.stream(sdpOffer.split("\n")).filter(line -> line.startsWith(prefix)).findFirst().orElse(null);
+        String identity =
+                Arrays.stream(sdpOffer.split("\n")).filter(line -> line.startsWith(prefix)).findFirst().orElse(null);
         if (identity == null) {
             return null;
         }
@@ -31,11 +33,14 @@ public record Identity(Idp idp, Assertion assertion) {
         this(raw.idp(), gson.fromJson(raw.assertion(), Assertion.class));
     }
 
-    private record Raw(Idp idp, String assertion) {}
+    private record Raw(Idp idp, String assertion) {
+    }
 
-    public record Idp(String domain, String protocol) {}
+    public record Idp(String domain, String protocol) {
+    }
 
-    public record Assertion(String token, String fingerprints) {}
+    public record Assertion(String token, String fingerprints) {
+    }
 
     public String toJson() {
         return gson.toJson(new Raw(idp, gson.toJson(assertion)));

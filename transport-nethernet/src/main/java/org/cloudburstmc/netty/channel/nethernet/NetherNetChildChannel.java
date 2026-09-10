@@ -9,7 +9,8 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 
 public class NetherNetChildChannel extends NetherNetChannel {
-    public NetherNetChildChannel(Channel parent, PeerConnection peerConnection, InetSocketAddress remote, InetSocketAddress local) {
+    public NetherNetChildChannel(Channel parent, PeerConnection peerConnection, InetSocketAddress remote,
+                                 InetSocketAddress local) {
         super(parent, remote, local);
         this.peerConnection = peerConnection;
         this.config = new DefaultNetherChannelConfig(this);

@@ -1,11 +1,14 @@
 description = "NetherNet transport for Netty"
 
+val nativeGroup = rootProject.property("nativeJavaGroup")
+val nativeVersion = rootProject.property("nativeJavaVersion")
+
 dependencies {
     api(libs.bundles.netty)
     api(libs.netty.codec.http)
     api(libs.expiringmap)
-    api("${rootProject.property("nativeJavaGroup")}:libdatachannel-java:${rootProject.property("nativeJavaVersion")}")
-    testRuntimeOnly("${rootProject.property("nativeJavaGroup")}:libdatachannel-java:${rootProject.property("nativeJavaVersion")}:x86_64")
+    api("$nativeGroup:libdatachannel-java:$nativeVersion")
+    testRuntimeOnly("$nativeGroup:libdatachannel-java:$nativeVersion:x86_64")
 
     implementation(libs.gson)
     implementation(libs.jose4j)

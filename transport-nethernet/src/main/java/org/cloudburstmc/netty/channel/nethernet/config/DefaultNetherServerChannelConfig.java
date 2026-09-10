@@ -5,7 +5,7 @@ import io.netty.channel.ChannelOption;
 
 import java.util.Map;
 
-public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig  {
+public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig {
     private volatile int serverRtcHandshakeTimeoutSeconds = 30;
 
     public DefaultNetherServerChannelConfig(Channel channel) {

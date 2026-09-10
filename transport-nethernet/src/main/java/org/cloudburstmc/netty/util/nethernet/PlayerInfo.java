@@ -13,5 +13,6 @@ import java.net.InetSocketAddress;
  * @param remoteAddress The address the join request came from
  * @param claims        The full set of validated JWT claims, for anything not surfaced above
  */
-public record PlayerInfo(String xuid, String displayName, String networkId, InetSocketAddress remoteAddress, JwtClaims claims) {
+public record PlayerInfo(String xuid, String displayName, String networkId, InetSocketAddress remoteAddress,
+                         JwtClaims claims) {
 }

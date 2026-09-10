@@ -50,54 +50,56 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.reliableChannel.onOpen.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
         this.reliableChannel.onClosed.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
 
-        this.reliableChannel.onMessage.register(DataChannelCallback.Message.handleBinary(new DataChannelCallback.BinaryMessage() {
-            private final ByteBuf assemblyBuf = config.getAllocator().buffer();
-            private int currentSegmentCount = -1;
+        this.reliableChannel.onMessage.register(
+                DataChannelCallback.Message.handleBinary(new DataChannelCallback.BinaryMessage() {
+                    private final ByteBuf assemblyBuf = config.getAllocator().buffer();
+                    private int currentSegmentCount = -1;
 
-            @Override
-            public void onBinary(DataChannel channel, ByteBuffer data) {
-                if (!data.hasRemaining())
-                    return;
-
-                int segments = data.get() & 0xFF;
-
-                if (currentSegmentCount == -1) {
-                    currentSegmentCount = segments;
-                } else {
-                    if (segments != currentSegmentCount - 1) {
-                        assemblyBuf.clear();
-                        currentSegmentCount = -1;
-                        return;
-                    }
-                    currentSegmentCount = segments;
-                }
-
-                if (data.hasRemaining()) {
-                    byte[] payload = new byte[data.remaining()];
-                    data.get(payload);
-                    assemblyBuf.writeBytes(payload);
-                }
-
-                if (segments == 0) {
-                    try {
-                        if (assemblyBuf.isReadable()) {
-                            ByteBuf packet = assemblyBuf.copy();
-                            assemblyBuf.skipBytes(assemblyBuf.readableBytes());
-
-                            eventLoop().execute(() -> {
-                                pipeline().fireChannelRead(packet);
-                                pipeline().fireChannelReadComplete();
-                            });
+                    @Override
+                    public void onBinary(DataChannel channel, ByteBuffer data) {
+                        if (!data.hasRemaining()) {
+                            return;
                         }
-                    } catch (Exception e) {
-                        log.error("Error processing packet", e);
-                    } finally {
-                        assemblyBuf.clear();
-                        currentSegmentCount = -1;
+
+                        int segments = data.get() & 0xFF;
+
+                        if (currentSegmentCount == -1) {
+                            currentSegmentCount = segments;
+                        } else {
+                            if (segments != currentSegmentCount - 1) {
+                                assemblyBuf.clear();
+                                currentSegmentCount = -1;
+                                return;
+                            }
+                            currentSegmentCount = segments;
+                        }
+
+                        if (data.hasRemaining()) {
+                            byte[] payload = new byte[data.remaining()];
+                            data.get(payload);
+                            assemblyBuf.writeBytes(payload);
+                        }
+
+                        if (segments == 0) {
+                            try {
+                                if (assemblyBuf.isReadable()) {
+                                    ByteBuf packet = assemblyBuf.copy();
+                                    assemblyBuf.skipBytes(assemblyBuf.readableBytes());
+
+                                    eventLoop().execute(() -> {
+                                        pipeline().fireChannelRead(packet);
+                                        pipeline().fireChannelReadComplete();
+                                    });
+                                }
+                            } catch (Exception e) {
+                                log.error("Error processing packet", e);
+                            } finally {
+                                assemblyBuf.clear();
+                                currentSegmentCount = -1;
+                            }
+                        }
                     }
-                }
-            }
-        }));
+                }));
 
         if (reliableChannel.isOpen()) {
             eventLoop().execute(this::onDataChannelStateChange);
@@ -144,8 +146,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     private void writeInternal(Object msg) {
-        if (!(msg instanceof ByteBuf))
+        if (!(msg instanceof ByteBuf)) {
             return;
+        }
 
         ByteBuf payload = (ByteBuf) msg;
 
@@ -155,8 +158,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
         int maxPayload = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
 
         int segments = (totalLength / maxPayload);
-        if (totalLength % maxPayload != 0)
+        if (totalLength % maxPayload != 0) {
             segments++;
+        }
 
         try {
             int offset = 0;

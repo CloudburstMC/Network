@@ -23,19 +23,23 @@ public class NetherNetScanner {
         System.out.println("Scanning for NetherNet servers on port 7551...");
 
         InetSocketAddress broadcastTarget = new InetSocketAddress("255.255.255.255", NetherNetConstants.DISCOVERY_PORT);
-        
+
         discovery.sendDiscoveryRequest(broadcastTarget, (senderId, payload) -> {
             try {
-                if (payload.readableBytes() < 4) return;
-                
+                if (payload.readableBytes() < 4) {
+                    return;
+                }
+
                 int length = payload.readIntLE();
-                if (payload.readableBytes() < length) return;
-                
+                if (payload.readableBytes() < length) {
+                    return;
+                }
+
                 String hexString = payload.readCharSequence(length, StandardCharsets.UTF_8).toString();
-                
+
                 byte[] binaryData = ByteBufUtil.decodeHexDump(hexString);
                 ByteBuf data = Unpooled.wrappedBuffer(binaryData);
-                
+
                 try {
                     int version = data.readUnsignedByte();
                     String serverName = readString(data);
@@ -72,9 +76,13 @@ public class NetherNetScanner {
     }
 
     private static String readString(ByteBuf buf) {
-        if (!buf.isReadable()) return "";
+        if (!buf.isReadable()) {
+            return "";
+        }
         int len = buf.readUnsignedByte();
-        if (buf.readableBytes() < len) return "";
+        if (buf.readableBytes() < len) {
+            return "";
+        }
         return buf.readCharSequence(len, StandardCharsets.UTF_8).toString();
     }
 }

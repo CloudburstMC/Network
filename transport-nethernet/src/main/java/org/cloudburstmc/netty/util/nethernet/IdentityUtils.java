@@ -27,12 +27,13 @@ public class IdentityUtils {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(IdentityUtils.class);
 
     private static final JwtConsumer JWT_CONSUMER = new JwtConsumerBuilder()
-        .setVerificationKeyResolver(new HttpsJwksVerificationKeyResolver(new HttpsJwks("https://authorization.franchise.minecraft-services.net/.well-known/keys")))
-        .setRequireExpirationTime()
-        .setRequireSubject()
-        .setExpectedAudience(true, "api://auth-minecraft-services/multiplayer")
-        .setExpectedIssuer("https://authorization.franchise.minecraft-services.net/")
-        .build();
+            .setVerificationKeyResolver(new HttpsJwksVerificationKeyResolver(
+                    new HttpsJwks("https://authorization.franchise.minecraft-services.net/.well-known/keys")))
+            .setRequireExpirationTime()
+            .setRequireSubject()
+            .setExpectedAudience(true, "api://auth-minecraft-services/multiplayer")
+            .setExpectedIssuer("https://authorization.franchise.minecraft-services.net/")
+            .build();
 
     /**
      * Validate the given identity against the known jwt signer
@@ -51,7 +52,7 @@ public class IdentityUtils {
      *
      * @param sdpOffer The SDP offer to validate
      * @return The JWT claims if the SDP offer is valid
-     * @throws JoseException If there is an error processing the SDP offer
+     * @throws JoseException       If there is an error processing the SDP offer
      * @throws InvalidJwtException If the SDP offer contains an invalid JWT
      */
     public static JwtClaims validateSdp(String sdpOffer) throws JoseException, InvalidJwtException {
@@ -84,7 +85,8 @@ public class IdentityUtils {
             // Set the JWS properties so we can verify
             jws.setKey(cpkKey);
             jws.setPayload(fingerprints);
-            jws.setAlgorithmConstraints(new AlgorithmConstraints(ConstraintType.PERMIT, AlgorithmIdentifiers.ECDSA_USING_P384_CURVE_AND_SHA384));
+            jws.setAlgorithmConstraints(new AlgorithmConstraints(ConstraintType.PERMIT,
+                    AlgorithmIdentifiers.ECDSA_USING_P384_CURVE_AND_SHA384));
 
             if (!jws.verifySignature()) {
                 throw new JoseException("Fingerprint signature mismatch");
@@ -105,15 +107,15 @@ public class IdentityUtils {
     public static String getCanonicalFingerprintJson(String sdpOffer) {
         String prefix = "a=fingerprint:";
         return Arrays.stream(sdpOffer.split("\n"))
-            .filter(line -> line.startsWith(prefix))
-            .map(line -> line.substring(prefix.length()).trim())
-            .map(line -> {
-                String[] parts = line.split(" ");
-                if (parts.length != 2) {
-                    throw new IllegalArgumentException("Invalid fingerprint line: " + line);
-                }
-                return "{\"algorithm\":\"" + parts[0] + "\",\"digest\":\"" + parts[1] + "\"}";
-            })
-            .collect(Collectors.joining(",", "{\"fingerprint\":[", "]}"));
+                .filter(line -> line.startsWith(prefix))
+                .map(line -> line.substring(prefix.length()).trim())
+                .map(line -> {
+                    String[] parts = line.split(" ");
+                    if (parts.length != 2) {
+                        throw new IllegalArgumentException("Invalid fingerprint line: " + line);
+                    }
+                    return "{\"algorithm\":\"" + parts[0] + "\",\"digest\":\"" + parts[1] + "\"}";
+                })
+                .collect(Collectors.joining(",", "{\"fingerprint\":[", "]}"));
     }
 }

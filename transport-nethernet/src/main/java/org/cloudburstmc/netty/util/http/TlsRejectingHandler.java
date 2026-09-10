@@ -15,7 +15,9 @@ public class TlsRejectingHandler extends ByteToMessageDecoder {
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
         // Make sure we have enough bytes to check if this is TLS
-        if (in.readableBytes() < 5) return;
+        if (in.readableBytes() < 5) {
+            return;
+        }
 
         if (SslHandler.isEncrypted(in, false)) {
             ctx.close();

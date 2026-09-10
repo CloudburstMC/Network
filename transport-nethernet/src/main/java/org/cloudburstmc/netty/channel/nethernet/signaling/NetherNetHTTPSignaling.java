@@ -122,24 +122,24 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         // Setup a new server bootstrap for http using the existing event loop and channel
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(eventLoop)
-            .channelFactory((ChannelFactory<NioServerSocketChannel>) () -> new NioServerSocketChannel(channel))
-            .childHandler(new ChannelInitializer<>() {
-                @Override
-                protected void initChannel(Channel ch) {
-                    ChannelPipeline p = ch.pipeline();
-                    // Handle ssl or drop it
-                    if (sslContext != null) {
-                        p.addLast(sslContext.newHandler(ch.alloc()));
-                    } else {
-                        p.addLast(new TlsRejectingHandler());
-                    }
+                .channelFactory((ChannelFactory<NioServerSocketChannel>) () -> new NioServerSocketChannel(channel))
+                .childHandler(new ChannelInitializer<>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        ChannelPipeline p = ch.pipeline();
+                        // Handle ssl or drop it
+                        if (sslContext != null) {
+                            p.addLast(sslContext.newHandler(ch.alloc()));
+                        } else {
+                            p.addLast(new TlsRejectingHandler());
+                        }
 
-                    p.addLast(new HttpServerCodec());
-                    p.addLast(new HttpObjectAggregator(8 * 1024));
-                    p.addLast(new HttpLoggingHandler(log));
-                    p.addLast(new SignalingHandler());
-                }
-            });
+                        p.addLast(new HttpServerCodec());
+                        p.addLast(new HttpObjectAggregator(8 * 1024));
+                        p.addLast(new HttpLoggingHandler(log));
+                        p.addLast(new SignalingHandler());
+                    }
+                });
 
         ChannelFuture regFuture = bootstrap.register();
         serverChannel = regFuture.channel();
@@ -216,7 +216,9 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 return;
             }
 
-            PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"), claims.getClaimValueAsString("xname"), networkId, remoteAddress, claims);
+            PlayerInfo player =
+                    new PlayerInfo(claims.getClaimValueAsString("xid"), claims.getClaimValueAsString("xname"),
+                            networkId, remoteAddress, claims);
             log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
 
             // Let the user reject the player before we start a connection for them
@@ -341,7 +343,9 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     @Override
     public void close() {
-        if (serverChannel != null) serverChannel.close();
+        if (serverChannel != null) {
+            serverChannel.close();
+        }
     }
 
     /**
@@ -356,7 +360,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * Called on the event loop, so don't block in here. A thrown exception is treated
          * as a rejection.
          *
-         * @param host The host header from the join request, which may be used to identify the server
+         * @param host   The host header from the join request, which may be used to identify the server
          * @param player The validated player attempting to join
          * @return true to accept the player, false to reject them with a 403
          */
@@ -374,7 +378,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * Called on the event loop, so don't block in here. The discovery-only fields of
          * {@link PongData} are ignored, as they have no place in the status response.
          *
-         * @param host The host header from the join request, which may be used to identify the server
+         * @param host          The host header from the join request, which may be used to identify the server
          * @param remoteAddress The address the status request came from
          * @return The MOTD to advertise
          */

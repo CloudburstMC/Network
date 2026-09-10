@@ -12,10 +12,10 @@ import java.security.MessageDigest;
 
 public class NetherNetConstants {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetConstants.class);
-    
+
     public static final int DISCOVERY_PORT = 7551;
     public static final long APPLICATION_ID = 0xDEADBEEFL;
-    
+
     // Packet IDs
     public static final int ID_DISCOVERY_REQUEST = 0x00;
     public static final int ID_DISCOVERY_RESPONSE = 0x01;
@@ -72,7 +72,7 @@ public class NetherNetConstants {
 
     /**
      * Encrypts a discovery packet using AES encryption and HMAC-SHA256 for integrity.
-     * 
+     *
      * @param packet The ByteBuf containing the discovery packet to encrypt.
      * @return The encrypted byte array ready for transmission.
      * @throws Exception if encryption fails.
@@ -82,7 +82,7 @@ public class NetherNetConstants {
         ByteBuf payload = Unpooled.buffer(len);
         payload.writeShortLE(len);
         payload.writeBytes(packet);
-        
+
         byte[] payloadBytes = new byte[payload.readableBytes()];
         payload.readBytes(payloadBytes);
         payload.release();
@@ -100,7 +100,7 @@ public class NetherNetConstants {
         ByteBuf result = Unpooled.buffer(signature.length + encrypted.length);
         result.writeBytes(signature);
         result.writeBytes(encrypted);
-        
+
         byte[] out = new byte[result.readableBytes()];
         result.readBytes(out);
         result.release();
@@ -109,7 +109,7 @@ public class NetherNetConstants {
 
     /**
      * Decrypts a discovery packet and verifies its integrity.
-     * 
+     *
      * @param input The ByteBuf containing the received discovery packet.
      * @return A ByteBuf with the decrypted payload, or null if verification fails.
      * @throws Exception if decryption fails.
@@ -118,7 +118,8 @@ public class NetherNetConstants {
         if (input.readableBytes() < 32) {
             log.debug("Discovery packet too short to contain valid signature");
             return null;
-        };
+        }
+        ;
 
         byte[] signature = new byte[32];
         input.readBytes(signature);
@@ -149,9 +150,9 @@ public class NetherNetConstants {
 
     /**
      * Builds a signaling message for a CONNECTREQUEST.
-     * 
-     * @param connectionId   The unique connection ID.
-     * @param sdp            The SDP payload.
+     *
+     * @param connectionId The unique connection ID.
+     * @param sdp          The SDP payload.
      * @return The formatted signaling message.
      */
     public static String buildSignalConnectRequest(long connectionId, String sdp) {
@@ -160,9 +161,9 @@ public class NetherNetConstants {
 
     /**
      * Builds a signaling message for a CONNECTRESPONSE.
-     * 
-     * @param connectionId   The unique connection ID.
-     * @param sdp            The SDP payload.
+     *
+     * @param connectionId The unique connection ID.
+     * @param sdp          The SDP payload.
      * @return The formatted signaling message.
      */
     public static String buildSignalConnectResponse(long connectionId, String sdp) {
@@ -171,9 +172,9 @@ public class NetherNetConstants {
 
     /**
      * Builds a signaling message for a CANDIDATEADD.
-     * 
-     * @param connectionId   The unique connection ID.
-     * @param candidateSdp   The candidate SDP string.
+     *
+     * @param connectionId The unique connection ID.
+     * @param candidateSdp The candidate SDP string.
      * @return The formatted signaling message.
      */
     public static String buildSignalCandidateAdd(long connectionId, String candidateSdp) {

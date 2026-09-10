@@ -3,13 +3,18 @@ package org.cloudburstmc.netty.util.nethernet;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import tel.schich.libdatachannel.LibDataChannel;
+
 import java.util.Locale;
 
-/** Controls native logging before messages cross into Java, and configures supported Java backends. */
+/**
+ * Controls native logging before messages cross into Java, and configures supported Java backends.
+ */
 public final class NetherNetLogging {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetLogging.class);
 
-    /** The SLF4J logger libdatachannel routes its native output through. */
+    /**
+     * The SLF4J logger libdatachannel routes its native output through.
+     */
     public static final String NATIVE_LOGGER = "tel.schich.libdatachannel.LibDataChannel";
 
     private NetherNetLogging() {
@@ -36,9 +41,13 @@ public final class NetherNetLogging {
             case "TRACE", "ALL" -> LibDataChannel.LogLevel.VERBOSE;
             default -> null;
         };
-        if (nativeLevel == null) return false;
+        if (nativeLevel == null) {
+            return false;
+        }
         LibDataChannel.setLogLevel(nativeLevel);
-        if (!applyLog4j2(normalised)) applyLogback(normalised);
+        if (!applyLog4j2(normalised)) {
+            applyLogback(normalised);
+        }
         log.debug("Set native transport log level to {}", normalised);
         return true;
     }
