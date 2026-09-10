@@ -17,7 +17,9 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -51,15 +53,13 @@ class NetherNetSendCompletionTest {
     }
 
     @Test
-    void repeatedFlushesCoalesceWithoutSerializingEachSend() {
+    void eachFlushSubmitsImmediatelyWhileEarlierSendsArePending() {
         try (Harness h = new Harness()) {
             List<ChannelFuture> writes = new ArrayList<>();
             for (int i = 0; i < 100; i++) {
                 writes.add(h.channel.writeAndFlush(payload(i)));
+                assertEquals(i + 1, h.session.callbacks.size());
             }
-            assertEquals(1, h.session.callbacks.size());
-            h.run();
-            assertEquals(100, h.session.callbacks.size());
             assertTrue(writes.stream().noneMatch(ChannelFuture::isDone));
             h.session.callbacks.forEach(callback -> callback.accept(null));
             h.run();
@@ -375,6 +375,56 @@ class NetherNetSendCompletionTest {
             assertTrue(write.isSuccess());
             assertTrue(channel.isOpen());
             assertEquals(0, buffer.refCnt());
+        } finally {
+            channel.close().syncUninterruptibly();
+            loop.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void explicitFlushBypassesRejectedRecoveryWhileNativeSendsRemainPending(boolean atWatermark) throws Exception {
+        AtomicInteger rejections = new AtomicInteger();
+        DefaultEventLoop loop = new DefaultEventLoop() {
+            @Override public void execute(Runnable task) {
+                if (Thread.currentThread().getName().equals("native-send-callback")) {
+                    rejections.incrementAndGet();
+                    throw new RejectedExecutionException("task queue is full");
+                }
+                super.execute(task);
+            }
+        };
+        ManualSession session = new ManualSession();
+        ActiveChild channel = new ActiveChild(session);
+        try {
+            loop.register(channel).sync();
+            loop.submit(() -> {
+                int firstSize = atWatermark ? 2 * 1024 * 1024 : 2;
+                ChannelFuture first = channel.write(Unpooled.buffer(firstSize).writeZero(firstSize));
+                ChannelFuture second = channel.writeAndFlush(payload(2));
+                ChannelFuture third = channel.write(payload(3));
+                assertEquals(atWatermark ? 1 : 2, session.callbacks.size());
+
+                Thread engine = new Thread(() -> {
+                    if (atWatermark) {
+                        channel.onEngineBytesSent(firstSize);
+                    } else {
+                        session.complete(1, null);
+                    }
+                }, "native-send-callback");
+                engine.start();
+                engine.join(2000);
+                assertFalse(engine.isAlive());
+                assertEquals(1, rejections.get());
+
+                // This task still owns the loop, so recovery cannot run before this flush.
+                channel.flush();
+                assertEquals(3, session.callbacks.size());
+                assertFalse(first.isDone());
+                assertFalse(second.isDone());
+                assertFalse(third.isDone());
+                return null;
+            }).sync();
         } finally {
             channel.close().syncUninterruptibly();
             loop.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();

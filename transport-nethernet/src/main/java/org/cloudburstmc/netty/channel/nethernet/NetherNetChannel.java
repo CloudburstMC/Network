@@ -105,7 +105,6 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
     };
     private int pendingSends;
-    private boolean completingWrites;
     private boolean removingCompletedWrites;
     // Set on the event loop when doWrite pauses on the high water mark; the
     // engine thread that drains below the low water mark clears it and
@@ -333,7 +332,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
     @Override
     protected void doWrite(ChannelOutboundBuffer in) throws Exception {
         if (removingCompletedWrites) {
-            requestWriteCompletion();
+            // The outer drain submits any writes added by completion listeners.
             return;
         }
         removeCompletedWrites(in);
@@ -348,12 +347,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
         if (in.size() == pendingSends) {
             return;
         }
-        // Combine repeated flushes while native sends are pending, so adding
-        // one message at a time does not repeatedly scan the in-flight batch.
-        if (pendingSends != 0 && !completingWrites) {
-            requestWriteCompletion();
-            return;
-        }
+        // Native acceptance and a queued recovery task must not gate an explicit flush.
         in.forEachFlushedMessage(msg -> {
             PendingWrite write = (PendingWrite) msg;
             if (write.submitted) {
@@ -440,8 +434,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
             if (loop != eventLoop()) {
                 scheduleWriteCompletion();
             } else if (!loop.isShuttingDown()) {
-                // A bounded task queue may be temporarily full. Keep one retry
-                // pending; no polling is needed on the normal send path.
+                // Recover even if a quiet connection produces no further events.
+                // Explicit flushes can submit writes while this retry is pending.
                 GlobalEventExecutor.INSTANCE.schedule(() -> {
                     if (isOpen()) {
                         scheduleWriteCompletion();
@@ -464,23 +458,18 @@ public abstract class NetherNetChannel extends AbstractChannel {
         if (!isOpen()) {
             return;
         }
-        completingWrites = true;
-        try {
-            ChannelOutboundBuffer in = unsafe().outboundBuffer();
-            if (in == null) {
-                return;
-            }
-            removeCompletedWrites(in);
-            IOException failure = writeFailure.get();
-            if (failure != null && isOpen()) {
-                // Retrying a rejected fragment after later frames were submitted
-                // could corrupt the reliable stream. Fail the connection instead.
-                ((NetherNetUnsafe) unsafe()).closeWithSendFailure(failure);
-            } else if (isOpen() && in.size() > pendingSends) {
-                ((NetherNetUnsafe) unsafe()).flushPendingWrites();
-            }
-        } finally {
-            completingWrites = false;
+        ChannelOutboundBuffer in = unsafe().outboundBuffer();
+        if (in == null) {
+            return;
+        }
+        removeCompletedWrites(in);
+        IOException failure = writeFailure.get();
+        if (failure != null && isOpen()) {
+            // Retrying a rejected fragment after later frames were submitted
+            // could corrupt the reliable stream. Fail the connection instead.
+            ((NetherNetUnsafe) unsafe()).closeWithSendFailure(failure);
+        } else if (isOpen() && in.size() > pendingSends) {
+            ((NetherNetUnsafe) unsafe()).flushPendingWrites();
         }
     }
 

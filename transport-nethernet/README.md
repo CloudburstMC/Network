@@ -92,6 +92,11 @@ in flight; completion handling is coalesced on the channel's event loop.
 The Java payload buffer is released as soon as the native binding has copied
 it; waiting for acceptance retains only the completion state.
 
+An explicit flush submits queued frames as long as the engine has capacity,
+without waiting for earlier send results. If a bounded event loop rejects
+completion processing, a 10 ms retry prevents a quiet connection from getting
+stuck. Explicit flushes bypass that retry; it adds no batching window.
+
 A native rejection or a failure preparing a send closes the connection and
 fails pending writes, releasing their buffers. Retrying a missing fragment
 after later frames were submitted could corrupt the reliable stream. Buffer
