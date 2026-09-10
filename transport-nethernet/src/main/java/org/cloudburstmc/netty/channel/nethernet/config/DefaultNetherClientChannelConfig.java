@@ -5,7 +5,7 @@ import io.netty.channel.ChannelOption;
 
 import java.util.Map;
 
-public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig  {
+public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig {
     private volatile int clientHandshakeTimeoutMs = 3000;
     private volatile int maxHandshakeAttempts = 3;
 
@@ -16,8 +16,8 @@ public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig
     @Override
     public Map<ChannelOption<?>, Object> getOptions() {
         return this.getOptions(
-                super.getOptions(), 
-                NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS, 
+                super.getOptions(),
+                NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS,
                 NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS
         );
     }

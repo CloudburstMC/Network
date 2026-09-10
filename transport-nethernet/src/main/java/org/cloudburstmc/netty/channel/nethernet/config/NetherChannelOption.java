@@ -23,7 +23,7 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<Integer> NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS =
             valueOf(NetherChannelOption.class, "NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS");
 
-     /**
+    /**
      * The timeout in seconds for completing the WebRTC handshake on the server side before automatically closing the connection.
      */
     public static final ChannelOption<Integer> NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS =

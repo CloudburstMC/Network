@@ -18,17 +18,18 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     /**
      * Creates a NetherNetXboxSignaling instance.
-     * 
+     *
      * @param networkId The Network ID to use.
      * @param xboxToken The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
     public NetherNetXboxSignaling(String networkId, String xboxToken) {
-        super(networkId, xboxToken, URI.create("wss://signal.franchise.minecraft-services.net/ws/v1.0/signaling/" + networkId));
+        super(networkId, xboxToken,
+                URI.create("wss://signal.franchise.minecraft-services.net/ws/v1.0/signaling/" + networkId));
     }
 
     /**
      * Creates a NetherNetXboxSignaling instance.
-     * 
+     *
      * @param localNetworkId The local Network ID to use.
      * @param xboxToken      The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
@@ -38,7 +39,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     /**
      * Creates a NetherNetXboxSignaling instance with a random local Network ID.
-     * 
+     *
      * @param xboxToken The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
     public NetherNetXboxSignaling(String xboxToken) {
@@ -49,7 +50,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
     protected void onConnected(ChannelHandlerContext ctx) {
         ctx.executor().scheduleAtFixedRate(() -> {
             JsonObject ping = new JsonObject();
-            ping.addProperty("Type", 0); 
+            ping.addProperty("Type", 0);
             ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)));
         }, 5, 5, TimeUnit.SECONDS);
     }
@@ -59,7 +60,9 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
         String text = frame.text();
         try {
             JsonObject json = gson.fromJson(text, JsonObject.class);
-            if (!json.has("Type")) return;
+            if (!json.has("Type")) {
+                return;
+            }
 
             int type = json.get("Type").getAsInt();
             switch (type) {
@@ -81,11 +84,12 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
                     if (json.has("Message") && connectFuture != null && !connectFuture.isDone()) {
                         String rawMsg = json.get("Message").getAsString();
                         JsonObject credentials = JsonParser.parseString(rawMsg).getAsJsonObject();
-                        
+
                         connectFuture.complete(parseTurnServers(credentials));
                     }
                 }
-                case NetherNetConstants.XBOX_SIGNAL_ACCEPTED, NetherNetConstants.XBOX_SIGNAL_ACK -> log.trace("Signal Ack: {}", text);
+                case NetherNetConstants.XBOX_SIGNAL_ACCEPTED, NetherNetConstants.XBOX_SIGNAL_ACK ->
+                        log.trace("Signal Ack: {}", text);
                 default -> log.debug("Unknown message type {}: {}", type, text);
             }
         } catch (Exception e) {
@@ -102,7 +106,8 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
             msg.addProperty("Message", data);
             channel.writeAndFlush(new TextWebSocketFrame(gson.toJson(msg)));
         } else {
-            throw new IllegalStateException("Attempted to send signal to " + targetNetworkId + " but WebSocket is closed!");
+            throw new IllegalStateException(
+                    "Attempted to send signal to " + targetNetworkId + " but WebSocket is closed!");
         }
     }
 }

@@ -19,13 +19,13 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     private final NetherNetDiscovery discovery;
     private final InetSocketAddress bindAddress;
     private final String localNetworkId;
-    
+
     // State captured after connect
     private volatile InetSocketAddress remoteAddress;
     private final AtomicReference<String> discoveredServerId = new AtomicReference<>(null);
 
     /**
-     * Creates a NetherNetDiscoverySignaling with a random local Network ID and binds to an ephemeral port.     * 
+     * Creates a NetherNetDiscoverySignaling with a random local Network ID and binds to an ephemeral port.     *
      */
     public NetherNetDiscoverySignaling() {
         this(ThreadLocalRandom.current().nextLong(), new InetSocketAddress(0));
@@ -33,7 +33,7 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
 
     /**
      * Creates a NetherNetDiscoverySignaling with the specified local Network ID.
-     * 
+     *
      * @param localNetworkId The local Network ID to use.
      */
     public NetherNetDiscoverySignaling(long localNetworkId) {
@@ -42,7 +42,7 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
 
     /**
      * Creates a NetherNetDiscoverySignaling with the specified local Network ID and bind address.
-     * 
+     *
      * @param localNetworkId The local Network ID to use.
      * @param bindAddress    The address to bind the discovery socket to.
      */
@@ -60,12 +60,12 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     @Override
     public CompletableFuture<List<IceServerInfo>> connect(SocketAddress remote) {
         CompletableFuture<List<IceServerInfo>> future = new CompletableFuture<>();
-        
+
         if (!(remote instanceof InetSocketAddress)) {
             future.completeExceptionally(new IllegalArgumentException("Discovery requires InetSocketAddress"));
             return future;
         }
-        
+
         this.remoteAddress = (InetSocketAddress) remote;
 
         try {
@@ -75,15 +75,15 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
             }
 
             log.debug("Sending Discovery Request to {}", remote);
-            
+
             // Send request and register the callback to capture the ID
             this.discovery.sendDiscoveryRequest(this.remoteAddress, (serverNetworkId, payload) -> {
                 try {
                     log.info("Discovery Response Received! Server NetworkID: {}", serverNetworkId);
-                    
+
                     // Capture the ID so we can use it for signaling later
                     discoveredServerId.set(Long.toUnsignedString(serverNetworkId));
-                    
+
                     future.complete(Collections.emptyList());
                 } catch (Exception e) {
                     log.error("Error processing discovery response", e);
@@ -139,10 +139,10 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
             log.warn("Cannot send signal: Unknown Network ID.");
             return;
         }
-        
+
         try {
             long id = Long.parseUnsignedLong(actualIdStr);
-            
+
             // If we have an explicit remote address (Client Mode), use it directly
             if (remoteAddress != null) {
                 this.discovery.sendSignal(remoteAddress, id, data);

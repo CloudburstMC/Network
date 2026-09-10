@@ -39,7 +39,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
     /**
      * Creates a NetherNetDiscovery instance with the specified Network ID.
-     * 
+     *
      * @param networkId The Network ID to use for discovery.
      */
     public NetherNetDiscovery(long networkId) {
@@ -55,9 +55,9 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         try {
             Bootstrap bootstrap = new Bootstrap();
             bootstrap.group(group)
-             .channel(NioDatagramChannel.class)
-             .option(ChannelOption.SO_BROADCAST, true)
-             .handler(this);
+                    .channel(NioDatagramChannel.class)
+                    .option(ChannelOption.SO_BROADCAST, true)
+                    .handler(this);
 
             this.channel = bootstrap.bind(port).sync().channel();
             log.info("NetherNet Discovery listening on port {}", port);
@@ -71,9 +71,9 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         try {
             Bootstrap bootstrap = new Bootstrap();
             bootstrap.group(group)
-             .channel(NioDatagramChannel.class)
-             .option(ChannelOption.SO_BROADCAST, true)
-             .handler(this);
+                    .channel(NioDatagramChannel.class)
+                    .option(ChannelOption.SO_BROADCAST, true)
+                    .handler(this);
 
             this.channel = bootstrap.bind(address).sync().channel();
             log.info("NetherNet Discovery listening on {}", address);
@@ -84,12 +84,12 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
     public void sendDiscoveryRequest(InetSocketAddress target, BiConsumer<Long, ByteBuf> onServerFound) {
         this.discoveryCallback = onServerFound;
-        
+
         ByteBuf buf = Unpooled.buffer();
         buf.writeShortLE(NetherNetConstants.ID_DISCOVERY_REQUEST);
         buf.writeLongLE(this.networkId);
         buf.writeZero(8); // Padding
-        
+
         sendPacket(buf, target);
     }
 
@@ -108,14 +108,14 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         byte[] binaryData = new byte[buf.readableBytes()];
         buf.readBytes(binaryData);
         buf.release();
-        
+
         String hex = HexFormat.of().formatHex(binaryData);
         byte[] hexBytes = hex.getBytes(StandardCharsets.UTF_8);
-        
+
         ByteBuf response = Unpooled.buffer();
         response.writeIntLE(hexBytes.length);
         response.writeBytes(hexBytes);
-        
+
         this.pongData = new byte[response.readableBytes()];
         response.readBytes(this.pongData);
         response.release();
@@ -124,7 +124,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     public void registerSignalHandler(long connectionId, SignalHandler handler) {
         this.signalHandlers.put(connectionId, handler);
     }
-    
+
     public void unregisterSignalHandler(long connectionId) {
         this.signalHandlers.remove(connectionId);
     }
@@ -134,10 +134,11 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     }
 
     /**
-     * Sends a signal immediately and schedules it to be resent periodically 
+     * Sends a signal immediately and schedules it to be resent periodically
      * until the returned ScheduledFuture is cancelled.
      */
-    public ScheduledFuture<?> sendSignalRetrying(InetSocketAddress recipient, long targetNetworkId, String data, long delayMs) {
+    public ScheduledFuture<?> sendSignalRetrying(InetSocketAddress recipient, long targetNetworkId, String data,
+                                                 long delayMs) {
         return channel.eventLoop().scheduleAtFixedRate(() -> {
             log.debug("Resending signal to {}: {}", recipient, data);
             sendSignal(recipient, targetNetworkId, data);
@@ -189,7 +190,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             log.debug("Failed to decrypt discovery packet from {}", packet.sender(), e);
             return;
         }
-        
+
         if (decrypted == null) {
             log.debug("Received invalid discovery packet from {}", packet.sender());
             return;
@@ -239,7 +240,9 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     }
 
     private void handleRequest(long senderId, InetSocketAddress sender) {
-        if (this.pongData == null) return;
+        if (this.pongData == null) {
+            return;
+        }
 
         ByteBuf buf = Unpooled.buffer();
         buf.writeShortLE(NetherNetConstants.ID_DISCOVERY_RESPONSE);
@@ -270,12 +273,14 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         }
 
         String[] parts = messageData.split(" ", 3);
-        if (parts.length < 2) return;
+        if (parts.length < 2) {
+            return;
+        }
 
         try {
             String type = parts[0];
             long connectionId = Long.parseUnsignedLong(parts[1]);
-            
+
             SignalHandler handler = signalHandlers.get(connectionId);
 
             if (handler != null) {
@@ -283,7 +288,8 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             } else if (NetherNetConstants.RTC_NEGOTIATION_CONNECT_REQUEST.equals(type)) {
                 if (newConnectionHandler != null) {
                     String payload = parts.length > 2 ? parts[2] : "";
-                    log.trace("Dispatching New Connection: ID={} Sender={}", Long.toUnsignedString(connectionId), Long.toUnsignedString(senderId));
+                    log.trace("Dispatching New Connection: ID={} Sender={}", Long.toUnsignedString(connectionId),
+                            Long.toUnsignedString(senderId));
                     newConnectionHandler.onConnect(connectionId, Long.toUnsignedString(senderId), payload);
                 } else {
                     log.debug("Received CONNECT_REQUEST but no NewConnectionHandler is set!");
@@ -305,10 +311,10 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     public boolean isActive() {
         return channel != null && channel.isActive();
     }
-    
+
     private void writeString(ByteBuf buf, String s) {
         byte[] b = s.getBytes(StandardCharsets.UTF_8);
-        this.writeUnsignedVarInt(buf, b.length); 
+        this.writeUnsignedVarInt(buf, b.length);
         buf.writeBytes(b);
     }
 

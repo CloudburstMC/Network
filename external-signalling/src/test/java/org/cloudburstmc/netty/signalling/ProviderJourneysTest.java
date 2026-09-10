@@ -3,33 +3,45 @@ package org.cloudburstmc.netty.signalling;
 import com.google.gson.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderJourneysTest {
-    private static ProviderClient client(IndependentProviderStub stub, Path directory, ProviderClient.Configuration configuration,
+    private static ProviderClient client(IndependentProviderStub stub, Path directory,
+                                         ProviderClient.Configuration configuration,
                                          ProviderClientTest.FakeTransport transport) throws Exception {
         return new ProviderClient(configuration, new ProviderStateStore(directory), transport,
-            () -> new ServerStatus("Independent host", 1000, "conformance", "world", 1, 20, 0),
-            () -> new ProviderClient.Health(true, 100, .01, "nethernet", "fixture"), message -> {});
+                () -> new ServerStatus("Independent host", 1000, "conformance", "world", 1, 20, 0),
+                () -> new ProviderClient.Health(true, 100, .01, "nethernet", "fixture"), message -> {
+        });
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void allFourOperatorJourneysUseOneNeutralLifecycle(boolean automatic, @TempDir Path directory) throws Exception {
-        String[] journeys = {"anonymous-standalone", "token-new-service", "token-fleet-attachment", "custom-host-provider"};
+        String[] journeys =
+                {"anonymous-standalone", "token-new-service", "token-fleet-attachment", "custom-host-provider"};
         for (String journey : journeys) {
             try (IndependentProviderStub stub = new IndependentProviderStub()) {
                 boolean bearer = !journey.equals("anonymous-standalone");
                 boolean attach = journey.equals("token-fleet-attachment");
-                var configuration = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", journey,
-                    automatic ? ProviderClient.AUTOMATIC : attach ? ProviderClient.ATTACH_INSTANCE : ProviderClient.NEW_SERVICE,
-                    bearer ? ProviderClient.BEARER_TOKEN : ProviderClient.ANONYMOUS_PROOF_OF_WORK,
-                    bearer ? "independent-provider-token" : null, attach ? "EU" : null, attach ? "proxy" : null,
-                    attach ? Map.of("location", "london", "role", "proxy") : Map.of());
+                var configuration =
+                        new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", journey,
+                                automatic ? ProviderClient.AUTOMATIC :
+                                        attach ? ProviderClient.ATTACH_INSTANCE : ProviderClient.NEW_SERVICE,
+                                bearer ? ProviderClient.BEARER_TOKEN : ProviderClient.ANONYMOUS_PROOF_OF_WORK,
+                                bearer ? "independent-provider-token" : null, attach ? "EU" : null,
+                                attach ? "proxy" : null,
+                                attach ? Map.of("location", "london", "role", "proxy") : Map.of());
                 var transport = new ProviderClientTest.FakeTransport();
                 ProviderClient instance = client(stub, directory.resolve(journey), configuration, transport);
                 try {
@@ -40,46 +52,74 @@ class ProviderJourneysTest {
                     assertEquals(bearer ? 0 : 2, stub.challengeDifficulty);
                     assertTrue(stub.keyAcknowledgements > 0);
                     assertTrue(instance.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
-                    if (attach) assertEquals("london", result.getAsJsonObject("placement").getAsJsonObject("tags").get("location").getAsString());
-                    JsonObject event = new JsonObject(); event.addProperty("stage", "ticket.data_channels_open");
-                    event.addProperty("ticketId", "opaque-correlation"); event.addProperty("occurredAt", java.time.Instant.now().toString());
-                    event.addProperty("reason", "connected"); event.addProperty("privatePayload", "must-not-be-persisted"); transport.events.add(event);
+                    if (attach) {
+                        assertEquals("london",
+                                result.getAsJsonObject("placement").getAsJsonObject("tags").get("location")
+                                        .getAsString());
+                    }
+                    JsonObject event = new JsonObject();
+                    event.addProperty("stage", "ticket.data_channels_open");
+                    event.addProperty("ticketId", "opaque-correlation");
+                    event.addProperty("occurredAt", Instant.now().toString());
+                    event.addProperty("reason", "connected");
+                    event.addProperty("privatePayload", "must-not-be-persisted");
+                    transport.events.add(event);
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                    while (stub.events.isEmpty() && System.nanoTime() < deadline) Thread.sleep(25);
-                    assertEquals(1, stub.events.size()); assertFalse(stub.events.getFirst().has("privatePayload"));
+                    while (stub.events.isEmpty() && System.nanoTime() < deadline) {
+                        Thread.sleep(25);
+                    }
+                    assertEquals(1, stub.events.size());
+                    assertFalse(stub.events.getFirst().has("privatePayload"));
                     assertEquals(0, transport.admissions, "Control-plane delivery cannot stage individual clients");
-                    instance.deregister().get(10, TimeUnit.SECONDS); assertTrue(stub.draining);
-                } finally { instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+                    instance.deregister().get(10, TimeUnit.SECONDS);
+                    assertTrue(stub.draining);
+                } finally {
+                    instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                }
             }
         }
     }
 
-    @Test void automaticRejectsUnknownModesAndAnonymousAttachment(@TempDir Path directory) throws Exception {
+    @Test
+    void automaticRejectsUnknownModesAndAnonymousAttachment(@TempDir Path directory) throws Exception {
         for (String selected : new String[]{"automatic", "unknown", "attach-instance"}) {
             try (IndependentProviderStub stub = new IndependentProviderStub()) {
                 stub.selectedMode = selected;
-                var configuration = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Mode test",
-                    ProviderClient.AUTOMATIC, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null, null, null, Map.of());
-                ProviderClient instance = client(stub, directory.resolve(selected), configuration, new ProviderClientTest.FakeTransport());
+                var configuration =
+                        new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Mode test",
+                                ProviderClient.AUTOMATIC, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null, null, null,
+                                Map.of());
+                ProviderClient instance = client(stub, directory.resolve(selected), configuration,
+                        new ProviderClientTest.FakeTransport());
                 try {
-                    assertThrows(java.util.concurrent.ExecutionException.class, () -> instance.start().get(10, TimeUnit.SECONDS));
+                    assertThrows(ExecutionException.class,
+                            () -> instance.start().get(10, TimeUnit.SECONDS));
                     assertFalse(stub.operationsSeen.contains("/example/complete"));
-                } finally { instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+                } finally {
+                    instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                }
             }
         }
     }
 
-    @Test void profileMigrationPreservesDurableIdentityAndAssignedIds(@TempDir Path directory) throws Exception {
+    @Test
+    void profileMigrationPreservesDurableIdentityAndAssignedIds(@TempDir Path directory) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
-            var configuration = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Migration");
+            var configuration =
+                    new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Migration");
             ProviderClient first = client(stub, directory, configuration, new ProviderClientTest.FakeTransport());
             JsonObject registration;
-            try { registration = first.start().get(20, TimeUnit.SECONDS); }
-            finally { first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+            try {
+                registration = first.start().get(20, TimeUnit.SECONDS);
+            } finally {
+                first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
             JsonObject previous;
             try (ProviderStateStore store = new ProviderStateStore(directory)) {
-                previous = store.read(); JsonObject legacy = previous.deepCopy();
-                legacy.remove("protocol"); legacy.remove("profile");
+                previous = store.read();
+                JsonObject legacy = previous.deepCopy();
+                legacy.remove("protocol");
+                legacy.remove("profile");
                 legacy.getAsJsonObject("registration").addProperty("protocol", "legacy-protocol-fixture");
                 legacy.getAsJsonObject("registration").addProperty("profile", "legacy-profile-fixture");
                 store.write(legacy);
@@ -87,10 +127,14 @@ class ProviderJourneysTest {
             ProviderClient resumed = client(stub, directory, configuration, new ProviderClientTest.FakeTransport());
             try {
                 JsonObject migrated = resumed.start().get(20, TimeUnit.SECONDS);
-                for (String field : new String[]{"instanceId", "serviceId", "registrationId", "keyId"})
+                for (String field : new String[]{"instanceId", "serviceId", "registrationId", "keyId"}) {
                     assertEquals(registration.get(field), migrated.get(field));
-                assertEquals(1, stub.registrations); assertEquals(2, stub.generation);
-            } finally { resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+                }
+                assertEquals(1, stub.registrations);
+                assertEquals(2, stub.generation);
+            } finally {
+                resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
             try (ProviderStateStore store = new ProviderStateStore(directory)) {
                 JsonObject current = store.read();
                 assertEquals(previous.get("privateKey"), current.get("privateKey"));
@@ -100,49 +144,72 @@ class ProviderJourneysTest {
         }
     }
 
-    @Test void requiredUnknownExtensionFailsBeforeCredentialTransmission(@TempDir Path directory) throws Exception {
+    @Test
+    void requiredUnknownExtensionFailsBeforeCredentialTransmission(@TempDir Path directory) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
-            stub.extensionMetadata = JsonParser.parseString("{\"org.example.required\":{\"version\":1,\"critical\":true,\"data\":{}}}").getAsJsonObject();
+            stub.extensionMetadata =
+                    JsonParser.parseString("{\"org.example.required\":{\"version\":1,\"critical\":true,\"data\":{}}}")
+                            .getAsJsonObject();
             var configuration = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example",
-                ProviderClient.NEW_SERVICE, ProviderClient.BEARER_TOKEN, "independent-provider-token", null, null, Map.of());
+                    ProviderClient.NEW_SERVICE, ProviderClient.BEARER_TOKEN, "independent-provider-token", null, null,
+                    Map.of());
             ProviderClient instance = client(stub, directory, configuration, new ProviderClientTest.FakeTransport());
             try {
-                assertThrows(java.util.concurrent.ExecutionException.class, () -> instance.start().get(20, TimeUnit.SECONDS));
-                assertNull(stub.challengeAuthorization); assertEquals(0, stub.registrations);
-            } finally { instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+                assertThrows(ExecutionException.class,
+                        () -> instance.start().get(20, TimeUnit.SECONDS));
+                assertNull(stub.challengeAuthorization);
+                assertEquals(0, stub.registrations);
+            } finally {
+                instance.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
         }
     }
 
-    @Test void recoversCommittedRegistrationWhenCompletionResponseIsLost(@TempDir Path directory) throws Exception {
+    @Test
+    void recoversCommittedRegistrationWhenCompletionResponseIsLost(@TempDir Path directory) throws Exception {
         // Exercise bearer attachment too: a recovery challenge intentionally has neither enrollment
         // placement nor bearer authorization, while the recovered registration retains both bindings.
-        for (boolean attach : new boolean[]{false, true}) try (IndependentProviderStub stub = new IndependentProviderStub()) {
-            Path statePath = directory.resolve(attach ? "attached" : "standalone");
-            var configuration = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Lost completion",
-                attach ? ProviderClient.ATTACH_INSTANCE : ProviderClient.NEW_SERVICE,
-                attach ? ProviderClient.BEARER_TOKEN : ProviderClient.ANONYMOUS_PROOF_OF_WORK,
-                attach ? "independent-provider-token" : null, attach ? "EU" : null, attach ? "proxy" : null,
-                attach ? Map.of("location", "london") : Map.of());
-            stub.loseCompletionResponse = true;
-            ProviderClient first = client(stub, statePath, configuration, new ProviderClientTest.FakeTransport());
-            try { assertThrows(java.util.concurrent.ExecutionException.class, () -> first.start().get(20, TimeUnit.SECONDS)); }
-            finally { first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
-            JsonObject before;
-            try (ProviderStateStore state = new ProviderStateStore(statePath)) {
-                before = state.read(); assertTrue(before.has("challenge")); assertFalse(before.has("registration"));
-            }
-            assertEquals(1, stub.registrations, "The provider committed despite the lost HTTP response");
-            ProviderClient resumed = client(stub, statePath, configuration, new ProviderClientTest.FakeTransport());
-            try {
-                JsonObject registration = resumed.start().get(20, TimeUnit.SECONDS);
-                assertEquals(stub.registration.get("registrationId"), registration.get("registrationId"));
-                assertEquals(1, stub.registrations); assertEquals(2, stub.generation);
-                assertTrue(resumed.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
-                assertTrue(stub.keyAcknowledgements > 0, "Lost one-time key material is freshly provisioned");
-            } finally { resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
-            try (ProviderStateStore state = new ProviderStateStore(statePath)) {
-                JsonObject after = state.read(); assertFalse(after.has("challenge"));
-                assertEquals(before.get("privateKey"), after.get("privateKey"));
+        for (boolean attach : new boolean[]{false, true}) {
+            try (IndependentProviderStub stub = new IndependentProviderStub()) {
+                Path statePath = directory.resolve(attach ? "attached" : "standalone");
+                var configuration =
+                        new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Lost completion",
+                                attach ? ProviderClient.ATTACH_INSTANCE : ProviderClient.NEW_SERVICE,
+                                attach ? ProviderClient.BEARER_TOKEN : ProviderClient.ANONYMOUS_PROOF_OF_WORK,
+                                attach ? "independent-provider-token" : null, attach ? "EU" : null,
+                                attach ? "proxy" : null,
+                                attach ? Map.of("location", "london") : Map.of());
+                stub.loseCompletionResponse = true;
+                ProviderClient first = client(stub, statePath, configuration, new ProviderClientTest.FakeTransport());
+                try {
+                    assertThrows(ExecutionException.class,
+                            () -> first.start().get(20, TimeUnit.SECONDS));
+                } finally {
+                    first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                }
+                JsonObject before;
+                try (ProviderStateStore state = new ProviderStateStore(statePath)) {
+                    before = state.read();
+                    assertTrue(before.has("challenge"));
+                    assertFalse(before.has("registration"));
+                }
+                assertEquals(1, stub.registrations, "The provider committed despite the lost HTTP response");
+                ProviderClient resumed = client(stub, statePath, configuration, new ProviderClientTest.FakeTransport());
+                try {
+                    JsonObject registration = resumed.start().get(20, TimeUnit.SECONDS);
+                    assertEquals(stub.registration.get("registrationId"), registration.get("registrationId"));
+                    assertEquals(1, stub.registrations);
+                    assertEquals(2, stub.generation);
+                    assertTrue(resumed.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
+                    assertTrue(stub.keyAcknowledgements > 0, "Lost one-time key material is freshly provisioned");
+                } finally {
+                    resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                }
+                try (ProviderStateStore state = new ProviderStateStore(statePath)) {
+                    JsonObject after = state.read();
+                    assertFalse(after.has("challenge"));
+                    assertEquals(before.get("privateKey"), after.get("privateKey"));
+                }
             }
         }
     }
