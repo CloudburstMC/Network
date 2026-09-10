@@ -1,7 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChannel;
-import dev.kastle.webrtc.PortAllocatorConfig;
+import io.github.sendablemetatype.webrtc.PortAllocatorConfig;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.DefaultChannelConfig;

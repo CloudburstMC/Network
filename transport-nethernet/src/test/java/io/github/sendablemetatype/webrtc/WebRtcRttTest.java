@@ -1,4 +1,4 @@
-package dev.kastle.webrtc;
+package io.github.sendablemetatype.webrtc;
 
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcRtt;
 import org.junit.jupiter.api.Test;

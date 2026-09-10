@@ -4,7 +4,7 @@ import org.cloudburstmc.netty.channel.nethernet.backend.LibWebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
-import dev.kastle.webrtc.PeerConnectionFactory;
+import io.github.sendablemetatype.webrtc.PeerConnectionFactory;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFactory;
 

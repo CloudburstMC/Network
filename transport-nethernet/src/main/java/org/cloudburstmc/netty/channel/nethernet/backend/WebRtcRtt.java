@@ -1,9 +1,9 @@
 package org.cloudburstmc.netty.channel.nethernet.backend;
 
-import dev.kastle.webrtc.RTCPeerConnection;
-import dev.kastle.webrtc.RTCStats;
-import dev.kastle.webrtc.RTCStatsReport;
-import dev.kastle.webrtc.RTCStatsType;
+import io.github.sendablemetatype.webrtc.RTCPeerConnection;
+import io.github.sendablemetatype.webrtc.RTCStats;
+import io.github.sendablemetatype.webrtc.RTCStatsReport;
+import io.github.sendablemetatype.webrtc.RTCStatsType;
 
 import java.util.Map;
 import java.util.function.DoubleConsumer;

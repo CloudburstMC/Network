@@ -1,14 +1,14 @@
 package org.cloudburstmc.netty.channel.nethernet.backend;
 
-import dev.kastle.webrtc.CreateSessionDescriptionObserver;
-import dev.kastle.webrtc.RTCDataChannelBuffer;
-import dev.kastle.webrtc.RTCDataChannelObserver;
-import dev.kastle.webrtc.RTCDataChannelState;
-import dev.kastle.webrtc.RTCIceGatheringState;
-import dev.kastle.webrtc.RTCPeerConnectionState;
-import dev.kastle.webrtc.RTCSdpType;
-import dev.kastle.webrtc.RTCSessionDescription;
-import dev.kastle.webrtc.SetSessionDescriptionObserver;
+import io.github.sendablemetatype.webrtc.CreateSessionDescriptionObserver;
+import io.github.sendablemetatype.webrtc.RTCDataChannelBuffer;
+import io.github.sendablemetatype.webrtc.RTCDataChannelObserver;
+import io.github.sendablemetatype.webrtc.RTCDataChannelState;
+import io.github.sendablemetatype.webrtc.RTCIceGatheringState;
+import io.github.sendablemetatype.webrtc.RTCPeerConnectionState;
+import io.github.sendablemetatype.webrtc.RTCSdpType;
+import io.github.sendablemetatype.webrtc.RTCSessionDescription;
+import io.github.sendablemetatype.webrtc.SetSessionDescriptionObserver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;

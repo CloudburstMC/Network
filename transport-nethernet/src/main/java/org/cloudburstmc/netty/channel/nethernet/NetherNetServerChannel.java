@@ -8,7 +8,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChanne
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
-import dev.kastle.webrtc.PeerConnectionFactory;
+import io.github.sendablemetatype.webrtc.PeerConnectionFactory;
 import io.netty.channel.AbstractServerChannel;
 import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelMetadata;

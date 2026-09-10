@@ -1,7 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetAnswerDecorator;
-import dev.kastle.webrtc.PortAllocatorConfig;
+import io.github.sendablemetatype.webrtc.PortAllocatorConfig;
 import io.netty.channel.ChannelOption;
 
 public class NetherChannelOption<T> extends ChannelOption<T> {
