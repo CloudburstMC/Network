@@ -547,7 +547,7 @@ public final class ProviderClient implements AutoCloseable {
                     key.has("retireAfter") ? key.get("retireAfter").getAsLong() : Long.MAX_VALUE));
         }
         transport.installTicketKeys(List.copyOf(keys)).toCompletableFuture().get(10, TimeUnit.SECONDS);
-        installedKeyId = keys.getLast().keyId();
+        installedKeyId = keys.get(keys.size() - 1).keyId();
     }
 
     /**
@@ -1091,7 +1091,6 @@ public final class ProviderClient implements AutoCloseable {
                 } catch (Exception e) {
                     diagnostics.accept("provider_state_close_failed");
                 }
-                http.close();
                 executor.shutdown();
                 stopped.complete(null);
             }

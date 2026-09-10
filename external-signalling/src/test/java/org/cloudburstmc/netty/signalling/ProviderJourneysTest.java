@@ -69,7 +69,7 @@ class ProviderJourneysTest {
                         Thread.sleep(25);
                     }
                     assertEquals(1, stub.events.size());
-                    assertFalse(stub.events.getFirst().has("privatePayload"));
+                    assertFalse(stub.events.get(0).has("privatePayload"));
                     assertEquals(0, transport.admissions, "Control-plane delivery cannot stage individual clients");
                     instance.deregister().get(10, TimeUnit.SECONDS);
                     assertTrue(stub.draining);
