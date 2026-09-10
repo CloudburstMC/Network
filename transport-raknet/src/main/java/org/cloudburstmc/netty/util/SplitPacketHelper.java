@@ -32,7 +32,7 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
     private final IntObjectMap<EncapsulatedPacket> packets;
     private final int partId;
     private final int expectedLength;
-    private final long created = System.currentTimeMillis();
+    private final long created = RakUtils.clock();
     private int reassembledSize;
 
     public SplitPacketHelper(int partId, long expectedLength) {
@@ -103,7 +103,7 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
         // If we're waiting on a split packet for more than 30 seconds, the client on the other end is either severely
         // lagging, or has died.
         if (this.refCnt() <= 0) throw new IllegalReferenceCountException(this.refCnt());
-        return System.currentTimeMillis() - created >= 30000;
+        return RakUtils.clock() - created >= 30000;
     }
 
     @Override

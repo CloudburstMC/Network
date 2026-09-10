@@ -24,6 +24,7 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
+import org.cloudburstmc.netty.util.RakUtils;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -72,7 +73,7 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
     }
 
     protected void onBlockedTick() {
-        long currTime = System.currentTimeMillis();
+        long currTime = RakUtils.clock();
 
         RakServerMetrics metrics = this.channel.config().getMetrics();
 
@@ -95,7 +96,7 @@ public class RakServerRateLimiter extends SimpleChannelInboundHandler<DatagramPa
         }
 
         long millis = unit.toMillis(time);
-        this.blockedConnections.put(address, System.currentTimeMillis() + millis);
+        this.blockedConnections.put(address, RakUtils.clock() + millis);
 
         if (this.channel.config().getMetrics() != null) {
             this.channel.config().getMetrics().addressBlocked(address);

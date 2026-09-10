@@ -30,6 +30,14 @@ import java.util.Queue;
 
 public class RakUtils {
 
+    /**
+     * Monotonic millisecond source for elapsed time. Unaffected by wall clock steps, so it is not
+     * comparable with {@link System#currentTimeMillis()}.
+     */
+    public static long clock() {
+        return System.nanoTime() / 1_000_000L;
+    }
+
     private static final Constructor<DefaultChannelPipeline> DEFAULT_CHANNEL_PIPELINE_CONSTRUCTOR;
     private static final Method PIPELINE_DESTROY_METHOD;
 

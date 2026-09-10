@@ -57,14 +57,14 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private volatile RakState state;
 
-    private volatile long lastTouched = System.currentTimeMillis();
+    private volatile long lastTouched = RakUtils.clock();
     private volatile long lastFlush;
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakSlidingWindow slidingWindow;
     private int splitIndex;
     private int datagramReadIndex;
-    int datagramWriteIndex;
+    private int datagramWriteIndex;
     private int reliabilityReadIndex;
     private int reliabilityWriteIndex;
     private int[] orderReadIndex;
@@ -76,7 +76,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private FastBinaryMinHeap<EncapsulatedPacket> outgoingPackets;
     private long[] outgoingPacketNextWeights;
     private FastBinaryMinHeap<EncapsulatedPacket>[] orderingHeaps;
-    long currentPingTime = -1;
+    private long currentPingTime = -1;
     private long lastPingTime = -1;
     private long lastPongTime = -1;
     private IntObjectMap<RakDatagramPacket> sentDatagrams;
@@ -473,7 +473,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void onTick() {
-        long curTime = System.currentTimeMillis();
+        long curTime = RakUtils.clock();
 
         int maxQueuedBytes = this.channel.config().getOption(RakChannelOption.RAK_MAX_QUEUED_BYTES);
 
@@ -517,23 +517,24 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         ChannelHandlerContext ctx = ctx();
 
-        this.writePing(ctx, curTime);
+        this.writePing(ctx);
 
         this.internalFlush(ctx);
     }
 
-    void writePing(ChannelHandlerContext ctx, long curTime) {
-        if (this.currentPingTime + 2000L < curTime && this.datagramWriteIndex > 1) {
+    void writePing(ChannelHandlerContext ctx) {
+        long pingTime = RakUtils.clock();
+        if (this.currentPingTime + 2000L < pingTime && this.datagramWriteIndex > 1) {
             ByteBuf buffer = ctx.alloc().ioBuffer(9);
             buffer.writeByte(ID_CONNECTED_PING);
-            buffer.writeLong(curTime);
-            this.currentPingTime = curTime;
+            buffer.writeLong(pingTime);
+            this.currentPingTime = pingTime;
             this.write(ctx, new RakMessage(buffer, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE), ctx.voidPromise());
         }
     }
 
     private void internalFlush(ChannelHandlerContext ctx) {
-        long curTime = System.currentTimeMillis();
+        long curTime = RakUtils.clock();
         if (this.lastFlush == curTime) {
             return; // do not flush multiple times within one ms
         }
@@ -709,7 +710,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void sendImmediate(ChannelHandlerContext ctx, EncapsulatedPacket[] packets) {
-        long curTime = System.currentTimeMillis();
+        long curTime = RakUtils.clock();
         for (EncapsulatedPacket packet : packets) {
             RakDatagramPacket datagram = this.createDatagramPacket();
             datagram.setSendTime(curTime);
@@ -915,29 +916,35 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     public void recalculatePongTime(long pingTime) {
         if (this.currentPingTime == pingTime) {
             this.lastPingTime = this.currentPingTime;
-            this.lastPongTime = System.currentTimeMillis();
+            this.lastPongTime = RakUtils.clock();
         }
     }
 
     private void touch() {
         this.checkForClosed();
-        this.lastTouched = System.currentTimeMillis();
+        this.lastTouched = RakUtils.clock();
     }
 
+    /**
+     * @param curTime reading from {@link RakUtils#clock()}, not a wall clock
+     */
     public boolean isStale(long curTime) {
         return curTime - this.lastTouched >= SESSION_STALE_MS;
     }
 
     public boolean isStale() {
-        return this.isStale(System.currentTimeMillis());
+        return this.isStale(RakUtils.clock());
     }
 
+    /**
+     * @param curTime reading from {@link RakUtils#clock()}, not a wall clock
+     */
     public boolean isTimedOut(long curTime) {
         return curTime - this.lastTouched >= this.channel.config().getOption(RakChannelOption.RAK_SESSION_TIMEOUT);
     }
 
     public boolean isTimedOut() {
-        return this.isTimedOut(System.currentTimeMillis());
+        return this.isTimedOut(RakUtils.clock());
     }
 
     public long getPing() {
