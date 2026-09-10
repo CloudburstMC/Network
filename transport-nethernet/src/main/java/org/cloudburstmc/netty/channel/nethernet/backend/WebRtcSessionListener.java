@@ -65,14 +65,15 @@ public interface WebRtcSessionListener {
     void onRemoteAddress(InetSocketAddress address, String candidateType);
 
     /**
-     * The engine wrote previously queued message bytes to the wire, shrinking
-     * its internal send buffer by the given amount. Consumers use this to
+     * The engine's buffered amount decreased by the given number of bytes.
+     * Notifications may combine changes and do not acknowledge peer delivery.
+     * Consumers use this to
      * bound how much data they queue into the engine
      * (see {@link WebRtcSession#send}): pause above a high water mark of
      * unsent bytes, resume when this callback drains below a low water mark.
      * Default is a no-op for consumers that do not track engine buffering.
      *
-     * @param bytes the number of buffered bytes handed to the wire
+     * @param bytes the decrease in buffered bytes
      */
     default void onBytesSent(long bytes) {
     }

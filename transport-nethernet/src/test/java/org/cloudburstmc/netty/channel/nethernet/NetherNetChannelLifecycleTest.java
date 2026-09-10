@@ -582,7 +582,7 @@ class NetherNetChannelLifecycleTest {
     private static final class TestSession implements WebRtcSession {
         private final AtomicInteger closes = new AtomicInteger();
 
-        @Override public void send(ByteBuffer data) { }
+        @Override public void send(ByteBuffer data, java.util.function.Consumer<Throwable> completion) { completion.accept(null); }
         @Override public void addRemoteCandidate(String candidateSdp) { }
         @Override public void close() { closes.incrementAndGet(); }
     }
@@ -598,16 +598,17 @@ class NetherNetChannelLifecycleTest {
         }
 
         @Override
-        protected void sendFramed(ByteBuf framed) {
+        protected void sendFramed(ByteBuf framed, java.util.function.Consumer<Throwable> completion) {
             sends.incrementAndGet();
             if (sendFailure != null) {
                 throw sendFailure;
             }
+            completion.accept(null);
         }
 
         @Override
-        protected AbstractUnsafe newUnsafe() {
-            return new AbstractUnsafe() {
+        protected NetherNetUnsafe newUnsafe() {
+            return new NetherNetUnsafe() {
                 @Override
                 public void connect(SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
                     promise.setFailure(new UnsupportedOperationException());

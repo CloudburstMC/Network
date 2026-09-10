@@ -61,7 +61,8 @@ class NetherNetHttpSignalingTest {
             }
             return new WebRtcSession() {
                 @Override
-                public void send(ByteBuffer data) {
+                public void send(ByteBuffer data, java.util.function.Consumer<Throwable> completion) {
+                    completion.accept(null);
                 }
 
                 @Override

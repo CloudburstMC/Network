@@ -4,6 +4,8 @@ plugins {
 
 description = "NetherNet transport for Netty"
 
+val webrtcNativePlatform = providers.gradleProperty("webrtcNativePlatform")
+
 dependencies {
     api(platform(libs.netty.bom))
     api(libs.bundles.netty)
@@ -21,8 +23,20 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
     testRuntimeOnly(libs.slf4j.jdk14)
 
+    if (webrtcNativePlatform.isPresent) {
+        val webrtc = libs.webrtc.java.get()
+        testRuntimeOnly("${webrtc.module.group}:${webrtc.module.name}:${webrtc.versionConstraint.requiredVersion}:${webrtcNativePlatform.get()}")
+    }
+
     constraints {
         testImplementation(libs.jspecify)
+    }
+}
+
+tasks.test {
+    systemProperty("webrtc.nativeTests", webrtcNativePlatform.isPresent.toString())
+    if (webrtcNativePlatform.isPresent) {
+        jvmArgs("--enable-native-access=ALL-UNNAMED")
     }
 }
 

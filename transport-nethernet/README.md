@@ -86,14 +86,35 @@ same framing as before.
 
 ### Write failures
 
-A known closed or unavailable transport, or a synchronous binding failure,
-fails the Netty write and closes the channel through its normal write-error
-path. Queued buffers are released and their pending writes fail as well.
+A write future succeeds when the native send operation accepts every frame
+of the message. It does not acknowledge peer receipt. Multiple frames may be
+in flight; completion handling is coalesced on the channel's event loop.
+The Java payload buffer is released as soon as the native binding has copied
+it; waiting for acceptance retains only the completion state.
 
-A successful write means the binding call completed. It does not confirm
-native engine acceptance or peer receipt: the current WebRTC binding logs
-asynchronous send rejections without returning them to the write future.
-Channel closures are reported through the existing state callbacks.
+A native rejection or a failure preparing a send closes the connection and
+fails pending writes, releasing their buffers. Retrying a missing fragment
+after later frames were submitted could corrupt the reliable stream. Buffer
+drain notifications control backpressure separately from send acceptance.
+
+Custom `WebRtcSession` backends implement `send(data, completion)` and report
+null for transport acceptance or a failure cause. The callback must return
+promptly and may run on an engine thread. Custom channels use a
+`NetherNetUnsafe` subclass so send failures use the same close path as the
+built-in client and server channels.
+
+### Native integration tests
+
+The default test suite uses controlled backends. To also exercise native send
+acceptance and rejection on the client and server paths, select the native
+classifier for the test JVM, for example:
+
+```shell
+./gradlew :transport-nethernet:test -PwebrtcNativePlatform=linux-x86_64
+```
+
+CI selects the native classifier for each runner and includes these tests in
+the build and release checks.
 
 ### Upstream integration examples
 

@@ -100,12 +100,13 @@ class NetherNetChannelRttSamplerTest {
         }
 
         @Override
-        protected void sendFramed(ByteBuf framed) {
+        protected void sendFramed(ByteBuf framed, java.util.function.Consumer<Throwable> completion) {
+            completion.accept(null);
         }
 
         @Override
-        protected AbstractUnsafe newUnsafe() {
-            return new AbstractUnsafe() {
+        protected NetherNetUnsafe newUnsafe() {
+            return new NetherNetUnsafe() {
                 @Override
                 public void connect(SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
                     promise.setFailure(new UnsupportedOperationException("Test channel cannot connect"));

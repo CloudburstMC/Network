@@ -394,10 +394,11 @@ class NetherNetServerChannelLazyBackendTest {
         final LinkedBlockingQueue<byte[]> sent = new LinkedBlockingQueue<>();
 
         @Override
-        public void send(ByteBuffer data) {
+        public void send(ByteBuffer data, java.util.function.Consumer<Throwable> completion) {
             byte[] payload = new byte[data.remaining()];
             data.get(payload);
             sent.add(payload);
+            completion.accept(null);
         }
         @Override public void addRemoteCandidate(String candidateSdp) { }
 

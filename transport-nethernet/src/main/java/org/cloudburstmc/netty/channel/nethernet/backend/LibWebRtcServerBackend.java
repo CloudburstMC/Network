@@ -515,12 +515,9 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
                 }
 
                 @Override
-                public void onBufferedAmountChange(long previousAmount) {
-                    // Despite the legacy parameter name, webrtc-java passes
-                    // libwebrtc's sent_data_size here: the number of buffered
-                    // bytes that were just written to the wire.
+                public void onBufferedAmountChange(long sentDataSize) {
                     if (reliable && !closedFlag) {
-                        listener.onBytesSent(previousAmount);
+                        listener.onBytesSent(sentDataSize);
                     }
                 }
             };
@@ -537,7 +534,7 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
         }
 
         @Override
-        public void send(ByteBuffer data) {
+        public void send(ByteBuffer data, Consumer<Throwable> completion) {
             if (closedFlag) {
                 throw new IllegalStateException("WebRTC session is closed");
             }
@@ -545,7 +542,7 @@ public class LibWebRtcServerBackend implements WebRtcServerBackend {
             if (r == null) {
                 throw new IllegalStateException("Reliable data channel is unavailable");
             }
-            r.sendAsync(new RTCDataChannelBuffer(data, true));
+            WebRtcSend.send(r, data, completion);
         }
 
         @Override

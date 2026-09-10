@@ -59,12 +59,13 @@ class NetherNetBackpressureTest {
             markTransportOpen();
         }
 
-        @Override protected void sendFramed(ByteBuf framed) {
+        @Override protected void sendFramed(ByteBuf framed, java.util.function.Consumer<Throwable> completion) {
             sentBytes.add(framed.readableBytes());
+            completion.accept(null);
         }
 
-        @Override protected AbstractUnsafe newUnsafe() {
-            return new AbstractUnsafe() {
+        @Override protected NetherNetUnsafe newUnsafe() {
+            return new NetherNetUnsafe() {
                 @Override public void connect(SocketAddress remote, SocketAddress local, ChannelPromise promise) {
                     promise.setFailure(new UnsupportedOperationException());
                 }

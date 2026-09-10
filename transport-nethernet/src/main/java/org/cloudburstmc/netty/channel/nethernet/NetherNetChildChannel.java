@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.Objects;
 import java.util.function.DoubleConsumer;
+import java.util.function.Consumer;
 
 /**
  * A server accepted NetherNet connection, backed by a
@@ -61,12 +62,12 @@ public class NetherNetChildChannel extends NetherNetChannel {
     }
 
     @Override
-    protected void sendFramed(ByteBuf framed) {
+    protected void sendFramed(ByteBuf framed, Consumer<Throwable> completion) {
         WebRtcSession session = this.session;
         if (session == null) {
             throw new IllegalStateException("WebRTC session is unavailable");
         }
-        session.send(toNioBuffer(framed));
+        session.send(toNioBuffer(framed), completion);
     }
 
     @Override
@@ -80,8 +81,8 @@ public class NetherNetChildChannel extends NetherNetChannel {
     }
 
     @Override
-    protected AbstractUnsafe newUnsafe() {
-        return new AbstractUnsafe() {
+    protected NetherNetUnsafe newUnsafe() {
+        return new NetherNetUnsafe() {
             @Override
             public void connect(SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
                 promise.setFailure(new UnsupportedOperationException("Child channel cannot connect"));

@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.backend;
 
 import java.nio.ByteBuffer;
+import java.util.function.Consumer;
 import java.util.function.DoubleConsumer;
 
 /**
@@ -16,16 +17,17 @@ public interface WebRtcSession {
      * transmission on the reliable data channel without blocking on the
      * engine's network processing. The data is copied out of the buffer
      * before this method returns, so the caller may reuse the buffer
-     * immediately. A known closed or unavailable transport must fail the call;
-     * synchronous binding failures propagate to the caller. Returning normally
-     * means the binding call completed, not that the native engine accepted the
-     * message or the peer received it. The current binding logs asynchronous
-     * send rejections; channel closures are reported separately through the listener.
+     * immediately. Completion reports acceptance by the transport, not delivery
+     * to the peer. It must be called once, with null on success or the failure
+     * cause, and may run on an engine thread or before this method returns.
+     * A failure preparing the operation may instead be thrown synchronously,
+     * without calling completion.
      *
      * @param data the message payload, already NetherNet framed
+     * @param completion receives the result of the send operation; must return promptly
      * @throws IllegalStateException if the session is known to be closed or its data channel is unavailable
      */
-    void send(ByteBuffer data);
+    void send(ByteBuffer data, Consumer<Throwable> completion);
 
     /**
      * Applies a remote ICE candidate signaled for this session. Candidates

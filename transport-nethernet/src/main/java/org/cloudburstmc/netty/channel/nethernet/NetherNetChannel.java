@@ -3,6 +3,9 @@ package org.cloudburstmc.netty.channel.nethernet;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufHolder;
+import io.netty.buffer.DefaultByteBufHolder;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.AbstractChannel;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelConfig;
@@ -10,7 +13,11 @@ import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.AbstractReferenceCounted;
+import io.netty.util.IllegalReferenceCountException;
 import io.netty.util.concurrent.ScheduledFuture;
+import io.netty.util.concurrent.GlobalEventExecutor;
+import io.netty.util.concurrent.SingleThreadEventExecutor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -18,13 +25,17 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleConsumer;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 /**
  * Base netty channel for NetherNet connections. Deliberately thin: it moves
@@ -80,10 +91,22 @@ public abstract class NetherNetChannel extends AbstractChannel {
     private int pendingInboundBytes;
     private boolean inboundDrainScheduled;
 
-    // Bytes handed to the engine and not yet reported sent via
-    // onEngineBytesSent. Incremented on the event loop, decremented on engine
-    // threads.
+    // Native acceptance completes a write; only buffered-amount notifications
+    // reduce this counter. Failed sends may also be included in those deltas.
     private final AtomicLong engineOutstanding = new AtomicLong();
+    private final AtomicReference<IOException> writeFailure = new AtomicReference<>();
+    private final AtomicBoolean writeCompletionScheduled = new AtomicBoolean();
+    private final Runnable writeCompletionTask = this::completeWrites;
+    private final Runnable shutdownHook = () -> {
+        if (isOpen() && eventLoop().inEventLoop()) {
+            IOException failure = writeFailure.get();
+            ((NetherNetUnsafe) unsafe()).closeWithSendFailure(failure != null ? failure
+                    : new IOException("Event loop stopped before NetherNet sends completed"));
+        }
+    };
+    private int pendingSends;
+    private boolean completingWrites;
+    private boolean removingCompletedWrites;
     // Set on the event loop when doWrite pauses on the high water mark; the
     // engine thread that drains below the low water mark clears it and
     // schedules the resume flush. The writer rechecks the counter after
@@ -301,22 +324,61 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     protected Object filterOutboundMessage(Object msg) {
-        if (!(msg instanceof ByteBuf)) {
+        if (!(msg instanceof ByteBuf buffer)) {
             throw new UnsupportedOperationException("NetherNet writes require a ByteBuf");
         }
-        return msg;
+        return new PendingWrite(this, buffer);
     }
 
     @Override
     protected void doWrite(ChannelOutboundBuffer in) throws Exception {
-        Object msg;
-        while ((msg = in.current()) != null) {
-            if (engineSaturated(in)) {
-                return;
-            }
-            writeFramed(msg);
-            in.remove();
+        if (removingCompletedWrites) {
+            requestWriteCompletion();
+            return;
         }
+        removeCompletedWrites(in);
+        if (!isOpen()) {
+            return;
+        }
+        IOException failure = writeFailure.get();
+        if (failure != null) {
+            ((NetherNetUnsafe) unsafe()).closeWithSendFailure(failure);
+            return;
+        }
+        if (in.size() == pendingSends) {
+            return;
+        }
+        // Combine repeated flushes while native sends are pending, so adding
+        // one message at a time does not repeatedly scan the in-flight batch.
+        if (pendingSends != 0 && !completingWrites) {
+            requestWriteCompletion();
+            return;
+        }
+        in.forEachFlushedMessage(msg -> {
+            PendingWrite write = (PendingWrite) msg;
+            if (write.submitted) {
+                return true;
+            }
+            if (engineSaturated(in)) {
+                return false;
+            }
+            write.submitted = true;
+            pendingSends++;
+            // A drain notification can beat sendFramed's return.
+            engineOutstanding.addAndGet(write.content().readableBytes());
+            try {
+                sendFramed(write.content(), write);
+                write.releaseContent();
+            } catch (Throwable cause) {
+                write.accept(cause);
+            }
+            IOException sendFailure = writeFailure.get();
+            if (sendFailure != null) {
+                ((NetherNetUnsafe) unsafe()).closeWithSendFailure(sendFailure);
+                return false;
+            }
+            return isOpen();
+        });
     }
 
     /**
@@ -344,11 +406,14 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     /**
-     * Reports engine buffer drain progress (bytes written to the wire).
+     * Reports a decrease in the engine's buffered amount, not peer delivery.
      * Called from engine threads via the session listener; resumes a paused
      * write path once the buffer is below the low water mark.
      */
     protected void onEngineBytesSent(long bytes) {
+        if (!isOpen() || bytes <= 0) {
+            return;
+        }
         long outstanding = engineOutstanding.addAndGet(-bytes);
         if (outstanding < 0) {
             // Sends dropped by the engine or counter reset races; clamp.
@@ -357,31 +422,157 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
         if (writesPaused && outstanding <= ENGINE_RESUME_LOW_WATER_MARK) {
             writesPaused = false;
-            try {
-                eventLoop().execute(() -> {
-                    if (open) {
-                        unsafe().flush();
+            requestWriteCompletion();
+        }
+    }
+
+    private void requestWriteCompletion() {
+        if (isOpen() && writeCompletionScheduled.compareAndSet(false, true)) {
+            scheduleWriteCompletion();
+        }
+    }
+
+    private void scheduleWriteCompletion() {
+        EventLoop loop = eventLoop();
+        try {
+            loop.execute(writeCompletionTask);
+        } catch (RejectedExecutionException cause) {
+            if (loop != eventLoop()) {
+                scheduleWriteCompletion();
+            } else if (!loop.isShuttingDown()) {
+                // A bounded task queue may be temporarily full. Keep one retry
+                // pending; no polling is needed on the normal send path.
+                GlobalEventExecutor.INSTANCE.schedule(() -> {
+                    if (isOpen()) {
+                        scheduleWriteCompletion();
                     }
-                });
-            } catch (Exception ignored) {
-                // Event loop rejected the task (shutdown race).
+                }, 10, TimeUnit.MILLISECONDS);
+            } else {
+                // The shutdown hook closes on the owner thread, never here on
+                // a native callback thread or after that owner has terminated.
+                writeCompletionScheduled.set(false);
             }
         }
     }
 
-    private void writeFramed(Object msg) throws Exception {
-        ByteBuf framed = (ByteBuf) msg;
-        int bytes = framed.readableBytes();
-        // Count before handing to the engine: its bytes sent callback fires
-        // from engine threads and can beat the statement after sendFramed,
-        // where a subtract first would clamp to zero and the late increment
-        // would inflate the counter permanently, wedging the write gate.
-        engineOutstanding.addAndGet(bytes);
+    private void completeWrites() {
+        if (!eventLoop().inEventLoop()) {
+            scheduleWriteCompletion();
+            return;
+        }
+        writeCompletionScheduled.set(false);
+        if (!isOpen()) {
+            return;
+        }
+        completingWrites = true;
         try {
-            sendFramed(framed);
-        } catch (Exception e) {
-            engineOutstanding.updateAndGet(outstanding -> Math.max(0, outstanding - bytes));
-            throw new IOException("Failed to send NetherNet message", e);
+            ChannelOutboundBuffer in = unsafe().outboundBuffer();
+            if (in == null) {
+                return;
+            }
+            removeCompletedWrites(in);
+            IOException failure = writeFailure.get();
+            if (failure != null && isOpen()) {
+                // Retrying a rejected fragment after later frames were submitted
+                // could corrupt the reliable stream. Fail the connection instead.
+                ((NetherNetUnsafe) unsafe()).closeWithSendFailure(failure);
+            } else if (isOpen() && in.size() > pendingSends) {
+                ((NetherNetUnsafe) unsafe()).flushPendingWrites();
+            }
+        } finally {
+            completingWrites = false;
+        }
+    }
+
+    private void removeCompletedWrites(ChannelOutboundBuffer in) {
+        removingCompletedWrites = true;
+        try {
+            Object msg;
+            while (isOpen() && (msg = in.current()) != null) {
+                if (msg instanceof PendingWrite write) {
+                    if (write.result != PendingWrite.SUCCESS) {
+                        break;
+                    }
+                    pendingSends--;
+                }
+                // Netty replaces cancelled entries with an empty ByteBuf.
+                in.remove();
+            }
+        } finally {
+            removingCompletedWrites = false;
+        }
+    }
+
+    @Override
+    protected abstract NetherNetUnsafe newUnsafe();
+
+    protected abstract class NetherNetUnsafe extends AbstractUnsafe {
+        private void flushPendingWrites() {
+            // Resume only entries the application already flushed.
+            flush0();
+        }
+
+        private void closeWithSendFailure(IOException failure) {
+            ClosedChannelException closed = new ClosedChannelException();
+            closed.initCause(failure);
+            close(voidPromise(), failure, closed);
+        }
+    }
+
+    private static final class PendingWrite extends AbstractReferenceCounted implements ByteBufHolder, Consumer<Throwable> {
+        private static final Object SUCCESS = new Object();
+        private static final AtomicReferenceFieldUpdater<PendingWrite, Object> RESULT =
+                AtomicReferenceFieldUpdater.newUpdater(PendingWrite.class, Object.class, "result");
+        private final NetherNetChannel channel;
+        private ByteBuf content;
+        private volatile Object result;
+        private boolean submitted;
+
+        private PendingWrite(NetherNetChannel channel, ByteBuf content) {
+            this.channel = channel;
+            this.content = content;
+        }
+
+        @Override
+        public ByteBuf content() {
+            if (refCnt() == 0) {
+                throw new IllegalReferenceCountException(0);
+            }
+            return content;
+        }
+
+        private void releaseContent() {
+            // The binding copied the payload before returning. Only the result
+            // state needs to wait in Netty's outbound buffer for the callback.
+            ByteBuf buffer = content;
+            content = Unpooled.EMPTY_BUFFER;
+            buffer.release();
+        }
+
+        @Override protected void deallocate() { releaseContent(); }
+        @Override public ByteBufHolder copy() { return replace(content().copy()); }
+        @Override public ByteBufHolder duplicate() { return replace(content().duplicate()); }
+        @Override public ByteBufHolder retainedDuplicate() { return replace(content().retainedDuplicate()); }
+        @Override public ByteBufHolder replace(ByteBuf buffer) { return new DefaultByteBufHolder(buffer); }
+        @Override public PendingWrite retain() { super.retain(); return this; }
+        @Override public PendingWrite retain(int increment) { super.retain(increment); return this; }
+        @Override public PendingWrite touch() { content().touch(); return this; }
+        @Override public PendingWrite touch(Object hint) { content().touch(hint); return this; }
+
+        @Override
+        public void accept(Throwable cause) {
+            if (!channel.isOpen()) {
+                return;
+            }
+            IOException failure = cause == null ? null : cause instanceof IOException io ? io
+                    : new IOException("Failed to send NetherNet message", cause);
+            if (!RESULT.compareAndSet(this, null, failure == null ? SUCCESS : failure)) {
+                return;
+            }
+            if (failure != null) {
+                channel.writeFailure.compareAndSet(null, failure);
+            }
+            channel.requestWriteCompletion();
         }
     }
 
@@ -389,28 +580,24 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * Ships one already framed message (header byte included, at most the
      * negotiated maximum message size) to the transport. Must not take
      * ownership of the buffer; the caller releases it. Runs on the event
-     * loop.
+     * loop. Completion reports native acceptance (null) or failure and may run
+     * on another thread. It must be invoked once unless preparation throws.
      */
-    protected abstract void sendFramed(ByteBuf framed);
+    protected abstract void sendFramed(ByteBuf framed, Consumer<Throwable> completion);
 
     /**
      * Converts a framed buffer into a NIO buffer suitable for the WebRTC
-     * send path, which requires position and limit to delimit the payload
-     * and handles direct memory most efficiently.
+     * send path. The binding copies heap and direct windows before returning.
      */
     protected static ByteBuffer toNioBuffer(ByteBuf framed) {
-        ByteBuffer nio = framed.nioBuffer();
-        if (!nio.isDirect()) {
-            ByteBuffer direct = ByteBuffer.allocateDirect(nio.remaining());
-            direct.put(nio);
-            direct.flip();
-            return direct;
-        }
-        return nio;
+        return framed.nioBuffer();
     }
 
     @Override
     protected void doRegister() throws Exception {
+        if (eventLoop() instanceof SingleThreadEventExecutor executor) {
+            executor.addShutdownHook(shutdownHook);
+        }
         if (isActive()) {
             // Netty's register flow fires channelActive itself for already
             // active channels; pre set the flag so it is not fired twice, and
@@ -432,6 +619,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
     @Override
     protected void doDeregister() throws Exception {
         inboundReady = false;
+        if (eventLoop() instanceof SingleThreadEventExecutor executor) {
+            executor.removeShutdownHook(shutdownHook);
+        }
     }
 
     @Override
@@ -481,6 +671,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.transportOpen = false;
         this.writesPaused = false;
         this.engineOutstanding.set(0);
+        this.pendingSends = 0;
         inboundReady = false;
         inboundClosed = true;
         readPending = false;

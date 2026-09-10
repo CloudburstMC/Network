@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcRtt;
+import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSend;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherClientChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
@@ -24,6 +25,7 @@ import io.github.sendablemetatype.webrtc.RTCPeerConnectionState;
 import io.github.sendablemetatype.webrtc.RTCSdpType;
 import io.github.sendablemetatype.webrtc.RTCSessionDescription;
 import io.github.sendablemetatype.webrtc.SetSessionDescriptionObserver;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
@@ -40,6 +42,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleConsumer;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public class NetherNetClientChannel extends NetherNetChannel {
@@ -193,11 +196,11 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     @Override
-    protected AbstractUnsafe newUnsafe() {
+    protected NetherNetUnsafe newUnsafe() {
         return new NetherNetClientUnsafe();
     }
 
-    private class NetherNetClientUnsafe extends AbstractUnsafe {
+    private class NetherNetClientUnsafe extends NetherNetUnsafe {
         @Override
         public void connect(SocketAddress remote, SocketAddress local, ChannelPromise promise) {
             if (!promise.setUncancellable() || !ensureOpen(promise)) return;
@@ -584,18 +587,13 @@ public class NetherNetClientChannel extends NetherNetChannel {
             }
 
             @Override
-            public void onBufferedAmountChange(long previousAmount) {
+            public void onBufferedAmountChange(long sentDataSize) {
                 if (!reliable) {
                     return;
                 }
-                // Despite the legacy parameter name, webrtc-java passes
-                // libwebrtc's sent_data_size here: the number of buffered
-                // bytes that were just written to the wire. Without this
-                // report the base class write gate would pause forever once
-                // the high water mark is crossed.
                 synchronized (attemptLock) {
                     if (isCurrentAttempt(generation)) {
-                        onEngineBytesSent(previousAmount);
+                        onEngineBytesSent(sentDataSize);
                     }
                 }
             }
@@ -603,12 +601,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     @Override
-    protected void sendFramed(io.netty.buffer.ByteBuf framed) {
+    protected void sendFramed(ByteBuf framed, Consumer<Throwable> completion) {
         RTCDataChannel reliable = this.reliableChannel;
         if (reliable == null) {
             throw new IllegalStateException("Reliable data channel is unavailable");
         }
-        reliable.sendAsync(new RTCDataChannelBuffer(toNioBuffer(framed), true));
+        WebRtcSend.send(reliable, toNioBuffer(framed), completion);
     }
 
     private void applyRemoteCandidate(String candidateSdp) {
