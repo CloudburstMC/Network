@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.channel.nethernet.admission;
+package org.cloudburstmc.netty.signalling.admission;
 
 /**
  * Validates admission metadata using locally installed keys. No network calls.

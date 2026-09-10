@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.channel.nethernet.admission;
+package org.cloudburstmc.netty.signalling.admission;
 
 /**
  * Trusted validator output. Never log credentials or reconstructed SDP.

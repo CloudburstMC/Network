@@ -8,7 +8,6 @@ dependencies {
     api(libs.netty.codec.http)
     api(libs.expiringmap)
     api("$nativeGroup:libdatachannel-java:$nativeVersion")
-    testRuntimeOnly("$nativeGroup:libdatachannel-java:$nativeVersion:x86_64")
 
     implementation(libs.gson)
     implementation(libs.jose4j)
