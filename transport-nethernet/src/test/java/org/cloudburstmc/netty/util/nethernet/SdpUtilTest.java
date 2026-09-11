@@ -42,6 +42,31 @@ class SdpUtilTest {
     }
 
     @Test
+    void matchesTheSameAddressWrittenTwoWays() {
+        String sdp = "v=0\r\n"
+                + "a=candidate:1 1 udp 2130706431 2001:db8::1 5000 typ host\r\n"
+                + "a=candidate:2 1 udp 2130706431 2001:db8::2 5000 typ host\r\n";
+
+        // The advertised form is expanded, the candidate is compressed, both are the same address
+        String filtered = SdpUtil.withAdvertisedCandidates(sdp, Set.of("2001:0db8:0000:0000:0000:0000:0000:0001"));
+
+        assertTrue(filtered.contains("2001:db8::1"));
+        assertFalse(filtered.contains("2001:db8::2"));
+    }
+
+    @Test
+    void leavesMdnsCandidatesToTheFilterRatherThanResolvingThem() {
+        String sdp = "v=0\r\n"
+                + "a=candidate:1 1 udp 2130706431 a1b2c3d4.local 5000 typ host\r\n"
+                + "a=candidate:2 1 udp 2130706431 203.0.113.10 5000 typ host\r\n";
+
+        String filtered = SdpUtil.withAdvertisedCandidates(sdp, Set.of("203.0.113.10"));
+
+        assertTrue(filtered.contains("203.0.113.10"));
+        assertFalse(filtered.contains("a1b2c3d4.local"));
+    }
+
+    @Test
     void announcesEverythingWhenNothingIsConfigured() {
         assertEquals(SDP, SdpUtil.withAdvertisedCandidates(SDP, Set.of()));
     }
