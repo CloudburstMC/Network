@@ -77,30 +77,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private NetherNetHTTPSignaling(Builder builder) {
         this.playerFilter = builder.playerFilter;
         this.motdProvider = builder.motdProvider;
-
-        if (builder.httpsKeystore != null) {
-            try {
-                char[] passwordChars = builder.httpsPassword.toCharArray();
-
-                KeyStore ks = KeyStore.getInstance("PKCS12");
-                try (FileInputStream fis = new FileInputStream(builder.httpsKeystore)) {
-                    ks.load(fis, passwordChars);
-                }
-
-                KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-                kmf.init(ks, passwordChars);
-
-                this.sslContext = SslContextBuilder.forServer(kmf).build();
-            } catch (Exception ex) {
-                log.error("Error loading https keystore: " + ex.getMessage(), ex);
-            }
-        }
-
-        try {
-            this.serverIdentity = ServerIdentity.fromPkcs12(builder.identityKeystore, builder.identityPassword);
-        } catch (Exception ex) {
-            log.error("Error loading identity keystore: " + ex.getMessage(), ex);
-        }
+        this.sslContext = builder.sslContext;
+        this.serverIdentity = builder.identity;
     }
 
     @Override
@@ -393,15 +371,27 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
      * the identity keystore is required.
      */
     public static class Builder {
-        private File identityKeystore;
-        private String identityPassword = "";
-        private File httpsKeystore;
-        private String httpsPassword = "";
+        private ServerIdentity identity;
+        private SslContext sslContext;
         private PlayerFilter playerFilter = (host, player) -> true;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
         /**
-         * Sets the unprotected keystore holding the identity key. Required.
+         * Sets the identity used to sign SDP answers. Required.
+         * <p>
+         * Load it with {@link ServerIdentity#fromPkcs12}, {@link ServerIdentity#fromPem} or
+         * {@link ServerIdentity#generate}, or build one straight from a keypair.
+         *
+         * @param identity The identity to sign with
+         * @return This builder
+         */
+        public Builder setIdentity(ServerIdentity identity) {
+            this.identity = identity;
+            return this;
+        }
+
+        /**
+         * Sets the identity from an unprotected PKCS12 keystore.
          *
          * @param identityKeystore PKCS12 keystore holding the EC P-384 identity key
          * @return This builder
@@ -411,11 +401,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the keystore holding the identity key used to sign SDP answers. Required.
-         * <p>
-         * The key must be EC P-384, and its certificate CN is surfaced as the identity
-         * domain, so set it to something recognisable.
-         * Generate one with:
+         * Sets the identity from a PKCS12 keystore. The key must be EC P-384, and its certificate
+         * CN becomes the identity domain, so set it to something recognisable. Generate one with:
          * <pre>{@code
          * keytool -genkeypair -alias identity -keyalg EC -groupname secp384r1 \
          *         -storetype PKCS12 -keystore identity.p12 -storepass changeit \
@@ -425,15 +412,46 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * @param identityKeystore PKCS12 keystore holding the EC P-384 identity key
          * @param identityPassword Password for {@code identityKeystore}, or "" if unprotected
          * @return This builder
+         * @throws IllegalArgumentException If the keystore cannot be read
          */
         public Builder setIdentityKeystore(File identityKeystore, String identityPassword) {
-            this.identityKeystore = identityKeystore;
-            this.identityPassword = identityPassword;
+            try {
+                return setIdentity(ServerIdentity.fromPkcs12(identityKeystore, identityPassword));
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Cannot read the identity keystore " + identityKeystore, e);
+            }
+        }
+
+        /**
+         * Sets the identity from an unencrypted PEM private key, which carries no certificate and
+         * so no domain of its own.
+         *
+         * @param identityPem PEM file holding the EC P-384 identity key
+         * @param domain      The identity domain, surfaced to players in the first use prompt
+         * @return This builder
+         * @throws IllegalArgumentException If the key cannot be read
+         */
+        public Builder setIdentityPem(File identityPem, String domain) {
+            try {
+                return setIdentity(ServerIdentity.fromPem(identityPem, domain));
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Cannot read the identity key " + identityPem, e);
+            }
+        }
+
+        /**
+         * Sets the TLS context for the listener. If unset the server listens in plaintext.
+         *
+         * @param sslContext The context to serve TLS with
+         * @return This builder
+         */
+        public Builder setSslContext(SslContext sslContext) {
+            this.sslContext = sslContext;
             return this;
         }
 
         /**
-         * Sets the unprotected keystore holding the TLS certificate and key.
+         * Serves TLS using an unprotected PKCS12 keystore.
          *
          * @param httpsKeystore PKCS12 keystore holding the TLS certificate and key
          * @return This builder
@@ -443,17 +461,57 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the keystore holding the TLS certificate and key.
-         * If unset the server listens in plaintext.
+         * Serves TLS using a PKCS12 keystore.
          *
          * @param httpsKeystore PKCS12 keystore holding the TLS certificate and key
          * @param httpsPassword Password for {@code httpsKeystore}, or "" if unprotected
          * @return This builder
+         * @throws IllegalArgumentException If the keystore cannot be read
          */
         public Builder setHttpsKeystore(File httpsKeystore, String httpsPassword) {
-            this.httpsKeystore = httpsKeystore;
-            this.httpsPassword = httpsPassword;
-            return this;
+            try {
+                char[] password = httpsPassword == null ? new char[0] : httpsPassword.toCharArray();
+
+                KeyStore store = KeyStore.getInstance("PKCS12");
+                try (FileInputStream input = new FileInputStream(httpsKeystore)) {
+                    store.load(input, password);
+                }
+
+                KeyManagerFactory factory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+                factory.init(store, password);
+                return setSslContext(SslContextBuilder.forServer(factory).build());
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Cannot read the TLS keystore " + httpsKeystore, e);
+            }
+        }
+
+        /**
+         * Serves TLS using PEM files, the form most certificate authorities hand out.
+         *
+         * @param certificateChain PEM certificate chain, leaf first
+         * @param privateKey       PEM private key for the leaf certificate
+         * @return This builder
+         * @throws IllegalArgumentException If either file cannot be read
+         */
+        public Builder setHttpsPem(File certificateChain, File privateKey) {
+            return setHttpsPem(certificateChain, privateKey, null);
+        }
+
+        /**
+         * Serves TLS using PEM files.
+         *
+         * @param certificateChain PEM certificate chain, leaf first
+         * @param privateKey       PEM private key for the leaf certificate
+         * @param keyPassword      Password for {@code privateKey}, or null if unencrypted
+         * @return This builder
+         * @throws IllegalArgumentException If either file cannot be read
+         */
+        public Builder setHttpsPem(File certificateChain, File privateKey, String keyPassword) {
+            try {
+                return setSslContext(SslContextBuilder.forServer(certificateChain, privateKey, keyPassword).build());
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Cannot read the TLS certificate " + certificateChain, e);
+            }
         }
 
         /**
@@ -494,11 +552,11 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * Builds the signalling instance.
          *
          * @return A new signalling instance
-         * @throws IllegalStateException If no identity keystore was set
+         * @throws IllegalStateException If no identity was set
          */
         public NetherNetHTTPSignaling build() {
-            if (identityKeystore == null) {
-                throw new IllegalStateException("An identity keystore is required");
+            if (identity == null) {
+                throw new IllegalStateException("An identity is required");
             }
 
             return new NetherNetHTTPSignaling(this);
