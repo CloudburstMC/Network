@@ -23,18 +23,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Verify canonical protocol fixtures
         run: node docs/external-signalling/fixtures.mjs
-      - name: Validate transport against the published native
-        run: ./gradlew --max-workers=2 build
-      - name: Build the native chain the published binding records
-        run: |
-          set -o pipefail
-          bash scripts/bootstrap-native-admission.sh | tee bootstrap.log
-          grep -E '^native(MavenRepository|JavaVersion)=' bootstrap.log >> "$GITHUB_ENV"
-      - name: Validate independent provider against that chain
-        run: |
-          ./gradlew --max-workers=2 :external-signalling:nativeAdmissionTest \
-            -PnativeMavenRepository="$nativeMavenRepository" \
-            -PnativeJavaVersion="$nativeJavaVersion"
+      - name: Validate transport and independent provider
+        run: ./gradlew --max-workers=2 build :external-signalling:nativeAdmissionTest
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -42,4 +32,3 @@ jobs:
           path: |
             **/build/test-results/**
             **/build/reports/tests/**
-            .native-deps/maven/**/provenance.json

@@ -14,12 +14,6 @@
  * under the License.
  */
 
-val nativeDependencies = java.util.Properties().apply {
-    rootProject.file("native-dependencies.properties").inputStream().use { load(it) }
-}
-val nativeJavaGroup: String = providers.gradleProperty("nativeJavaGroup")
-    .getOrElse(nativeDependencies.getProperty("nativeJavaGroup"))
-
 val networkVersion = System.getenv("NETWORK_PUBLISH_VERSION")
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
@@ -34,22 +28,9 @@ subprojects {
     version = networkVersion
 
     repositories {
-        val localNativeRepository = rootProject.file(".native-deps/maven")
-        if (localNativeRepository.isDirectory) {
-            maven {
-                name = "localNativeDevelopment"
-                url = localNativeRepository.toURI()
-                content { includeGroup(nativeJavaGroup) }
-            }
-        }
-        maven {
-            name = "openCollabSnapshots"
-            url = uri(rootProject.providers.gradleProperty("nativeMavenRepository")
-                .getOrElse("https://repo.opencollab.dev/maven-snapshots/"))
-            content { includeGroup(nativeJavaGroup) }
-        }
         mavenLocal()
         mavenCentral()
+        maven("https://repo.opencollab.dev/main")
     }
 
     configure<JavaPluginExtension> {

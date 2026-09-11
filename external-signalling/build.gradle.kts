@@ -26,21 +26,6 @@ tasks.test {
     }
 }
 
-tasks.register("nativeBindingJar") {
-    val binding = configurations.testRuntimeClasspath.map { classpath ->
-        classpath.incoming.artifactView {
-            componentFilter { it is ModuleComponentIdentifier && it.module == "libdatachannel-java" }
-        }.files
-    }
-    // Printing a path does not otherwise make Gradle resolve anything.
-    dependsOn(binding)
-    doLast {
-        val jar = binding.get().files.firstOrNull { !it.name.contains("-") || it.name.endsWith("SNAPSHOT.jar") }
-            ?: binding.get().files.first()
-        println(jar.absolutePath)
-    }
-}
-
 tasks.register("nativeBenchClasspath") {
     dependsOn(tasks.testClasses)
     // Printing a classpath does not otherwise make Gradle build its project JARs.
