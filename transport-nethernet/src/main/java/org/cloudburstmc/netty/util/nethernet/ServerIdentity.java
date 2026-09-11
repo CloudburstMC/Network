@@ -11,7 +11,6 @@ import org.jose4j.lang.JoseException;
 import org.jspecify.annotations.Nullable;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -26,12 +25,8 @@ import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.cert.Certificate;
-import java.security.cert.X509Certificate;
 import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPrivateKeySpec;
@@ -47,10 +42,6 @@ import java.util.Set;
 import java.util.Collections;
 import java.util.List;
 
-import javax.naming.InvalidNameException;
-import javax.naming.ldap.LdapName;
-import javax.naming.ldap.Rdn;
-import javax.security.auth.x500.X500Principal;
 
 /**
  * Produces the server-side identity assertion for each SDP answer
@@ -75,97 +66,6 @@ public class ServerIdentity {
         this.publicKey = publicKey;
         this.domain = domain;
         this.token = buildToken(publicKey, expiry);
-    }
-
-    /**
-     * Loads the keypair from the first key entry of a PKCS12 keystore.
-     *
-     * @param keystore The PKCS12 keystore file, commonly named .p12 or .pfx
-     * @param password The keystore password
-     * @return The loaded ServerIdentity
-     * @throws GeneralSecurityException If there is a security error
-     * @throws IOException              If there is an I/O error
-     * @throws JoseException            If there is an error creating the JWT
-     */
-    public static ServerIdentity fromPkcs12(File keystore,
-                                              String password) throws GeneralSecurityException, IOException, JoseException {
-        return fromPkcs12(keystore, password, null);
-    }
-
-    /**
-     * Loads the keypair from the first key entry of a PKCS12 keystore, naming the identity
-     * {@code domain} rather than the certificate's common name.
-     * <p>
-     * The domain is only display text; clients pin the public key, so it can be changed without
-     * replacing the key and re-prompting anyone.
-     *
-     * @param keystore The PKCS12 keystore file
-     * @param password The keystore password
-     * @param domain   The identity domain, or null to take the certificate's common name
-     * @return The loaded ServerIdentity
-     * @throws GeneralSecurityException If there is a security error
-     * @throws IOException              If there is an I/O error
-     * @throws JoseException            If there is an error creating the JWT
-     */
-    public static ServerIdentity fromPkcs12(File keystore, String password, @Nullable String domain)
-            throws GeneralSecurityException, IOException, JoseException {
-        char[] pwd = password.toCharArray();
-
-        KeyStore ks = KeyStore.getInstance("PKCS12");
-        try (FileInputStream fis = new FileInputStream(keystore)) {
-            ks.load(fis, pwd);
-        }
-
-        // Find the first key in the keystore and extract the certificate
-        String alias = findKeyAlias(ks);
-        PrivateKey privateKey = (PrivateKey) ks.getKey(alias, pwd);
-        Certificate cert = ks.getCertificate(alias);
-        PublicKey publicKey = cert.getPublicKey();
-
-        // Extract the expiry and common name from the cert if they exist
-        Instant expiry = null;
-        String subject = "";
-        if (cert instanceof X509Certificate x509) {
-            expiry = x509.getNotAfter().toInstant();
-            subject = extractCommonName(x509.getSubjectX500Principal());
-        }
-
-        return new ServerIdentity(privateKey, publicKey, expiry, domain == null ? subject : domain);
-    }
-
-    /**
-     * Finds the first key entry alias in a keystore.
-     *
-     * @param keyStore The keystore to search
-     * @return The alias of the first key entry
-     * @throws KeyStoreException If no key entry is found
-     */
-    private static String findKeyAlias(KeyStore keyStore) throws KeyStoreException {
-        for (String candidate : Collections.list(keyStore.aliases())) {
-            if (keyStore.isKeyEntry(candidate)) {
-                return candidate;
-            }
-        }
-        throw new KeyStoreException("No private key entry found in identity keystore");
-    }
-
-    /**
-     * Search the principal and extract the common name
-     *
-     * @param principal The X500Principal to extract the common name from
-     * @return The common name, or an empty string if not found
-     */
-    private static String extractCommonName(X500Principal principal) {
-        try {
-            LdapName name = new LdapName(principal.getName());
-            for (Rdn rdn : name.getRdns()) {
-                if (rdn.getType().equalsIgnoreCase("CN")) {
-                    return rdn.getValue().toString();
-                }
-            }
-        } catch (InvalidNameException ignored) {
-        }
-        return "";
     }
 
     /**

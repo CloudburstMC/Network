@@ -575,7 +575,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         /**
          * Sets the identity used to sign SDP answers. Required.
          * <p>
-         * Load it with {@link ServerIdentity#fromPkcs12}, {@link ServerIdentity#fromPem} or
+         * Load it with {@link ServerIdentity#fromPemOrCreate}, {@link ServerIdentity#fromPem} or
          * {@link ServerIdentity#generate}, or build one straight from a keypair.
          *
          * @param identity The identity to sign with
@@ -584,38 +584,6 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         public Builder setIdentity(ServerIdentity identity) {
             this.identity = identity;
             return this;
-        }
-
-        /**
-         * Sets the identity from an unprotected PKCS12 keystore.
-         *
-         * @param identityKeystore PKCS12 keystore holding the EC P-384 identity key
-         * @return This builder
-         */
-        public Builder setIdentityKeystore(File identityKeystore) {
-            return setIdentityKeystore(identityKeystore, "");
-        }
-
-        /**
-         * Sets the identity from a PKCS12 keystore. The key must be EC P-384, and its certificate
-         * CN becomes the identity domain, so set it to something recognisable. Generate one with:
-         * <pre>{@code
-         * keytool -genkeypair -alias identity -keyalg EC -groupname secp384r1 \
-         *         -storetype PKCS12 -keystore identity.p12 -storepass changeit \
-         *         -dname "CN=Your Server" -validity 3650
-         * }</pre>
-         *
-         * @param identityKeystore PKCS12 keystore holding the EC P-384 identity key
-         * @param identityPassword Password for {@code identityKeystore}, or "" if unprotected
-         * @return This builder
-         * @throws IllegalArgumentException If the keystore cannot be read
-         */
-        public Builder setIdentityKeystore(File identityKeystore, String identityPassword) {
-            try {
-                return setIdentity(ServerIdentity.fromPkcs12(identityKeystore, identityPassword));
-            } catch (Exception e) {
-                throw new IllegalArgumentException("Cannot read the identity keystore " + identityKeystore, e);
-            }
         }
 
         /**
