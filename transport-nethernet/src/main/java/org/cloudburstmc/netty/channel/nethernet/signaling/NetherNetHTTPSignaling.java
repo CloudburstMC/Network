@@ -298,7 +298,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         private InetSocketAddress clientAddress(ChannelHandlerContext ctx, FullHttpRequest req) {
             InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
-            if (trustedProxies.isEmpty() || remote == null || !trustedProxies.contains(remote)) {
+            if (!trustedProxies.contains(remote)) {
                 return remote;
             }
 
