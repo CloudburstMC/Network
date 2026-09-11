@@ -41,12 +41,20 @@ class TokenTrustTest {
      * two differ the assertion is claiming a key it does not hold.
      */
     private static String offer(KeyPair tokenKey, KeyPair namedKey) throws Exception {
+        return offer(tokenKey, namedKey, null);
+    }
+
+    /** The same offer, with the token addressed to {@code audience} when there is one. */
+    private static String offer(KeyPair tokenKey, KeyPair namedKey, String audience) throws Exception {
         JwtClaims claims = new JwtClaims();
         claims.setClaim("cpk", Base64.getEncoder().encodeToString(namedKey.getPublic().getEncoded()));
         claims.setClaim("xid", "2535000000000000");
         claims.setClaim("xname", "Probe");
         claims.setIssuedAtToNow();
         claims.setExpirationTimeMinutesInTheFuture(5);
+        if (audience != null) {
+            claims.setAudience(audience);
+        }
         String token = sign(tokenKey, claims.toJson());
 
         String sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n" + FINGERPRINT + "\r\n"
@@ -89,6 +97,17 @@ class TokenTrustTest {
         JwtClaims claims = IdentityUtils.validateSdp(offer(pair, pair), TokenTrust.ANY);
 
         assertEquals("2535000000000000", claims.getClaimValueAsString("xid"));
+        assertEquals("Probe", claims.getClaimValueAsString("xname"));
+    }
+
+    @Test
+    void anyAcceptsATokenAddressedToTheAuthService() throws Exception {
+        KeyPair pair = keyPair();
+        // What a retail client presents. Demanding an audience turns every real client away
+        String offer = offer(pair, pair, "api://auth-minecraft-services/multiplayer");
+
+        JwtClaims claims = IdentityUtils.validateSdp(offer, TokenTrust.ANY);
+
         assertEquals("Probe", claims.getClaimValueAsString("xname"));
     }
 

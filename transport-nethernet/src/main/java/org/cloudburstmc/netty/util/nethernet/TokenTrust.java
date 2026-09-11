@@ -48,6 +48,8 @@ public interface TokenTrust {
                 .setDisableRequireSignature()
                 .setSkipSignatureVerification()
                 .setRequireExpirationTime()
+                // Who the token is addressed to says nothing about whether it is trusted
+                .setSkipDefaultAudienceValidation()
                 .build();
 
         private Unverified() {
