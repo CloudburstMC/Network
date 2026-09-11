@@ -7,6 +7,7 @@ import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import io.netty.util.AsciiString;
 
 import java.util.Collection;
@@ -80,6 +81,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
     private final Set<String> advertisedAddresses;
+    private final TokenTrust tokenTrust;
 
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
@@ -95,6 +97,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.trustedProxies = builder.trustedProxies;
         this.iceOnLocalPort = builder.iceOnLocalPort;
         this.advertisedAddresses = builder.advertisedAddresses;
+        this.tokenTrust = builder.tokenTrust;
     }
 
     @Override
@@ -203,7 +206,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
             JwtClaims claims;
             try {
-                claims = IdentityUtils.validateSdp(sdpOffer);
+                claims = IdentityUtils.validateSdp(sdpOffer, tokenTrust);
             } catch (Exception e) {
                 log.error("Identity validation failed", e);
                 respondEmptyWithStatus(ctx, HttpResponseStatus.UNAUTHORIZED);
@@ -424,6 +427,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private IpRangeSet trustedProxies = IpRangeSet.empty();
         private boolean iceOnLocalPort = true;
         private Set<String> advertisedAddresses = Set.of();
+        private TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
         private PlayerFilter playerFilter = (host, player) -> true;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
@@ -599,6 +603,18 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         public Builder setAdvertisedAddresses(Collection<String> advertisedAddresses) {
             this.advertisedAddresses = advertisedAddresses == null ? Set.of() : Set.copyOf(advertisedAddresses);
+            return this;
+        }
+
+        /**
+         * Sets who to trust to have signed the token in a joining peer's identity assertion.
+         * Defaults to {@link TokenTrust#MINECRAFT_AUTH}, which is what a retail client presents.
+         *
+         * @param tokenTrust The trust policy
+         * @return This builder
+         */
+        public Builder setTokenTrust(TokenTrust tokenTrust) {
+            this.tokenTrust = tokenTrust;
             return this;
         }
 

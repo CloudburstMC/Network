@@ -56,6 +56,21 @@ public class IdentityUtils {
      * @throws InvalidJwtException If the SDP offer contains an invalid JWT
      */
     public static JwtClaims validateSdp(String sdpOffer) throws JoseException, InvalidJwtException {
+        return validateSdp(sdpOffer, TokenTrust.MINECRAFT_AUTH);
+    }
+
+    /**
+     * Validate the SDP offer against the embedded identity, trusting its token as {@code trust}
+     * decides. The fingerprint binding is checked either way.
+     *
+     * @param sdpOffer The SDP offer to validate
+     * @param trust    Who to trust to have signed the token
+     * @return The JWT claims if the SDP offer is valid
+     * @throws JoseException       If there is an error processing the SDP offer
+     * @throws InvalidJwtException If the SDP offer contains an invalid JWT
+     */
+    public static JwtClaims validateSdp(String sdpOffer, TokenTrust trust)
+            throws JoseException, InvalidJwtException {
         // Extract the identity
         Identity identity = Identity.fromSdpOffer(sdpOffer);
         if (identity == null) {
@@ -63,8 +78,14 @@ public class IdentityUtils {
         }
         log.debug("Received identity: " + identity);
 
-        JwtContext jwtContext = IdentityUtils.validateIdentity(identity);
-        JwtClaims claims = jwtContext.getJwtClaims();
+        JwtClaims claims;
+        try {
+            claims = trust.claims(identity);
+        } catch (InvalidJwtException | JoseException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new JoseException("Token is not trusted", e);
+        }
 
         // Reconstruct the detached payload from the SDP fingerprint lines
         String fingerprints = getCanonicalFingerprintJson(sdpOffer);
