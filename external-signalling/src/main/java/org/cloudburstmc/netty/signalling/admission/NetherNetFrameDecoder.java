@@ -1,56 +1,74 @@
 package org.cloudburstmc.netty.signalling.admission;
 
-import java.util.Arrays;
+import io.netty.buffer.ByteBuf;
 
 /**
  * Bounded countdown framing. Unordered traffic must fit one SCTP message.
  */
 public final class NetherNetFrameDecoder {
     public static final int FRAME_LIMIT = 10000, MESSAGE_LIMIT = 262144;
-    private byte[] assembly;
-    private int size, expected = -1;
+    private ByteBuf assembly;
+    private int expected = -1;
 
-    public byte[] decode(byte[] frame, boolean reliable) {
-        if (frame.length < 2 || frame.length > FRAME_LIMIT) {
+    /**
+     * Consumes the frame and returns a completed message, or {@code null} while one is still assembling. The
+     * returned buffer belongs to the caller.
+     */
+    public ByteBuf decode(ByteBuf frame, boolean reliable) {
+        try {
+            return assemble(frame, reliable);
+        } finally {
+            frame.release();
+        }
+    }
+
+    private ByteBuf assemble(ByteBuf frame, boolean reliable) {
+        int length = frame.readableBytes();
+        if (length < 2 || length > FRAME_LIMIT) {
             throw new IllegalArgumentException("Invalid NetherNet frame length");
         }
-        int remaining = Byte.toUnsignedInt(frame[0]), payload = frame.length - 1;
+        int start = frame.readerIndex();
+        int remaining = frame.getUnsignedByte(start);
+        int payload = length - 1;
         // Countdown alone cannot disambiguate interleaved/reordered fragmented messages.
         if (!reliable) {
             if (remaining != 0) {
                 throw new IllegalArgumentException("Fragmented unordered NetherNet message is unsupported");
             }
-            return Arrays.copyOfRange(frame, 1, frame.length);
+            return frame.retainedSlice(start + 1, payload);
         }
+        int size = this.assembly == null ? 0 : this.assembly.readableBytes();
         if (remaining >= (MESSAGE_LIMIT + FRAME_LIMIT - 2) / (FRAME_LIMIT - 1) ||
-                (expected != -1 && expected != remaining) || size + payload > MESSAGE_LIMIT) {
-            clear();
+                (this.expected != -1 && this.expected != remaining) || size + payload > MESSAGE_LIMIT) {
+            this.clear();
             throw new IllegalArgumentException("Invalid NetherNet fragment sequence");
         }
-        if (expected == -1 && remaining == 0) {
-            return Arrays.copyOfRange(frame, 1, frame.length);
+        if (this.expected == -1 && remaining == 0) {
+            return frame.retainedSlice(start + 1, payload);
         }
-        if (assembly == null) {
-            assembly = new byte[MESSAGE_LIMIT];
+        if (this.assembly == null) {
+            this.assembly = frame.alloc().buffer(payload, MESSAGE_LIMIT);
         }
-        System.arraycopy(frame, 1, assembly, size, payload);
-        size += payload;
-        expected = remaining - 1;
+        this.assembly.writeBytes(frame, start + 1, payload);
+        this.expected = remaining - 1;
         if (remaining != 0) {
             return null;
         }
-        byte[] message = Arrays.copyOf(assembly, size);
-        clear();
+        ByteBuf message = this.assembly;
+        this.assembly = null;
+        this.clear();
         return message;
     }
 
     public void clear() {
-        assembly = null;
-        size = 0;
-        expected = -1;
+        if (this.assembly != null) {
+            this.assembly.release();
+            this.assembly = null;
+        }
+        this.expected = -1;
     }
 
     public int retainedBytes() {
-        return assembly == null ? 0 : assembly.length;
+        return this.assembly == null ? 0 : this.assembly.capacity();
     }
 }

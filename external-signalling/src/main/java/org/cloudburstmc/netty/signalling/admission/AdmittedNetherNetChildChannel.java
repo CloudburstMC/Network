@@ -2,7 +2,6 @@ package org.cloudburstmc.netty.signalling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.util.concurrent.ScheduledFuture;
 import tel.schich.libdatachannel.*;
@@ -23,7 +22,7 @@ import java.util.function.Consumer;
 public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     public static final int WRITE_LIMIT = 1 << 20, NATIVE_WRITE_LIMIT = 1 << 19, INBOUND_FRAMES = 128;
 
-    private record Incoming(byte[] bytes, boolean reliable) {
+    private record Incoming(ByteBuf bytes, boolean reliable) {
     }
 
     private final ArrayBlockingQueue<Incoming> incoming = new ArrayBlockingQueue<>(INBOUND_FRAMES);
@@ -98,9 +97,10 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                 failed.set(true);
                 return;
             }
-            byte[] copy = new byte[bytes.remaining()];
-            bytes.get(copy);
+            ByteBuf copy = alloc().buffer(bytes.remaining());
+            copy.writeBytes(bytes);
             if (!incoming.offer(new Incoming(copy, reliable))) {
+                copy.release();
                 failed.set(true);
             }
         }));
@@ -130,10 +130,10 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                     if (frame == null) {
                         break;
                     }
-                    byte[] message = decoder.decode(frame.bytes(), frame.reliable());
+                    ByteBuf message = decoder.decode(frame.bytes(), frame.reliable());
                     if (message != null) {
                         pipeline().fireUserEventTriggered(new NetherNetPacket.Delivery(frame.reliable()));
-                        pipeline().fireChannelRead(Unpooled.wrappedBuffer(message));
+                        pipeline().fireChannelRead(message);
                         read = true;
                     }
                 }
@@ -248,7 +248,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             nativeTermination.completeExceptionally(failure);
             throw failure;
         } finally {
-            incoming.clear();
+            this.discardQueuedFrames();
             decoder.clear();
         }
         nativeTermination.complete(null);
@@ -267,6 +267,13 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
 
     void closeUnregistered() {
         doClose();
+    }
+
+    private void discardQueuedFrames() {
+        Incoming frame;
+        while ((frame = incoming.poll()) != null) {
+            frame.bytes().release();
+        }
     }
 
     public int queuedFrames() {
