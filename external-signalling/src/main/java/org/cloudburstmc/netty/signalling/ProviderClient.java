@@ -148,6 +148,8 @@ public final class ProviderClient implements AutoCloseable {
     private PrivateKey privateKey;
     private String profileRevision;
     private JsonObject lastProfile;
+    /** A delivered epoch, kept out of the persisted state until the transport has accepted it. */
+    private JsonObject pendingTicketKey;
     private long intervalMs = 10000, nextHeartbeat, snapshotClock;
     private boolean started, closed, scheduledCheckIns;
     private long nextOutcomes, nextStatusUpdate, minUpdateIntervalMs = 1000, appliedStateRevision;
@@ -471,7 +473,7 @@ public final class ProviderClient implements AutoCloseable {
         state.add("ticketKeys", new JsonArray());
         state.remove("challenge");
         if (registration.has("ticketKey")) {
-            state.getAsJsonArray("ticketKeys").add(registration.remove("ticketKey"));
+            pendingTicketKey = registration.remove("ticketKey").getAsJsonObject();
         }
         save();
     }
@@ -528,19 +530,22 @@ public final class ProviderClient implements AutoCloseable {
                 }
             }
         }
+        if (pendingTicketKey != null) {
+            retained.add(pendingTicketKey);
+        }
         if (retained.size() > 8) {
             throw new IOException("Too many admission key epochs");
         }
-        state.add("ticketKeys", retained);
-        save();
         if (retained.isEmpty()) {
+            state.add("ticketKeys", retained);
             installedKeyId = null;
             if (!state.has("keyRequestId")) {
                 state.addProperty("keyRequestId", UUID.randomUUID().toString());
-                save();
             }
+            save();
             return;
         }
+        // Reading the epochs is what rejects a malformed one, so it happens before anything is written
         List<ProviderTransport.TicketKey> keys = new ArrayList<>();
         for (JsonElement entry : retained) {
             JsonObject key = entry.getAsJsonObject();
@@ -549,6 +554,11 @@ public final class ProviderClient implements AutoCloseable {
                     key.has("retireAfter") ? key.get("retireAfter").getAsLong() : Long.MAX_VALUE));
         }
         transport.installTicketKeys(List.copyOf(keys)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        // Only an epoch set the transport accepted is recorded, so the next heartbeat cannot advertise
+        // a key that was never installed, and a bad one cannot survive a restart
+        state.add("ticketKeys", retained);
+        pendingTicketKey = null;
+        save();
         installedKeyId = keys.get(keys.size() - 1).keyId();
     }
 
@@ -684,10 +694,18 @@ public final class ProviderClient implements AutoCloseable {
                         !key.get("keyId").equals(response.getAsJsonObject("keyRequest").get("keyId"))) {
                     throw new IOException("Unbound admission key response");
                 }
-                state.getAsJsonArray("ticketKeys").add(key);
-                state.remove("keyRequestId");
-                save();
-                installKeys();
+                pendingTicketKey = key;
+                JsonElement pendingRequest = state.remove("keyRequestId");
+                try {
+                    installKeys();
+                } catch (Exception e) {
+                    // A key the transport will not take must not outlive this heartbeat, in memory or on disk
+                    pendingTicketKey = null;
+                    if (pendingRequest != null) {
+                        state.add("keyRequestId", pendingRequest);
+                    }
+                    throw e;
+                }
                 lastProfile = null;
                 again = true;
             } else if (state.has("keyRequestId") && response.has("keyRequest") &&

@@ -68,6 +68,7 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.util.Map;
+import java.security.SecureRandom;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -81,7 +82,7 @@ import java.util.concurrent.TimeoutException;
 public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final InternalLogger log = InternalLoggerFactory.getInstance(getClass());
 
-    private final Random random = new Random();
+    private final Random random = new SecureRandom();
     private final Map<String, Promise<String>> pendingAnswers = new ConcurrentHashMap<>();
 
     private final PlayerFilter playerFilter;
@@ -298,7 +299,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         private InetSocketAddress clientAddress(ChannelHandlerContext ctx, FullHttpRequest req) {
             InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
-            if (trustedProxies.isEmpty() || remote == null || !trustedProxies.contains(remote)) {
+            if (!trustedProxies.contains(remote)) {
                 return remote;
             }
 

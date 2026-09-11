@@ -1,8 +1,12 @@
 package org.cloudburstmc.netty.util.nethernet;
 
+import io.netty.util.NetUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.HashSet;
 import java.util.Set;
 
 /**
@@ -31,6 +35,26 @@ public final class SdpUtil {
     }
 
     /**
+     * The canonical form of an IP literal, so that the same address written two ways compares equal.
+     * Anything that is not an IP literal, such as an mDNS {@code .local} candidate, is left alone
+     * rather than resolved, since a lookup here would block and can only answer for this host.
+     *
+     * @param address The address as written
+     * @return A form that can be compared
+     */
+    private static String normaliseAddress(String address) {
+        byte[] bytes = NetUtil.createByteArrayFromIpAddressString(address);
+        if (bytes == null) {
+            return address;
+        }
+        try {
+            return InetAddress.getByAddress(bytes).getHostAddress();
+        } catch (UnknownHostException e) {
+            return address;
+        }
+    }
+
+    /**
      * Drops every ICE candidate whose address is not in {@code allowed}.
      * <p>
      * ICE gathers a candidate on every interface it can see, which on a host network includes
@@ -47,6 +71,10 @@ public final class SdpUtil {
         if (allowed.isEmpty()) {
             return sdp;
         }
+        Set<String> normalised = new HashSet<>(allowed.size());
+        for (String address : allowed) {
+            normalised.add(normaliseAddress(address));
+        }
 
         StringBuilder out = new StringBuilder(sdp.length());
         boolean kept = false;
@@ -58,7 +86,7 @@ public final class SdpUtil {
             }
             if (line.startsWith(CANDIDATE_PREFIX)) {
                 String address = candidateAddress(line);
-                if (address == null || !allowed.contains(address)) {
+                if (address == null || !normalised.contains(normaliseAddress(address))) {
                     dropped = true;
                     continue;
                 }

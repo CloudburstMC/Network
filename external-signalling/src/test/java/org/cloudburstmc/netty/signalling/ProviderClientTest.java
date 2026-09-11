@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
@@ -17,6 +18,40 @@ import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderClientTest {
+    @Test
+    void anUnusableAdmissionKeyIsNotPersistedAndTheHostStartsAgain(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Key host",
+                    ProviderClient.NEW_SERVICE, ProviderClient.BEARER_TOKEN, "independent-provider-token",
+                    null, null, Map.of());
+            Path directory = path.resolve("keys");
+
+            FakeTransport refusing = new FakeTransport();
+            refusing.refuseKeys = true;
+            ProviderClient first = new ProviderClient(config, new ProviderStateStore(directory), refusing, () -> null,
+                    () -> new ProviderClient.Health(true, 20, 0, "nethernet", "fixture"), message -> {
+            });
+            try {
+                assertThrows(Exception.class, () -> first.start().get(20, TimeUnit.SECONDS));
+            } finally {
+                first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+
+            // The refused epoch must not have reached the state file, or every later start dies on it
+            String persisted = Files.readString(directory.resolve("provider-state.json"));
+            assertFalse(persisted.contains("\"ticketKeys\":[{"), "a refused admission key was persisted: " + persisted);
+
+            ProviderClient second = new ProviderClient(config, new ProviderStateStore(directory), new FakeTransport(),
+                    () -> null, () -> new ProviderClient.Health(true, 20, 0, "nethernet", "fixture"), message -> {
+            });
+            try {
+                assertNotNull(second.start().get(20, TimeUnit.SECONDS));
+            } finally {
+                second.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     @Test
     void poolAttachmentsAndRemovedPublicEndpointsPreserveRuntimeIdentity(@TempDir Path path) throws Exception {
         for (boolean standalone : List.of(false, true)) {
@@ -281,7 +316,12 @@ class ProviderClientTest {
             return CompletableFuture.completedFuture(p);
         }
 
+        boolean refuseKeys;
+
         public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+            if (refuseKeys) {
+                return CompletableFuture.failedFuture(new IllegalArgumentException("Unusable admission key"));
+            }
             installed = keys.size();
             ticketKeyId = keys.get(keys.size() - 1).keyId();
             return CompletableFuture.completedFuture(null);
