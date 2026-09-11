@@ -8,7 +8,15 @@ import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
+import io.netty.handler.codec.ByteToMessageDecoder;
+import java.util.List;
+import io.netty.handler.codec.ProtocolDetectionResult;
+import io.netty.handler.codec.ProtocolDetectionState;
+import io.netty.handler.codec.haproxy.HAProxyMessage;
+import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
+import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.util.AsciiString;
+import io.netty.util.AttributeKey;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
@@ -83,11 +91,16 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     private static final int ANSWER_TIMEOUT_SECONDS = 30;
 
+    /** The source a trusted proxy declared in its PROXY header. */
+    private static final AttributeKey<InetSocketAddress> PROXIED_SOURCE =
+            AttributeKey.valueOf(NetherNetHTTPSignaling.class, "proxiedSource");
+
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
     private final Set<String> advertisedAddresses;
     private final TokenTrust tokenTrust;
     private final boolean serveHttp;
+    private final boolean proxyProtocol;
 
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
@@ -106,6 +119,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.advertisedAddresses = builder.advertisedAddresses;
         this.tokenTrust = builder.tokenTrust;
         this.serveHttp = builder.serveHttp;
+        this.proxyProtocol = builder.proxyProtocol;
     }
 
     @Override
@@ -138,6 +152,11 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                     @Override
                     protected void initChannel(Channel ch) {
                         ChannelPipeline p = ch.pipeline();
+                        // A PROXY header precedes the TLS handshake, so it is read before any of this
+                        if (proxyProtocol) {
+                            p.addLast(new OptionalProxyProtocol());
+                        }
+
                         // Handle ssl or drop it
                         if (sslContext != null) {
                             p.addLast(sslContext.newHandler(ch.alloc()));
@@ -160,6 +179,43 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 future.channel().close();
             }
         });
+    }
+
+    /**
+     * Reads a PROXY header from a trusted proxy, and steps aside for anything else.
+     */
+    private class OptionalProxyProtocol extends ByteToMessageDecoder {
+        @Override
+        protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+            InetSocketAddress peer = (InetSocketAddress) ctx.channel().remoteAddress();
+            if (!trustedProxies.contains(peer)) {
+                ctx.pipeline().remove(this);
+                return;
+            }
+
+            ProtocolDetectionResult<HAProxyProtocolVersion> detected = HAProxyMessageDecoder.detectProtocol(in);
+            if (detected.state() == ProtocolDetectionState.NEEDS_MORE_DATA) {
+                return;
+            }
+            if (detected.state() == ProtocolDetectionState.INVALID) {
+                // A trusted proxy is allowed to speak plain HTTP too
+                ctx.pipeline().remove(this);
+                return;
+            }
+
+            ctx.pipeline().addAfter(ctx.name(), null, new SimpleChannelInboundHandler<HAProxyMessage>() {
+                @Override
+                protected void channelRead0(ChannelHandlerContext inner, HAProxyMessage message) {
+                    if (message.sourceAddress() != null) {
+                        inner.channel().attr(PROXIED_SOURCE)
+                                .set(new InetSocketAddress(message.sourceAddress(), message.sourcePort()));
+                        log.debug("Got PROXY header: (from " + peer + ") " + message.sourceAddress());
+                    }
+                    inner.pipeline().remove(this);
+                }
+            });
+            ctx.pipeline().replace(this, null, new HAProxyMessageDecoder());
+        }
     }
 
     private class SignalingHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
@@ -244,6 +300,12 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
             if (trustedProxies.isEmpty() || remote == null || !trustedProxies.contains(remote)) {
                 return remote;
+            }
+
+            // A PROXY header is the more trustworthy of the two, so it wins
+            InetSocketAddress proxied = ctx.channel().attr(PROXIED_SOURCE).get();
+            if (proxied != null) {
+                return proxied;
             }
 
             String forwarded = req.headers().get(FORWARDED_FOR);
@@ -506,6 +568,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private Set<String> advertisedAddresses = Set.of();
         private TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
         private boolean serveHttp = true;
+        private boolean proxyProtocol = false;
         private PlayerFilter playerFilter = (host, player) -> true;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
@@ -693,6 +756,22 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         public Builder setTokenTrust(TokenTrust tokenTrust) {
             this.tokenTrust = tokenTrust;
+            return this;
+        }
+
+        /**
+         * Sets whether to read a HAProxy PROXY header, v1 or v2, from connections that arrive from
+         * a trusted proxy. Defaults to false.
+         * <p>
+         * Only connections from {@link #setTrustedProxies} are looked at, and a connection that
+         * carries no header is served normally, so a listener can take both. The header is read
+         * before TLS, which is where a proxy puts it.
+         *
+         * @param proxyProtocol Whether to accept PROXY headers
+         * @return This builder
+         */
+        public Builder setProxyProtocol(boolean proxyProtocol) {
+            this.proxyProtocol = proxyProtocol;
             return this;
         }
 

@@ -3,6 +3,7 @@ description = "NetherNet transport for Netty"
 dependencies {
     api(libs.bundles.netty)
     api(libs.netty.codec.http)
+    api(libs.netty.codec.haproxy)
     api(libs.expiringmap)
     api(libs.libdatachannel.java)
 
