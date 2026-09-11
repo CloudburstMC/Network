@@ -153,10 +153,17 @@ class ProviderClientTest {
             ProviderClient client = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example"),
                     new ProviderStateStore(path), new FakeTransport(), () -> null,
-                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "fixture"), message -> {
+                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", null), message -> {
             });
             try {
+                JsonObject extensions = JsonParser.parseString(
+                        "{\"org.example.location\":{\"version\":1,\"critical\":false,\"data\":{\"location\":null}}}")
+                        .getAsJsonObject();
+                client.updateHeartbeatExtensions(extensions).get(10, TimeUnit.SECONDS);
                 JsonObject result = client.start().get(20, TimeUnit.SECONDS);
+                assertEquals(extensions, stub.lastHeartbeat.getAsJsonObject("extensions"),
+                        "Explicit null in opaque extension data must survive wire serialization");
+                assertFalse(stub.lastHeartbeat.has("build"), "Unspecified optional health fields stay omitted");
                 assertFalse(result.has("ticketKey"));
                 assertEquals(stub.extensionMetadata, result.getAsJsonObject("extensions"));
                 assertFalse(Files.readString(path.resolve("provider-state.json"))

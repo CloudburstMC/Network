@@ -123,7 +123,8 @@ public final class ProviderClient implements AutoCloseable {
         }
     }
 
-    private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().create();
+    // Null is meaningful inside opaque extension data (for example, clearing a setting).
+    private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
     private final Configuration config;
     private final ProviderStateStore store;
     private final ProviderTransport transport;
@@ -644,7 +645,7 @@ public final class ProviderClient implements AutoCloseable {
                 body.add("playerCount", JSON.toJsonTree(health.playerCount()));
             }
             body.addProperty("protocolVersion", health.protocolVersion());
-            body.addProperty("build", health.build());
+            if (health.build() != null) body.addProperty("build", health.build());
             if (config.region() != null) {
                 body.addProperty("region", config.region());
             }
