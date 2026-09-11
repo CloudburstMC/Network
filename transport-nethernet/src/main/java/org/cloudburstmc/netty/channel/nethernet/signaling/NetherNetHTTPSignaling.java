@@ -686,7 +686,18 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * @return This builder
          */
         public Builder setTrustedProxies(Collection<String> trustedProxies) {
-            this.trustedProxies = IpRangeSet.parse(trustedProxies);
+            return setTrustedProxies(IpRangeSet.parse(trustedProxies));
+        }
+
+        /**
+         * Sets the reverse proxies whose {@code X-Forwarded-For} header is honoured, from a set that
+         * is already parsed, for callers that match the same addresses elsewhere.
+         *
+         * @param trustedProxies The addresses to trust
+         * @return This builder
+         */
+        public Builder setTrustedProxies(IpRangeSet trustedProxies) {
+            this.trustedProxies = trustedProxies == null ? IpRangeSet.empty() : trustedProxies;
             return this;
         }
 
