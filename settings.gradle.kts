@@ -20,6 +20,22 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
+val nativeDependencies = java.util.Properties().apply {
+    File(settingsDir, "native-dependencies.properties").inputStream().use { load(it) }
+}
+
+dependencyResolutionManagement {
+    versionCatalogs {
+        create("libs") {
+            val group = providers.gradleProperty("nativeJavaGroup")
+                .getOrElse(nativeDependencies.getProperty("nativeJavaGroup"))
+            val version = providers.gradleProperty("nativeJavaVersion")
+                .getOrElse(nativeDependencies.getProperty("nativeJavaVersion"))
+            library("libdatachannel-java", group, "libdatachannel-java").version(version)
+        }
+    }
+}
+
 include("transport-raknet")
 include("transport-nethernet")
 include("external-signalling")

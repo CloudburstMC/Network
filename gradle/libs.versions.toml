@@ -1,6 +1,5 @@
 [versions]
 netty = "4.1.130.Final"
-libdatachannel = "0.24.1.1"
 gson = "2.13.2"
 jose4j = "0.9.6"
 junit = "5.9.2"
@@ -17,7 +16,6 @@ netty-transport-native-unix-common = { group = "io.netty", name = "netty-transpo
 
 expiringmap = { group = "net.jodah", name = "expiringmap", version = "0.5.10" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
-libdatachannel-java = { group = "tel.schich", name = "libdatachannel-java", version.ref = "libdatachannel" }
 jose4j = { group = "org.bitbucket.b_c", name = "jose4j", version.ref = "jose4j" }
 
 # Test dependencies

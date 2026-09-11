@@ -1,8 +1,5 @@
 description = "NetherNet External Signalling client and stateless admission"
 
-val nativeGroup = rootProject.property("nativeJavaGroup")
-val nativeVersion = rootProject.property("nativeJavaVersion")
-
 java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(17))
@@ -15,7 +12,7 @@ dependencies {
     testImplementation(libs.bundles.junit)
     testImplementation(project(":transport-raknet"))
     testRuntimeOnly(libs.junit.platform.launcher)
-    testRuntimeOnly("$nativeGroup:libdatachannel-java:$nativeVersion:x86_64")
+    testRuntimeOnly(variantOf(libs.libdatachannel.java) { classifier("x86_64") })
 }
 
 tasks.jar {
@@ -26,6 +23,21 @@ tasks.jar {
 tasks.test {
     useJUnitPlatform {
         excludeTags("native")
+    }
+}
+
+tasks.register("nativeBindingJar") {
+    val binding = configurations.testRuntimeClasspath.map { classpath ->
+        classpath.incoming.artifactView {
+            componentFilter { it is ModuleComponentIdentifier && it.module == "libdatachannel-java" }
+        }.files
+    }
+    // Printing a path does not otherwise make Gradle resolve anything.
+    dependsOn(binding)
+    doLast {
+        val jar = binding.get().files.firstOrNull { !it.name.contains("-") || it.name.endsWith("SNAPSHOT.jar") }
+            ?: binding.get().files.first()
+        println(jar.absolutePath)
     }
 }
 
