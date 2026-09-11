@@ -17,9 +17,8 @@
 val nativeDependencies = java.util.Properties().apply {
     rootProject.file("native-dependencies.properties").inputStream().use { load(it) }
 }
-for (key in listOf("nativeJavaGroup", "nativeJavaVersion")) {
-    if (!rootProject.hasProperty(key)) rootProject.extra[key] = nativeDependencies.getProperty(key)
-}
+val nativeJavaGroup: String = providers.gradleProperty("nativeJavaGroup")
+    .getOrElse(nativeDependencies.getProperty("nativeJavaGroup"))
 
 val networkVersion = System.getenv("NETWORK_PUBLISH_VERSION")
         ?.trim()
@@ -35,11 +34,19 @@ subprojects {
     version = networkVersion
 
     repositories {
+        val localNativeRepository = rootProject.file(".native-deps/maven")
+        if (localNativeRepository.isDirectory) {
+            maven {
+                name = "localNativeDevelopment"
+                url = localNativeRepository.toURI()
+                content { includeGroup(nativeJavaGroup) }
+            }
+        }
         maven {
-            name = "maintainedNativeDevelopment"
+            name = "openCollabSnapshots"
             url = uri(rootProject.providers.gradleProperty("nativeMavenRepository")
-                .getOrElse(rootProject.file(".native-deps/maven").toURI().toString()))
-            content { includeGroup("io.github.teamziax") }
+                .getOrElse("https://repo.opencollab.dev/maven-snapshots/"))
+            content { includeGroup(nativeJavaGroup) }
         }
         mavenLocal()
         mavenCentral()

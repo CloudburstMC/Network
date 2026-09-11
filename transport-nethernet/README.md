@@ -3,7 +3,7 @@
 ## Usage
 
 > [!IMPORTANT]
-> This library uses [libdatachannel-java](https://github.com/pschichtel/libdatachannel-java) and needs its platform-specific native library at runtime. The main artifact contains no natives, so you have to add the classifier(s) for the platforms you ship yourself.
+> This library uses [libdatachannel-java](https://github.com/opencollab-incubator/libdatachannel-java) and needs its platform-specific native library at runtime. The main artifact contains no natives, so you have to add the classifier(s) for the platforms you ship yourself.
 
 ```kotlin
 val nativePlatforms = listOf(
@@ -17,7 +17,7 @@ val nativePlatforms = listOf(
 dependencies {
     implementation("org.cloudburstmc.netty:netty-transport-nethernet:$netherNetVersion")
     nativePlatforms.forEach { platform ->
-        runtimeOnly("tel.schich:libdatachannel-java:$libdatachannelVersion:$platform")
+        runtimeOnly("dev.opencollab:libdatachannel-java:$libdatachannelVersion:$platform")
     }
 }
 ```

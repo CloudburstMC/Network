@@ -101,7 +101,7 @@ public final class NativeAdmissionBench {
                 }
                 var endpoint = host.channel();
                 emit("stats", Map.of("admission", endpoint.admissionStats(), "native", endpoint.nativeStats(),
-                        "nativeCreationAttempts", PeerConnection.nativeCreationAttempts(), "hostCreations",
+                        "nativeCreationAttempts", NativeDiagnostics.creationAttempts().orElse(-1), "hostCreations",
                         endpoint.creationAttempts(), "deliveredChannels", delivered.get()));
                 for (var event : endpoint.pollEvents()) {
                     emit("stage", Map.of("stage", event.stage(), "ticketId", event.ticketId(),

@@ -337,10 +337,10 @@ class NativeAdmissionIntegrationTest {
             var answer = TestSignallingProvider.answer(client.localDescription(), id.fingerprint(), port,
                     System.currentTimeMillis() + 2000, TestSignallingProvider.AUDIENCE, false);
             byte[] request = nominatedBinding(answer.token() + ":expiredDecisionClient", answer.password());
-            long before = PeerConnection.nativeCreationAttempts();
+            OptionalLong before = NativeDiagnostics.creationAttempts();
             socket.send(new DatagramPacket(request, request.length, loopback, port));
             await(() -> endpoint.admissionStats().invalid() > 0);
-            assertEquals(before, PeerConnection.nativeCreationAttempts());
+            NativeDiagnostics.assertCreations(before, 0);
             assertEquals(0, endpoint.creationAttempts());
             assertEquals(0, endpoint.nativeStats()[2]);
             assertEquals(0, endpoint.nativeStats()[3]);
@@ -444,14 +444,14 @@ class NativeAdmissionIntegrationTest {
             rakPing(49191);
             assertEquals(0, endpoint.nativeStats()[2]);
             assertEquals(0, endpoint.admissionStats().claims());
-            long beforeInvalid = PeerConnection.nativeCreationAttempts();
+            OptionalLong beforeInvalid = NativeDiagnostics.creationAttempts();
             try (var noise = new DatagramSocket()) {
                 byte[] packet = new byte[40];
                 noise.send(new DatagramPacket(packet, packet.length, loopback, port));
             }
             await(() -> endpoint.nativeStats()[0] > 0);
             assertEquals(0, endpoint.nativeStats()[5], "Malformed UDP stays native");
-            assertEquals(beforeInvalid, PeerConnection.nativeCreationAttempts());
+            NativeDiagnostics.assertCreations(beforeInvalid, 0);
             assertEquals(0, endpoint.nativeStats()[3]);
             assertThrows(IllegalStateException.class, () -> new IceUdpMuxListener(loopback, port, Runnable::run,
                     request -> CompletableFuture.completedFuture(null)));
@@ -511,7 +511,7 @@ class NativeAdmissionIntegrationTest {
                                 "wrong-stun-integrity-password"),
                         StatelessAdmissionValidatorTest.binding(answer.token() + ":differentClientUfrag",
                                 answer.password()));
-                long beforeNegatives = PeerConnection.nativeCreationAttempts();
+                OptionalLong beforeNegatives = NativeDiagnostics.creationAttempts();
                 try (var invalid = new DatagramSocket()) {
                     for (byte[] packet : rejectedPackets) {
                         long rejectedBefore = endpoint.admissionStats().invalid();
@@ -519,7 +519,7 @@ class NativeAdmissionIntegrationTest {
                         await(() -> endpoint.admissionStats().invalid() > rejectedBefore);
                     }
                 }
-                assertEquals(beforeNegatives, PeerConnection.nativeCreationAttempts());
+                NativeDiagnostics.assertCreations(beforeNegatives, 0);
                 assertEquals(0, endpoint.admissionStats().claims());
                 assertEquals(0, endpoint.nativeStats()[2]);
                 assertEquals(0, endpoint.nativeStats()[3]);
@@ -527,13 +527,13 @@ class NativeAdmissionIntegrationTest {
                 // Issuing an answer changes NO host state. Host has only its profile and key snapshot.
                 assertEquals(0, endpoint.admissionStats().claims());
                 assertEquals(0, endpoint.creationAttempts());
-                long beforeJoin = PeerConnection.nativeCreationAttempts();
+                OptionalLong beforeJoin = NativeDiagnostics.creationAttempts();
                 client.setRemoteDescription(answer.sdp(), SessionDescriptionType.ANSWER);
                 assertTrue(echoed.await(12, TimeUnit.SECONDS), "both channels echo through Netty");
                 assertNull(failure.get());
                 assertEquals(3, inboundMask.get());
                 assertEquals(1, endpoint.creationAttempts());
-                assertEquals(beforeJoin + 1, PeerConnection.nativeCreationAttempts());
+                NativeDiagnostics.assertCreations(beforeJoin, 1);
                 rakPing(49191);
                 assertEquals(1, endpoint.nativeStats()[2]);
                 assertEquals(1, endpoint.nativeStats()[3]);
@@ -574,7 +574,7 @@ class NativeAdmissionIntegrationTest {
         ServerBootstrap bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInboundHandlerAdapter());
         NativeProviderTransport transport = null;
         try {
-            long creations = PeerConnection.nativeCreationAttempts();
+            OptionalLong creations = NativeDiagnostics.creationAttempts();
             transport =
                     NativeProviderTransport.open(bootstrap, new InetSocketAddress("127.0.0.1", 49196), id.certificate(),
                                     id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
@@ -594,7 +594,7 @@ class NativeAdmissionIntegrationTest {
                     transport.applyState("join-admission").toCompletableFuture().get());
             assertEquals(0, transport.channel().admissionStats().claims());
             assertEquals(0, transport.channel().nativeStats()[2]);
-            assertEquals(creations, PeerConnection.nativeCreationAttempts());
+            NativeDiagnostics.assertCreations(creations, 0);
             transport.installTicketKeys(
                     List.of(new ProviderTransport.TicketKey("K001",
                                     TestSignallingProvider.SECRET, 0, System.currentTimeMillis() + 60_000),
@@ -616,7 +616,8 @@ class NativeAdmissionIntegrationTest {
                     .get("incarnation").getAsString();
             assertNotEquals(incarnation, restarted);
             assertNotEquals(NativeProviderTransport.audience(incarnation), NativeProviderTransport.audience(restarted));
-            assertEquals(creations, PeerConnection.nativeCreationAttempts());
+            assertEquals(0, transport.channel().nativeStats()[2]);
+            NativeDiagnostics.assertCreations(creations, 0);
         } finally {
             if (transport != null) {
                 transport.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -662,7 +663,7 @@ class NativeAdmissionIntegrationTest {
                 answers.add(TestSignallingProvider.answer(client.localDescription(), id.fingerprint(), 49198,
                         System.currentTimeMillis() + 30000, TestSignallingProvider.AUDIENCE, false));
             }
-            long before = PeerConnection.nativeCreationAttempts();
+            OptionalLong before = NativeDiagnostics.creationAttempts();
             clients.get(0).setRemoteDescription(answers.get(0).sdp(), SessionDescriptionType.ANSWER);
             clients.get(1).setRemoteDescription(answers.get(1).sdp(), SessionDescriptionType.ANSWER);
             await(() -> opens.get(0) == 2 && opens.get(1) == 2);
@@ -671,7 +672,7 @@ class NativeAdmissionIntegrationTest {
             clients.get(2).setRemoteDescription(answers.get(2).sdp(), SessionDescriptionType.ANSWER);
             await(() -> endpoint.admissionStats().capacityRejected() > 0);
             assertEquals(2, endpoint.creationAttempts());
-            assertEquals(before + 2, PeerConnection.nativeCreationAttempts());
+            NativeDiagnostics.assertCreations(before, 2);
             assertEquals(2, endpoint.admissionStats().claims());
             var closing = children.get(0);
             closing.close().sync();
@@ -683,7 +684,7 @@ class NativeAdmissionIntegrationTest {
                 return opens.get(2) == 2;
             });
             assertEquals(3, endpoint.creationAttempts());
-            assertEquals(before + 3, PeerConnection.nativeCreationAttempts());
+            NativeDiagnostics.assertCreations(before, 3);
             assertEquals(2, endpoint.liveNativePeers());
             assertEquals(2, endpoint.nativeStats()[2]);
             assertEquals(3, endpoint.admissionStats().claims());

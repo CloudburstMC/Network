@@ -99,7 +99,7 @@ public final class ProviderNativeBench {
                 }
                 var endpoint = nativeHost.channel();
                 emit("stats", Map.of("admission", endpoint.admissionStats(), "native", endpoint.nativeStats(),
-                        "nativeCreationAttempts", PeerConnection.nativeCreationAttempts(), "hostCreations",
+                        "nativeCreationAttempts", NativeDiagnostics.creationAttempts().orElse(-1), "hostCreations",
                         endpoint.creationAttempts(), "deliveredChannels", delivered.get()));
                 Thread.sleep(100);
             }
