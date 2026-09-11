@@ -100,8 +100,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         // Enable multiplexing and set the port
         return config
                 .withEnableIceUdpMux(true)
-                .withPortRangeBegin((short) port)
-                .withPortRangeEnd((short) port);
+                .withPortRangeBegin(port)
+                .withPortRangeEnd(port);
     }
 
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
