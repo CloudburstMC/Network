@@ -29,6 +29,8 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import javax.net.ssl.SSLException;
+
 import java.net.ConnectException;
 import java.net.SocketAddress;
 import java.net.URI;
@@ -91,6 +93,19 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         }
     }
 
+    /**
+     * TLS for the signaling websocket, which carries the Xbox token in its upgrade request.
+     * <p>
+     * Netty leaves {@code endpointIdentificationAlgorithm} unset, which validates the chain but not
+     * the name on it, so without this any publicly trusted certificate would be accepted for the
+     * signaling host.
+     */
+    static SslContext signalingSslContext() throws SSLException {
+        return SslContextBuilder.forClient()
+                .endpointIdentificationAlgorithm("HTTPS")
+                .build();
+    }
+
     protected synchronized CompletableFuture<List<IceServerInfo>> connectInternal() {
         if (connectFuture != null) {
             return connectFuture;
@@ -100,7 +115,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         connectFuture.thenAccept(servers -> this.iceServers = servers);
 
         try {
-            SslContext sslCtx = SslContextBuilder.forClient().build();
+            SslContext sslCtx = signalingSslContext();
             WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
                     uri, WebSocketVersion.V13, null, false,
                     new DefaultHttpHeaders()
