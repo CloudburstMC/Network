@@ -5,9 +5,11 @@ import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
+import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import io.netty.util.AsciiString;
 
 import java.util.Collection;
+import java.util.Set;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
 import io.netty.bootstrap.ServerBootstrap;
@@ -76,6 +78,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
+    private final Set<String> advertisedAddresses;
 
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
@@ -90,6 +93,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.serverIdentity = builder.identity;
         this.trustedProxies = builder.trustedProxies;
         this.iceOnLocalPort = builder.iceOnLocalPort;
+        this.advertisedAddresses = builder.advertisedAddresses;
     }
 
     @Override
@@ -335,7 +339,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
         Promise<String> answer = pendingAnswers.get(targetNetworkId);
         if (answer != null) {
-            answer.trySuccess(sdp);
+            answer.trySuccess(SdpUtil.withAdvertisedCandidates(sdp, this.advertisedAddresses));
         } else {
             log.debug("No pending join waiting for " + targetNetworkId);
         }
@@ -418,6 +422,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private SslContext sslContext;
         private IpRangeSet trustedProxies = IpRangeSet.empty();
         private boolean iceOnLocalPort = true;
+        private Set<String> advertisedAddresses = Set.of();
         private PlayerFilter playerFilter = (host, player) -> true;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
@@ -580,6 +585,19 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         public Builder setIceOnLocalPort(boolean iceOnLocalPort) {
             this.iceOnLocalPort = iceOnLocalPort;
+            return this;
+        }
+
+        /**
+         * Sets the only local addresses that may be announced as ICE candidates. Empty, the
+         * default, announces every address ICE gathers.
+         *
+         * @param advertisedAddresses Addresses reachable by connecting peers
+         * @return This builder
+         * @see SdpUtil#withAdvertisedCandidates
+         */
+        public Builder setAdvertisedAddresses(Collection<String> advertisedAddresses) {
+            this.advertisedAddresses = advertisedAddresses == null ? Set.of() : Set.copyOf(advertisedAddresses);
             return this;
         }
 
