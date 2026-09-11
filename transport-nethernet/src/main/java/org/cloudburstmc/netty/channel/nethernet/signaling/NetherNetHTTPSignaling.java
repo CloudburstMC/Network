@@ -4,6 +4,10 @@ import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
+import io.netty.util.AsciiString;
+
+import java.util.Collection;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
 import io.netty.bootstrap.ServerBootstrap;
@@ -68,6 +72,11 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final PlayerFilter playerFilter;
     private final MotdProvider motdProvider;
 
+    private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
+
+    private final IpRangeSet trustedProxies;
+    private final boolean iceOnLocalPort;
+
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
     private NewConnectionHandler newConnectionHandler;
@@ -79,6 +88,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.motdProvider = builder.motdProvider;
         this.sslContext = builder.sslContext;
         this.serverIdentity = builder.identity;
+        this.trustedProxies = builder.trustedProxies;
+        this.iceOnLocalPort = builder.iceOnLocalPort;
     }
 
     @Override
@@ -140,7 +151,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             String path = new QueryStringDecoder(req.uri()).path();
             HttpMethod method = req.method();
             String host = req.headers().get(HttpHeaderNames.HOST);
-            InetSocketAddress remoteAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+            InetSocketAddress remoteAddress = clientAddress(ctx, req);
 
             // Respond to the status check
             if (path.equals("/v1/join")) {
@@ -245,6 +256,29 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             newConnectionHandler.onConnect(random.nextLong(), networkId, sdpOffer);
         }
 
+        /**
+         * The peer address, or the address a trusted reverse proxy forwarded on its behalf.
+         */
+        private InetSocketAddress clientAddress(ChannelHandlerContext ctx, FullHttpRequest req) {
+            InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+            if (trustedProxies.isEmpty() || remote == null || !trustedProxies.contains(remote)) {
+                return remote;
+            }
+
+            String forwarded = req.headers().get(FORWARDED_FOR);
+            if (forwarded == null || forwarded.isBlank()) {
+                return remote;
+            }
+
+            // Leftmost entry is the originating client
+            String first = forwarded.split(",")[0].trim();
+            try {
+                return new InetSocketAddress(first, remote.getPort());
+            } catch (IllegalArgumentException e) {
+                return remote;
+            }
+        }
+
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             log.error("Signaling handler error", cause);
@@ -284,6 +318,15 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     @Override
     public boolean usesTrickleIce() {
         return false;
+    }
+
+    /**
+     * Whether ICE may gather on the port signalling is bound to. Set it false when another
+     * transport already holds the UDP side of that port, so ICE uses its own.
+     */
+    @Override
+    public boolean allowsIceOnLocalPort() {
+        return this.iceOnLocalPort;
     }
 
     @Override
@@ -373,6 +416,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     public static class Builder {
         private ServerIdentity identity;
         private SslContext sslContext;
+        private IpRangeSet trustedProxies = IpRangeSet.empty();
+        private boolean iceOnLocalPort = true;
         private PlayerFilter playerFilter = (host, player) -> true;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
@@ -512,6 +557,30 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             } catch (Exception e) {
                 throw new IllegalArgumentException("Cannot read the TLS certificate " + certificateChain, e);
             }
+        }
+
+        /**
+         * Sets the reverse proxies whose {@code X-Forwarded-For} header is honoured, as single
+         * addresses or CIDR ranges. Requests from anywhere else keep their peer address.
+         *
+         * @param trustedProxies Addresses or CIDR ranges, such as {@code 10.0.0.0/8}
+         * @return This builder
+         */
+        public Builder setTrustedProxies(Collection<String> trustedProxies) {
+            this.trustedProxies = IpRangeSet.parse(trustedProxies);
+            return this;
+        }
+
+        /**
+         * Sets whether ICE may gather on the port signalling binds to. Defaults to true. Set it
+         * false when another transport, such as RakNet, already holds the UDP side of that port.
+         *
+         * @param iceOnLocalPort Whether ICE may use the signalling port
+         * @return This builder
+         */
+        public Builder setIceOnLocalPort(boolean iceOnLocalPort) {
+            this.iceOnLocalPort = iceOnLocalPort;
+            return this;
         }
 
         /**
