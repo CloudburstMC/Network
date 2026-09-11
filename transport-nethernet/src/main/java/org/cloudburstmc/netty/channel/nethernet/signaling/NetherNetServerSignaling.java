@@ -109,12 +109,17 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     public record PongData(String serverName, int protocol, String version, String levelName, int gameType,
                            int playerCount, int maxPlayerCount, boolean isEditorWorld, boolean isHardcore,
                            int transportLayer,
-                           int connectionType) {
+                           int connectionType, int dataVersion, boolean onlineAuth, boolean selfSignedAuth,
+                           String nonce) {
 
         public static final PongData DEFAULT = new Builder().build();
 
+        /**
+         * The document a client reads from {@code GET /v1/join}, in the order the schema lists.
+         */
         public String toJson() {
             JsonObject info = new JsonObject();
+            info.addProperty("dataVersion", dataVersion());
             info.addProperty("name", serverName());
             info.addProperty("protocol", protocol());
             info.addProperty("version", version());
@@ -122,6 +127,13 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
             info.addProperty("players", playerCount());
             info.addProperty("maxPlayers", maxPlayerCount());
             info.addProperty("gameType", gameType());
+            info.addProperty("editor", isEditorWorld());
+            info.addProperty("hardcore", isHardcore());
+            info.addProperty("onlineAuth", onlineAuth());
+            info.addProperty("selfSignedAuth", selfSignedAuth());
+            info.addProperty("nonce", nonce());
+            info.addProperty("transportLayer", transportLayer());
+            info.addProperty("connection", connectionType());
             return info.toString();
         }
 
@@ -136,7 +148,12 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
             private boolean isEditorWorld = false;
             private boolean isHardcore = false;
             private int transportLayer = 2; // Default to NetherNet
-            private int connectionType = 4; // Default to LAN
+            private int connectionType = 4; // Default to LANWebRTCSignaling
+            private int dataVersion = 7;
+            private boolean onlineAuth = true;
+            private boolean selfSignedAuth = false;
+            // Random per host, as a dedicated server does
+            private String nonce = String.format("%016x", new java.security.SecureRandom().nextLong());
 
             public Builder setServerName(String serverName) {
                 this.serverName = serverName;
@@ -193,9 +210,34 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
                 return this;
             }
 
+            public Builder setDataVersion(int dataVersion) {
+                this.dataVersion = dataVersion;
+                return this;
+            }
+
+            /**
+             * Whether the host authenticates players against the auth service. A host that does not
+             * should also set {@link #setSelfSignedAuth}.
+             */
+            public Builder setOnlineAuth(boolean onlineAuth) {
+                this.onlineAuth = onlineAuth;
+                return this;
+            }
+
+            public Builder setSelfSignedAuth(boolean selfSignedAuth) {
+                this.selfSignedAuth = selfSignedAuth;
+                return this;
+            }
+
+            public Builder setNonce(String nonce) {
+                this.nonce = nonce;
+                return this;
+            }
+
             public PongData build() {
                 return new PongData(serverName, protocol, version, levelName, gameType, playerCount,
-                        maxPlayerCount, isEditorWorld, isHardcore, transportLayer, connectionType);
+                        maxPlayerCount, isEditorWorld, isHardcore, transportLayer, connectionType,
+                        dataVersion, onlineAuth, selfSignedAuth, nonce);
             }
         }
     }
