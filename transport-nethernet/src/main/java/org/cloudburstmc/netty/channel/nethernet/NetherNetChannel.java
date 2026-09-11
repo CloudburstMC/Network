@@ -16,6 +16,7 @@ import tel.schich.libdatachannel.DataChannelCallback;
 import tel.schich.libdatachannel.PeerConnection;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.Queue;
@@ -41,6 +42,20 @@ public abstract class NetherNetChannel extends AbstractChannel {
         super(parent);
         this.remoteAddress = remote;
         this.localAddress = local;
+    }
+
+    /**
+     * The round trip time of the underlying transport in milliseconds, or {@code 0} while it is unknown, which
+     * matches how the raknet transport reports a session without a completed ping.
+     *
+     * @return the round trip time in milliseconds
+     */
+    public long getPing() {
+        PeerConnection peer = this.peerConnection;
+        if (peer == null) {
+            return 0;
+        }
+        return peer.rtt().map(Duration::toMillis).orElse(0L);
     }
 
     public void setDataChannels(DataChannel reliable, DataChannel unreliable) {
