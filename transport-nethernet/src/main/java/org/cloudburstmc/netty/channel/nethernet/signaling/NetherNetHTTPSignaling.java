@@ -97,7 +97,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         try {
-            this.serverIdentity = ServerIdentity.fromKeystore(builder.identityKeystore, builder.identityPassword);
+            this.serverIdentity = ServerIdentity.fromPkcs12(builder.identityKeystore, builder.identityPassword);
         } catch (Exception ex) {
             log.error("Error loading identity keystore: " + ex.getMessage(), ex);
         }

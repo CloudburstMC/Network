@@ -19,6 +19,7 @@ expiringmap = { group = "net.jodah", name = "expiringmap", version = "0.5.10" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 libdatachannel-java = { group = "dev.opencollab", name = "libdatachannel-java", version.ref = "libdatachannel" }
 jose4j = { group = "org.bitbucket.b_c", name = "jose4j", version.ref = "jose4j" }
+jspecify = { group = "org.jspecify", name = "jspecify", version = "1.0.0" }
 
 # Test dependencies
 junit-jupiter-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine", version.ref = "junit" }
