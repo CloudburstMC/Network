@@ -234,7 +234,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
             if (NetherNetConstants.RTC_NEGOTIATION_CONNECT_REQUEST.equals(parts[0]) && newConnectionHandler != null) {
                 String payload = parts.length > 2 ? parts[2] : "";
-                newConnectionHandler.onConnect(connectionId, sender, payload);
+                newConnectionHandler.onConnect(connectionId, sender, payload, null, null);
             } else {
                 log.debug("No handler found for connection ID: {} (Type: {})", connectionId, parts[0]);
             }

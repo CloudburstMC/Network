@@ -1,5 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
+import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
+import org.jspecify.annotations.Nullable;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
@@ -65,8 +67,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
         this.localAddress = (InetSocketAddress) localAddress;
 
-        this.signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp) -> {
-            acceptConnection(connectionId, offerSdp, remoteNetworkId);
+        this.signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp, clientAddress, player) -> {
+            acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, player);
         });
 
         this.signaling.bind(localAddress, eventLoop());
@@ -103,6 +105,21 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     }
 
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
+        acceptConnection(connectionId, offerSdp, remoteNetworkId, null, null);
+    }
+
+    public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId,
+                                 @Nullable InetSocketAddress clientAddress) {
+        acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, null);
+    }
+
+    /**
+     * @param clientAddress The address the peer signalled from, or null if it is not known. ICE
+     *                      replaces it with the negotiated pair once the connection is up, but
+     *                      until then it is all the child channel has to report.
+     */
+    public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId,
+                                 @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
         PeerConnectionConfiguration rtcConfig =
                 bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
                         .withDisableAutoNegotiation(true)
@@ -114,8 +131,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);
         observer.setPeerConnection(pc);
 
-        NetherNetChildChannel child = new NetherNetChildChannel(this, pc, new InetSocketAddress(0), localAddress);
+        NetherNetChildChannel child = new NetherNetChildChannel(this,
+                pc, clientAddress == null ? new InetSocketAddress(0) : clientAddress, localAddress);
         child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
+        if (player != null) {
+            child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
+        }
         observer.setChildChannel(child);
 
         child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));

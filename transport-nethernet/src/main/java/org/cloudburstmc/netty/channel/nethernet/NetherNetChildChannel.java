@@ -4,6 +4,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfi
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.AttributeKey;
+import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import tel.schich.libdatachannel.PeerConnection;
 
 import java.net.InetSocketAddress;
@@ -19,6 +20,13 @@ public class NetherNetChildChannel extends NetherNetChannel {
      */
     public static final AttributeKey<Long> CONNECTION_ID =
             AttributeKey.valueOf(NetherNetChildChannel.class, "connectionId");
+
+    /**
+     * The peer whose validated identity assertion opened this channel, when the signalling that
+     * accepted it validates one. Signalling that carries no identity leaves it unset.
+     */
+    public static final AttributeKey<PlayerInfo> PLAYER_INFO =
+            AttributeKey.valueOf(NetherNetChildChannel.class, "playerInfo");
 
     public NetherNetChildChannel(Channel parent, PeerConnection peerConnection, InetSocketAddress remote,
                                  InetSocketAddress local) {
