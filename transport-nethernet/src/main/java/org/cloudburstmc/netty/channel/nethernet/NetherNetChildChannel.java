@@ -23,7 +23,12 @@ public class NetherNetChildChannel extends NetherNetChannel {
 
     /**
      * The peer whose validated identity assertion opened this channel, when the signalling that
-     * accepted it validates one. Signalling that carries no identity leaves it unset.
+     * accepted it validates one. Signalling that carries no identity leaves it unset, so treat an
+     * absent value as an unauthenticated transport rather than an authenticated one.
+     * <p>
+     * Whatever identity your protocol presents after the transport is up is not tied to this one.
+     * Compare the two, through {@link PlayerInfo#clientPublicKey()}, or a peer can replay an
+     * identity it captured from somewhere else.
      */
     public static final AttributeKey<PlayerInfo> PLAYER_INFO =
             AttributeKey.valueOf(NetherNetChildChannel.class, "playerInfo");

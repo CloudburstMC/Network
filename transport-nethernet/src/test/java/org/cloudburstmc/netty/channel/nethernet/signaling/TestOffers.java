@@ -32,6 +32,7 @@ final class TestOffers {
         claims.setClaim("xid", "2535000000000000");
         claims.setClaim("xname", "Probe");
         claims.setIssuedAtToNow();
+        claims.setExpirationTimeMinutesInTheFuture(5);
 
         String token = sign(pair, claims.toJson());
         String[] parts = sign(pair, IdentityUtils.getCanonicalFingerprintJson(SDP)).split("\\.");
