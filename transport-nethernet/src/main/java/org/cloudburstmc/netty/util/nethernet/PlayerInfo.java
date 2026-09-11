@@ -11,9 +11,14 @@ import java.util.Base64;
 
 /**
  * The validated identity of a player attempting to join.
+ * <p>
+ * How much of this can be trusted depends on the {@link TokenTrust} the offer was validated with.
+ * Under {@link TokenTrust#MINECRAFT_AUTH} the token is Xbox issued, so the claims are attested.
+ * Under {@link TokenTrust#ANY} the peer signed its own token and every claim below is self asserted,
+ * with only {@link #clientPublicKey()} bound to a key the peer had to hold.
  *
- * @param xuid          The Xbox user ID of the player
- * @param displayName   The Xbox gamertag of the player
+ * @param xuid          The Xbox user ID of the player, self asserted under {@link TokenTrust#ANY}
+ * @param displayName   The Xbox gamertag of the player, self asserted under {@link TokenTrust#ANY}
  * @param networkId     The Network ID the player is joining with
  * @param remoteAddress The address the join request came from
  * @param claims        The full set of validated JWT claims, for anything not surfaced above
