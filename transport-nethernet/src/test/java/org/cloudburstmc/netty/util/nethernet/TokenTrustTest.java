@@ -3,6 +3,7 @@ package org.cloudburstmc.netty.util.nethernet;
 import org.jose4j.jws.AlgorithmIdentifiers;
 import org.jose4j.jws.JsonWebSignature;
 import org.jose4j.jwt.JwtClaims;
+import org.jose4j.jwt.NumericDate;
 import org.junit.jupiter.api.Test;
 
 import java.security.KeyPair;
@@ -10,6 +11,7 @@ import java.security.KeyPairGenerator;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Base64;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -44,6 +46,7 @@ class TokenTrustTest {
         claims.setClaim("xid", "2535000000000000");
         claims.setClaim("xname", "Probe");
         claims.setIssuedAtToNow();
+        claims.setExpirationTimeMinutesInTheFuture(5);
         String token = sign(tokenKey, claims.toJson());
 
         String sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n" + FINGERPRINT + "\r\n"
@@ -53,6 +56,31 @@ class TokenTrustTest {
         Identity identity = new Identity(new Identity.Idp("example.test", "default"),
                 new Identity.Assertion(token, parts[0] + ".." + parts[2]));
         return sdp.replace("m=application", "a=identity:" + identity.toBase64() + "\r\nm=application");
+    }
+
+    /** The same offer, with a token that expired an hour ago. */
+    private static String expiredOffer(KeyPair pair) throws Exception {
+        JwtClaims claims = new JwtClaims();
+        claims.setClaim("cpk", Base64.getEncoder().encodeToString(pair.getPublic().getEncoded()));
+        claims.setClaim("xid", "2535000000000000");
+        claims.setIssuedAt(NumericDate.fromSeconds(NumericDate.now().getValue() - 7200));
+        claims.setExpirationTime(NumericDate.fromSeconds(NumericDate.now().getValue() - 3600));
+        String token = sign(pair, claims.toJson());
+
+        String sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n" + FINGERPRINT + "\r\n"
+                + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+        String[] parts = sign(pair, IdentityUtils.getCanonicalFingerprintJson(sdp)).split("\\.");
+
+        Identity identity = new Identity(new Identity.Idp("example.test", "default"),
+                new Identity.Assertion(token, parts[0] + ".." + parts[2]));
+        return sdp.replace("m=application", "a=identity:" + identity.toBase64() + "\r\nm=application");
+    }
+
+    @Test
+    void anyRejectsAnExpiredToken() throws Exception {
+        String offer = expiredOffer(keyPair());
+
+        assertThrows(Exception.class, () -> IdentityUtils.validateSdp(offer, TokenTrust.ANY));
     }
 
     @Test
@@ -81,6 +109,16 @@ class TokenTrustTest {
         Exception e = assertThrows(Exception.class, () -> IdentityUtils.validateSdp(offer, TokenTrust.ANY));
         assertTrue(e.getMessage().contains("Fingerprint") || e.getMessage().contains("signature"),
                 "expected a fingerprint binding failure, got: " + e.getMessage());
+    }
+
+    @Test
+    void handsBackTheKeyThePeerProvedItHolds() throws Exception {
+        KeyPair pair = keyPair();
+        JwtClaims claims = IdentityUtils.validateSdp(offer(pair, pair), TokenTrust.ANY);
+
+        PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"), "Probe", "42", null, claims);
+        // A consumer compares this against whatever identity its own login step presents
+        assertArrayEquals(pair.getPublic().getEncoded(), player.clientPublicKey().getEncoded());
     }
 
     @Test

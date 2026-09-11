@@ -26,8 +26,10 @@ public interface TokenTrust {
      * Reads the claims without checking who signed the token, for peers that cannot present a
      * Minecraft-issued one, such as another proxy in the same fleet.
      * <p>
-     * The {@code cpk} binding still applies, so the peer must hold the key its token names, but
-     * nothing here establishes <i>who</i> the peer is. Pair it with an identity check of your own.
+     * The token must still carry an expiry and be within it, so a captured assertion cannot be
+     * replayed indefinitely, and the {@code cpk} binding still applies, so the peer must hold the
+     * key its token names. Nothing here establishes <i>who</i> the peer is, so pair it with an
+     * identity check of your own.
      */
     TokenTrust ANY = identity -> Unverified.CONSUMER.processToClaims(identity.assertion().token());
 
@@ -41,9 +43,10 @@ public interface TokenTrust {
     /** Holder so the shared consumer is built once. */
     final class Unverified {
         static final JwtConsumer CONSUMER = new JwtConsumerBuilder()
-                .setSkipAllValidators()
+                // Who signed it is not checked, but an expiry still has to be present and current
                 .setDisableRequireSignature()
                 .setSkipSignatureVerification()
+                .setRequireExpirationTime()
                 .build();
 
         private Unverified() {
