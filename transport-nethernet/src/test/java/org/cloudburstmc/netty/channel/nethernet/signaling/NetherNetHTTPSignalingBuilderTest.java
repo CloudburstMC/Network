@@ -54,9 +54,11 @@ class NetherNetHTTPSignalingBuilderTest {
     }
 
     @Test
-    void reportsAnUnreadableIdentityAtConfigurationTime(@TempDir Path dir) {
-        File missing = dir.resolve("nope.p12").toFile();
+    void reportsAnUnreadableIdentityAtConfigurationTime(@TempDir Path dir) throws Exception {
+        File unreadable = dir.resolve("broken.pem").toFile();
+        Files.writeString(unreadable.toPath(), "not a pem at all\n");
+
         assertThrows(IllegalArgumentException.class,
-                () -> new NetherNetHTTPSignaling.Builder().setIdentityKeystore(missing));
+                () -> new NetherNetHTTPSignaling.Builder().setIdentityPem(unreadable, "example.test"));
     }
 }
