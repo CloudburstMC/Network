@@ -99,6 +99,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
     private final Set<String> advertisedAddresses;
+    private final List<IceServerInfo> iceServers;
     private final TokenTrust tokenTrust;
     private final boolean serveHttp;
     private final boolean proxyProtocol;
@@ -118,6 +119,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.trustedProxies = builder.trustedProxies;
         this.iceOnLocalPort = builder.iceOnLocalPort;
         this.advertisedAddresses = builder.advertisedAddresses;
+        this.iceServers = builder.iceServers;
         this.tokenTrust = builder.tokenTrust;
         this.serveHttp = builder.serveHttp;
         this.proxyProtocol = builder.proxyProtocol;
@@ -374,6 +376,15 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     /**
+     * The STUN and TURN servers ICE may use, which this signalling takes from its configuration
+     * rather than from a handshake, since it speaks to nothing that would hand them out.
+     */
+    @Override
+    public List<IceServerInfo> getIceServers() {
+        return this.iceServers;
+    }
+
+    /**
      * Answers an SDP offer, whether it arrived over this server's HTTP endpoint or was handed in
      * from outside it.
      * <p>
@@ -567,6 +578,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private IpRangeSet trustedProxies = IpRangeSet.empty();
         private boolean iceOnLocalPort = true;
         private Set<String> advertisedAddresses = Set.of();
+        private List<IceServerInfo> iceServers = List.of();
         private TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
         private boolean serveHttp = true;
         private boolean proxyProtocol = false;
@@ -724,6 +736,22 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         public Builder setAdvertisedAddresses(Collection<String> advertisedAddresses) {
             this.advertisedAddresses = advertisedAddresses == null ? Set.of() : Set.copyOf(advertisedAddresses);
+            return this;
+        }
+
+        /**
+         * Sets the STUN and TURN servers ICE may use, empty by default.
+         * <p>
+         * A host behind NAT gathers only the addresses its interfaces carry, none of which a peer
+         * elsewhere can reach. A STUN server is what turns that into the address the peer sees,
+         * and a TURN server relays when no direct path exists. Neither is needed when the host
+         * holds a reachable address itself.
+         *
+         * @param iceServers The servers to offer ICE
+         * @return This builder
+         */
+        public Builder setIceServers(Collection<IceServerInfo> iceServers) {
+            this.iceServers = iceServers == null ? List.of() : List.copyOf(iceServers);
             return this;
         }
 
