@@ -9,8 +9,11 @@ import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import io.netty.util.AsciiString;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.Set;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
@@ -78,16 +81,20 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
 
+    private static final int ANSWER_TIMEOUT_SECONDS = 30;
+
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
     private final Set<String> advertisedAddresses;
     private final TokenTrust tokenTrust;
+    private final boolean serveHttp;
 
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
     private NewConnectionHandler newConnectionHandler;
 
     private Channel serverChannel;
+    private volatile EventLoop eventLoop;
 
     private NetherNetHTTPSignaling(Builder builder) {
         this.playerFilter = builder.playerFilter;
@@ -98,12 +105,19 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.iceOnLocalPort = builder.iceOnLocalPort;
         this.advertisedAddresses = builder.advertisedAddresses;
         this.tokenTrust = builder.tokenTrust;
+        this.serveHttp = builder.serveHttp;
     }
 
     @Override
     public void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException {
         if (!(localAddress instanceof InetSocketAddress)) {
             throw new IllegalArgumentException("Unsupported address type");
+        }
+        this.eventLoop = eventLoop;
+
+        // Offers arrive through acceptOffer instead, so there is nothing to listen on
+        if (!this.serveHttp) {
+            return;
         }
 
         // Bind the listening socket ourselves so a failure throws correctly
@@ -204,64 +218,23 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             String sdpOffer = req.content().toString(StandardCharsets.UTF_8);
             log.trace("Received sdp offer: " + sdpOffer);
 
-            JwtClaims claims;
-            try {
-                claims = IdentityUtils.validateSdp(sdpOffer, tokenTrust);
-            } catch (Exception e) {
-                log.error("Identity validation failed", e);
-                respondEmptyWithStatus(ctx, HttpResponseStatus.UNAUTHORIZED);
-                return;
-            }
-
-            PlayerInfo player =
-                    new PlayerInfo(claims.getClaimValueAsString("xid"), claims.getClaimValueAsString("xname"),
-                            networkId, remoteAddress, claims);
-            log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
-
-            // Let the user reject the player before we start a connection for them
-            boolean allowed;
-            try {
-                allowed = playerFilter.allow(host, player);
-            } catch (Exception e) {
-                log.error("Player filter failed for " + player.xuid(), e);
-                allowed = false;
-            }
-
-            if (!allowed) {
-                log.debug("Rejected join from " + player.displayName() + " (" + player.xuid() + ")");
-                respondEmptyWithStatus(ctx, HttpResponseStatus.FORBIDDEN);
-                return;
-            }
-
-            // Register the pending answer before firing the callback so a fast answer isn't missed.
-            Promise<String> answer = ctx.executor().newPromise();
-            pendingAnswers.put(networkId, answer);
-
-            // Cancel the answer promise if we have waited 30s
-            ScheduledFuture<?> timeout = ctx.executor().schedule(() -> {
-                answer.tryFailure(new TimeoutException("Timed out waiting for SDP answer"));
-            }, 30, TimeUnit.SECONDS);
-
-            answer.addListener((FutureListener<String>) future -> {
-                pendingAnswers.remove(networkId, answer);
-                timeout.cancel(false);
-
-                if (!future.isSuccess()) {
-                    log.error("No SDP answer for " + networkId, future.cause());
-                    respondEmptyWithStatus(ctx, HttpResponseStatus.GATEWAY_TIMEOUT);
+            acceptOffer(networkId, sdpOffer, remoteAddress, host).whenComplete((sdpAnswer, failure) -> {
+                if (failure == null) {
+                    log.trace("Signed SDP answer: " + sdpAnswer);
+                    respondWithString(ctx, sdpAnswer, "application/sdp");
                     return;
                 }
 
-                String sdpAnswer = future.getNow();
-                log.trace("Signed SDP answer: " + sdpAnswer);
-
-                log.debug("Sending SDP answer");
-
-                respondWithString(ctx, sdpAnswer, "application/sdp");
+                Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
+                OfferRejected.Reason reason = cause instanceof OfferRejected rejected
+                        ? rejected.reason() : OfferRejected.Reason.UNAVAILABLE;
+                respondEmptyWithStatus(ctx, switch (reason) {
+                    case INVALID_IDENTITY -> HttpResponseStatus.UNAUTHORIZED;
+                    case REJECTED -> HttpResponseStatus.FORBIDDEN;
+                    case TIMEOUT -> HttpResponseStatus.GATEWAY_TIMEOUT;
+                    case UNAVAILABLE -> HttpResponseStatus.SERVICE_UNAVAILABLE;
+                });
             });
-
-            // We cant use the network ID as the connection ID as they can be out of the bounds of a long
-            newConnectionHandler.onConnect(random.nextLong(), networkId, sdpOffer, remoteAddress, player);
         }
 
         /**
@@ -335,6 +308,110 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     @Override
     public boolean allowsIceOnLocalPort() {
         return this.iceOnLocalPort;
+    }
+
+    /**
+     * Answers an SDP offer, whether it arrived over this server's HTTP endpoint or was handed in
+     * from outside it.
+     * <p>
+     * The returned description already carries the ICE candidates and the server identity
+     * assertion, so it can be written back to the peer verbatim.
+     *
+     * @param networkId     The peer's network ID
+     * @param sdpOffer      The raw SDP offer
+     * @param clientAddress The address the offer came from, used for the peer's identity and to
+     *                      seed the child channel, or null if it is not known
+     * @param host          The host the peer asked for, passed to the player filter
+     * @return The signed SDP answer, or a failure carrying an {@link OfferRejected}
+     */
+    public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
+                                                 @Nullable InetSocketAddress clientAddress,
+                                                 @Nullable String host) {
+        JwtClaims claims;
+        try {
+            claims = IdentityUtils.validateSdp(sdpOffer, tokenTrust);
+        } catch (Exception e) {
+            log.error("Identity validation failed", e);
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(OfferRejected.Reason.INVALID_IDENTITY, "identity validation failed", e));
+        }
+
+        PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
+                claims.getClaimValueAsString("xname"), networkId, clientAddress, claims);
+        log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
+
+        // Let the user reject the player before we start a connection for them
+        boolean allowed;
+        try {
+            allowed = playerFilter.allow(host, player);
+        } catch (Exception e) {
+            log.error("Player filter failed for " + player.xuid(), e);
+            allowed = false;
+        }
+
+        if (!allowed) {
+            log.debug("Rejected join from " + player.displayName() + " (" + player.xuid() + ")");
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(OfferRejected.Reason.REJECTED, "rejected by the player filter", null));
+        }
+
+        EventLoop loop = this.eventLoop;
+        if (loop == null || newConnectionHandler == null) {
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(OfferRejected.Reason.UNAVAILABLE, "signalling is not bound", null));
+        }
+
+        CompletableFuture<String> result = new CompletableFuture<>();
+
+        // Register the pending answer before firing the callback so a fast answer isn't missed
+        Promise<String> answer = loop.newPromise();
+        pendingAnswers.put(networkId, answer);
+
+        ScheduledFuture<?> timeout = loop.schedule(
+                () -> answer.tryFailure(new TimeoutException("Timed out waiting for SDP answer")),
+                ANSWER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        answer.addListener((FutureListener<String>) future -> {
+            pendingAnswers.remove(networkId, answer);
+            timeout.cancel(false);
+
+            if (future.isSuccess()) {
+                result.complete(future.getNow());
+                return;
+            }
+            log.error("No SDP answer for " + networkId, future.cause());
+            result.completeExceptionally(new OfferRejected(OfferRejected.Reason.TIMEOUT,
+                    "no answer was produced", future.cause()));
+        });
+
+        // We cant use the network ID as the connection ID as they can be out of the bounds of a long
+        newConnectionHandler.onConnect(random.nextLong(), networkId, sdpOffer, clientAddress, player);
+        return result;
+    }
+
+    /** Why an offer did not produce an answer. */
+    public static final class OfferRejected extends Exception {
+        public enum Reason {
+            /** The offer carried no usable identity assertion. */
+            INVALID_IDENTITY,
+            /** The player filter turned the peer away. */
+            REJECTED,
+            /** Nothing produced an answer in time. */
+            TIMEOUT,
+            /** Signalling is not in a state to answer. */
+            UNAVAILABLE
+        }
+
+        private final Reason reason;
+
+        OfferRejected(Reason reason, String message, @Nullable Throwable cause) {
+            super(message, cause);
+            this.reason = reason;
+        }
+
+        public Reason reason() {
+            return this.reason;
+        }
     }
 
     @Override
@@ -428,6 +505,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private boolean iceOnLocalPort = true;
         private Set<String> advertisedAddresses = Set.of();
         private TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
+        private boolean serveHttp = true;
         private PlayerFilter playerFilter = (host, player) -> true;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
@@ -615,6 +693,20 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         public Builder setTokenTrust(TokenTrust tokenTrust) {
             this.tokenTrust = tokenTrust;
+            return this;
+        }
+
+        /**
+         * Sets whether to serve the HTTP join endpoint. Defaults to true. With it off nothing is
+         * listened on and offers have to be handed in through
+         * {@link NetherNetHTTPSignaling#acceptOffer}, which is how an endpoint outside this process
+         * drives signalling.
+         *
+         * @param serveHttp Whether to bind the join endpoint
+         * @return This builder
+         */
+        public Builder setServeHttp(boolean serveHttp) {
+            this.serveHttp = serveHttp;
             return this;
         }
 
