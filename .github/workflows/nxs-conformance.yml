@@ -1,9 +1,13 @@
 name: External signalling conformance
 on:
   push:
-    branches: [develop]
+    branches:
+      - 'develop'
+      - 'nethernet'
   pull_request:
-    branches: [develop]
+    branches:
+      - 'develop'
+      - 'nethernet'
   workflow_dispatch:
 permissions:
   contents: read

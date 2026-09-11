@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - 'develop'
+      - 'nethernet'
 
 jobs:
   deploy:
