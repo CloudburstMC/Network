@@ -115,6 +115,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         observer.setPeerConnection(pc);
 
         NetherNetChildChannel child = new NetherNetChildChannel(this, pc, new InetSocketAddress(0), localAddress);
+        child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
         observer.setChildChannel(child);
 
         child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
