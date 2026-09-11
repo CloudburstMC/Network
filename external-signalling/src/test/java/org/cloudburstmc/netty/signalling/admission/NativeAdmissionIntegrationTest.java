@@ -3,6 +3,8 @@ package org.cloudburstmc.netty.signalling.admission;
 import com.google.gson.JsonObject;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
@@ -470,11 +472,12 @@ class NativeAdmissionIntegrationTest {
                     byte[] payload = new byte[reliable ? 20013 : 7];
                     Arrays.fill(payload, (byte) (reliable ? 11 : 22));
                     dc.onMessage.register(DataChannelCallback.Message.handleBinary((d, buffer) -> {
-                        byte[] frame = new byte[buffer.remaining()];
-                        buffer.get(frame);
+                        ByteBuf frame = Unpooled.buffer(buffer.remaining()).writeBytes(buffer);
                         try {
-                            byte[] message = decoder.decode(frame, reliable);
-                            if (message != null) {
+                            ByteBuf decoded = decoder.decode(frame, reliable);
+                            if (decoded != null) {
+                                byte[] message = ByteBufUtil.getBytes(decoded);
+                                decoded.release();
                                 assertArrayEquals(payload, message);
                                 echoed.countDown();
                             }

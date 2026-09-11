@@ -1,6 +1,9 @@
 package org.cloudburstmc.netty.signalling.admission;
 
 import com.google.gson.*;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
 import java.security.MessageDigest;
@@ -137,7 +140,12 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         for (var entry : fixture("cloudburst-protocol-vectors.v1.json").getAsJsonArray("nethernetFrames")) {
             var frame = entry.getAsJsonObject();
             var decoder = new NetherNetFrameDecoder();
-            byte[] actual = decoder.decode(HexFormat.of().parseHex(frame.get("frameHex").getAsString()), true);
+            ByteBuf decoded = decoder.decode(Unpooled.wrappedBuffer(
+                    HexFormat.of().parseHex(frame.get("frameHex").getAsString())), true);
+            byte[] actual = decoded == null ? null : ByteBufUtil.getBytes(decoded);
+            if (decoded != null) {
+                decoded.release();
+            }
             if (frame.getAsJsonObject("decoded").get("complete").getAsBoolean()) {
                 assertArrayEquals(HexFormat.of().parseHex(frame.get("payloadHex").getAsString()), actual);
             } else {

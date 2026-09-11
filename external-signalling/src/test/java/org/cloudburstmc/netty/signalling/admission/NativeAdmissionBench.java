@@ -1,5 +1,7 @@
 package org.cloudburstmc.netty.signalling.admission;
 
+import io.netty.buffer.Unpooled;
+import io.netty.buffer.ByteBufUtil;
 import com.google.gson.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -139,10 +141,11 @@ public final class NativeAdmissionBench {
                 var decoder = new NetherNetFrameDecoder();
                 channel.onMessage.register(DataChannelCallback.Message.handleBinary((dc, bytes) -> {
                     try {
-                        byte[] frame = new byte[bytes.remaining()];
-                        bytes.get(frame);
-                        byte[] message = decoder.decode(frame, reliable);
-                        if (message != null) {
+                        ByteBuf frame = Unpooled.buffer(bytes.remaining()).writeBytes(bytes);
+                        ByteBuf decoded = decoder.decode(frame, reliable);
+                        if (decoded != null) {
+                            byte[] message = ByteBufUtil.getBytes(decoded);
+                            decoded.release();
                             if (!Arrays.equals(payload, message)) {
                                 throw new IllegalStateException("Echo payload mismatch");
                             }
