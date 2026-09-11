@@ -89,7 +89,7 @@ public final class ProviderBench {
                 registrationMode, authorization, token, region, pool, tags);
         var client = new ProviderClient(config, new ProviderStateStore(state), transport,
                 () -> new ServerStatus("Java bench", 1234, "fixture-only", "Fixture", 2, 50, 0),
-                () -> new ProviderClient.Health(true, 100, 0.02, "nethernet", "java-conformance"), System.err::println);
+                () -> new ProviderClient.Health(true, true, 100, 0.02, "nethernet", "java-conformance"), System.err::println);
         try {
             JsonObject registration = client.start().get(30, TimeUnit.SECONDS);
             String extensionsFile = System.getProperty("providerExtensionsFile");
