@@ -29,6 +29,15 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<Integer> NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS =
             valueOf(NetherChannelOption.class, "NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS");
 
+    /**
+     * Whether to check the address a peer signalled from when its offer holds nothing routable.
+     * Defaults to true, and does nothing for a host that gathered a routable candidate of its own.
+     *
+     * @see org.cloudburstmc.netty.util.nethernet.SdpUtil#inferredPeerCandidates
+     */
+    public static final ChannelOption<Boolean> NETHER_INFER_PEER_CANDIDATES =
+            valueOf(NetherChannelOption.class, "NETHER_INFER_PEER_CANDIDATES");
+
     @SuppressWarnings("deprecation")
     protected NetherChannelOption(String name) {
         super(name);

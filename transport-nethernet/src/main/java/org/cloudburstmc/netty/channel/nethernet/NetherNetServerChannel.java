@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
+import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import org.jspecify.annotations.Nullable;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
@@ -127,7 +128,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                                 this.signaling.getIceServers().stream().map(IceServerInfo::toUris).flatMap(List::stream)
                                         .toList());
 
-        ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId);
+        ServerPeerConnectionObserver observer =
+                new ServerPeerConnectionObserver(connectionId, remoteNetworkId, offerSdp, clientAddress);
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);
         observer.setPeerConnection(pc);
 
@@ -242,9 +244,37 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private PeerConnection peerConnection;
         private volatile boolean fullSdpSent = false;
 
-        public ServerPeerConnectionObserver(long connectionId, String remoteNetworkId) {
+        private final String offerSdp;
+        private final InetSocketAddress clientAddress;
+
+        public ServerPeerConnectionObserver(long connectionId, String remoteNetworkId, String offerSdp,
+                                            @Nullable InetSocketAddress clientAddress) {
             this.connectionId = connectionId;
             this.remoteNetworkId = remoteNetworkId;
+            this.offerSdp = offerSdp;
+            this.clientAddress = clientAddress;
+        }
+
+        /**
+         * Checks the address the peer signalled from, once it is clear neither side gathered
+         * anything the other can reach.
+         *
+         * @param local The description this side gathered
+         */
+        private void inferPeerCandidates(String local) {
+            if (!config.getOption(NetherChannelOption.NETHER_INFER_PEER_CANDIDATES)
+                    || SdpUtil.hasRoutableHostCandidate(local)) {
+                return;
+            }
+            for (String candidate : SdpUtil.inferredPeerCandidates(this.offerSdp, this.clientAddress)) {
+                log.debug("Inferred candidate for {}: {}", Long.toUnsignedString(connectionId), candidate);
+                try {
+                    peerConnection.addRemoteCandidate(candidate);
+                } catch (Exception e) {
+                    log.debug("Failed to add inferred candidate for {}: {}",
+                            Long.toUnsignedString(connectionId), e.toString());
+                }
+            }
         }
 
         public void register(PeerConnection pc) {
@@ -345,7 +375,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         private void onGatheringStateChange(GatheringState state) {
-            if (state != GatheringState.RTC_GATHERING_COMPLETE || fullSdpSent || signaling.usesTrickleIce()) {
+            if (state != GatheringState.RTC_GATHERING_COMPLETE) {
                 return;
             }
 
@@ -358,6 +388,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 return;
             }
 
+            inferPeerCandidates(local);
+
+            if (fullSdpSent || signaling.usesTrickleIce()) {
+                return;
+            }
             fullSdpSent = true;
 
             log.trace("Sending full SDP (with gathered candidates) for {}", Long.toUnsignedString(connectionId));
