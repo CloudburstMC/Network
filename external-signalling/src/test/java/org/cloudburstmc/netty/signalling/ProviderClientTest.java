@@ -29,7 +29,7 @@ class ProviderClientTest {
             FakeTransport refusing = new FakeTransport();
             refusing.refuseKeys = true;
             ProviderClient first = new ProviderClient(config, new ProviderStateStore(directory), refusing, () -> null,
-                    () -> new ProviderClient.Health(true, 20, 0, "nethernet", "fixture"), message -> {
+                    () -> new ProviderClient.Health(true, true, 20, 0, "nethernet", "fixture"), message -> {
             });
             try {
                 assertThrows(Exception.class, () -> first.start().get(20, TimeUnit.SECONDS));
@@ -42,7 +42,7 @@ class ProviderClientTest {
             assertFalse(persisted.contains("\"ticketKeys\":[{"), "a refused admission key was persisted: " + persisted);
 
             ProviderClient second = new ProviderClient(config, new ProviderStateStore(directory), new FakeTransport(),
-                    () -> null, () -> new ProviderClient.Health(true, 20, 0, "nethernet", "fixture"), message -> {
+                    () -> null, () -> new ProviderClient.Health(true, true, 20, 0, "nethernet", "fixture"), message -> {
             });
             try {
                 assertNotNull(second.start().get(20, TimeUnit.SECONDS));
