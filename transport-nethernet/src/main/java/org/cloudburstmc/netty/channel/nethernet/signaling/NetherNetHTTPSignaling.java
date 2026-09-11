@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.jspecify.annotations.Nullable;
 import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
@@ -257,7 +258,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             });
 
             // We cant use the network ID as the connection ID as they can be out of the bounds of a long
-            newConnectionHandler.onConnect(random.nextLong(), networkId, sdpOffer);
+            newConnectionHandler.onConnect(random.nextLong(), networkId, sdpOffer, remoteAddress, player);
         }
 
         /**
@@ -556,7 +557,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * @return This builder
          * @throws IllegalArgumentException If either file cannot be read
          */
-        public Builder setHttpsPem(File certificateChain, File privateKey, String keyPassword) {
+        public Builder setHttpsPem(File certificateChain, File privateKey, @Nullable String keyPassword) {
             try {
                 return setSslContext(SslContextBuilder.forServer(certificateChain, privateKey, keyPassword).build());
             } catch (Exception e) {

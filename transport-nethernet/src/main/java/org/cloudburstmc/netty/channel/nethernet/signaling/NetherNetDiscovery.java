@@ -217,7 +217,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
                 case NetherNetConstants.ID_DISCOVERY_MESSAGE -> {
                     log.trace("Handled discovery message from {}", packet.sender());
                     log.trace("Message Data: {}", decrypted.toString(StandardCharsets.UTF_8));
-                    handleMessage(decrypted, senderId);
+                    handleMessage(decrypted, senderId, packet.sender());
                 }
                 case NetherNetConstants.ID_DISCOVERY_RESPONSE -> {
                     log.trace("Handled discovery response from {}", packet.sender());
@@ -253,7 +253,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         sendPacket(buf, sender);
     }
 
-    private void handleMessage(ByteBuf data, long senderId) {
+    private void handleMessage(ByteBuf data, long senderId, InetSocketAddress sender) {
         long recipientId = data.readLongLE();
 
         if (recipientId != this.networkId && recipientId != 0) {
@@ -290,7 +290,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
                     String payload = parts.length > 2 ? parts[2] : "";
                     log.trace("Dispatching New Connection: ID={} Sender={}", Long.toUnsignedString(connectionId),
                             Long.toUnsignedString(senderId));
-                    newConnectionHandler.onConnect(connectionId, Long.toUnsignedString(senderId), payload);
+                    newConnectionHandler.onConnect(connectionId, Long.toUnsignedString(senderId), payload, sender, null);
                 } else {
                     log.debug("Received CONNECT_REQUEST but no NewConnectionHandler is set!");
                 }
