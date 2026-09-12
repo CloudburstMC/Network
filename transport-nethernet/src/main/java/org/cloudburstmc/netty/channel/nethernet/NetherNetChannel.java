@@ -66,58 +66,77 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.reliableChannel.onClosed.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
 
         this.reliableChannel.onMessage.register(
-                DataChannelCallback.Message.handleBinary(new DataChannelCallback.BinaryMessage() {
-                    private final ByteBuf assemblyBuf = config.getAllocator().buffer();
-                    private int currentSegmentCount = -1;
-
-                    @Override
-                    public void onBinary(DataChannel channel, ByteBuffer data) {
-                        if (!data.hasRemaining()) {
-                            return;
-                        }
-
-                        int segments = data.get() & 0xFF;
-
-                        if (currentSegmentCount == -1) {
-                            currentSegmentCount = segments;
-                        } else {
-                            if (segments != currentSegmentCount - 1) {
-                                assemblyBuf.clear();
-                                currentSegmentCount = -1;
-                                return;
-                            }
-                            currentSegmentCount = segments;
-                        }
-
-                        if (data.hasRemaining()) {
-                            byte[] payload = new byte[data.remaining()];
-                            data.get(payload);
-                            assemblyBuf.writeBytes(payload);
-                        }
-
-                        if (segments == 0) {
-                            try {
-                                if (assemblyBuf.isReadable()) {
-                                    ByteBuf packet = assemblyBuf.copy();
-                                    assemblyBuf.skipBytes(assemblyBuf.readableBytes());
-
-                                    eventLoop().execute(() -> {
-                                        pipeline().fireChannelRead(packet);
-                                        pipeline().fireChannelReadComplete();
-                                    });
-                                }
-                            } catch (Exception e) {
-                                log.error("Error processing packet", e);
-                            } finally {
-                                assemblyBuf.clear();
-                                currentSegmentCount = -1;
-                            }
-                        }
-                    }
-                }));
+                DataChannelCallback.Message.handleBinary(new MessageAssembler("reliable")));
+        if (this.unreliableChannel != null) {
+            this.unreliableChannel.onMessage.register(
+                    DataChannelCallback.Message.handleBinary(new MessageAssembler("unreliable")));
+        }
 
         if (reliableChannel.isOpen()) {
             eventLoop().execute(this::onDataChannelStateChange);
+        }
+    }
+
+    /**
+     * Reassembles the segmented messages of one data channel. The two channels are separate
+     * streams, so each needs its own assembler.
+     */
+    private final class MessageAssembler implements DataChannelCallback.BinaryMessage {
+        private final ByteBuf assemblyBuf = config.getAllocator().buffer();
+        private final String label;
+        private int currentSegmentCount = -1;
+
+        MessageAssembler(String label) {
+            this.label = label;
+        }
+
+        @Override
+        public void onBinary(DataChannel channel, ByteBuffer data) {
+            if (!data.hasRemaining()) {
+                log.debug("Empty message on the {} channel", label);
+                return;
+            }
+
+            int segments = data.get() & 0xFF;
+
+            if (currentSegmentCount == -1) {
+                currentSegmentCount = segments;
+            } else {
+                if (segments != currentSegmentCount - 1) {
+                    log.debug("Discarding {} assembled bytes on the {} channel: segment {} does not follow {}",
+                            assemblyBuf.readableBytes(), label, segments, currentSegmentCount);
+                    assemblyBuf.clear();
+                    currentSegmentCount = -1;
+                    return;
+                }
+                currentSegmentCount = segments;
+            }
+
+            if (data.hasRemaining()) {
+                byte[] payload = new byte[data.remaining()];
+                data.get(payload);
+                assemblyBuf.writeBytes(payload);
+            }
+
+            if (segments == 0) {
+                try {
+                    if (assemblyBuf.isReadable()) {
+                        ByteBuf packet = assemblyBuf.copy();
+                        assemblyBuf.skipBytes(assemblyBuf.readableBytes());
+
+                        log.trace("Read {} bytes from the {} channel", packet.readableBytes(), label);
+                        eventLoop().execute(() -> {
+                            pipeline().fireChannelRead(packet);
+                            pipeline().fireChannelReadComplete();
+                        });
+                    }
+                } catch (Exception e) {
+                    log.error("Error processing packet", e);
+                } finally {
+                    assemblyBuf.clear();
+                    currentSegmentCount = -1;
+                }
+            }
         }
     }
 
@@ -162,6 +181,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     private void writeInternal(Object msg) {
         if (!(msg instanceof ByteBuf)) {
+            log.debug("Dropping an outbound {}, which this channel cannot frame", msg == null ? null :
+                    msg.getClass().getName());
             return;
         }
 
@@ -176,7 +197,6 @@ public abstract class NetherNetChannel extends AbstractChannel {
         if (totalLength % maxPayload != 0) {
             segments++;
         }
-
         try {
             int offset = 0;
             for (int i = 0; i < segments; i++) {
