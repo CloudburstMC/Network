@@ -34,8 +34,15 @@ public final class TransportIdentityBinding {
             // RakNet binds the chain through the encryption handshake instead
             return null;
         }
+        return mismatch(channel.attr(NetherNetChildChannel.PLAYER_INFO).get(), identityPublicKey);
+    }
 
-        PlayerInfo player = channel.attr(NetherNetChildChannel.PLAYER_INFO).get();
+    /**
+     * @param player            The identity the transport validated, or null if it has none
+     * @param identityPublicKey The key the login chain is signed with
+     * @return Why the login must be rejected, or null when the two agree
+     */
+    public static String mismatch(PlayerInfo player, PublicKey identityPublicKey) {
         if (player == null) {
             return "the transport carries no validated identity to bind the login chain to";
         }
