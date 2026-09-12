@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.util.nethernet;
 
+import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -22,6 +23,17 @@ import java.util.List;
  */
 public final class TrustedProxies {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(TrustedProxies.class);
+
+    /**
+     * Whether a {@code http} or {@code https} entry is fetched at all, true by default.
+     * <p>
+     * The list decides who may speak for a client, so fetching one puts that decision on a remote
+     * server and makes the host reach out to it on every start. An operator who would rather keep
+     * the answer in the configuration file can set this to false, and a URL entry is then refused
+     * rather than quietly trusted.
+     */
+    public static final String FETCH_PROPERTY = "org.cloudburstmc.netty.trustedProxies.fetch";
+    private static final boolean FETCH = SystemPropertyUtil.getBoolean(FETCH_PROPERTY, true);
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
@@ -50,6 +62,13 @@ public final class TrustedProxies {
     }
 
     private static List<String> expand(Collection<String> entries) {
+        return expand(entries, FETCH);
+    }
+
+    /**
+     * @param fetch Whether a URL entry may be fetched, from {@link #FETCH_PROPERTY}
+     */
+    static List<String> expand(Collection<String> entries, boolean fetch) {
         List<String> out = new ArrayList<>();
         for (String entry : entries) {
             String trimmed = entry == null ? "" : entry.trim();
@@ -58,6 +77,12 @@ public final class TrustedProxies {
             }
             if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
                 out.add(trimmed);
+                continue;
+            }
+
+            if (!fetch) {
+                log.warn("Not fetching the trusted proxy list at {}, {} is false, "
+                        + "no addresses taken from it", trimmed, FETCH_PROPERTY);
                 continue;
             }
 
