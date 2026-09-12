@@ -68,7 +68,7 @@ public final class ProviderNativeBench {
                     new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration"),
                     new ProviderStateStore(state), nativeHost,
                     () -> new ServerStatus("Automatic native server", 1234, "fixture-only", "Integration", 0, 4, 0),
-                    () -> new ProviderClient.Health(true, 4, 0, "nethernet", "provider-native-bench"),
+                    () -> new ProviderClient.Health(true, true, 4, 0, "nethernet", "provider-native-bench"),
                     System.err::println);
             JsonObject registration = provider.start().get(45, TimeUnit.SECONDS);
             if (args.length > 4) {

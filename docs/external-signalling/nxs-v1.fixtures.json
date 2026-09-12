@@ -118,7 +118,8 @@
         "gameType": 0,
         "protocol": 1234,
         "level": "world"
-      }
+      },
+      "acceptingPlayers": true
     }
   }
 }

@@ -92,3 +92,6 @@ assert(f.fleetExamples.heartbeat.playerCount.sampledAt <= f.fleetExamples.heartb
 assert.deepEqual(Object.keys(f.fleetExamples.heartbeat.serverStatus).sort(),
     ['name', 'protocol', 'version', 'level', 'players', 'maxPlayers', 'gameType'].sort());
 console.log('NXS canonical signing, stateless encryption, fleet examples, and fixture hashes verified.');
+
+assert(schema.$defs.heartbeat.required.includes('acceptingPlayers'));
+assert.equal(f.fleetExamples.heartbeat.acceptingPlayers, true);

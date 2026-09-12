@@ -215,11 +215,12 @@ endpoint alongside the runtime.
 
 ## `heartbeat`
 
-Required fields: `healthy,capacity,load,protocolVersion,clockUnixMillis,
+Required fields: `healthy,acceptingPlayers,capacity,load,protocolVersion,clockUnixMillis,
 checkInVersion,state,appliedStateRevision,gameOutcomes`.
 Optional fields: `build,region,serverStatus,hostProfile,hostProfileRevision,
 installedKeyIds,keyRequestId,extensions`.
 
+- `healthy` is application health. `acceptingPlayers` is explicit willingness to accept new players; false while draining or closed. A serving host may pause acceptance and later report true without changing lifecycle. Neither field is derived from player counts. Report acceptance changes promptly.
 - `capacity` is an integer from 0 to 1000000; `load` is a finite number from 0 to 1.
 - `state` is `serving`, `draining` or `closed`. A draining endpoint cannot resume
   serving in the same generation; a fresh endpoint requires recovery/completion.
