@@ -152,6 +152,98 @@ class SdpUtilTest {
     }
 
     @Test
+    void countsAGlobalIpv6HostCandidate() {
+        assertTrue(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 2001:db8::1 19135 typ host\r\n"));
+    }
+
+    @Test
+    void countsNoAddressItCannotJudge() {
+        // Lines that are not candidates, are truncated, name another type, or hide behind mDNS
+        assertFalse(SdpUtil.hasRoutableHostCandidate("v=0\r\no=- 1 2 IN IP4 203.0.113.9\r\n"));
+        assertFalse(SdpUtil.hasRoutableHostCandidate("a=candidate:1 1 udp 2122194687 203.0.113.9\r\n"));
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 203.0.113.9 19135 not-typ host\r\n"));
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 c0ffee.local 19135 typ host\r\n"),
+                "an mDNS name must not be resolved to judge it");
+    }
+
+    @Test
+    void countsNoAddressThatNamesEveryoneOrNoone() {
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 0.0.0.0 19135 typ host\r\n"), "the wildcard address");
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 224.0.0.1 19135 typ host\r\n"), "multicast");
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 169.254.3.4 19135 typ host\r\n"), "link local");
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 fe80::1 19135 typ host\r\n"), "IPv6 link local");
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 100.64.0.1 19135 typ host\r\n"), "the bottom of CGNAT");
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 100.127.255.254 19135 typ host\r\n"), "the top of CGNAT");
+        assertTrue(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 100.128.0.1 19135 typ host\r\n"), "just past CGNAT");
+        assertTrue(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 100.63.255.254 19135 typ host\r\n"), "just below CGNAT");
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 fdff::1 19135 typ host\r\n"), "the top of fc00::/7");
+        assertTrue(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 fe00::1 19135 typ host\r\n"), "just past fc00::/7");
+    }
+
+    @Test
+    void infersNothingFromAPeerBehindCarrierNat() {
+        // The address the offer arrived from has to be one another peer could reach back on
+        assertTrue(SdpUtil.inferredPeerCandidates(HOST_ONLY_OFFER,
+                new InetSocketAddress("100.108.10.95", 44321)).isEmpty());
+        assertTrue(SdpUtil.inferredPeerCandidates(HOST_ONLY_OFFER,
+                new InetSocketAddress("fd7a:115c:a1e0::1", 44321)).isEmpty());
+        assertTrue(SdpUtil.inferredPeerCandidates(HOST_ONLY_OFFER,
+                InetSocketAddress.createUnresolved("example.test", 44321)).isEmpty(),
+                "an unresolved address names no host to guess at");
+    }
+
+    @Test
+    void skipsCandidateLinesItCannotRead() {
+        String offer = "v=0\r\n"
+                + "a=candidate:1 1 udp 2122194687 192.168.1.76\r\n"
+                + "a=candidate:2 1 udp 2122194687 192.168.1.76 55473 not-typ host\r\n"
+                + "a=candidate:3 1 tcp 2122194687 192.168.1.76 55474 typ host\r\n"
+                + "a=candidate:4 1 udp 2122194687 192.168.1.76 55475 typ host\r\n"
+                + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+
+        List<String> inferred = SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("203.0.113.9", 44321));
+
+        assertEquals(1, inferred.size(), "only the one readable UDP host candidate");
+        assertTrue(inferred.get(0).contains("203.0.113.9 55475 typ srflx"));
+    }
+
+    @Test
+    void guessesOncePerPortHoweverOftenItAppears() {
+        String offer = "v=0\r\n"
+                + "a=candidate:1 1 udp 2122194687 192.168.1.76 55473 typ host\r\n"
+                + "a=candidate:2 1 udp 2122194687 10.7.0.2 55473 typ host\r\n"
+                + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+
+        assertEquals(1, SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("203.0.113.9", 44321)).size());
+    }
+
+    @Test
+    void dropsACandidateItCannotReadAnAddressOutOf() {
+        String sdp = "v=0\r\n"
+                + "a=candidate:1 1 udp 2130706431\r\n"
+                + "a=candidate:2 1 udp 2130706431 203.0.113.10 19191 typ host\r\n"
+                + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+
+        String filtered = SdpUtil.withAdvertisedCandidates(sdp, Set.of("203.0.113.10"));
+
+        assertFalse(filtered.contains("a=candidate:1 "), "a candidate with no address cannot be advertised");
+        assertTrue(filtered.contains("a=candidate:2 "));
+    }
+
+    @Test
     void infersNothingWithoutAKnownAddress() {
         assertTrue(SdpUtil.inferredPeerCandidates(HOST_ONLY_OFFER, null).isEmpty());
     }
@@ -162,5 +254,14 @@ class SdpUtilTest {
 
         // libwebrtc rejects a description that ends in an empty line
         assertFalse(filtered.endsWith("\r\n\r\n"));
+    }
+
+    @Test
+    void dropsABlankLineFromAnywhereInTheDescription() {
+        String filtered = SdpUtil.withAdvertisedCandidates(
+                SDP.replace("a=candidate:2", "\r\na=candidate:2"), Set.of("203.0.113.10"));
+
+        assertFalse(filtered.contains("\r\n\r\n"), "a blank line anywhere is enough to be rejected");
+        assertTrue(filtered.contains("a=candidate:1 "), "and the candidates around it still stand");
     }
 }

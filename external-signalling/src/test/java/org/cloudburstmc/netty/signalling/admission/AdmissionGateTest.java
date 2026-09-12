@@ -19,6 +19,101 @@ class AdmissionGateTest extends AdmissionFixture {
         return new AdmissionRequest(token, remote, other);
     }
 
+    /** A second ticket, minted for the same client so only the source tuple differs. */
+    private String anotherToken() throws Exception {
+        var trusted = validator().validate(request(), now);
+        return TestSignallingProvider.answer(trusted.remoteDescription(), trusted.remoteFingerprint(), 49199,
+                now + 30_000, f.getAsJsonObject("context").get("audience").getAsString(), false).token();
+    }
+
+    @Test
+    void refusesLimitsItCouldNotHonour() {
+        assertDoesNotThrow(AdmissionGate.Limits::defaults);
+
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(0, 2, 1, 1000), "no sessions");
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(65537, 65537, 1, 1000),
+                "more sessions than it will hold");
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(4, 3, 1, 1000),
+                "fewer claims than sessions, which would strand capacity");
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(2, 262145, 1, 1000),
+                "more claims than it will hold");
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(2, 2, 0, 1000), "no pending");
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(2, 2, 3, 1000),
+                "more pending than sessions");
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(2, 2, 1, 99),
+                "a handshake window too short to complete one");
+        assertThrows(IllegalArgumentException.class, () -> new AdmissionGate.Limits(2, 2, 1, 120_001),
+                "or long enough to hold capacity all day");
+    }
+
+    @Test
+    void holdsOneReservationPerSourceTuple() throws Exception {
+        // Another ticket from the same address must not take a second slot
+        var gate = gate();
+        assertNotNull(gate.reserve(request(), now, 0));
+
+        assertNull(gate.reserve(request(anotherToken(), remote), now, 0));
+        assertEquals(1, gate.stats().replayRejected());
+        assertEquals(1, gate.stats().sessions());
+    }
+
+    @Test
+    void refusesWhenTheClaimsItRemembersAreFull() throws Exception {
+        // Sessions are free, but every token it has seen is still remembered
+        var gate = new AdmissionGate(new AdmissionGate.Limits(2, 2, 2, 1000), validator());
+        var first = gate.reserve(request(), now, 0);
+        assertNotNull(first);
+        assertTrue(gate.ready(first));
+        gate.finish(first);
+
+        assertNotNull(gate.reserve(request(anotherToken(), remote), now, 0));
+        assertNull(gate.reserve(new AdmissionRequest(anotherToken(), remote, other), now, 0));
+        assertEquals(1, gate.stats().capacityRejected());
+    }
+
+    @Test
+    void tellsTheCallerWhatItReservedWithoutPrintingIt() {
+        var gate = gate();
+        var reservation = gate.reserve(request(), now, 12345);
+
+        assertEquals(validator().validate(request(), now).tokenId(), reservation.tokenId());
+        assertEquals(new InetSocketAddress("127.0.0.1", 23450), reservation.tuple());
+        assertEquals(12345, reservation.acceptedNanos());
+        assertFalse(reservation.toString().contains(token), "a ticket must never reach a log");
+    }
+
+    @Test
+    void letsAReservationBecomeReadyOnlyOnce() {
+        // A used token must not allocate a second peer
+        var gate = gate();
+        var reservation = gate.reserve(request(), now, 0);
+
+        assertTrue(gate.ready(reservation));
+        assertFalse(gate.ready(reservation));
+        assertEquals(1, gate.stats().accepted());
+    }
+
+    @Test
+    void refusesToReadyAReservationThatTimedOut() {
+        var gate = gate();
+        var reservation = gate.reserve(request(), now, 0);
+
+        assertEquals(List.of(reservation), gate.sweep(now, 2_000_000_000L));
+        assertFalse(gate.ready(reservation), "a handshake that ran out of time cannot finish later");
+        assertNull(gate.admission(reservation));
+    }
+
+    @Test
+    void finishesAReservationOnlyOnce() {
+        var gate = gate();
+        var reservation = gate.reserve(request(), now, 0);
+
+        assertTrue(gate.finish(reservation));
+        assertFalse(gate.finish(reservation), "a second teardown must not free capacity twice");
+        assertNull(gate.admission(reservation));
+        assertFalse(gate.ready(reservation));
+    }
+
     @Test
     void invalidTokensNeverReserveCapacity() {
         var gate = gate();

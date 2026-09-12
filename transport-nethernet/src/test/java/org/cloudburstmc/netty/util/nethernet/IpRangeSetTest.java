@@ -3,7 +3,9 @@ package org.cloudburstmc.netty.util.nethernet;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,6 +50,39 @@ class IpRangeSetTest {
         assertTrue(contains(set, "192.168.1.5"));
         assertFalse(contains(set, "172.16.0.1"));
         assertFalse(set.isEmpty());
+    }
+
+    @Test
+    void trustsNothingWhenNothingIsConfigured() {
+        // Trust has to start closed, whatever shape the absence of configuration takes
+        assertTrue(IpRangeSet.parse(null).isEmpty());
+        assertTrue(IpRangeSet.parse(List.of()).isEmpty());
+        assertTrue(IpRangeSet.parse(Arrays.asList(null, "", "   ")).isEmpty());
+    }
+
+    @Test
+    void trustsNothingWhenEveryEntryIsBroken() {
+        IpRangeSet set = IpRangeSet.parse(List.of("not-an-address", "10.0.0.0/x", "10.0.0.0/99"));
+
+        assertTrue(set.isEmpty(), "a file of typos must not become a wildcard");
+    }
+
+    @Test
+    void aBareIpv6AddressCoversOnlyItself() throws Exception {
+        IpRangeSet set = IpRangeSet.parse(List.of("2001:db8::1"));
+
+        assertTrue(set.contains(InetAddress.getByName("2001:db8::1")));
+        assertFalse(set.contains(InetAddress.getByName("2001:db8::2")));
+    }
+
+    @Test
+    void matchesNothingItCannotRead() throws Exception {
+        IpRangeSet set = IpRangeSet.parse(List.of("10.0.0.0/8"));
+
+        assertFalse(set.contains((InetSocketAddress) null));
+        assertFalse(set.contains((InetAddress) null));
+        assertFalse(set.contains(InetSocketAddress.createUnresolved("10.0.0.1", 1)),
+                "an unresolved address names no host, so it can match no range");
     }
 
     @Test
