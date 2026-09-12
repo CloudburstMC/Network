@@ -1,6 +1,9 @@
 package org.cloudburstmc.netty.util.nethernet;
 
 import io.netty.channel.Channel;
+import io.netty.util.AttributeKey;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 
 import java.security.PublicKey;
@@ -21,6 +24,35 @@ import java.security.PublicKey;
  */
 public final class TransportIdentityBinding {
 
+    private static final AttributeKey<IdentityKeyVerifier> KEY = AttributeKey.valueOf(TransportIdentityBinding.class, "verifier");
+
+    /** Install before publishing the child. The channel and admission owner may both close it. */
+    public static void install(Channel channel, IdentityKeyVerifier verifier) {
+        if (verifier == null) throw new IllegalArgumentException("verifier");
+        if (channel.attr(KEY).setIfAbsent(verifier) != null) {
+            verifier.close();
+            throw new IllegalStateException("Identity binding already installed");
+        }
+        channel.closeFuture().addListener(ignored -> verifier.close());
+    }
+
+    public static IdentityKeyVerifier forPlayer(PlayerInfo player) {
+        final byte[] expected;
+        try { expected = IdentityPublicKey.canonical(player.clientPublicKey()); }
+        catch (Exception invalid) { throw new IllegalArgumentException("Invalid signalling identity", invalid); }
+        return new IdentityKeyVerifier() {
+            protected boolean matches(byte[] key) { return MessageDigest.isEqual(expected, key); }
+            protected void release() { Arrays.fill(expected, (byte) 0); }
+        };
+    }
+
+    /** Release only after the application has accepted its existing trusted forwarding identity. */
+    public static String acceptForwardedIdentity(Channel channel) {
+        if (!(channel instanceof NetherNetChildChannel)) return null;
+        IdentityKeyVerifier verifier = channel.attr(KEY).get();
+        return verifier == null ? null : verifier.acceptForwardedIdentity();
+    }
+
     private TransportIdentityBinding() {
     }
 
@@ -34,7 +66,8 @@ public final class TransportIdentityBinding {
             // RakNet binds the chain through the encryption handshake instead
             return null;
         }
-        return mismatch(channel.attr(NetherNetChildChannel.PLAYER_INFO).get(), identityPublicKey);
+        IdentityKeyVerifier verifier = channel.attr(KEY).get();
+        return verifier == null ? "the transport carries no validated identity binding" : verifier.mismatch(identityPublicKey);
     }
 
     /**
@@ -48,7 +81,7 @@ public final class TransportIdentityBinding {
         }
 
         try {
-            if (!player.clientPublicKey().equals(identityPublicKey)) {
+            if (!MessageDigest.isEqual(IdentityPublicKey.canonical(player.clientPublicKey()), IdentityPublicKey.canonical(identityPublicKey))) {
                 return "the login chain is signed with a different key than the one that opened the transport";
             }
         } catch (Exception e) {

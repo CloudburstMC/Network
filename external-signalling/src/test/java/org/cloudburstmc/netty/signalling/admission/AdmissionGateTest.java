@@ -77,6 +77,7 @@ class AdmissionGateTest extends AdmissionFixture {
         var r = gate.reserve(request(), now, 0);
         assertTrue(gate.ready(r));
         gate.connected(r);
+        assertNull(gate.admission(r).identityVerifier().acceptForwardedIdentity());
         assertNull(gate.reserve(elsewhere(), now, 0));
         assertEquals(1, gate.stats().replayRejected());
         assertTrue(gate.sweep(now + 120_000, 120_000_000_000L).isEmpty());

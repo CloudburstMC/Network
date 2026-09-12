@@ -11,6 +11,8 @@ import java.util.*;
  * Test signalling source. Offer and issued token are NEVER delivered to the host.
  */
 final class TestSignallingProvider {
+    static final String IDENTITY_CPK = AdmissionFixture.fixture("stateless-admission-v1.fixtures.json")
+            .getAsJsonObject("identity").get("canonicalCpk").getAsString();
     static final String AUDIENCE = "sig_fixture/gs_one/test_boot_001", SECRET =
             "stateless-fixture-secret-32-bytes-minimum";
 
@@ -43,8 +45,9 @@ final class TestSignallingProvider {
         if (wrongClientFingerprint) {
             fp[0] ^= 1;
         }
+        byte[] identityBinding = Arrays.copyOf(hmac(utf8(SECRET), "nxs-identity-binding-v1\0" + audience + "\0" + IDENTITY_CPK), 16);
         ByteBuffer claims = ByteBuffer.allocate(67 + pwd.length());
-        claims.putInt((int) (expiry / 1000)).put(fp).putShort((short) 5000).putInt(262144).put(new byte[16]).putLong(42)
+        claims.putInt((int) (expiry / 1000)).put(fp).putShort((short) 5000).putInt(262144).put(identityBinding).putLong(42)
                 .put((byte) pwd.length()).put(utf8(pwd));
         byte[] nonce = new byte[12];
         new SecureRandom().nextBytes(nonce);

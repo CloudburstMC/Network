@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.signalling.provider;
 
 import com.google.gson.JsonObject;
+import java.net.URI;
 import org.cloudburstmc.netty.signalling.ProviderClient;
 
 /**
@@ -23,6 +24,12 @@ public final class ProviderRuntimeObservations {
         return new ProviderClient.Health(true, acceptingPlayers, capacity,
                 Math.min(1, (double) connectedPlayers / Math.max(1, capacity)), "nethernet", build,
                 new ProviderClient.PlayerCount(connectedPlayers, sampledAt));
+    }
+
+    /** Describes the trust boundary without logging provider credentials or URL query data. */
+    public static String delegatedIdentityMessage(URI origin) {
+        return "NetherNet client identities are authenticated by external signalling provider " + origin.getHost()
+                + "; direct login keys are checked against its admission tickets";
     }
 
     public static String registrationMessage(JsonObject registration) {

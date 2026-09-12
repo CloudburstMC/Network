@@ -81,7 +81,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         assertEquals(c.get("clientIcePwd").getAsString(), a.remotePassword());
         assertEquals(c.get("clientSctpPort").getAsInt(), a.remoteSctpPort());
         assertEquals(c.get("networkId").getAsString(), a.networkId());
-        assertEquals(c.get("callerContextHashHex").getAsString(), a.callerContextHash());
+        assertEquals(c.get("identityBindingHex").getAsString(), a.identityBindingHex());
         assertEquals(password, a.localPassword());
         assertEquals(c.get("clientFingerprintHex").getAsString(),
                 a.remoteFingerprint().substring(8).replace(":", "").toLowerCase(Locale.ROOT));

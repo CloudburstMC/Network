@@ -1,6 +1,9 @@
 package org.cloudburstmc.netty.signalling.admission;
 
 
+import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
+import java.util.function.LongSupplier;
+
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
@@ -25,25 +28,80 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         }
     }
 
-    private record Material(byte[] encryption, byte[] secret, long notBefore, long retireAfter) {
-        void erase() {
+    private static final class Material {
+        final byte[] encryption, secret;
+        final long notBefore, retireAfter;
+        private int references;
+        private boolean installed = true, revoked;
+
+        Material(byte[] encryption, byte[] secret, long notBefore, long retireAfter) {
+            this.encryption = encryption;
+            this.secret = secret;
+            this.notBefore = notBefore;
+            this.retireAfter = retireAfter;
+        }
+
+        synchronized void retain() { references++; }
+        synchronized void release() { references--; eraseIfUnused(); }
+        synchronized void retire() { installed = false; eraseIfUnused(); }
+        synchronized boolean usable() { return !revoked; }
+        synchronized void revoke() {
+            revoked = true;
             Arrays.fill(encryption, (byte) 0);
             Arrays.fill(secret, (byte) 0);
+        }
+        private void eraseIfUnused() { if (!installed && references == 0) revoke(); }
+        synchronized boolean unused() { return !installed && references == 0; }
+        synchronized boolean matches(String audience, byte[] canonicalKey, byte[] expected) {
+            if (revoked) return false;
+            byte[] actual = hmac("HmacSHA256", secret, utf8("nxs-identity-binding-v1\0" + audience + "\0"
+                    + Base64.getEncoder().encodeToString(canonicalKey)));
+            try { return MessageDigest.isEqual(expected, Arrays.copyOf(actual, 16)); }
+            finally { Arrays.fill(actual, (byte) 0); }
+        }
+    }
+
+    private final class Binding extends IdentityKeyVerifier {
+        private final Material material;
+        private final byte[] expected;
+        private final long deadlineNanos;
+
+        Binding(Material material, byte[] expected, long ttlMillis) {
+            this.material = material;
+            this.expected = expected;
+            this.deadlineNanos = nanoTime.getAsLong() + ttlMillis * 1_000_000L;
+            material.retain();
+        }
+
+        protected boolean usable() {
+            return nanoTime.getAsLong() - deadlineNanos < 0 && material.usable();
+        }
+        protected boolean matches(byte[] key) { return material.matches(audience, key, expected); }
+        protected void release() {
+            Arrays.fill(expected, (byte) 0);
+            material.release();
         }
     }
 
     private static final Base64.Encoder BASE64 = Base64.getEncoder().withoutPadding();
     private final String audience;
     private final long maxTtlMs;
+    private final LongSupplier nanoTime;
+    private final Set<Material> epochs = new HashSet<>();
     private volatile Map<String, Material> keys = Map.of();
 
     public StatelessAdmissionValidator(String audience, long maxTtlMs) {
+        this(audience, maxTtlMs, System::nanoTime);
+    }
+
+    StatelessAdmissionValidator(String audience, long maxTtlMs, LongSupplier nanoTime) {
         if (audience == null || audience.isEmpty() || audience.length() > 512 || audience.indexOf(0) >= 0
                 || maxTtlMs <= 0 || maxTtlMs > 120_000) {
             throw new IllegalArgumentException("Admission context");
         }
         this.audience = audience;
         this.maxTtlMs = maxTtlMs;
+        this.nanoTime = Objects.requireNonNull(nanoTime);
     }
 
     /**
@@ -53,33 +111,47 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         if (snapshot.size() > 8) {
             throw new IllegalArgumentException("At most eight admission epochs");
         }
-        Map<String, Material> next = new HashMap<>();
+        Set<String> ids = new HashSet<>();
         for (TicketKey key : snapshot) {
             if (key.keyId() == null || !key.keyId().matches("[A-Z0-9]{4}") || key.secret() == null
-                    || key.secret().length() < 32 || key.secret().length() > 256 || next.containsKey(key.keyId())
+                    || key.secret().length() < 32 || key.secret().length() > 256 || !ids.add(key.keyId())
                     || key.notBefore() < 0 || key.retireAfter() <= key.notBefore()) {
                 throw new IllegalArgumentException("Invalid admission key snapshot");
             }
-            byte[] secret = utf8(key.secret());
-            next.put(key.keyId(),
-                    new Material(hmac("HmacSHA256", secret, utf8("nxs-stateless-aead-v1\0" + audience)), secret,
-                            key.notBefore(), key.retireAfter()));
         }
-        Map<String, Material> previous = keys;
+        Map<String, Material> next = new HashMap<>();
+        try {
+            for (TicketKey key : snapshot) {
+                byte[] secret = utf8(key.secret());
+                Material previous = keys.get(key.keyId());
+                if (previous != null && previous.notBefore == key.notBefore() && previous.retireAfter == key.retireAfter()
+                        && MessageDigest.isEqual(previous.secret, secret)) {
+                    Arrays.fill(secret, (byte) 0);
+                    next.put(key.keyId(), previous);
+                } else {
+                    next.put(key.keyId(), new Material(hmac("HmacSHA256", secret,
+                            utf8("nxs-stateless-aead-v1\0" + audience)), secret, key.notBefore(), key.retireAfter()));
+                }
+            }
+        } catch (RuntimeException failed) {
+            next.values().stream().filter(m -> !keys.containsValue(m)).forEach(Material::retire);
+            throw failed;
+        }
+        keys.values().stream().filter(m -> !next.containsValue(m)).forEach(Material::retire);
         keys = Map.copyOf(next);
-        previous.values().forEach(Material::erase);
+        epochs.addAll(next.values());
+        epochs.removeIf(Material::unused);
     }
 
+    /** Routine rotation stops new admissions; admitted logins retain their original epoch until completion/expiry. */
     public synchronized void retireKeys(long nowMillis) {
         Map<String, Material> retained = new HashMap<>();
         for (var entry : keys.entrySet()) {
-            if (entry.getValue().retireAfter() <= nowMillis) {
-                entry.getValue().erase();
-            } else {
-                retained.put(entry.getKey(), entry.getValue());
-            }
+            if (entry.getValue().retireAfter <= nowMillis) entry.getValue().retire();
+            else retained.put(entry.getKey(), entry.getValue());
         }
         keys = Map.copyOf(retained);
+        epochs.removeIf(Material::unused);
     }
 
     public boolean ready() {
@@ -90,8 +162,10 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         return keys.keySet();
     }
 
+    /** Revoke all installed and retained epochs, including pending logins. */
     public synchronized void clear() {
-        keys.values().forEach(Material::erase);
+        epochs.forEach(Material::revoke);
+        epochs.clear();
         keys = Map.of();
     }
 
@@ -108,7 +182,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             }
             String keyId = token.substring(4, 8);
             Material key = keys.get(keyId);
-            if (key == null || nowMillis < key.notBefore() || nowMillis >= key.retireAfter()) {
+            if (key == null || nowMillis < key.notBefore || nowMillis >= key.retireAfter) {
                 return null;
             }
             String encoded = token.substring(8);
@@ -117,7 +191,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
                 return null;
             }
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key.encryption(), "AES"),
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key.encryption, "AES"),
                     new GCMParameterSpec(128, Arrays.copyOf(envelope, 12)));
             cipher.updateAAD(utf8("nxs-stateless-admission-v1\0" + token.substring(0, 8) + "\0" + audience + "\0"
                     + request.remoteUfrag()));
@@ -145,11 +219,11 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
                 return null;
             }
             String localPassword = BASE64.encodeToString(Arrays.copyOf(
-                    hmac("HmacSHA256", key.secret(), utf8("nxs-stateless-ice-v1\0" + audience + "\0" + token)), 24));
+                    hmac("HmacSHA256", key.secret, utf8("nxs-stateless-ice-v1\0" + audience + "\0" + token)), 24));
             return new VerifiedAdmission(tokenId(token), token, localPassword, request.remoteUfrag(), remotePassword,
                     "sha-256 " + HexFormat.ofDelimiter(":").withUpperCase().formatHex(fingerprint), sctp, max,
                     expiresAt,
-                    networkId, HexFormat.of().formatHex(identity), keyId);
+                    networkId, HexFormat.of().formatHex(identity), keyId, new Binding(key, identity, expiresAt - nowMillis));
         } catch (Exception invalid) {
             return null;
         } finally {

@@ -121,6 +121,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      */
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId,
                                  @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
+        var identityVerifier = player == null ? null
+                : org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.forPlayer(player);
         PeerConnectionConfiguration rtcConfig =
                 bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
                         .withDisableAutoNegotiation(true)
@@ -138,6 +140,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
         if (player != null) {
             child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
+            org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.install(child, identityVerifier);
         }
         observer.setChildChannel(child);
 
