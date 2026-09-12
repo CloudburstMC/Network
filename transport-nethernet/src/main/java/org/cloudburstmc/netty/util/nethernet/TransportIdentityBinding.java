@@ -71,11 +71,14 @@ public final class TransportIdentityBinding {
     }
 
     /**
+     * Not for callers outside the transport: it sees no channel, so it applies none of the checks
+     * above it and a host reaching for it would skip them.
+     *
      * @param player            The identity the transport validated, or null if it has none
      * @param identityPublicKey The key the login chain is signed with
      * @return Why the login must be rejected, or null when the two agree
      */
-    public static String mismatch(PlayerInfo player, PublicKey identityPublicKey) {
+    static String mismatch(PlayerInfo player, PublicKey identityPublicKey) {
         if (player == null) {
             return "the transport carries no validated identity to bind the login chain to";
         }
