@@ -33,6 +33,59 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("native")
 class NativeAdmissionIntegrationTest {
     @Test
+    @Timeout(40)
+    void transportPublishesBindingBeforeLoginAndRejectsADifferentKey() throws Exception {
+        var id = identity();
+        var group = new DefaultEventLoopGroup(1);
+        var validator = new StatelessAdmissionValidator(TestSignallingProvider.AUDIENCE, 60_000);
+        validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignallingProvider.SECRET)));
+        var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
+        var results = new LinkedBlockingQueue<Boolean>();
+        try {
+            new ServerBootstrap().group(group).channelFactory(() -> endpoint)
+                    .childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
+                        protected void initChannel(AdmittedNetherNetChildChannel child) {
+                            child.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
+                                protected void channelRead0(ChannelHandlerContext ctx, ByteBuf message) throws Exception {
+                                    var key = java.security.KeyFactory.getInstance("EC").generatePublic(
+                                            new java.security.spec.X509EncodedKeySpec(ByteBufUtil.getBytes(message)));
+                                    String mismatch = org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.mismatch(child, key);
+                                    results.add(mismatch == null);
+                                    if (mismatch != null) ctx.close();
+                                }
+                            });
+                        }
+                    }).bind("127.0.0.1", 49201).sync();
+            var generator = java.security.KeyPairGenerator.getInstance("EC");
+            generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
+            for (boolean matching : new boolean[]{true, false}) {
+                byte[] loginKey = matching ? Base64.getDecoder().decode(TestSignallingProvider.IDENTITY_CPK)
+                        : generator.generateKeyPair().getPublic().getEncoded();
+                try (var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT
+                        .withDisableAutoNegotiation(true).withBindAddress(InetAddress.getLoopbackAddress()), Runnable::run)) {
+                    var reliable = client.createDataChannel("ReliableDataChannel");
+                    client.createDataChannel("UnreliableDataChannel", DataChannelInitSettings.DEFAULT.withReliability(
+                            new DataChannelReliability(true, true, 0, 0)));
+                    reliable.onOpen.register(dc -> dc.sendMessage(ByteBuffer.allocateDirect(1 + loginKey.length)
+                            .put((byte) 0).put(loginKey).flip()));
+                    client.setLocalDescription("offer", "identityClient" + matching, "p".repeat(32));
+                    var answer = TestSignallingProvider.answer(client.localDescription(), id.fingerprint(), 49201,
+                            System.currentTimeMillis() + 30_000, TestSignallingProvider.AUDIENCE, false);
+                    client.setRemoteDescription(answer.sdp(), SessionDescriptionType.ANSWER);
+                    assertEquals(matching, results.poll(12, TimeUnit.SECONDS));
+                    assertTrue(client.closeAndAwait(Duration.ofSeconds(5)));
+                }
+            }
+            assertEquals(2, endpoint.creationAttempts());
+            System.out.println("native-identity-binding PASS matchingKey=true capturedOtherKeyRejected=true");
+        } finally {
+            endpoint.close().awaitUninterruptibly();
+            endpoint.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
+    @Test
     @Timeout(30)
     void dualStackWildcardAcceptsBothFamiliesAndRetainsSingleTicketOwnership() throws Exception {
         var id = identity();

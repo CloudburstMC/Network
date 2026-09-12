@@ -167,8 +167,9 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 "a=ice-ufrag:" + a.localUfrag() + "\r\n")) {
             throw new IllegalStateException("Native identity does not match published profile");
         }
+        org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.install(child, a.identityVerifier());
         child.attr(AdmissionPrincipal.KEY)
-                .set(new AdmissionPrincipal(a.tokenId(), a.networkId(), a.callerContextHash(), a.keyId()));
+                .set(new AdmissionPrincipal(a.tokenId(), a.networkId(), a.identityBindingHex(), a.keyId()));
         peer.onStateChange.register((p, state) -> {
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) {
                 session.failed = true;

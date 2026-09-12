@@ -12,6 +12,7 @@ const digest = value => createHash('sha256').update(value).digest();
 const b64 = value => value.toString('base64url');
 const hmac = (key, data) => createHmac('sha256', key).update(data).digest();
 const update = process.argv.includes('--write');
+const updateAdmission = update || process.argv.includes('--write-admission');
 
 const f = read('nxs-v1.fixtures.json'), c = f.challenge;
 f.protocol = c.protocol = protocol;
@@ -43,12 +44,26 @@ for (const [name, payload] of [['proof', proof], ['request', request]]) {
 if (update) write('nxs-v1.fixtures.json', f);
 
 const v = read('stateless-admission-v1.fixtures.json'), claims = v.claims, context = v.context;
+const canonicalCpk = createPublicKey({key: v.identity.publicKeyJwk, format: 'jwk'}).export({type: 'spki', format: 'der'}).toString('base64');
+const bindingInput = Buffer.from(`nxs-identity-binding-v1\0${context.audience}\0${canonicalCpk}`, 'utf8');
+const fullBinding = hmac(Buffer.from(context.secret, 'utf8'), bindingInput);
+const identityBindingHex = fullBinding.subarray(0, 16).toString('hex');
+if (updateAdmission) {
+  v.identity.canonicalCpk = canonicalCpk;
+  v.identity.hmacInputHex = bindingInput.toString('hex');
+  v.identity.hmacSha256Hex = fullBinding.toString('hex');
+  claims.identityBindingHex = identityBindingHex;
+}
+assert.equal(v.identity.canonicalCpk, canonicalCpk);
+assert.equal(v.identity.hmacInputHex, bindingInput.toString('hex'));
+assert.equal(v.identity.hmacSha256Hex, fullBinding.toString('hex'));
+assert.equal(claims.identityBindingHex, identityBindingHex);
 const plain = Buffer.alloc(67 + claims.clientIcePwd.length);
 plain.writeUInt32BE(claims.expiresAt / 1000);
 Buffer.from(claims.clientFingerprintHex, 'hex').copy(plain, 4);
 plain.writeUInt16BE(claims.clientSctpPort, 36);
 plain.writeUInt32BE(claims.clientMaxMessageSize, 38);
-Buffer.from(claims.callerContextHashHex, 'hex').copy(plain, 42);
+Buffer.from(claims.identityBindingHex, 'hex').copy(plain, 42);
 plain.writeBigUInt64BE(BigInt(claims.networkId), 58);
 plain[66] = claims.clientIcePwd.length;
 plain.write(claims.clientIcePwd, 67, 'ascii');
@@ -62,7 +77,7 @@ const localUfrag = header + Buffer.concat([nonce, encrypted]).toString('base64')
 const icePwd = hmac(context.secret, `nxs-stateless-ice-v1\0${context.audience}\0${localUfrag}`).subarray(0, 24)
     .toString('base64');
 const expected = {localUfrag, icePwd, ufragLength: localUfrag.length};
-if (update) {
+if (updateAdmission) {
   v.expected = expected;
   write('stateless-admission-v1.fixtures.json', v);
 }
@@ -72,7 +87,7 @@ const provenance = {
   files: Object.fromEntries(['stateless-admission-v1.fixtures.json', 'cloudburst-protocol-vectors.v1.json'].map(
       name => [name, digest(readFileSync(path(name))).toString('hex')]))
 };
-if (update) write('provenance.json', provenance);
+if (updateAdmission) write('provenance.json', provenance);
 assert.deepEqual(read('provenance.json'), provenance);
 
 // Fleet examples keep public endpoint metadata optional and runtime counts independent.

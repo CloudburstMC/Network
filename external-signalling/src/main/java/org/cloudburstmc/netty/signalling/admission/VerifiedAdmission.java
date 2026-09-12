@@ -1,13 +1,17 @@
 package org.cloudburstmc.netty.signalling.admission;
 
+import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
+import java.util.Objects;
+
 /**
  * Trusted validator output. Never log credentials or reconstructed SDP.
  */
 public record VerifiedAdmission(String tokenId, String localUfrag, String localPassword,
                                 String remoteUfrag, String remotePassword, String remoteFingerprint,
                                 int remoteSctpPort, int remoteMaxMessageSize, long expiresAt,
-                                String networkId, String callerContextHash, String keyId) {
+                                String networkId, String identityBindingHex, String keyId, IdentityKeyVerifier identityVerifier) {
     public VerifiedAdmission {
+        Objects.requireNonNull(identityVerifier, "identityVerifier");
         if (tokenId == null || !tokenId.matches("[0-9a-f]{32}")) {
             throw new IllegalArgumentException("tokenId");
         }

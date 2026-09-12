@@ -24,15 +24,16 @@ public final class AdmissionGate {
         private VerifiedAdmission admission;
         private final String tokenId;
         private final InetSocketAddress tuple;
-        private final long expiresAt, acceptedNanos;
+        private final long expiresAt, acceptedNanos, loginDeadlineNanos;
         private boolean ready, connected, closing, closed;
 
-        private Reservation(VerifiedAdmission admission, InetSocketAddress tuple, long nanos) {
+        private Reservation(VerifiedAdmission admission, InetSocketAddress tuple, long millis, long nanos) {
             this.admission = admission;
             this.tokenId = admission.tokenId();
             this.tuple = tuple;
             this.expiresAt = admission.expiresAt();
             this.acceptedNanos = nanos;
+            this.loginDeadlineNanos = nanos + (admission.expiresAt() - millis) * 1_000_000L;
         }
 
         public String tokenId() {
@@ -91,23 +92,27 @@ public final class AdmissionGate {
         }
         if (claims.containsKey(a.tokenId()) || tuples.containsKey(request.address())) {
             replayRejected++;
+            a.identityVerifier().close();
             return null;
         }
         if (draining) {
             capacityRejected++;
+            a.identityVerifier().close();
             return null;
         }
         if (pending >= limits.pending()) {
             capacityRejected++;
             pendingLimitRejected++;
             pendingAtRejection = pending;
+            a.identityVerifier().close();
             return null;
         }
         if (tuples.size() >= limits.sessions() || claims.size() >= limits.claims()) {
             capacityRejected++;
+            a.identityVerifier().close();
             return null;
         }
-        Reservation r = new Reservation(a, request.address(), nowNanos);
+        Reservation r = new Reservation(a, request.address(), nowMillis, nowNanos);
         claims.put(r.tokenId, r);
         tuples.put(r.tuple, r);
         pending++;
@@ -153,6 +158,7 @@ public final class AdmissionGate {
         }
         tuples.remove(r.tuple);
         r.closed = true;
+        r.admission.identityVerifier().close();
         r.admission = null;
         // A copied token with forged STUN integrity must not consume the real client's token.
         if (!r.ready || closed) {
@@ -171,8 +177,9 @@ public final class AdmissionGate {
     public synchronized List<Reservation> sweep(long nowMillis, long nowNanos) {
         List<Reservation> timedOut = new ArrayList<>();
         for (Reservation r : claims.values()) {
-            if (!r.closed && !r.closing && !r.connected
-                    && nowNanos - r.acceptedNanos >= limits.handshakeMillis() * 1_000_000L) {
+            if (!r.closed && !r.closing && (r.admission.identityVerifier().rejected()
+                    || (r.admission.identityVerifier().pending() && nowNanos - r.loginDeadlineNanos >= 0)
+                    || (!r.connected && nowNanos - r.acceptedNanos >= limits.handshakeMillis() * 1_000_000L))) {
                 r.closing = true;
                 timedOut.add(r);
             }
@@ -190,6 +197,7 @@ public final class AdmissionGate {
         List<Reservation> active = new ArrayList<>(tuples.values());
         for (Reservation r : active) {
             r.closing = true;
+            r.admission.identityVerifier().close();
         }
         claims.values().removeIf(r -> r.closed);
         return active;

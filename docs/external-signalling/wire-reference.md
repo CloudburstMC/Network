@@ -391,10 +391,70 @@ data (AAD) is
 | 4 | 32 | SHA-256 client certificate fingerprint |
 | 36 | 2 | Client SCTP port, 1–65535 |
 | 38 | 4 | Client maximum message size, 1–262144 |
-| 42 | 16 | Opaque caller-context hash, no account-specific interpretation |
+| 42 | 16 | Identity binding: first 16 raw bytes of the HMAC below |
 | 58 | 8 | NetherNet network ID, unsigned 64-bit |
 | 66 | 1 | Client ICE password length, 22–91 |
 | 67 | N | Client ICE password in ICE base64 alphabet |
+
+### Bind signalling identity to the game login
+
+The provider MUST verify the client's signalling assertion, including its proof
+of possession over the offered DTLS fingerprint. It MUST derive the binding from
+that verified assertion's `cpk`, never from request headers or account metadata:
+
+```text
+identityBinding = HMAC-SHA256(secret,
+    UTF8("nxs-identity-binding-v1") || 0x00 || UTF8(audience) || 0x00 || UTF8(cpk))[0:16]
+```
+
+`secret` is the UTF-8 encoding of the installed ticket secret, **not** a base64
+decoding. `audience` is exactly `nxs-stateless-host-v1/<incarnation>`, as used for
+this ticket's encryption. `cpk` is standard base64 of canonical P-384 public-key
+SPKI DER: `id-ecPublicKey`, named curve `secp384r1`, and an uncompressed SEC1 point
+(`04 || X[48] || Y[48]`). Validate curve parameters and the point; normalize the
+validated key rather than retaining the client's original encoding. Standard
+base64 padding rules apply (this 120-byte SPKI needs no padding). The 16 raw MAC
+bytes occupy offset 42; hex is only a fixture/debug representation. No account
+identifier is encoded into or substituted for this binding.
+
+After normal Bedrock LoginPacket chain/token and client-data signature validation,
+the component terminating the direct client transport MUST canonicalize the
+validated login identity key the same way, recompute the MAC using the admitted
+ticket's secret and audience, and compare all 16 bytes in constant time. Reject
+missing, expired, revoked or mismatched binding evidence before accepting the
+player. Validity of the LoginPacket alone does not bind it to this transport.
+
+The reference `TransportIdentityBinding.mismatch(channel, validatedLoginKey)`
+helper handles both built-in signalling and NXS. Install its channel evidence
+before publishing the child. Consumers MUST invoke it at their validated login
+boundary; a library update alone cannot add an application login check.
+
+The verifier is one-shot. Retain the actual admitted key epoch until comparison,
+channel closure, rejection or the ticket's login deadline; do not look up the
+current secret by key ID later. Repeated key snapshots reuse unchanged epochs.
+Routine snapshot replacement/retirement stops new admissions but preserves pending
+comparisons, even if a key ID is reused. `StatelessAdmissionValidator.clear()`
+explicitly revokes installed and retained epochs and invalidates pending logins.
+Convert the remaining ticket lifetime to a monotonic deadline at admission. Opening
+data channels does not complete login; pending logins expire even after transport
+connection. Successful game sessions may outlive the ticket. Release retained
+material on capacity/replay rejection and failed native setup as well as channel
+closure. Admission principals expose no ticket secret or key handle.
+
+An explicitly configured trusted forwarding listener delegates player authentication
+to its proxy under its existing forwarding contract. A proxy may re-sign the
+backend chain, so the backend MUST NOT compare that chain to the original player's
+signalling key. Preserve that existing contract: after validating its forwarded
+fields, a consumer may call `TransportIdentityBinding.acceptForwardedIdentity`
+to complete the unused admission lifecycle. Do not infer forwarding from client
+fields or a missing/mismatched binding. The proxy terminating a direct NetherNet
+client is responsible for the equivalent signalling/login comparison there.
+This does not define a new proxy protocol or make untrusted forwarding safe.
+
+This pre-release change replaces the former opaque offset-42 field in NXS1 in
+place. Upgrade issuers and direct client terminators together; old tickets/issuers
+are not accepted as an identity-binding fallback. The wire size, carrier limit,
+DTLS verification, STUN integrity checks and unrelated RakNet handshake remain.
 
 The host's local ICE password is the unpadded standard base64 encoding of the
 first 24 bytes of
