@@ -9,6 +9,7 @@ Network components used within Cloudburst projects.
 - `netty-transport-common` - API shared by the transports, such as the largest message a channel can write
 - [`netty-transport-raknet`](transport-raknet/README.md) - A RakNet implementation based on Netty patterns
 - [`netty-transport-nethernet`](transport-nethernet/README.md) - A NetherNet implementation based on Netty patterns
+- [`netty-external-signalling`](external-signalling/README.md) - A NetherNet signalling provider client and its stateless admission host
 
 ### Maven
 
