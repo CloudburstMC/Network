@@ -197,22 +197,29 @@ public abstract class NetherNetChannel extends AbstractChannel {
         if (totalLength % maxPayload != 0) {
             segments++;
         }
+        if (segments == 0) {
+            log.debug("Nothing sent for an empty outbound message");
+        }
+
         try {
+            // Absolute reads, so every offset starts where the readable bytes do
+            int start = framed.readerIndex();
             int offset = 0;
             for (int i = 0; i < segments; i++) {
                 int remaining = segments - 1 - i;
-                int chunkSize = Math.min(maxPayload, framed.readableBytes() - offset);
+                int chunkSize = Math.min(maxPayload, totalLength - offset);
 
                 ByteBuffer chunk = ByteBuffer.allocateDirect(1 + chunkSize);
                 chunk.put((byte) remaining);
 
-                framed.getBytes(offset, chunk);
+                framed.getBytes(start + offset, chunk);
                 chunk.position(chunk.limit());
                 chunk.flip();
 
                 reliableChannel.sendMessage(chunk);
                 offset += chunkSize;
             }
+            log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
         } catch (Exception e) {
             pipeline().fireExceptionCaught(e);
         } finally {
