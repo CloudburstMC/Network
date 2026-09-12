@@ -108,7 +108,7 @@ public interface NetherNetSignaling extends AutoCloseable {
                 try {
                     uris.add(new URI(withCredentials(url.trim())));
                 } catch (URISyntaxException e) {
-                    log.warn("Ignoring unparseable ICE server URL {}: {}", url, e.toString());
+                    log.warn("Ignoring unparseable ICE server URL {}: {}", redacted(url), e.toString());
                 }
             }
 
@@ -131,6 +131,40 @@ public interface NetherNetSignaling extends AutoCloseable {
 
             return url.substring(0, authority) + encode(username) + ":" + encode(password) + "@" + url.substring(
                     authority);
+        }
+
+        /**
+         * The URL without whatever credentials it carries, which is the only form worth logging. A
+         * TURN URL keeps its secret in the authority, and this type is handed straight to loggers
+         * and exception messages.
+         *
+         * @param url The URL as configured
+         * @return The same URL with any userinfo replaced
+         */
+        private static String redacted(String url) {
+            int at = url.lastIndexOf('@');
+            if (at < 0) {
+                return url;
+            }
+            int scheme = url.indexOf(':');
+            int authority = scheme < 0 ? 0 : (url.startsWith("://", scheme) ? scheme + 3 : scheme + 1);
+            return url.substring(0, authority) + "***@" + url.substring(at + 1);
+        }
+
+        /**
+         * Never prints the credentials, since a record's own form would put them in every log line
+         * and error report that touches one.
+         */
+        @Override
+        public String toString() {
+            List<String> safe = new ArrayList<>();
+            if (urls != null) {
+                for (String url : urls) {
+                    safe.add(url == null ? null : redacted(url));
+                }
+            }
+            return "IceServerInfo[urls=" + safe
+                    + ", username=" + (username == null || username.isEmpty() ? "" : "***") + "]";
         }
 
         /**
