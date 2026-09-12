@@ -18,6 +18,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class ForwardedForTest {
@@ -97,6 +98,43 @@ class ForwardedForTest {
         get(port, "203.0.113.7");
 
         assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void ignoresAHostnameRatherThanResolvingIt() throws Exception {
+        // Resolving here would block the signalling event loop on DNS and let the header stand for
+        // whatever the answer happened to be
+        int port = start(List.of("127.0.0.0/8"));
+        get(port, "localhost");
+
+        // The name would otherwise survive into the address the transport reports
+        assertEquals("127.0.0.1", observed().getHostString());
+    }
+
+    @Test
+    void ignoresAValueThatIsNotAnAddressAtAll() throws Exception {
+        int port = start(List.of("127.0.0.0/8"));
+        get(port, "not an address");
+
+        InetSocketAddress seen = observed();
+        assertFalse(seen.isUnresolved(), "an unresolved address would reach the transport as a null host");
+        assertEquals("127.0.0.1", seen.getAddress().getHostAddress());
+    }
+
+    @Test
+    void ignoresAHeaderThatIsOnlyWhitespace() throws Exception {
+        int port = start(List.of("127.0.0.0/8"));
+        get(port, "   ");
+
+        assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void honoursAnIpv6LiteralInBrackets() throws Exception {
+        int port = start(List.of("127.0.0.0/8"));
+        get(port, "[2001:db8::1]");
+
+        assertEquals("2001:db8:0:0:0:0:0:1", observed().getAddress().getHostAddress());
     }
 
     @Test
