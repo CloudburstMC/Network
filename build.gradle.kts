@@ -23,6 +23,18 @@ subprojects {
     apply(plugin = "java-library")
     apply(plugin = "maven-publish")
     apply(plugin = "signing")
+    apply(plugin = "jacoco")
+
+    tasks.withType<Test>().configureEach {
+        finalizedBy(tasks.withType<JacocoReport>())
+    }
+    tasks.withType<JacocoReport>().configureEach {
+        dependsOn(tasks.withType<Test>())
+        reports {
+            xml.required.set(true)
+            html.required.set(true)
+        }
+    }
 
     group = "org.cloudburstmc.netty"
     version = networkVersion
@@ -30,6 +42,7 @@ subprojects {
     repositories {
         mavenLocal()
         mavenCentral()
+        maven("https://repo.opencollab.dev/main")
     }
 
     configure<JavaPluginExtension> {

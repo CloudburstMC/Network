@@ -1,0 +1,37 @@
+description = "NetherNet transport for Netty"
+
+dependencies {
+    api(libs.bundles.netty)
+    api(libs.netty.codec.http)
+    api(libs.netty.codec.haproxy)
+    api(libs.expiringmap)
+    api(libs.libdatachannel.java)
+
+    implementation(libs.gson)
+    implementation(libs.jose4j)
+
+    // Annotations only, CLASS retention, so consumers need nothing at runtime
+    compileOnly(libs.jspecify)
+
+    testImplementation(libs.bundles.junit)
+    // Netty cannot self sign on a modern JDK without it, and the TLS listener needs a certificate
+    testImplementation(libs.bouncycastle.pkix)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+configure<JavaPluginExtension> {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+    withJavadocJar()
+    withSourcesJar()
+}
+
+tasks.jar {
+    manifest.attributes["Automatic-Module-Name"] = "org.cloudburstmc.netty.transport.nethernet"
+}
+
+tasks.register<JavaExec>("runDiscovery") {
+    mainClass.set("org.cloudburstmc.netty.util.nethernet.NetherNetScanner")
+    classpath = sourceSets["main"].runtimeClasspath
+}

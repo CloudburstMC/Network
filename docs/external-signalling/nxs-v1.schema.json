@@ -1,0 +1,895 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nethernet:external-signalling:v1",
+  "title": "NetherNet External Signalling v1",
+  "type": "object",
+  "required": [
+    "protocol",
+    "mode",
+    "profile",
+    "publicKeyJwk"
+  ],
+  "properties": {
+    "protocol": {
+      "const": "nethernet-external-signalling-v1"
+    },
+    "mode": {
+      "enum": [
+        "automatic",
+        "new-service",
+        "attach-instance"
+      ]
+    },
+    "profile": {
+      "type": "string"
+    },
+    "publicKeyJwk": {
+      "type": "object",
+      "required": [
+        "crv",
+        "kty",
+        "x",
+        "y"
+      ],
+      "not": {
+        "required": [
+          "d"
+        ]
+      },
+      "properties": {
+        "crv": {
+          "const": "P-384"
+        },
+        "kty": {
+          "const": "EC"
+        },
+        "x": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{64}$"
+        },
+        "y": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{64}$"
+        }
+      }
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scheme"
+      ],
+      "properties": {
+        "scheme": {
+          "enum": [
+            "anonymous-proof-of-work",
+            "bearer-token"
+          ]
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "region",
+        "pool"
+      ],
+      "properties": {
+        "region": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,32}$"
+        },
+        "pool": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "tags": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_.-]{1,32}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxProperties": 16
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "attach-instance"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "placement",
+          "authorization"
+        ],
+        "properties": {
+          "authorization": {
+            "properties": {
+              "scheme": {
+                "const": "bearer-token"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "discovery": {
+      "type": "object",
+      "required": [
+        "provider",
+        "controlOrigin",
+        "protocols",
+        "signatures",
+        "modes",
+        "profiles",
+        "operations",
+        "authorization",
+        "limits"
+      ],
+      "properties": {
+        "authorization": {
+          "type": "object",
+          "required": [
+            "header",
+            "schemes"
+          ],
+          "properties": {
+            "header": {
+              "const": "Authorization"
+            },
+            "schemes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "scheme",
+                  "modes"
+                ],
+                "properties": {
+                  "scheme": {
+                    "enum": [
+                      "anonymous-proof-of-work",
+                      "bearer-token"
+                    ]
+                  },
+                  "modes": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "automatic",
+                        "new-service",
+                        "attach-instance"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        },
+        "operations": {
+          "type": "object",
+          "required": [
+            "register",
+            "complete",
+            "heartbeat",
+            "outcomes",
+            "rotate",
+            "retire",
+            "deregister"
+          ],
+          "properties": {
+            "register": {
+              "type": "string",
+              "format": "uri"
+            },
+            "complete": {
+              "type": "string",
+              "format": "uri"
+            },
+            "heartbeat": {
+              "type": "string",
+              "format": "uri"
+            },
+            "outcomes": {
+              "type": "string",
+              "format": "uri"
+            },
+            "rotate": {
+              "type": "string",
+              "format": "uri"
+            },
+            "retire": {
+              "type": "string",
+              "format": "uri"
+            },
+            "deregister": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "signature",
+        "challengeId",
+        "nonce",
+        "audience",
+        "thumbprint",
+        "context",
+        "contextDigest",
+        "expiresAt",
+        "serverTime",
+        "pow"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        },
+        "signature": {
+          "const": "nxs-es384-v1"
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "serverTime": {
+          "type": "integer"
+        },
+        "authorization": {
+          "type": "object",
+          "required": [
+            "scheme",
+            "reference"
+          ],
+          "properties": {
+            "scheme": {
+              "enum": [
+                "anonymous-proof-of-work",
+                "bearer-token"
+              ]
+            },
+            "reference": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "challengeId",
+        "proofNonce",
+        "signature",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        }
+      }
+    },
+    "registration": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "provider",
+        "registrationId",
+        "instanceId",
+        "keyId",
+        "profile",
+        "placement",
+        "heartbeatIntervalMs",
+        "leaseGeneration",
+        "leaseDeadline",
+        "readiness"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        },
+        "serviceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publicAddress": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "dependentRequired": {
+        "serviceId": [
+          "publicAddress"
+        ],
+        "publicAddress": [
+          "serviceId"
+        ]
+      },
+      "description": "An independent runtime identity. Optional serviceId/publicAddress describe a public endpoint at this observation; they are not stable instance identity. Pool attachments may have no public endpoint or serve several endpoints."
+    },
+    "readiness": {
+      "type": "object",
+      "required": [
+        "serverTime",
+        "instanceId",
+        "serviceAvailable",
+        "instanceRoutable",
+        "readiness",
+        "leaseGeneration",
+        "leaseDeadline",
+        "placement"
+      ]
+    },
+    "rotation": {
+      "type": "object",
+      "required": [
+        "publicKeyJwk",
+        "proof"
+      ]
+    },
+    "ticketKey": {
+      "type": "object",
+      "required": [
+        "keyId",
+        "secret"
+      ]
+    },
+    "extensions": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*){1,7}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "version",
+          "critical",
+          "data"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999999999
+          },
+          "critical": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object"
+          }
+        }
+      },
+      "x-max-utf8-bytes": 16384
+    },
+    "recovery": {
+      "type": "object",
+      "required": [
+        "registrationId",
+        "protocol",
+        "profile"
+      ],
+      "properties": {
+        "registrationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol": {
+          "const": "nethernet-external-signalling-v1"
+        },
+        "profile": {
+          "const": "nxs-admission-v1"
+        }
+      }
+    },
+    "register": {
+      "oneOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "$ref": "#/$defs/recovery"
+        }
+      ]
+    },
+    "hostState": {
+      "enum": [
+        "serving",
+        "draining",
+        "closed"
+      ]
+    },
+    "hostProfile": {
+      "type": "object",
+      "required": [
+        "candidates",
+        "dtlsFingerprint",
+        "credentialKeyId",
+        "sctpPort",
+        "maxMessageSize",
+        "statelessAdmission"
+      ],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": [
+              "foundation",
+              "component",
+              "protocol",
+              "priority",
+              "address",
+              "port",
+              "type"
+            ],
+            "properties": {
+              "foundation": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,32}$"
+              },
+              "component": {
+                "const": 1
+              },
+              "protocol": {
+                "const": "udp"
+              },
+              "priority": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 253
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "type": {
+                "enum": [
+                  "host",
+                  "srflx",
+                  "relay"
+                ]
+              }
+            }
+          }
+        },
+        "dtlsFingerprint": {
+          "type": "string",
+          "pattern": "^sha-256 [0-9A-F]{2}(?::[0-9A-F]{2}){31}$"
+        },
+        "credentialKeyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "sctpPort": {
+          "const": 5000
+        },
+        "maxMessageSize": {
+          "const": 262144
+        },
+        "statelessAdmission": {
+          "type": "object",
+          "required": [
+            "capability",
+            "incarnation"
+          ],
+          "properties": {
+            "capability": {
+              "const": "nethernet.stateless-admission.v1"
+            },
+            "incarnation": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        }
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": [
+        "healthy",
+        "acceptingPlayers",
+        "capacity",
+        "load",
+        "protocolVersion",
+        "clockUnixMillis",
+        "checkInVersion",
+        "state",
+        "appliedStateRevision",
+        "gameOutcomes"
+      ],
+      "properties": {
+        "healthy": {
+          "type": "boolean"
+        },
+        "capacity": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "load": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "protocolVersion": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clockUnixMillis": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "checkInVersion": {
+          "const": 1
+        },
+        "state": {
+          "$ref": "#/$defs/hostState"
+        },
+        "appliedStateRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "gameOutcomes": {
+          "enum": [
+            "available",
+            "unavailable"
+          ]
+        },
+        "build": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "serverStatus": {
+          "type": "object"
+        },
+        "hostProfile": {
+          "$ref": "#/$defs/hostProfile"
+        },
+        "hostProfileRevision": {
+          "type": "string",
+          "maxLength": 184
+        },
+        "installedKeyIds": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{4}$"
+          }
+        },
+        "keyRequestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        },
+        "playerCount": {
+          "$ref": "#/$defs/playerCount"
+        },
+        "acceptingPlayers": {
+          "type": "boolean",
+          "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "draining",
+                  "closed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "acceptingPlayers": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "checkIn": {
+      "type": "object",
+      "required": [
+        "version",
+        "afterMillis",
+        "nextCheckInAt",
+        "leaseExpiresAt",
+        "minUpdateIntervalMillis"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "afterMillis": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 86400000
+        },
+        "nextCheckInAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "leaseExpiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "minUpdateIntervalMillis": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 86400000
+        }
+      }
+    },
+    "heartbeatResponse": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "receivedAt",
+        "staleAfter",
+        "hostProfileRevision",
+        "activeKeyId",
+        "leaseGeneration",
+        "readiness",
+        "desiredState",
+        "retirements"
+      ],
+      "properties": {
+        "accepted": {
+          "const": true
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "staleAfter": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "hostProfileRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "activeKeyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "leaseGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness"
+        },
+        "desiredState": {
+          "type": "object",
+          "required": [
+            "revision",
+            "state"
+          ],
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "state": {
+              "$ref": "#/$defs/hostState"
+            }
+          }
+        },
+        "checkIn": {
+          "$ref": "#/$defs/checkIn"
+        },
+        "keyRequest": {
+          "type": "object",
+          "required": [
+            "id",
+            "keyId"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "keyId": {
+              "type": "string",
+              "pattern": "^[A-Z0-9]{4}$"
+            }
+          }
+        },
+        "ticketKey": {
+          "$ref": "#/$defs/ticketKey"
+        },
+        "retirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "keyId",
+              "retireAfter"
+            ],
+            "properties": {
+              "keyId": {
+                "type": "string",
+                "pattern": "^[A-Z0-9]{4}$"
+              },
+              "retireAfter": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "required": [
+        "events"
+      ],
+      "properties": {
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "ticketId",
+              "stage",
+              "occurredAt"
+            ],
+            "properties": {
+              "ticketId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "stage": {
+                "enum": [
+                  "ticket.ice_seen",
+                  "ticket.ice_connected",
+                  "ticket.dtls_connected",
+                  "ticket.sctp_connected",
+                  "ticket.data_channels_open",
+                  "ticket.game_joined",
+                  "ticket.game_rejected",
+                  "ticket.failed"
+                ]
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "playerCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connectedPlayers",
+        "sampledAt"
+      ],
+      "properties": {
+        "connectedPlayers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "sampledAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "Actual players connected to this runtime, including still-connected draining players. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Absence means unknown. Never derive this value from public serverStatus, load, tickets or reservations."
+    }
+  },
+  "x-context-order": [
+    "mode",
+    "profile",
+    "label",
+    "authorizationId",
+    "serviceId",
+    "region",
+    "pool",
+    "registrationId"
+  ],
+  "x-optional-context-order": [
+    "tagsDigest"
+  ],
+  "x-signature-format": "ES384 P1363 r||s 96 bytes unpadded base64url",
+  "x-canonicalization": "UTF-8 JSON arrays, no whitespace, no Unicode normalization, epoch milliseconds as integers, absent context strings are empty",
+  "description": "Registration, heartbeat and stateless join feedback for the experimental NXS contract.",
+  "x-profile": "nxs-admission-v1",
+  "x-discovery-path": "/.well-known/nethernet-external-signalling",
+  "x-headers": [
+    "nxs-instance-id",
+    "nxs-key-id",
+    "nxs-timestamp",
+    "nxs-signature-version",
+    "nxs-generation",
+    "nxs-sequence",
+    "nxs-signature",
+    "idempotency-key"
+  ],
+  "x-operations": [
+    "register",
+    "complete",
+    "heartbeat",
+    "outcomes",
+    "rotate",
+    "retire",
+    "deregister"
+  ]
+}
