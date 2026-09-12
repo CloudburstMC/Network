@@ -78,7 +78,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * This class implements a signaling server using HTTP(S) for the NetherNet protocol.
+ * This class implements a signalling server using HTTP(S) for the NetherNet protocol.
  * <p>
  * Follows <a href="https://github.com/Mojang/bedrock-protocol-docs/blob/7330880ab78ef001cad0b9cdfedb3aa3eaa6d4af/NetherNetOnboardingGuide.md">...</a>
  */
@@ -150,7 +150,6 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             throw new ConnectException("Failed to bind HTTP signaling to " + localAddress + ": " + e.getMessage());
         }
 
-        // Setup a new server bootstrap for http using the existing event loop and channel
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(eventLoop)
                 .channelFactory((ChannelFactory<NioServerSocketChannel>) () -> new NioServerSocketChannel(channel))
@@ -238,7 +237,6 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             String host = req.headers().get(HttpHeaderNames.HOST);
             InetSocketAddress remoteAddress = clientAddress(ctx, req);
 
-            // Respond to the status check
             if (path.equals("/v1/join")) {
                 if (!HttpMethod.GET.equals(method)) {
                     respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
@@ -258,13 +256,11 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 return;
             }
 
-            // Only continue if the path is /v1/join/<networkId>
             if (!path.startsWith("/v1/join/")) {
                 respondEmptyWithStatus(ctx, HttpResponseStatus.NOT_FOUND);
                 return;
             }
 
-            // Only continue if this is a post request
             if (!HttpMethod.POST.equals(method)) {
                 respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
                 return;
@@ -360,7 +356,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     @Override
     public void setAdvertisementData(PongData pongData) {
-        // No-op for Web Signaling.
+        // Nothing to do for HTTP signalling
     }
 
     @Override
@@ -465,7 +461,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                     "no answer was produced", future.cause()));
         });
 
-        // We cant use the network ID as the connection ID as they can be out of the bounds of a long
+        // We cannot use the network ID as the connection ID, they can fall outside the bounds of a long
         newConnectionHandler.onConnect(random.nextLong(), networkId, sdpOffer, clientAddress, player);
         return result;
     }
@@ -509,12 +505,12 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     @Override
     public void setSignalHandler(long connectionId, SignalHandler handler) {
-        // No-op for Web Signaling.
+        // Nothing to do for HTTP signalling
     }
 
     @Override
     public void removeSignalHandler(long connectionId) {
-        // No-op for Web Signaling.
+        // Nothing to do for HTTP signalling
     }
 
     @Override

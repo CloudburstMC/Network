@@ -27,17 +27,17 @@ public class NetherNetConstants {
     public static final String RTC_NEGOTIATION_CANDIDATE_ADD = "CANDIDATEADD";
     public static final String RTC_NEGOTIATION_CONNECT_ERROR = "CONNECTERROR";
 
-    // Signaling User Agent String
+    // Signalling User Agent String
     public static final String SIGNALING_USER_AGENT = "libHttpClient/1.0.0.0";
 
-    // Xbox Signaling Message Types
+    // Xbox Signalling Message Types
     public static final int XBOX_SIGNAL_NOT_FOUND = 0;
     public static final int XBOX_SIGNAL_SIGNAL = 1;
     public static final int XBOX_SIGNAL_CREDENTIALS = 2;
     public static final int XBOX_SIGNAL_ACCEPTED = 3;
     public static final int XBOX_SIGNAL_ACK = 4;
 
-    // Xbox JSON-RPC Signaling Method Names
+    // Xbox JSON-RPC Signalling Method Names
     public static final String XBOX_RPC_METHOD_TURN_AUTH = "Signaling_TurnAuth_v1_0";
     public static final String XBOX_RPC_METHOD_SEND_MESSAGE = "Signaling_SendClientMessage_v1_0";
     public static final String XBOX_RPC_METHOD_RECEIVE_MESSAGE = "Signaling_ReceiveMessage_v1_0";
@@ -149,33 +149,33 @@ public class NetherNetConstants {
     }
 
     /**
-     * Builds a signaling message for a CONNECTREQUEST.
+     * Builds a signalling message for a CONNECTREQUEST.
      *
      * @param connectionId The unique connection ID.
      * @param sdp          The SDP payload.
-     * @return The formatted signaling message.
+     * @return The formatted signalling message.
      */
     public static String buildSignalConnectRequest(long connectionId, String sdp) {
         return RTC_NEGOTIATION_CONNECT_REQUEST + " " + Long.toUnsignedString(connectionId) + " " + sdp;
     }
 
     /**
-     * Builds a signaling message for a CONNECTRESPONSE.
+     * Builds a signalling message for a CONNECTRESPONSE.
      *
      * @param connectionId The unique connection ID.
      * @param sdp          The SDP payload.
-     * @return The formatted signaling message.
+     * @return The formatted signalling message.
      */
     public static String buildSignalConnectResponse(long connectionId, String sdp) {
         return RTC_NEGOTIATION_CONNECT_RESPONSE + " " + Long.toUnsignedString(connectionId) + " " + sdp;
     }
 
     /**
-     * Builds a signaling message for a CANDIDATEADD.
+     * Builds a signalling message for a CANDIDATEADD.
      *
      * @param connectionId The unique connection ID.
      * @param candidateSdp The candidate SDP string.
-     * @return The formatted signaling message.
+     * @return The formatted signalling message.
      */
     public static String buildSignalCandidateAdd(long connectionId, String candidateSdp) {
         return RTC_NEGOTIATION_CANDIDATE_ADD + " " + Long.toUnsignedString(connectionId) + " " + candidateSdp;

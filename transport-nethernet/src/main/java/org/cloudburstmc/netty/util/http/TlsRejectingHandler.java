@@ -24,7 +24,6 @@ public class TlsRejectingHandler extends ByteToMessageDecoder {
             return;
         }
 
-        // Allow the pipeline to continue
         ctx.pipeline().remove(this);
     }
 }

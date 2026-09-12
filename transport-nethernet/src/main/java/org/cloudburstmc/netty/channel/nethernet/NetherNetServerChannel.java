@@ -7,7 +7,9 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChanne
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
+import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import io.netty.channel.AbstractServerChannel;
 import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelMetadata;
@@ -44,13 +46,13 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     /**
      * Creates a NetherNetServerChannel.
      *
-     * @param signaling The NetherNetServerSignaling instance for signaling.
+     * @param signaling The NetherNetServerSignaling instance for signalling.
      */
     public NetherNetServerChannel(NetherNetServerSignaling signaling) {
         this.signaling = signaling;
         this.config = new DefaultNetherServerChannelConfig(this);
 
-        // Prefer the signaling identity so answers are signed with a key clients can attribute to us
+        // Prefer the signalling identity so answers are signed with a key clients can attribute to us
         this.serverIdentity = signaling.serverIdentity();
         if (this.serverIdentity == null) {
             try {
@@ -77,7 +79,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     /**
      * Pins ICE to the bound address, so the transport uses one predictable port rather than an
-     * ephemeral one per connection. Skipped when the signaling holds that UDP port itself.
+     * ephemeral one per connection. Skipped when the signalling holds that UDP port itself.
      *
      * @param config The configuration to derive from.
      * @return The configuration with the bound address applied.
@@ -98,7 +100,6 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             return config;
         }
 
-        // Enable multiplexing and set the port
         return config
                 .withEnableIceUdpMux(true)
                 .withPortRangeBegin(port)
@@ -121,8 +122,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      */
     public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId,
                                  @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
-        var identityVerifier = player == null ? null
-                : org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.forPlayer(player);
+        IdentityKeyVerifier identityVerifier = player == null ? null
+                : TransportIdentityBinding.forPlayer(player);
         PeerConnectionConfiguration rtcConfig =
                 bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
                         .withDisableAutoNegotiation(true)
@@ -140,7 +141,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
         if (player != null) {
             child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
-            org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.install(child, identityVerifier);
+            TransportIdentityBinding.install(child, identityVerifier);
         }
         observer.setChildChannel(child);
 
@@ -160,7 +161,6 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         observer.register(pc);
 
-        // Register Signal Handler
         signaling.setSignalHandler(connectionId, (signal) -> {
             String[] parts = signal.split(" ", 3);
             if (parts.length < 3) {
@@ -186,7 +186,6 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
         });
 
-        // Handle Offer
         try {
             pc.setRemoteDescription(offerSdp, SessionDescriptionType.OFFER);
             log.trace("Remote description set for {}", Long.toUnsignedString(connectionId));
@@ -306,7 +305,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                         Long.toUnsignedString(this.connectionId), candidate, extractCandidateType(candidate));
             }
 
-            // Skip sending candidate if the signaling doesn't support trickle ICE
+            // Skip sending candidate if the signalling doesn't support trickle ICE
             if (!signaling.usesTrickleIce()) {
                 return;
             }
@@ -333,7 +332,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private void onConnectionChange(PeerState state) {
             log.debug("Connection {} state changed: {}", Long.toUnsignedString(this.connectionId), state);
             if (state == PeerState.RTC_CONNECTED) {
-                // Resolve the real client address from the selected ICE candidate pair and store it on the child channel.
+                // The selected candidate pair is the only place the peer's real address appears
                 InetSocketAddress raw = this.peerConnection.remoteAddress();
                 this.child.setRemoteAddress(new InetSocketAddress(raw.getHostString(), raw.getPort()));
             }

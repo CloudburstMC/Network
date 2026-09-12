@@ -4,11 +4,22 @@ import java.security.PublicKey;
 
 /** One login decision, owned by a transport channel. Never exposes admission secrets. */
 public abstract class IdentityKeyVerifier implements AutoCloseable {
-    private enum State { PENDING, ACCEPTED, REJECTED, CLOSED }
+    private enum State {
+        PENDING, ACCEPTED, REJECTED, CLOSED
+    }
+
     private State state = State.PENDING;
 
+    /**
+     * Spends the binding on one login, whatever the outcome.
+     *
+     * @param key The key the login chain is signed with
+     * @return Why the login must be rejected, or null when it may proceed
+     */
     public final synchronized String mismatch(PublicKey key) {
-        if (state != State.PENDING) return "the transport identity binding has already been consumed";
+        if (state != State.PENDING) {
+            return "the transport identity binding has already been consumed";
+        }
         boolean accepted = false;
         try {
             accepted = usable() && matches(IdentityPublicKey.canonical(key));
@@ -21,17 +32,28 @@ public abstract class IdentityKeyVerifier implements AutoCloseable {
         }
     }
 
-    /** Only for an application's already authenticated, explicitly trusted forwarding path. */
+    /**
+     * Spends the binding without a key of its own, for an application's already authenticated and
+     * explicitly trusted forwarding path.
+     *
+     * @return Why the login must be rejected, or null when it may proceed
+     */
     public final synchronized String acceptForwardedIdentity() {
-        if (state != State.PENDING) return "the transport identity binding has already been consumed";
+        if (state != State.PENDING) {
+            return "the transport identity binding has already been consumed";
+        }
         boolean accepted = usable();
         state = accepted ? State.ACCEPTED : State.REJECTED;
         release();
         return accepted ? null : "the transport identity binding has expired or been revoked";
     }
 
-    public final synchronized boolean pending() { return state == State.PENDING; }
+    /** @return Whether a login may still be decided against this binding */
+    public final synchronized boolean pending() {
+        return state == State.PENDING;
+    }
 
+    /** @return Whether nothing can be admitted against this binding any more */
     public final synchronized boolean rejected() {
         return state == State.REJECTED || state == State.CLOSED || (state == State.PENDING && !usable());
     }
@@ -44,7 +66,17 @@ public abstract class IdentityKeyVerifier implements AutoCloseable {
         }
     }
 
-    protected boolean usable() { return true; }
+    /** @return Whether the admission behind this binding is still live */
+    protected boolean usable() {
+        return true;
+    }
+
+    /**
+     * @param canonicalKey The login key, canonicalised by {@link IdentityPublicKey}
+     * @return Whether it is the key the transport admitted
+     */
     protected abstract boolean matches(byte[] canonicalKey);
+
+    /** Erases whatever the binding held. Called once, whichever way it is spent. */
     protected abstract void release();
 }

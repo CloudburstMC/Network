@@ -45,7 +45,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
     /**
      * Creates a NetherNetClientChannel.
      *
-     * @param signaling The NetherNetClientSignaling instance for signaling.
+     * @param signaling The NetherNetClientSignaling instance for signalling.
      */
     public NetherNetClientChannel(NetherNetClientSignaling signaling) {
         super(null, null, null);
@@ -179,7 +179,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
             return;
         }
 
-        // fail exceptionally if max retries reached
+        // Fail exceptionally once the retries are spent
         int maxRetries = this.config().getOption(NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS);
         if (retryCount >= maxRetries) {
             if (connectPromise != null && !connectPromise.isDone()) {
@@ -327,7 +327,6 @@ public class NetherNetClientChannel extends NetherNetChannel {
             log.debug("NetherNet Connection Established!");
             handshakeComplete = true;
 
-            // Cancel timeout now that we are done
             if (handshakeTimeoutTask != null) {
                 handshakeTimeoutTask.cancel(false);
             }

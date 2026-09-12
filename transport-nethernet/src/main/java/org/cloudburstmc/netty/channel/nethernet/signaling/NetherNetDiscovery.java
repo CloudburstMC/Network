@@ -159,7 +159,6 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         sendPacket(buf, recipient);
     }
 
-    // New sendSignal looking up Address from ID
     public void sendSignal(long targetNetworkId, String data) {
         InetSocketAddress recipient = peerAddresses.get(targetNetworkId);
         if (recipient != null) {
@@ -223,7 +222,6 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
                     log.trace("Handled discovery response from {}", packet.sender());
                     if (discoveryCallback != null) {
                         log.trace("Response Data: {}", decrypted.toString(StandardCharsets.UTF_8));
-                        // Pass the payload (decrypted buffer) to the callback
                         // We retain it because we are passing it out of the pipeline handler
                         discoveryCallback.accept(senderId, decrypted.retain());
                     }

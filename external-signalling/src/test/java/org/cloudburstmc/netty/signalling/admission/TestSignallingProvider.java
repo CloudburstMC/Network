@@ -45,10 +45,11 @@ final class TestSignallingProvider {
         if (wrongClientFingerprint) {
             fp[0] ^= 1;
         }
-        byte[] identityBinding = Arrays.copyOf(hmac(utf8(SECRET), "nxs-identity-binding-v1\0" + audience + "\0" + IDENTITY_CPK), 16);
+        byte[] identityBinding = Arrays.copyOf(
+                hmac(utf8(SECRET), "nxs-identity-binding-v1\0" + audience + "\0" + IDENTITY_CPK), 16);
         ByteBuffer claims = ByteBuffer.allocate(67 + pwd.length());
-        claims.putInt((int) (expiry / 1000)).put(fp).putShort((short) 5000).putInt(262144).put(identityBinding).putLong(42)
-                .put((byte) pwd.length()).put(utf8(pwd));
+        claims.putInt((int) (expiry / 1000)).put(fp).putShort((short) 5000).putInt(262144).put(identityBinding)
+                .putLong(42).put((byte) pwd.length()).put(utf8(pwd));
         byte[] nonce = new byte[12];
         new SecureRandom().nextBytes(nonce);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");

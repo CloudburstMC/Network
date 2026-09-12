@@ -6,16 +6,16 @@ import java.util.concurrent.CompletableFuture;
 
 public interface NetherNetClientSignaling extends NetherNetSignaling {
     /**
-     * Connects to the signaling medium (Client mode).
+     * Connects to the signalling medium (Client mode).
      *
-     * @param remoteAddress The address of the signaling server to connect to.
+     * @param remoteAddress The address of the signalling server to connect to.
      */
     CompletableFuture<List<IceServerInfo>> connect(SocketAddress remoteAddress);
 
     /**
-     * Sets a handler to be called when a signaling message is received for an unknown connection ID.
+     * Sets a handler to be called when a signalling message is received for an unknown connection ID.
      *
-     * @param handler The handler to process incoming signaling messages for unknown connection IDs.
+     * @param handler The handler to process incoming signalling messages for unknown connection IDs.
      */
     void setNotFoundHandler(NotFoundHandler handler);
 
@@ -25,7 +25,7 @@ public interface NetherNetClientSignaling extends NetherNetSignaling {
     @FunctionalInterface
     interface NotFoundHandler {
         /**
-         * Called when the signaling service indicates the target peer was not found.
+         * Called when the signalling service indicates the target peer was not found.
          *
          * @param reason The reason or raw message payload regarding the failure.
          */
