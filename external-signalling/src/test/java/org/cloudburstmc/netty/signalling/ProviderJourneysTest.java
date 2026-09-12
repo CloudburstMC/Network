@@ -21,7 +21,7 @@ class ProviderJourneysTest {
                                          ProviderClientTest.FakeTransport transport) throws Exception {
         return new ProviderClient(configuration, new ProviderStateStore(directory), transport,
                 () -> new ServerStatus("Independent host", 1000, "conformance", "world", 1, 20, 0),
-                () -> new ProviderClient.Health(true, 100, .01, "nethernet", "fixture"), message -> {
+                () -> new ProviderClient.Health(true, true, 100, .01, "nethernet", "fixture"), message -> {
         });
     }
 

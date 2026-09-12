@@ -528,6 +528,7 @@
       "type": "object",
       "required": [
         "healthy",
+        "acceptingPlayers",
         "capacity",
         "load",
         "protocolVersion",
@@ -613,8 +614,33 @@
         },
         "playerCount": {
           "$ref": "#/$defs/playerCount"
+        },
+        "acceptingPlayers": {
+          "type": "boolean",
+          "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "draining",
+                  "closed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "acceptingPlayers": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     },
     "checkIn": {
       "type": "object",

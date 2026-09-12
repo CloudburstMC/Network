@@ -93,7 +93,7 @@ public final class ProviderClient implements AutoCloseable {
     /**
      * Capacity and playerCount describe the same observation. Public server status is independent.
      */
-    public record Health(boolean healthy, int capacity, double load, String protocolVersion, String build,
+    public record Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion, String build,
                          PlayerCount playerCount) {
         public Health {
             if (capacity < 0 || capacity > 1000000 || !Double.isFinite(load) || load < 0 || load > 1
@@ -105,8 +105,8 @@ public final class ProviderClient implements AutoCloseable {
         /**
          * Hosts without actual player telemetry report unknown, never a synthetic zero.
          */
-        public Health(boolean healthy, int capacity, double load, String protocolVersion, String build) {
-            this(healthy, capacity, load, protocolVersion, build, null);
+        public Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion, String build) {
+            this(healthy, acceptingPlayers, capacity, load, protocolVersion, build, null);
         }
     }
 
@@ -123,7 +123,8 @@ public final class ProviderClient implements AutoCloseable {
         }
     }
 
-    private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().create();
+    // Null is meaningful inside opaque extension data (for example, clearing a setting).
+    private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
     private final Configuration config;
     private final ProviderStateStore store;
     private final ProviderTransport transport;
@@ -143,6 +144,7 @@ public final class ProviderClient implements AutoCloseable {
     private final AtomicBoolean refreshQueued = new AtomicBoolean();
     private JsonObject state, discovery;
     private JsonObject registrationExtensions = new JsonObject();
+    private JsonObject heartbeatExtensions = new JsonObject();
     private PrivateKey privateKey;
     private String profileRevision;
     private JsonObject lastProfile;
@@ -605,6 +607,7 @@ public final class ProviderClient implements AutoCloseable {
         Health health = healthSupplier.get();
         return !Objects.equals(status, lastReportedStatus) || lastReportedHealth == null
                 || health.healthy() != lastReportedHealth.healthy()
+                || health.acceptingPlayers() != lastReportedHealth.acceptingPlayers()
                 || health.capacity() != lastReportedHealth.capacity()
                 || !Objects.equals(connectedPlayers(health), connectedPlayers(lastReportedHealth))
                 || !Objects.equals(health.protocolVersion(), lastReportedHealth.protocolVersion()) || !Objects.equals(
@@ -643,14 +646,16 @@ public final class ProviderClient implements AutoCloseable {
                 body.add("keyRequestId", state.get("keyRequestId"));
             }
             Health health = healthSupplier.get();
-            body.addProperty("healthy", health.healthy() && installedKeyId != null && hostState.equals("serving"));
+            body.addProperty("healthy", health.healthy());
+            body.addProperty("acceptingPlayers", health.acceptingPlayers() && installedKeyId != null && hostState.equals("serving"));
+            if (!heartbeatExtensions.isEmpty()) body.add("extensions", heartbeatExtensions.deepCopy());
             body.addProperty("capacity", health.capacity());
             body.addProperty("load", health.load());
             if (health.playerCount() != null) {
                 body.add("playerCount", JSON.toJsonTree(health.playerCount()));
             }
             body.addProperty("protocolVersion", health.protocolVersion());
-            body.addProperty("build", health.build());
+            if (health.build() != null) body.addProperty("build", health.build());
             if (config.region() != null) {
                 body.addProperty("region", config.region());
             }
@@ -752,6 +757,11 @@ public final class ProviderClient implements AutoCloseable {
             if (revision < appliedStateRevision || !Set.of("serving", "draining", "closed").contains(target)) {
                 throw new IOException("Unsupported provider state");
             }
+            if (revision > appliedStateRevision && target.equals("serving") && !hostState.equals("serving")) {
+                // This endpoint's drain is permanent. Recovery with a fresh endpoint must apply resume.
+                diagnostics.accept("provider_resume_requires_recovery");
+                return;
+            }
             if (revision > appliedStateRevision) {
                 ProviderTransport.ApplyResult applied = target.equals("serving") ? ProviderTransport.ApplyResult.APPLIED
                         : transport.applyState(target).toCompletableFuture().get(10, TimeUnit.SECONDS);
@@ -825,8 +835,21 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     /**
-     * Opaque optional extension metadata; the application decides what it means.
+     * Replace optional application observations and promptly send them when running.
+     * An omitted extension is not an application-level instruction to clear an earlier observation.
      */
+    public CompletableFuture<Void> updateHeartbeatExtensions(JsonObject extensions) {
+        JsonObject document = new JsonObject();
+        document.add("extensions", extensions.deepCopy());
+        JsonObject validated = ProtocolExtensions.copy(document);
+        return submit(() -> {
+            heartbeatExtensions = validated;
+            if (started) heartbeat();
+            return null;
+        });
+    }
+
+    /** Opaque registration metadata; the application decides what it means. */
     public CompletableFuture<JsonObject> extensions() {
         return submit(() -> registrationExtensions.deepCopy());
     }
@@ -913,7 +936,6 @@ public final class ProviderClient implements AutoCloseable {
     public CompletableFuture<Void> drain() {
         return submit(() -> {
             drainAndReport();
-            started = false;
             return null;
         });
     }

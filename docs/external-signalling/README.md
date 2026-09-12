@@ -51,6 +51,8 @@ The reply returns the accepted profile revision, readiness, lease/schedule,
 provider state and any admission-key updates. A host becomes routable only with
 a live lease, usable profile and acknowledged installed key.
 
+Report `healthy` and `acceptingPlayers` independently on every heartbeat. A healthy draining host reports false acceptance and continues reporting its actual remaining players. A serving host can pause and resume acceptance without changing lifecycle.
+
 Apply provider state before acknowledging its revision. `draining` stops new
 joins and preserves existing sessions; `closed` closes the transport. Provider
 routing and credential decisions take effect independently of host check-in.
