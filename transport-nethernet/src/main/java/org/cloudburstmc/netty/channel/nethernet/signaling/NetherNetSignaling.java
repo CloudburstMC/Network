@@ -7,7 +7,7 @@ public interface NetherNetSignaling extends AutoCloseable {
     /**
      * Sends a signaling message to the remote peer.
      *
-     * @param targetNetworkId The Network ID of the destination (String to support Realms).
+     * @param targetNetworkId The destination's opaque Network ID. LAN discovery requires a uint64 decimal string.
      * @param data            The raw signaling payload.
      */
     void sendSignal(String targetNetworkId, String data);
@@ -28,8 +28,7 @@ public interface NetherNetSignaling extends AutoCloseable {
     void removeSignalHandler(long connectionId);
 
     /**
-     * Returns the Local Network ID of this client as a String.
-     * This is required for formatting the 'candidate:' string in SDP.
+     * Returns this client's local Network ID as an opaque string.
      */
     String getLocalNetworkId();
 

@@ -15,6 +15,21 @@ selection to the application; its tests use the SLF4J bridge to Java logging.
 > [!IMPORTANT]
 > This library requires the platform-specific WebRTC native libraries at runtime. See the [WebRTC usage guide](https://github.com/EduGeyser/webrtc-java#usage) for instructions on how to include the native libraries in your project.
 
+### Network IDs
+
+HTTP and Xbox signaling treat peer NetworkIDs as opaque strings. HTTP callers
+must encode the ID as one UTF-8 URL path segment in `/v1/join/{networkId}`.
+The listener decodes percent escapes once and preserves literal `+` characters,
+leading zeros and numeric-looking IDs outside the uint64 range. Missing IDs,
+malformed percent escapes, invalid UTF-8 and unescaped path delimiters receive
+HTTP 400.
+
+The Xbox WebSocket path encodes the local ID as a single segment; JSON signaling
+keeps peer IDs as strings. Generated IDs remain decimal strings for compatibility.
+LAN discovery still uses uint64 IDs in its binary wire format. The numeric
+`NetherNetAddress` constructor and `getNetworkIdAsLong()` remain available for
+that representation; use `getNetworkId()` when handling opaque IDs.
+
 ### LAN advertisements
 
 `NetherNetDiscovery` emits binary ServerData v6, matching stable Bedrock

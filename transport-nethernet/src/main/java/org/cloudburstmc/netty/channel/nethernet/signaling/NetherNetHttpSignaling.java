@@ -32,6 +32,7 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
@@ -44,6 +45,8 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -453,13 +456,21 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
             respond(ctx, HttpResponseStatus.NOT_FOUND, "text/plain", "Not found");
         }
 
-        private void handleOffer(ChannelHandlerContext ctx, FullHttpRequest request, String networkId) {
-            // The NetworkID is opaque but currently always a uint64 rendered
-            // as a string; validating mirrors the reference implementation.
+        private void handleOffer(ChannelHandlerContext ctx, FullHttpRequest request, String encodedNetworkId) {
+            String networkId;
             try {
-                Long.parseUnsignedLong(networkId);
-            } catch (NumberFormatException e) {
-                respond(ctx, HttpResponseStatus.BAD_REQUEST, "text/plain", "Network ID must be uint64");
+                if (encodedNetworkId.isEmpty() || encodedNetworkId.indexOf('/') >= 0
+                        || encodedNetworkId.indexOf('#') >= 0) {
+                    throw new IllegalArgumentException("Expected one Network ID path segment");
+                }
+                // Decode to bytes first so invalid UTF-8 cannot collapse distinct IDs.
+                // Path decoding preserves literal '+' and decodes percent escapes once.
+                String decodedBytes = new QueryStringDecoder("/" + encodedNetworkId, StandardCharsets.ISO_8859_1)
+                        .path().substring(1);
+                networkId = StandardCharsets.UTF_8.newDecoder()
+                        .decode(ByteBuffer.wrap(decodedBytes.getBytes(StandardCharsets.ISO_8859_1))).toString();
+            } catch (IllegalArgumentException | CharacterCodingException e) {
+                respond(ctx, HttpResponseStatus.BAD_REQUEST, "text/plain", "Invalid Network ID path segment");
                 return;
             }
             NewConnectionHandler handler = newConnectionHandler;

@@ -15,7 +15,7 @@ public class NetherNetAddress extends SocketAddress {
     }
 
     /**
-     * Creates a NetherNetAddress from a string Network ID.
+     * Creates a NetherNetAddress from an opaque Network ID, preserving its value.
      *
      * @param networkId The string Network ID.
      */
@@ -33,10 +33,11 @@ public class NetherNetAddress extends SocketAddress {
     }
 
     /**
-     * Tries to parse the Network ID as a long.
+     * Converts a numeric Network ID to its unsigned 64-bit representation.
+     * Opaque IDs should be read with {@link #getNetworkId()} instead.
      *
      * @return the long value
-     * @throws NumberFormatException if the ID is not a valid unsigned long string (e.g. Realms ID).
+     * @throws NumberFormatException if the ID is not an unsigned decimal 64-bit integer.
      */
     public long getNetworkIdAsLong() {
         return Long.parseUnsignedLong(networkId);

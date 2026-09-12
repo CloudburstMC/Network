@@ -182,8 +182,10 @@ class NetherNetHttpSignalingTest {
     }
 
     @Test
-    void nonNumericNetworkIdAnswers400() throws Exception {
-        assertEquals(400, post("/v1/join/not-a-number", "v=0\r\n").statusCode());
+    void nonNumericNetworkIdProducesAnAnswerThroughTheServerChannel() throws Exception {
+        HttpResponse<String> response = post("/v1/join/not-a-number", "v=0\r\n");
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().startsWith(CANNED_ANSWER));
     }
 
     @Test

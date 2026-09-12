@@ -9,6 +9,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Sharable
@@ -22,7 +24,16 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
      * @param xboxToken The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
     public NetherNetXboxSignaling(String networkId, String xboxToken) {
-        super(networkId, xboxToken, URI.create("wss://signal.franchise.minecraft-services.net/ws/v1.0/signaling/" + networkId));
+        super(networkId, xboxToken, signalingUri(networkId));
+    }
+
+    private static URI signalingUri(String networkId) {
+        String segment = URLEncoder.encode(networkId, StandardCharsets.UTF_8).replace("+", "%20");
+        // Opaque IDs must not become URL dot segments or change the signaling endpoint.
+        if (segment.equals(".") || segment.equals("..")) {
+            segment = segment.replace(".", "%2E");
+        }
+        return URI.create("wss://signal.franchise.minecraft-services.net/ws/v1.0/signaling/" + segment);
     }
 
     /**

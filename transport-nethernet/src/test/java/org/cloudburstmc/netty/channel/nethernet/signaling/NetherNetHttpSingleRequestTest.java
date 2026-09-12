@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -57,6 +58,47 @@ class NetherNetHttpSingleRequestTest {
         signaling.close();
         channel.finishAndReleaseAll();
         worker.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+    }
+
+    @Test
+    void missingNetworkIdIsRejected() {
+        receive(post("", "offer"));
+        assertTrue(readResponse().startsWith("HTTP/1.1 400 Bad Request\r\n"));
+        assertTrue(offers.isEmpty());
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "not-a-number|not-a-number",
+            "c99b1a2e-89d6-4a88-b031-571f5236d64c|c99b1a2e-89d6-4a88-b031-571f5236d64c",
+            "18446744073709551616|18446744073709551616",
+            "00042|00042",
+            "Peer:Name|Peer:Name",
+            "peer+name|peer+name",
+            "peer%2Bname|peer+name",
+            "peer%20name|peer name",
+            "peer%2Fname|peer/name",
+            "peer%252Fname|peer%2Fname",
+            "peer%3Fx%23y%25z?ignored=1|peer?x#y%z",
+            "%E7%8E%A9%E5%AE%B6%F0%9F%8E%AE|\u73a9\u5bb6\ud83c\udfae",
+            "%EF%BF%BD|\ufffd"
+    })
+    void networkIdsAreDecodedOnceAndPreserved(String encodedId, String expectedId) {
+        receive(post(encodedId, "offer"));
+        assertEquals(1, offers.size());
+        assertEquals(expectedId, offers.getFirst().networkId());
+        answer("answer for opaque peer");
+        String response = readResponse();
+        assertTrue(response.startsWith("HTTP/1.1 200 OK\r\n"));
+        assertTrue(response.endsWith("answer for opaque peer"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"%", "%2", "%GG", "peer/child", "peer#fragment", "%FF", "%C3", "%C0%AF", "%ED%A0%80"})
+    void malformedNetworkIdPathIsRejected(String encodedId) {
+        receive(post(encodedId, "offer"));
+        assertTrue(readResponse().startsWith("HTTP/1.1 400 Bad Request\r\n"));
+        assertTrue(offers.isEmpty());
     }
 
     @Test
