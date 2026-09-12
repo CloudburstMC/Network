@@ -48,6 +48,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.QueryStringDecoder;
+import io.netty.handler.ssl.OptionalSslHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.concurrent.FutureListener;
@@ -160,9 +161,10 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                             p.addLast(new OptionalProxyProtocol());
                         }
 
-                        // Handle ssl or drop it
+                        // Both schemes reach one port: the first bytes say which this is, and a
+                        // client that finds no TLS falls back to plaintext on the same port
                         if (sslContext != null) {
-                            p.addLast(sslContext.newHandler(ch.alloc()));
+                            p.addLast(new OptionalSslHandler(sslContext));
                         } else {
                             p.addLast(new TlsRejectingHandler());
                         }
