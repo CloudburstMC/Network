@@ -1,13 +1,16 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerChannel;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
+import org.cloudburstmc.netty.util.nethernet.ClientIdentity;
+import org.cloudburstmc.netty.util.nethernet.ClientAssertionFixtures;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcServerBackend;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSession;
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSessionListener;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelInitializer;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.handler.ssl.SslContext;
@@ -24,10 +27,14 @@ import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * Exercises the HTTP signaling front end against the real netty stack and
@@ -45,6 +52,7 @@ class NetherNetHttpSignalingTest {
     private static ScriptedBackend backend;
     private static HttpClient client;
     private static String baseUrl;
+    private static final LinkedBlockingQueue<ClientIdentity> authenticatedChildren = new LinkedBlockingQueue<>();
 
     /** Records accepts and answers each offer with the canned SDP. */
     private static final class ScriptedBackend implements WebRtcServerBackend {
@@ -85,11 +93,17 @@ class NetherNetHttpSignalingTest {
         group = new MultiThreadIoEventLoopGroup(2, NioIoHandler.newFactory());
         backend = new ScriptedBackend();
         signaling = new NetherNetHttpSignaling((SslContext) null, group);
+        signaling.setOfferValidator(null); // The scripted backend uses unsigned offers.
 
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(group, group)
                 .channelFactory(() -> new NetherNetServerChannel(backend, signaling))
-                .childHandler(new ChannelInboundHandlerAdapter());
+                .childHandler(new ChannelInitializer<NetherNetChildChannel>() {
+                    @Override protected void initChannel(NetherNetChildChannel channel) {
+                        ClientIdentity identity = channel.getClientIdentity();
+                        if (identity != null) authenticatedChildren.add(identity);
+                    }
+                });
         serverChannel = bootstrap.bind(new InetSocketAddress("127.0.0.1", 0)).sync().channel();
 
         InetSocketAddress bound = signaling.boundAddress();
@@ -116,6 +130,32 @@ class NetherNetHttpSignalingTest {
         return client.send(HttpRequest.newBuilder(URI.create(baseUrl + path))
                         .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void validatesBeforeBackendCreationAndPublishesTheIdentity() throws Exception {
+        AtomicBoolean validatedOnIoLoop = new AtomicBoolean();
+        var validator = ClientAssertionFixtures.validator();
+        signaling.setOfferValidator(sdp -> {
+            for (var loop : group) {
+                if (loop.inEventLoop()) validatedOnIoLoop.set(true);
+            }
+            return validator.validate(sdp);
+        });
+        try {
+            String valid = ClientAssertionFixtures.validOffer();
+            int previousAccepts = backend.fullIceFlags.size();
+            assertEquals(400, post("/v1/join/opaque-peer",
+                    valid.replace(ClientAssertionFixtures.DIGEST, "CD:".repeat(31) + "CD")).statusCode());
+            assertEquals(previousAccepts, backend.fullIceFlags.size());
+            assertEquals(200, post("/v1/join/opaque-peer", valid).statusCode());
+            ClientIdentity identity = authenticatedChildren.poll(3, TimeUnit.SECONDS);
+            assertNotNull(identity);
+            assertEquals("1234567890", identity.getClaims().get("xid"));
+            assertFalse(validatedOnIoLoop.get());
+        } finally {
+            signaling.setOfferValidator(null);
+        }
     }
 
     @Test

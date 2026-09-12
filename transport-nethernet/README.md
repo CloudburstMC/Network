@@ -30,6 +30,56 @@ LAN discovery still uses uint64 IDs in its binary wire format. The numeric
 `NetherNetAddress` constructor and `getNetworkIdAsLong()` remain available for
 that representation; use `getNetworkId()` when handling opaque IDs.
 
+### HTTP offer authentication
+
+`NetherNetHttpSignaling` requires a valid client identity assertion by default.
+Before creating a WebRTC peer, it verifies the Minecraft auth service's token
+signature, issuer, audience, expiry and subject, then checks the detached ES384
+signature binding the token's P-384 client key to every SDP fingerprint. Missing
+or invalid assertions receive HTTP 400. Self-signed tokens are rejected by this
+default policy.
+
+Trusted signing keys come from Minecraft's authorization service and are cached;
+URLs in the client's assertion cannot select a different trust source. Key
+fetching and verification run on a bounded executor outside the I/O loops. The
+existing negotiation deadline covers validation too, and a full validation queue
+receives HTTP 503. These checks run only during connection setup.
+
+To add application authorization, wrap the default verifier and reject claims
+that your application does not allow:
+
+```java
+ClientAssertionValidator verifier = new ClientAssertionValidator();
+signaling.setOfferValidator(sdp -> {
+    ClientIdentity identity = verifier.validate(sdp);
+    if (!allowedXuids.contains(identity.getClaims().get("xid"))) {
+        throw new GeneralSecurityException("Player is not allowed");
+    }
+    return identity;
+});
+```
+
+Validators may run concurrently. A custom validator must return a verified
+`ClientIdentity` or throw an exception to reject the offer. Configure the trusted
+issuer-key constructor of `ClientAssertionValidator` for a private issuer.
+
+For an endpoint that deliberately accepts unvalidated offers, opt out explicitly:
+
+```java
+signaling.setOfferValidator(null);
+```
+
+Accepted child channels expose the verified identity through
+`child.getClientIdentity()` or
+`channel.attr(NetherNetChildChannel.CLIENT_IDENTITY).get()`. It is null when offer
+validation is disabled or unsupported by the signaling path. Applications still
+own Bedrock Login authentication and must check that the Login identity matches
+the verified transport key; NetworkM does not parse Login packets. Set discovery
+authentication flags to match the endpoint's admission policy.
+
+This policy applies to HTTP offers. LAN and Xbox signaling behavior is unchanged,
+as is the server identity assertion attached to answers.
+
 ### LAN advertisements
 
 `NetherNetDiscovery` emits binary ServerData v6, matching stable Bedrock

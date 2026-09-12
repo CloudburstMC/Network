@@ -8,8 +8,8 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
 
     /**
      * Transforms every SDP answer before it is signaled, e.g. to attach the
-     * server identity assertion. Null (the default) signals answers as
-     * negotiated.
+     * server identity assertion. Null (the default) uses the built-in
+     * server identity assertion.
      */
     public static final ChannelOption<NetherNetAnswerDecorator> NETHER_SERVER_ANSWER_DECORATOR =
             valueOf(NetherChannelOption.class, "NETHER_SERVER_ANSWER_DECORATOR");

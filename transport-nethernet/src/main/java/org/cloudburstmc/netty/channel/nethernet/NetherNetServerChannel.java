@@ -7,6 +7,7 @@ import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSessionListener;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
+import org.cloudburstmc.netty.util.nethernet.ClientIdentity;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
 import io.github.sendablemetatype.webrtc.PeerConnectionFactory;
 import io.netty.channel.AbstractServerChannel;
@@ -210,9 +211,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * same loop, so everything here is single threaded and ordered.
      */
     private void establishConnection(PendingConnection pending, long connectionId, String offerSdp, String remoteNetworkId) {
+        // Capture identity before checking liveness: cancellation can remove the HTTP exchange.
+        ClientIdentity identity = signaling.clientIdentityOf(connectionId);
         // Offers racing a failed doBind: signaling briefly accepted
         // connections but the backend never materialized.
-        if (!isOpen() || backend == null) {
+        if (!isOpen() || backend == null || !signaling.isConnectionPending(connectionId)) {
             log.debug("Dropping offer {} while the server backend is unavailable", Long.toUnsignedString(connectionId));
             signaling.removeSignalHandler(connectionId);
             return;
@@ -225,6 +228,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             NetherNetChildChannel child = new NetherNetChildChannel(this,
                     signaledAddress != null ? signaledAddress : generatePlaceholderAddress(), localAddress);
             pending.child = child;
+            child.setClientIdentity(identity);
             children.add(child);
             child.setMaxOutboundMessageSize(maxMessageSize);
 

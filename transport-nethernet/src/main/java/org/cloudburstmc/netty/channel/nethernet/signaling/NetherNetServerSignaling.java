@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
+import org.cloudburstmc.netty.util.nethernet.ClientIdentity;
 
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
@@ -74,6 +75,12 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     default InetSocketAddress remoteAddressOf(long connectionId) {
         return null;
     }
+
+    /** Returns the validated offer identity, or null when this signaling path did not validate one. */
+    default ClientIdentity clientIdentityOf(long connectionId) { return null; }
+
+    /** Whether a request/response exchange is still awaiting negotiation; message-based signaling defaults to true. */
+    default boolean isConnectionPending(long connectionId) { return true; }
 
     /**
      * LAN v6 advertisement fields. Authentication flags describe the consumer's

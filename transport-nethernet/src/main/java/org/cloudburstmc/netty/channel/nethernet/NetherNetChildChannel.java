@@ -2,10 +2,12 @@ package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.backend.WebRtcSession;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
+import org.cloudburstmc.netty.util.nethernet.ClientIdentity;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
+import io.netty.util.AttributeKey;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -20,12 +22,22 @@ import java.util.function.Consumer;
  * into this channel.
  */
 public class NetherNetChildChannel extends NetherNetChannel {
+    /** Validated offer identity, also accessible through channel wrappers that delegate attributes. */
+    public static final AttributeKey<ClientIdentity> CLIENT_IDENTITY =
+            AttributeKey.valueOf(NetherNetChildChannel.class, "clientIdentity");
 
     private volatile WebRtcSession session;
 
     public NetherNetChildChannel(Channel parent, InetSocketAddress remote, InetSocketAddress local) {
         super(parent, remote, local);
         this.config = new DefaultNetherChannelConfig(this);
+    }
+
+    /** Returns the validated offer identity, or null when validation was disabled or unsupported by the signaling path. */
+    public ClientIdentity getClientIdentity() { return attr(CLIENT_IDENTITY).get(); }
+
+    void setClientIdentity(ClientIdentity identity) {
+        if (identity != null) attr(CLIENT_IDENTITY).set(identity);
     }
 
     /**

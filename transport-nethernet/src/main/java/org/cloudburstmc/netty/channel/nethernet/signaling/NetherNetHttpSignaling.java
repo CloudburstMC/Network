@@ -2,6 +2,9 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetOfferValidator;
+import org.cloudburstmc.netty.util.nethernet.ClientAssertionValidator;
+import org.cloudburstmc.netty.util.nethernet.ClientIdentity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -39,6 +42,7 @@ import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.concurrent.GlobalEventExecutor;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -52,6 +56,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
@@ -100,6 +110,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     private final Supplier<SslContext> sslContextSupplier;
     private final EventLoopGroup workerGroup;
     private final Supplier<? extends EventLoopGroup> acceptGroupFactory;
+    private final Supplier<? extends ExecutorService> validationExecutorFactory;
     private final Object lifecycleLock = new Object();
     private final ChannelGroup connections = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE, true);
     private final String localNetworkId = Long.toUnsignedString(ThreadLocalRandom.current().nextLong());
@@ -111,6 +122,8 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
     // Racing a duplicate first warn is harmless; this only bounds the spam.
     private volatile boolean statusSupplierWarned;
     private volatile NewConnectionHandler newConnectionHandler;
+    private volatile NetherNetOfferValidator offerValidator = new ClientAssertionValidator();
+    private ExecutorService validationExecutor;
     private volatile Channel serverChannel;
     // The TCP accept loop. Owned: bind() is called from the NetherNet server
     // channel's event loop, so registering the listener on a caller supplied
@@ -143,9 +156,44 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
 
     NetherNetHttpSignaling(Supplier<SslContext> sslContextSupplier, EventLoopGroup workerGroup,
                           Supplier<? extends EventLoopGroup> acceptGroupFactory) {
+        this(sslContextSupplier, workerGroup, acceptGroupFactory, NetherNetHttpSignaling::newValidationExecutor);
+    }
+
+    NetherNetHttpSignaling(Supplier<SslContext> sslContextSupplier, EventLoopGroup workerGroup,
+                          Supplier<? extends EventLoopGroup> acceptGroupFactory,
+                          Supplier<? extends ExecutorService> validationExecutorFactory) {
         this.sslContextSupplier = Objects.requireNonNull(sslContextSupplier, "sslContextSupplier");
         this.workerGroup = Objects.requireNonNull(workerGroup, "workerGroup");
         this.acceptGroupFactory = Objects.requireNonNull(acceptGroupFactory, "acceptGroupFactory");
+        this.validationExecutorFactory = Objects.requireNonNull(validationExecutorFactory, "validationExecutorFactory");
+    }
+
+    /**
+     * Configures offer validation and optional application authorization. The default
+     * verifies Minecraft-issued tokens and their SDP fingerprint signatures. Set null
+     * to explicitly opt out. Changes apply to subsequent offers; validators run outside
+     * I/O loops and must not log bearer tokens or include them in exception messages.
+     */
+    public void setOfferValidator(NetherNetOfferValidator validator) {
+        this.offerValidator = validator;
+    }
+
+    private static ExecutorService newValidationExecutor() {
+        int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors()));
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(threads, threads, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(64), new DefaultThreadFactory("nethernet-identity", true));
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    private ExecutorService validationExecutor() {
+        synchronized (lifecycleLock) {
+            if (closed) throw new RejectedExecutionException("HTTP signaling is closed");
+            if (validationExecutor == null) {
+                validationExecutor = Objects.requireNonNull(validationExecutorFactory.get(), "validation executor");
+            }
+            return validationExecutor;
+        }
     }
 
     /**
@@ -356,11 +404,23 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
         return exchange != null ? exchange.remoteAddress : null;
     }
 
+    @Override
+    public ClientIdentity clientIdentityOf(long connectionId) {
+        PendingExchange exchange = pendingExchanges.get(connectionId);
+        return exchange != null ? exchange.identity : null;
+    }
+
+    @Override
+    public boolean isConnectionPending(long connectionId) {
+        return pendingExchanges.containsKey(connectionId);
+    }
+
     /** Closes the listener and accepted connections. This instance cannot be rebound. */
     @Override
     public void close() {
         Channel channel;
         EventLoopGroup accept;
+        ExecutorService validation;
         synchronized (lifecycleLock) {
             if (closed) {
                 return;
@@ -368,8 +428,10 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
             closed = true;
             channel = serverChannel;
             accept = acceptGroup;
+            validation = validationExecutor;
             this.serverChannel = null;
             this.acceptGroup = null;
+            this.validationExecutor = null;
         }
         try {
             if (channel != null) {
@@ -385,6 +447,7 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
             signalHandlers.clear();
         } finally {
             try {
+                if (validation != null) validation.shutdownNow();
                 connections.close();
             } finally {
                 if (accept != null) {
@@ -402,6 +465,8 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
         final ChannelHandlerContext ctx;
         final InetSocketAddress remoteAddress;
         private ScheduledFuture<?> timeout;
+        private Future<?> validationTask;
+        private volatile ClientIdentity identity;
         private boolean completed;
 
         PendingExchange(ChannelHandlerContext ctx, InetSocketAddress remoteAddress) {
@@ -420,10 +485,19 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
 
         synchronized void cancelTimeout() {
             completed = true;
+            if (validationTask != null) {
+                validationTask.cancel(true);
+                validationTask = null;
+            }
             if (timeout != null) {
                 timeout.cancel(false);
                 timeout = null;
             }
+        }
+
+        synchronized void setValidationTask(Future<?> task) {
+            if (completed) task.cancel(true);
+            else validationTask = task;
         }
     }
 
@@ -492,7 +566,8 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
             // client, CONNECTERROR inward so the server channel closes the
             // half negotiated child.
             exchange.setTimeout(ctx.channel().eventLoop().schedule(() -> {
-                if (pendingExchanges.remove(connectionId) != null) {
+                if (pendingExchanges.remove(connectionId, exchange)) {
+                    exchange.cancelTimeout();
                     log.debug("Negotiation for {} timed out waiting for the answer", Long.toUnsignedString(connectionId));
                     respond(ctx, HttpResponseStatus.BAD_GATEWAY, "text/plain", "Timed out waiting for answer");
                     SignalHandler signalHandler = signalHandlers.get(connectionId);
@@ -514,8 +589,63 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
                 }
             });
 
+            NetherNetOfferValidator validator = offerValidator;
+            if (validator == null) {
+                dispatchOffer(connectionId, exchange, networkId, offerSdp, handler, null, null);
+                return;
+            }
+            FutureTask<Void> task = new FutureTask<>(() -> {
+                ClientIdentity identity = null;
+                Exception failure = null;
+                try {
+                    identity = Objects.requireNonNull(validator.validate(offerSdp), "Validator returned no identity");
+                } catch (Exception e) {
+                    failure = e;
+                }
+                ClientIdentity verified = identity;
+                Exception error = failure;
+                try {
+                    ctx.executor().execute(() -> dispatchOffer(connectionId, exchange, networkId, offerSdp,
+                            handler, verified, error));
+                } catch (RejectedExecutionException e) {
+                    // The existing negotiation deadline still reaps the exchange if the loop recovers.
+                    log.debug("Identity completion could not reach the HTTP event loop for {}",
+                            Long.toUnsignedString(connectionId));
+                }
+                return null;
+            });
+            exchange.setValidationTask(task);
+            try {
+                if (!task.isCancelled()) validationExecutor().execute(task);
+            } catch (RejectedExecutionException e) {
+                if (pendingExchanges.remove(connectionId, exchange)) {
+                    exchange.cancelTimeout();
+                    respond(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "text/plain", "Identity validation unavailable");
+                }
+            }
+        }
+
+        private void dispatchOffer(long connectionId, PendingExchange exchange, String networkId, String offerSdp,
+                                   NewConnectionHandler handler, ClientIdentity identity, Exception failure) {
+            if (closed || !exchange.ctx.channel().isActive() || pendingExchanges.get(connectionId) != exchange) return;
+            if (failure != null) {
+                if (pendingExchanges.remove(connectionId, exchange)) {
+                    exchange.cancelTimeout();
+                    respond(exchange.ctx, HttpResponseStatus.BAD_REQUEST, "text/plain", "Client assertion rejected");
+                }
+                return;
+            }
+            exchange.identity = identity;
             log.debug("Offer for {} from network {} via HTTP", Long.toUnsignedString(connectionId), networkId);
-            handler.onConnect(connectionId, networkId, offerSdp);
+            try {
+                handler.onConnect(connectionId, networkId, offerSdp);
+            } catch (Exception e) {
+                if (pendingExchanges.remove(connectionId, exchange)) {
+                    exchange.cancelTimeout();
+                    signalHandlers.remove(connectionId);
+                    exchange.ctx.close();
+                }
+            }
         }
 
         @Override
