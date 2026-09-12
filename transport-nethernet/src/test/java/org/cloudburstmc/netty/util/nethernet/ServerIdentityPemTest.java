@@ -5,6 +5,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.security.spec.ECGenParameterSpec;
+import java.security.KeyPairGenerator;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -128,6 +131,106 @@ class ServerIdentityPemTest {
 
         // Round trips through the reader, which requires the embedded public point
         assertEquals(publicKeyOf(created), publicKeyOf(ServerIdentity.fromPem(file, "example.test")));
+    }
+
+    /** Wraps raw DER in a PEM block, to drive the parser with bytes openssl would never write. */
+    private static Path pemOf(Path dir, byte... der) throws Exception {
+        Path pem = dir.resolve("key.pem");
+        Files.writeString(pem, "-----BEGIN EC PRIVATE KEY-----\n"
+                + Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(der)
+                + "\n-----END EC PRIVATE KEY-----\n");
+        return pem;
+    }
+
+    private static GeneralSecurityException refused(Path pem) {
+        return assertThrows(GeneralSecurityException.class,
+                () -> ServerIdentity.fromPem(pem.toFile(), "example.test"));
+    }
+
+    @Test
+    void refusesDerThatIsNotAStructureItKnows(@TempDir Path dir) throws Exception {
+        // A key file is operator supplied, but a parser written by hand still has to fail cleanly
+        assertTrue(refused(pemOf(dir, (byte) 0x02, (byte) 0x01, (byte) 0x00)).getMessage().contains("Expected DER tag"),
+                "an integer where a sequence belongs");
+        assertTrue(refused(pemOf(dir, (byte) 0x30)).getMessage().contains("Truncated DER length"),
+                "a sequence with no length at all");
+        assertTrue(refused(pemOf(dir, (byte) 0x30, (byte) 0x05, (byte) 0x02, (byte) 0x01, (byte) 0x01))
+                .getMessage().contains("past the end"), "a length reaching past what was sent");
+        assertTrue(refused(pemOf(dir, (byte) 0x30, (byte) 0x85, (byte) 0x01, (byte) 0x01, (byte) 0x01, (byte) 0x01,
+                (byte) 0x01)).getMessage().contains("Unsupported DER length"), "a length of five bytes");
+        assertTrue(refused(pemOf(dir, (byte) 0x30, (byte) 0x80)).getMessage().contains("Unsupported DER length"),
+                "the indefinite form DER does not allow");
+        assertTrue(refused(pemOf(dir, (byte) 0x30, (byte) 0x82, (byte) 0x01)).getMessage()
+                .contains("Truncated DER length"), "a multi byte length cut short");
+        assertTrue(refused(pemOf(dir, (byte) 0x30, (byte) 0x00)).getMessage().contains("Truncated DER"),
+                "an empty sequence with nothing to read");
+    }
+
+    @Test
+    void refusesAPublicPointThatIsNotWholeBytes(@TempDir Path dir) throws Exception {
+        // A bit string counts its unused bits, and a key point has none
+        byte[] der = {0x30, 0x0b, 0x02, 0x01, 0x01, 0x04, 0x01, 0x01, (byte) 0xa1, 0x03, 0x03, 0x01, 0x07};
+
+        assertTrue(refused(pemOf(dir, der)).getMessage().contains("whole number of bytes"));
+    }
+
+    @Test
+    void refusesAPemBodyThatIsNotBase64(@TempDir Path dir) throws Exception {
+        Path pem = dir.resolve("key.pem");
+        Files.writeString(pem, "-----BEGIN EC PRIVATE KEY-----\nnot base64!!\n-----END EC PRIVATE KEY-----\n");
+
+        GeneralSecurityException refused = assertThrows(GeneralSecurityException.class,
+                () -> ServerIdentity.fromPem(pem.toFile(), "example.test"));
+        assertTrue(refused.getMessage().contains("not valid base64"));
+    }
+
+    @Test
+    void refusesAFileWithNoPemBlockInIt(@TempDir Path dir) throws Exception {
+        Path pem = dir.resolve("key.pem");
+        Files.writeString(pem, "# just a comment\nand some text\n");
+
+        GeneralSecurityException refused = assertThrows(GeneralSecurityException.class,
+                () -> ServerIdentity.fromPem(pem.toFile(), "example.test"));
+        assertTrue(refused.getMessage().contains("No PEM block"));
+    }
+
+    @Test
+    void refusesAKeyOnAnotherCurve(@TempDir Path dir) throws Exception {
+        // A P-256 key carries a point of the wrong length for P-384
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp256r1"));
+        Path pem = dir.resolve("key.pem");
+        Files.writeString(pem, "-----BEGIN PRIVATE KEY-----\n"
+                + Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(generator.generateKeyPair()
+                        .getPrivate().getEncoded())
+                + "\n-----END PRIVATE KEY-----\n");
+
+        assertThrows(GeneralSecurityException.class, () -> ServerIdentity.fromPem(pem.toFile(), "example.test"));
+    }
+
+    @Test
+    void refusesAnIdentityKeyThatIsASymbolicLink(@TempDir Path dir) throws Exception {
+        // Following one would write the key wherever the link points
+        Path real = dir.resolve("real.pem");
+        Path link = dir.resolve("key.pem");
+        Files.writeString(real, "placeholder");
+        Files.createSymbolicLink(link, real);
+
+        IOException refused = assertThrows(IOException.class,
+                () -> ServerIdentity.fromPemOrCreate(link.toFile(), "example.test"));
+        assertTrue(refused.getMessage().contains("symbolic link"));
+    }
+
+    @Test
+    void tightensThePermissionsOfAKeyItFindsAlready(@TempDir Path dir) throws Exception {
+        Path pem = dir.resolve("key.pem");
+        ServerIdentity.fromPemOrCreate(pem.toFile(), "example.test");
+        Files.setPosixFilePermissions(pem, PosixFilePermissions.fromString("rw-rw-rw-"));
+
+        ServerIdentity.fromPemOrCreate(pem.toFile(), "example.test");
+
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(pem)),
+                "a key left readable by everyone is tightened on the next start");
     }
 
     @Test
