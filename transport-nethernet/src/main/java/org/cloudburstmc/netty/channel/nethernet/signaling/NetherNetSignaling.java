@@ -13,13 +13,12 @@ import java.util.List;
 public interface NetherNetSignaling extends AutoCloseable {
 
     /**
-     * Sends a signaling message to the remote peer.
+     * Sends a signalling message to the remote peer.
      *
      * @param targetNetworkId The Network ID of the destination (String to support Realms).
-     * @param data            The raw signaling payload.
+     * @param data            The raw signalling payload.
      */
     default void sendSignal(String targetNetworkId, String data) {
-        // Default implementation does nothing
     }
 
     /**
@@ -30,19 +29,18 @@ public interface NetherNetSignaling extends AutoCloseable {
      * @param sdp             The full SDP message with all candidates.
      */
     default void sendFullSdp(String targetNetworkId, String sdp) {
-        // Default implementation does nothing
     }
 
     /**
-     * Sets a handler to receive signaling messages for a specific connection ID.
+     * Sets a handler to receive signalling messages for a specific connection ID.
      *
      * @param connectionId The connection ID to listen for.
-     * @param handler      The handler to process incoming signaling messages.
+     * @param handler      The handler to process incoming signalling messages.
      */
     void setSignalHandler(long connectionId, SignalHandler handler);
 
     /**
-     * Removes the signaling handler for a specific connection ID.
+     * Removes the signalling handler for a specific connection ID.
      *
      * @param connectionId The connection ID whose handler should be removed.
      */
@@ -55,12 +53,12 @@ public interface NetherNetSignaling extends AutoCloseable {
     String getLocalNetworkId();
 
     /**
-     * Whether the signaling is connected and able to carry messages
+     * Whether the signalling is connected and able to carry messages
      */
     boolean isActive();
 
     /**
-     * Closes the signaling channel and releases any associated resources.
+     * Closes the signalling channel and releases any associated resources.
      */
     @Override
     void close();

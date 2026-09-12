@@ -8,6 +8,7 @@ import java.security.KeyPairGenerator;
 import java.security.PublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -21,7 +22,8 @@ class IdentityBindingTest extends AdmissionFixture {
     }
 
     StatelessAdmissionValidator.TicketKey epoch() {
-        return new StatelessAdmissionValidator.TicketKey("K001", f.getAsJsonObject("context").get("secret").getAsString());
+        return new StatelessAdmissionValidator.TicketKey("K001",
+                f.getAsJsonObject("context").get("secret").getAsString());
     }
 
     @Test
@@ -45,7 +47,8 @@ class IdentityBindingTest extends AdmissionFixture {
     void unsupportedAndMissingKeysFailClosed() throws Exception {
         var generator = KeyPairGenerator.getInstance("EC");
         generator.initialize(new ECGenParameterSpec("secp256r1"));
-        assertNotNull(validator().validate(request(), now).identityVerifier().mismatch(generator.generateKeyPair().getPublic()));
+        assertNotNull(validator().validate(request(), now).identityVerifier()
+                .mismatch(generator.generateKeyPair().getPublic()));
         assertNotNull(validator().validate(request(), now).identityVerifier().mismatch(null));
     }
 
@@ -56,7 +59,8 @@ class IdentityBindingTest extends AdmissionFixture {
         v.installKeys(List.of(epoch()));
         assertNull(refresh.mismatch(key()));
         var replaced = v.validate(request(), now).identityVerifier();
-        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", "replacement-secret-at-least-thirty-two-characters")));
+        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001",
+                "replacement-secret-at-least-thirty-two-characters")));
         assertNull(v.validate(request(), now));
         assertNull(replaced.mismatch(key()));
         v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", epoch().secret(), now, now + 1000)));
@@ -84,7 +88,8 @@ class IdentityBindingTest extends AdmissionFixture {
     @Test
     void pendingDeadlineIsMonotonicAndCompletedForwardingSurvivesExpiry() throws Exception {
         var nanos = new AtomicLong(0);
-        var v = new StatelessAdmissionValidator(f.getAsJsonObject("context").get("audience").getAsString(), 60_000, nanos::get);
+        var v = new StatelessAdmissionValidator(f.getAsJsonObject("context").get("audience").getAsString(),
+                60_000, nanos::get);
         v.installKeys(List.of(epoch()));
         var pending = v.validate(request(), now).identityVerifier();
         var forwarded = v.validate(request(), now).identityVerifier();
@@ -104,8 +109,12 @@ class IdentityBindingTest extends AdmissionFixture {
             var binding = gate.admission(r).identityVerifier();
             assertTrue(gate.ready(r));
             gate.connected(r);
-            if (mode == 1) assertNull(binding.mismatch(key()));
-            if (mode == 2) assertNull(binding.acceptForwardedIdentity());
+            if (mode == 1) {
+                assertNull(binding.mismatch(key()));
+            }
+            if (mode == 2) {
+                assertNull(binding.acceptForwardedIdentity());
+            }
             assertEquals(mode == 0 ? List.of(r) : List.of(), gate.sweep(now + 30_000, 30_000_000_000L));
             gate.finish(r);
             assertFalse(binding.pending());
@@ -115,7 +124,7 @@ class IdentityBindingTest extends AdmissionFixture {
     @Test
     void reserveRejectionAndNativeFailureReleaseTheirOwnBinding() {
         var v = validator();
-        var issued = new java.util.ArrayList<VerifiedAdmission>();
+        var issued = new ArrayList<VerifiedAdmission>();
         var gate = new AdmissionGate(AdmissionGate.Limits.defaults(), (request, time) -> {
             var a = v.validate(request, time);
             issued.add(a);

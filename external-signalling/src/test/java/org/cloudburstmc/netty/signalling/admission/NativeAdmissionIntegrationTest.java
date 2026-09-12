@@ -11,6 +11,7 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.signalling.ProviderTransport;
+import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import tel.schich.libdatachannel.*;
@@ -38,7 +39,8 @@ class NativeAdmissionIntegrationTest {
         var id = identity();
         var group = new DefaultEventLoopGroup(1);
         var validator = new StatelessAdmissionValidator(TestSignallingProvider.AUDIENCE, 60_000);
-        validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignallingProvider.SECRET)));
+        validator.installKeys(List.of(
+                new StatelessAdmissionValidator.TicketKey("K001", TestSignallingProvider.SECRET)));
         var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
         var results = new LinkedBlockingQueue<Boolean>();
         try {
@@ -46,12 +48,15 @@ class NativeAdmissionIntegrationTest {
                     .childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
                         protected void initChannel(AdmittedNetherNetChildChannel child) {
                             child.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
-                                protected void channelRead0(ChannelHandlerContext ctx, ByteBuf message) throws Exception {
+                                protected void channelRead0(ChannelHandlerContext ctx, ByteBuf message)
+                                        throws Exception {
                                     var key = java.security.KeyFactory.getInstance("EC").generatePublic(
                                             new java.security.spec.X509EncodedKeySpec(ByteBufUtil.getBytes(message)));
-                                    String mismatch = org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.mismatch(child, key);
+                                    String mismatch = TransportIdentityBinding.mismatch(child, key);
                                     results.add(mismatch == null);
-                                    if (mismatch != null) ctx.close();
+                                    if (mismatch != null) {
+                                        ctx.close();
+                                    }
                                 }
                             });
                         }
@@ -62,7 +67,8 @@ class NativeAdmissionIntegrationTest {
                 byte[] loginKey = matching ? Base64.getDecoder().decode(TestSignallingProvider.IDENTITY_CPK)
                         : generator.generateKeyPair().getPublic().getEncoded();
                 try (var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT
-                        .withDisableAutoNegotiation(true).withBindAddress(InetAddress.getLoopbackAddress()), Runnable::run)) {
+                        .withDisableAutoNegotiation(true).withBindAddress(InetAddress.getLoopbackAddress()),
+                        Runnable::run)) {
                     var reliable = client.createDataChannel("ReliableDataChannel");
                     client.createDataChannel("UnreliableDataChannel", DataChannelInitSettings.DEFAULT.withReliability(
                             new DataChannelReliability(true, true, 0, 0)));

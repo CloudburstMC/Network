@@ -13,19 +13,31 @@ import java.util.HexFormat;
 /** Canonical named secp384r1 SPKI DER, with an uncompressed and validated public point. */
 public final class IdentityPublicKey {
     private static final ECParameterSpec CURVE;
-    private static final byte[] PREFIX = HexFormat.of().parseHex("3076301006072a8648ce3d020106052b8104002203620004");
+    private static final byte[] PREFIX =
+            HexFormat.of().parseHex("3076301006072a8648ce3d020106052b8104002203620004");
+
     static {
         try {
             AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC");
             parameters.init(new ECGenParameterSpec("secp384r1"));
             CURVE = parameters.getParameterSpec(ECParameterSpec.class);
-        } catch (Exception e) { throw new ExceptionInInitializerError(e); }
+        } catch (Exception e) {
+            throw new ExceptionInInitializerError(e);
+        }
     }
 
-    private IdentityPublicKey() { }
+    private IdentityPublicKey() {
+    }
 
+    /**
+     * @param key The key to canonicalise
+     * @return Its fixed 120 byte encoding, so that two spellings of one key compare equal
+     * @throws IllegalArgumentException If it is not a point on secp384r1
+     */
     public static byte[] canonical(PublicKey key) {
-        if (!(key instanceof ECPublicKey ec)) throw new IllegalArgumentException("Expected an EC public key");
+        if (!(key instanceof ECPublicKey ec)) {
+            throw new IllegalArgumentException("Expected an EC public key");
+        }
         ECParameterSpec params = ec.getParams();
         if (params == null || !CURVE.getCurve().equals(params.getCurve())
                 || !CURVE.getGenerator().equals(params.getGenerator())

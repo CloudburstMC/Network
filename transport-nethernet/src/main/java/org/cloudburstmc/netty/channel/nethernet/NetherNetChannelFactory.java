@@ -23,7 +23,7 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
     /**
      * Creates a NetherNet Server Channel Factory.
      *
-     * @param signaling The NetherNetServerSignaling instance for signaling.
+     * @param signaling The NetherNetServerSignaling instance for signalling.
      * @return A ChannelFactory for NetherNetServerChannel.
      */
     public static ChannelFactory<NetherNetServerChannel> server(NetherNetServerSignaling signaling) {
@@ -33,7 +33,7 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
     /**
      * Creates a NetherNet Client Channel Factory.
      *
-     * @param signaling The NetherNetClientSignaling instance for signaling.
+     * @param signaling The NetherNetClientSignaling instance for signalling.
      * @return A ChannelFactory for NetherNetClientChannel.
      */
     public static ChannelFactory<NetherNetClientChannel> client(NetherNetClientSignaling signaling) {

@@ -412,7 +412,7 @@ public class ServerIdentity {
                 .encodeToString(publicKey.getEncoded())); // Custom claim required by the NetherNet spec
         claims.setIssuedAtToNow();
 
-        // If we have a domain set it as the isser as it could be shown to the user
+        // If we have a domain set it as the issuer, as it could be shown to the user
         if (domain != null && !domain.isBlank()) {
             claims.setIssuer(domain);
         }

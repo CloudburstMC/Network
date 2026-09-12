@@ -94,11 +94,11 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     /**
-     * TLS for the signaling websocket, which carries the Xbox token in its upgrade request.
+     * TLS for the signalling websocket, which carries the Xbox token in its upgrade request.
      * <p>
      * Netty leaves {@code endpointIdentificationAlgorithm} unset, which validates the chain but not
      * the name on it, so without this any publicly trusted certificate would be accepted for the
-     * signaling host.
+     * signalling host.
      */
     static SslContext signalingSslContext() throws SSLException {
         return SslContextBuilder.forClient()
@@ -193,7 +193,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void setAdvertisementData(PongData pongData) {
-        // No-op for Xbox Signaling.
+        // Nothing to do for Xbox signalling
     }
 
     @Override

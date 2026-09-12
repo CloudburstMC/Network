@@ -13,7 +13,7 @@ import java.net.SocketAddress;
 public class NetherNetChildChannel extends NetherNetChannel {
 
     /**
-     * The signaling connection ID this channel was accepted for.
+     * The signalling connection ID this channel was accepted for.
      * <p>
      * A child arrives on the server pipeline carrying nothing that ties it back to the offer that
      * produced it, and arrival order does not follow the order answers were produced in.

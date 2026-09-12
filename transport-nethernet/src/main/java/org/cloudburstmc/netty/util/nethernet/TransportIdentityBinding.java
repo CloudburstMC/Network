@@ -2,11 +2,11 @@ package org.cloudburstmc.netty.util.nethernet;
 
 import io.netty.channel.Channel;
 import io.netty.util.AttributeKey;
-import java.security.MessageDigest;
-import java.util.Arrays;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 
+import java.security.MessageDigest;
 import java.security.PublicKey;
+import java.util.Arrays;
 
 /**
  * Ties the Bedrock login chain to the identity that opened the transport.
@@ -24,11 +24,17 @@ import java.security.PublicKey;
  */
 public final class TransportIdentityBinding {
 
-    private static final AttributeKey<IdentityKeyVerifier> KEY = AttributeKey.valueOf(TransportIdentityBinding.class, "verifier");
+    private static final AttributeKey<IdentityKeyVerifier> KEY =
+            AttributeKey.valueOf(TransportIdentityBinding.class, "verifier");
+
+    private TransportIdentityBinding() {
+    }
 
     /** Install before publishing the child. The channel and admission owner may both close it. */
     public static void install(Channel channel, IdentityKeyVerifier verifier) {
-        if (verifier == null) throw new IllegalArgumentException("verifier");
+        if (verifier == null) {
+            throw new IllegalArgumentException("verifier");
+        }
         if (channel.attr(KEY).setIfAbsent(verifier) != null) {
             verifier.close();
             throw new IllegalStateException("Identity binding already installed");
@@ -38,22 +44,31 @@ public final class TransportIdentityBinding {
 
     public static IdentityKeyVerifier forPlayer(PlayerInfo player) {
         final byte[] expected;
-        try { expected = IdentityPublicKey.canonical(player.clientPublicKey()); }
-        catch (Exception invalid) { throw new IllegalArgumentException("Invalid signalling identity", invalid); }
+        try {
+            expected = IdentityPublicKey.canonical(player.clientPublicKey());
+        } catch (Exception invalid) {
+            throw new IllegalArgumentException("Invalid signalling identity", invalid);
+        }
         return new IdentityKeyVerifier() {
-            protected boolean matches(byte[] key) { return MessageDigest.isEqual(expected, key); }
-            protected void release() { Arrays.fill(expected, (byte) 0); }
+            @Override
+            protected boolean matches(byte[] key) {
+                return MessageDigest.isEqual(expected, key);
+            }
+
+            @Override
+            protected void release() {
+                Arrays.fill(expected, (byte) 0);
+            }
         };
     }
 
     /** Release only after the application has accepted its existing trusted forwarding identity. */
     public static String acceptForwardedIdentity(Channel channel) {
-        if (!(channel instanceof NetherNetChildChannel)) return null;
+        if (!(channel instanceof NetherNetChildChannel)) {
+            return null;
+        }
         IdentityKeyVerifier verifier = channel.attr(KEY).get();
         return verifier == null ? null : verifier.acceptForwardedIdentity();
-    }
-
-    private TransportIdentityBinding() {
     }
 
     /**
@@ -67,7 +82,10 @@ public final class TransportIdentityBinding {
             return null;
         }
         IdentityKeyVerifier verifier = channel.attr(KEY).get();
-        return verifier == null ? "the transport carries no validated identity binding" : verifier.mismatch(identityPublicKey);
+        if (verifier == null) {
+            return "the transport carries no validated identity binding";
+        }
+        return verifier.mismatch(identityPublicKey);
     }
 
     /**
@@ -84,7 +102,8 @@ public final class TransportIdentityBinding {
         }
 
         try {
-            if (!MessageDigest.isEqual(IdentityPublicKey.canonical(player.clientPublicKey()), IdentityPublicKey.canonical(identityPublicKey))) {
+            byte[] admitted = IdentityPublicKey.canonical(player.clientPublicKey());
+            if (!MessageDigest.isEqual(admitted, IdentityPublicKey.canonical(identityPublicKey))) {
                 return "the login chain is signed with a different key than the one that opened the transport";
             }
         } catch (Exception e) {

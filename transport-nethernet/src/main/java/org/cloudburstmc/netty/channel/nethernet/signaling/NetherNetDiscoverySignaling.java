@@ -76,12 +76,10 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
 
             log.debug("Sending Discovery Request to {}", remote);
 
-            // Send request and register the callback to capture the ID
             this.discovery.sendDiscoveryRequest(this.remoteAddress, (serverNetworkId, payload) -> {
                 try {
                     log.info("Discovery Response Received! Server NetworkID: {}", serverNetworkId);
 
-                    // Capture the ID so we can use it for signaling later
                     discoveredServerId.set(Long.toUnsignedString(serverNetworkId));
 
                     future.complete(Collections.emptyList());
@@ -167,7 +165,7 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
 
     @Override
     public void setNotFoundHandler(NetherNetClientSignaling.NotFoundHandler handler) {
-        // Not implemented for Discovery signaling
+        // Nothing to do for discovery signalling
     }
 
     @Override

@@ -180,23 +180,16 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     private void writeInternal(Object msg) {
-        if (!(msg instanceof ByteBuf)) {
-            log.debug("Dropping an outbound {}, which this channel cannot frame", msg == null ? null :
-                    msg.getClass().getName());
+        if (!(msg instanceof ByteBuf payload)) {
+            log.debug("Dropping an outbound {}, which this channel cannot frame",
+                    msg == null ? null : msg.getClass().getName());
             return;
         }
 
-        ByteBuf payload = (ByteBuf) msg;
-
         ByteBuf framed = payload.retainedDuplicate();
-
-        int totalLength = framed.readableBytes();
         int maxPayload = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
-
-        int segments = (totalLength / maxPayload);
-        if (totalLength % maxPayload != 0) {
-            segments++;
-        }
+        int totalLength = framed.readableBytes();
+        int segments = (totalLength + maxPayload - 1) / maxPayload;
         if (segments == 0) {
             log.debug("Nothing sent for an empty outbound message");
         }
@@ -204,20 +197,13 @@ public abstract class NetherNetChannel extends AbstractChannel {
         try {
             // Absolute reads, so every offset starts where the readable bytes do
             int start = framed.readerIndex();
-            int offset = 0;
-            for (int i = 0; i < segments; i++) {
-                int remaining = segments - 1 - i;
+            for (int i = 0, offset = 0; i < segments; i++, offset += maxPayload) {
                 int chunkSize = Math.min(maxPayload, totalLength - offset);
-
                 ByteBuffer chunk = ByteBuffer.allocateDirect(1 + chunkSize);
-                chunk.put((byte) remaining);
 
+                chunk.put((byte) (segments - 1 - i));
                 framed.getBytes(start + offset, chunk);
-                chunk.position(chunk.limit());
-                chunk.flip();
-
-                reliableChannel.sendMessage(chunk);
-                offset += chunkSize;
+                reliableChannel.sendMessage(chunk.flip());
             }
             log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
         } catch (Exception e) {
