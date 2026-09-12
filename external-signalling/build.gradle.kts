@@ -9,6 +9,8 @@ java {
 dependencies {
     api(libs.gson)
     api(project(":transport-nethernet"))
+    // Creating the host's DTLS identity, which the JDK offers no API for
+    implementation(libs.bouncycastle.pkix)
     testImplementation(libs.bundles.junit)
     testImplementation(project(":transport-raknet"))
     testRuntimeOnly(libs.junit.platform.launcher)
