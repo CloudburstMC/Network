@@ -17,6 +17,7 @@ import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.util.AsciiString;
 import io.netty.util.AttributeKey;
+import io.netty.util.NetUtil;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
@@ -63,6 +64,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.ConnectException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.ServerSocketChannel;
@@ -320,11 +322,14 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
             // Leftmost entry is the originating client
             String first = forwarded.split(",")[0].trim();
-            try {
-                return new InetSocketAddress(first, remote.getPort());
-            } catch (IllegalArgumentException e) {
-                return remote;
+            if (first.startsWith("[") && first.endsWith("]")) {
+                first = first.substring(1, first.length() - 1);
             }
+
+            // An address literal only. Resolving a name here would block this event loop on DNS and
+            // let the header stand for whatever the answer happened to be
+            InetAddress literal = NetUtil.createInetAddressFromIpAddressString(first);
+            return literal == null ? remote : new InetSocketAddress(literal, remote.getPort());
         }
 
         @Override
