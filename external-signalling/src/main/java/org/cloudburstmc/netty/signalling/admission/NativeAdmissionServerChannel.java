@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.signalling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
+import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import io.netty.channel.*;
 import io.netty.util.NetUtil;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -167,7 +168,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 "a=ice-ufrag:" + a.localUfrag() + "\r\n")) {
             throw new IllegalStateException("Native identity does not match published profile");
         }
-        org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.install(child, a.identityVerifier());
+        TransportIdentityBinding.install(child, a.identityVerifier());
         child.attr(AdmissionPrincipal.KEY)
                 .set(new AdmissionPrincipal(a.tokenId(), a.networkId(), a.identityBindingHex(), a.keyId()));
         peer.onStateChange.register((p, state) -> {
