@@ -4,13 +4,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.signalling.ProviderClient;
 import org.cloudburstmc.netty.signalling.admission.EndpointAddress;
+import org.cloudburstmc.netty.util.nethernet.SecretValue;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.InetSocketAddress;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.*;
 
@@ -122,42 +121,15 @@ public record ProviderRuntimeConfiguration(
         if (value == null || value.isBlank()) {
             return null;
         }
-        value = value.trim();
-        boolean file = value.startsWith("file:") || value.startsWith("/") || value.startsWith("./") || value.startsWith("../") || absolutePath(value);
-        if (file) {
-            try {
-                Path source = path(directory, value.startsWith("file:") ? value.substring(5) : value);
-                if (!Files.isRegularFile(source) || Files.size(source) > 16384) {
-                    throw new IOException();
-                }
-                value = Files.readString(source).trim();
-            } catch (Exception invalid) {
-                throw new IOException("nxs.token file must be readable and contain at most 16384 bytes");
-            }
+        try {
+            value = SecretValue.resolve(value, directory).trim();
+        } catch (IOException unreadable) {
+            throw new IOException("nxs.token file must be readable and contain at most 16384 bytes");
         }
         if (value.isBlank() || value.length() > 16384 || value.chars().anyMatch(c -> c <= 32 || c == 127)) {
             throw new IOException("nxs.token must contain one non-empty bearer token");
         }
         return value;
-    }
-
-    /**
-     * @return whether the value is an absolute path, e.g. C:\token on Windows, so it is never sent as the token itself
-     */
-    private static boolean absolutePath(String value) {
-        try {
-            return Path.of(value).isAbsolute();
-        } catch (InvalidPathException notAPath) {
-            return false;
-        }
-    }
-
-    private static Path path(Path directory, String value) {
-        Path path = Path.of(value);
-        if (path.isAbsolute()) {
-            return path.normalize();
-        }
-        return directory.resolve(path).normalize();
     }
 
     public String encodedAdvertisedEndpoints() {
