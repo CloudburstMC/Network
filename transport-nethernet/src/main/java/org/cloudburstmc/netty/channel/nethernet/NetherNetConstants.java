@@ -27,6 +27,13 @@ public class NetherNetConstants {
     public static final String RTC_NEGOTIATION_CANDIDATE_ADD = "CANDIDATEADD";
     public static final String RTC_NEGOTIATION_CONNECT_ERROR = "CONNECTERROR";
 
+    /**
+     * Stands in for a target this side has not learned yet, so LAN discovery picks one.
+     * It is the unset value of the discovery packet's own 64-bit id field, not a NetworkID,
+     * which is an opaque string that must never be read as a number.
+     */
+    public static final String DISCOVER_TARGET = "0";
+
     // Signalling User Agent String
     public static final String SIGNALING_USER_AGENT = "libHttpClient/1.0.0.0";
 
