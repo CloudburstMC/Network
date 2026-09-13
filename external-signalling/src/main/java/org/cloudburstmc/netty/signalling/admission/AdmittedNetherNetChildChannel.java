@@ -20,7 +20,9 @@ import java.util.function.Consumer;
  * Native admission child with bounded queues and both NetherNet channel semantics.
  */
 public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
-    public static final int WRITE_LIMIT = 1 << 20, NATIVE_WRITE_LIMIT = 1 << 19, INBOUND_FRAMES = 128;
+    public static final int WRITE_LIMIT = 1 << 20;
+    public static final int NATIVE_WRITE_LIMIT = 1 << 19;
+    public static final int INBOUND_FRAMES = 128;
 
     private record Incoming(ByteBuf bytes, boolean reliable) {
     }
@@ -64,6 +66,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         if (!isOpen()) {
             throw new IllegalStateException("Child closed");
         }
+
         String label = dc.label();
         if (label.equals("ReliableDataChannel") && reliableChannel == null) {
             checkSemantics(dc, true);
@@ -76,6 +79,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         } else {
             throw new IllegalArgumentException("Unexpected or duplicate NetherNet channel");
         }
+
         installed = reliableChannel != null && unreliableChannel != null;
     }
 
@@ -113,15 +117,18 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         if (!isOpen()) {
             return;
         }
+
         if (failed.get()) {
             close();
             return;
         }
+
         try {
             if (isActive() && !activated) {
                 activated = true;
                 pipeline().fireChannelActive();
             }
+
             if (config().isAutoRead() || readDemand) {
                 readDemand = false;
                 boolean read = false;
@@ -130,6 +137,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                     if (frame == null) {
                         break;
                     }
+
                     ByteBuf message = decoder.decode(frame.bytes(), frame.reliable());
                     if (message != null) {
                         pipeline().fireUserEventTriggered(new NetherNetPacket.Delivery(frame.reliable()));
@@ -137,10 +145,12 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                         read = true;
                     }
                 }
+
                 if (read) {
                     pipeline().fireChannelReadComplete();
                 }
             }
+
             if (isActive()) {
                 ChannelOutboundBuffer out = unsafe().outboundBuffer();
                 if (out != null) {
@@ -164,20 +174,24 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                 NetherNetFrameDecoder.FRAME_LIMIT - 1)) {
             throw new IllegalArgumentException("NetherNet message exceeds channel framing limit");
         }
+
         ChannelOutboundBuffer out = unsafe().outboundBuffer();
         if (out == null || out.totalPendingWriteBytes() + size + 128 > WRITE_LIMIT) {
             throw new IllegalStateException("NetherNet outbound queue full");
         }
+
         return message;
     }
 
     private static ByteBuf payload(Object message) {
-        if (message instanceof ByteBuf b) {
-            return b;
+        if (message instanceof ByteBuf buf) {
+            return buf;
         }
-        if (message instanceof NetherNetPacket p) {
-            return p.content();
+
+        if (message instanceof NetherNetPacket packet) {
+            return packet.content();
         }
+
         throw new IllegalArgumentException("Expected ByteBuf or NetherNetPacket");
     }
 
@@ -186,16 +200,18 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         if (!isActive()) {
             return; // Netty retains ownership and promises; no private unbounded queue
         }
+
         while (out.current() != null) {
             Object message = out.current();
             ByteBuf payload = payload(message);
             DataChannel dc =
-                    message instanceof NetherNetPacket p && !p.reliable() ? unreliableChannel : reliableChannel;
+                    message instanceof NetherNetPacket packet && !packet.reliable() ? unreliableChannel : reliableChannel;
             int length = payload.readableBytes(), chunks = (length + 9998) / 9999;
             if (dc.bufferedAmount() + length + chunks > NATIVE_WRITE_LIMIT) {
                 out.setUserDefinedWritability(1, false);
                 return;
             }
+
             try {
                 for (int i = 0, offset = payload.readerIndex(); i < chunks; i++) {
                     int count = Math.min(9999, length - i * 9999);

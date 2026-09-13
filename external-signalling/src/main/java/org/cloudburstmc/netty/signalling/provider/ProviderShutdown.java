@@ -59,8 +59,13 @@ public final class ProviderShutdown implements AutoCloseable {
             if (failure == null) failure = cleanupFailure;
             else failure.addSuppressed(cleanupFailure);
         }
-        if (failure == null) stopped.complete(null);
-        else stopped.completeExceptionally(failure);
+
+        if (failure == null) {
+            stopped.complete(null);
+        } else {
+            stopped.completeExceptionally(failure);
+        }
+
         try {
             Runtime.getRuntime().removeShutdownHook(hook);
         } catch (IllegalStateException shuttingDown) { /* The JVM is already awaiting this hook. */ }

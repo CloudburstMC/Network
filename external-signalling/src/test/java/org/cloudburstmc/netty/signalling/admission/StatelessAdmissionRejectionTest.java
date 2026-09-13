@@ -226,6 +226,10 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
                 PASSWORD, FINGERPRINT, 5000, 262144), "no remote ufrag");
         assertThrows(IllegalArgumentException.class, () -> admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag",
                 "short", FINGERPRINT, 5000, 262144), "a remote password under 22 characters");
+        assertNotNull(admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag", "a".repeat(91), FINGERPRINT, 5000,
+                262144), "a remote password of exactly 91 characters");
+        assertThrows(IllegalArgumentException.class, () -> admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag",
+                "a".repeat(92), FINGERPRINT, 5000, 262144), "a remote password over 91 characters");
         assertThrows(IllegalArgumentException.class, () -> admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag",
                 PASSWORD, null, 5000, 262144), "no fingerprint");
         assertThrows(IllegalArgumentException.class, () -> admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag",

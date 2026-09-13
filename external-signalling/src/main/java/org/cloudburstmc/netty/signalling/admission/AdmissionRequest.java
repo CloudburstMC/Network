@@ -17,6 +17,10 @@ public record AdmissionRequest(String localUfrag, String remoteUfrag, InetSocket
         }
     }
 
+    /**
+     * Whether a peer-supplied ICE credential is {@code min} to {@code max} ice-chars
+     * (RFC 8445: ALPHA / DIGIT / '+' / '/'). Null and out-of-range values are rejected.
+     */
     static boolean iceString(String value, int min, int max) {
         if (value == null || value.length() < min || value.length() > max) {
             return false;

@@ -88,7 +88,7 @@ class SdpUtilTest {
     @Test
     void seesAHostCandidateAPeerElsewhereCouldReach() {
         assertTrue(SdpUtil.hasRoutableHostCandidate(
-                "a=candidate:1 1 udp 2122194687 203.0.113.9 19135 typ host\r\n"));
+                "a=candidate:1 1 udp 2122194687 93.184.216.34 19135 typ host\r\n"));
     }
 
     @Test
@@ -112,12 +112,12 @@ class SdpUtilTest {
     @Test
     void infersACandidateForEveryPortAPeerGathered() {
         List<String> inferred = SdpUtil.inferredPeerCandidates(HOST_ONLY_OFFER,
-                new InetSocketAddress("203.0.113.9", 44321));
+                new InetSocketAddress("93.184.216.34", 44321));
 
         // One per UDP port, at the address the offer arrived from, TCP left alone
         assertEquals(2, inferred.size());
-        assertTrue(inferred.get(0).contains("203.0.113.9 55473 typ srflx"));
-        assertTrue(inferred.get(1).contains("203.0.113.9 55472 typ srflx"));
+        assertTrue(inferred.get(0).contains("93.184.216.34 55473 typ srflx"));
+        assertTrue(inferred.get(1).contains("93.184.216.34 55472 typ srflx"));
     }
 
     @Test
@@ -130,7 +130,7 @@ class SdpUtilTest {
 
         // The peer decides how many candidates it sends, so it must not decide how many packets leave
         assertEquals(8, SdpUtil.inferredPeerCandidates(sdp.toString(),
-                new InetSocketAddress("203.0.113.9", 44321)).size());
+                new InetSocketAddress("93.184.216.34", 44321)).size());
     }
 
     @Test
@@ -139,7 +139,7 @@ class SdpUtilTest {
                 "a=candidate:4 1 udp 1678767103 198.51.100.4 55474 typ srflx raddr 0.0.0.0 rport 0\r\n"
                         + "m=application");
 
-        assertTrue(SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("203.0.113.9", 44321)).isEmpty());
+        assertTrue(SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("93.184.216.34", 44321)).isEmpty());
     }
 
     @Test
@@ -154,7 +154,7 @@ class SdpUtilTest {
     @Test
     void countsAGlobalIpv6HostCandidate() {
         assertTrue(SdpUtil.hasRoutableHostCandidate(
-                "a=candidate:1 1 udp 2122194687 2001:db8::1 19135 typ host\r\n"));
+                "a=candidate:1 1 udp 2122194687 2606:4700:4700::1111 19135 typ host\r\n"));
     }
 
     @Test
@@ -189,8 +189,11 @@ class SdpUtilTest {
                 "a=candidate:1 1 udp 2122194687 100.63.255.254 19135 typ host\r\n"), "just below CGNAT");
         assertFalse(SdpUtil.hasRoutableHostCandidate(
                 "a=candidate:1 1 udp 2122194687 fdff::1 19135 typ host\r\n"), "the top of fc00::/7");
-        assertTrue(SdpUtil.hasRoutableHostCandidate(
+        // Everything immediately past fc00::/7 is reserved, so global unicast is the boundary
+        assertFalse(SdpUtil.hasRoutableHostCandidate(
                 "a=candidate:1 1 udp 2122194687 fe00::1 19135 typ host\r\n"), "just past fc00::/7");
+        assertTrue(SdpUtil.hasRoutableHostCandidate(
+                "a=candidate:1 1 udp 2122194687 2606:4700:4700::1111 19135 typ host\r\n"), "global unicast");
     }
 
     @Test
@@ -214,10 +217,10 @@ class SdpUtilTest {
                 + "a=candidate:4 1 udp 2122194687 192.168.1.76 55475 typ host\r\n"
                 + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
 
-        List<String> inferred = SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("203.0.113.9", 44321));
+        List<String> inferred = SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("93.184.216.34", 44321));
 
         assertEquals(1, inferred.size(), "only the one readable UDP host candidate");
-        assertTrue(inferred.get(0).contains("203.0.113.9 55475 typ srflx"));
+        assertTrue(inferred.get(0).contains("93.184.216.34 55475 typ srflx"));
     }
 
     @Test
@@ -227,7 +230,7 @@ class SdpUtilTest {
                 + "a=candidate:2 1 udp 2122194687 10.7.0.2 55473 typ host\r\n"
                 + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
 
-        assertEquals(1, SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("203.0.113.9", 44321)).size());
+        assertEquals(1, SdpUtil.inferredPeerCandidates(offer, new InetSocketAddress("93.184.216.34", 44321)).size());
     }
 
     @Test

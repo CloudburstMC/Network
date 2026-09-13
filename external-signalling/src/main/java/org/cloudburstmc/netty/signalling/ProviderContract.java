@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.signalling;
 
 import com.google.gson.*;
 
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
@@ -13,8 +14,8 @@ final class ProviderContract {
 
     static {
         try (var in = ProviderContract.class.getResourceAsStream("/nxs-v1.schema.json")) {
-            SCHEMA = JsonParser.parseString(
-                    new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+            SCHEMA = JsonParser.parseReader(
+                    new InputStreamReader(Objects.requireNonNull(in), StandardCharsets.UTF_8)).getAsJsonObject();
         } catch (Exception e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -27,6 +28,7 @@ final class ProviderContract {
                 throw new IllegalArgumentException("Missing required provider field: " + field.getAsString());
             }
         }
+
         if (schema.has("properties")) {
             for (var p : schema.getAsJsonObject("properties").entrySet()) {
                 JsonObject property = p.getValue().getAsJsonObject();
@@ -46,6 +48,7 @@ final class ProviderContract {
         for (JsonElement key : SCHEMA.getAsJsonArray("x-context-order")) {
             values.add(context.get(key.getAsString()).getAsString());
         }
+
         if (SCHEMA.has("x-optional-context-order")) {
             for (JsonElement key : SCHEMA.getAsJsonArray("x-optional-context-order")) {
                 if (context.has(key.getAsString())) {
@@ -53,6 +56,7 @@ final class ProviderContract {
                 }
             }
         }
+
         return values.toArray();
     }
 }

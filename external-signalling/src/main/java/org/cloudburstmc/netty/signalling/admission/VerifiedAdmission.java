@@ -1,7 +1,9 @@
 package org.cloudburstmc.netty.signalling.admission;
 
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
+
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * Trusted validator output. Never log credentials or reconstructed SDP.
@@ -10,20 +12,32 @@ public record VerifiedAdmission(String tokenId, String localUfrag, String localP
                                 String remoteUfrag, String remotePassword, String remoteFingerprint,
                                 int remoteSctpPort, int remoteMaxMessageSize, long expiresAt,
                                 String networkId, String identityBindingHex, String keyId, IdentityKeyVerifier identityVerifier) {
+    /**
+     * The envelope bounds the client password: 186 bytes less a 12 byte nonce, a 16 byte tag and
+     * the 67 byte fixed prefix leaves 91. Narrower than the 256 ICE itself permits.
+     */
+    static final int MAX_CLIENT_PASSWORD = 91;
+
+    private static final Pattern TOKEN_ID = Pattern.compile("[0-9a-f]{32}");
+
     public VerifiedAdmission {
         Objects.requireNonNull(identityVerifier, "identityVerifier");
-        if (tokenId == null || !tokenId.matches("[0-9a-f]{32}")) {
+        if (tokenId == null || !TOKEN_ID.matcher(tokenId).matches()) {
             throw new IllegalArgumentException("tokenId");
         }
-        if (!AdmissionRequest.iceString(localUfrag, 4, 256) || !AdmissionRequest.iceString(remoteUfrag, 4, 256) ||
-                !AdmissionRequest.iceString(localPassword, 22, 256) || !AdmissionRequest.iceString(remotePassword, 22,
-                256)) {
+
+        if (!AdmissionRequest.iceString(localUfrag, 4, 256) || !AdmissionRequest.iceString(remoteUfrag, 4, 256)
+                || !AdmissionRequest.iceString(localPassword, 22, 256)
+                || !AdmissionRequest.iceString(remotePassword, 22, MAX_CLIENT_PASSWORD)) {
             throw new IllegalArgumentException("ICE identity");
         }
-        if (remoteFingerprint == null || !remoteFingerprint.matches("sha-256 ([0-9A-F]{2}:){31}[0-9A-F]{2}")) {
+
+        if (!DtlsFingerprint.valid(remoteFingerprint)) {
             throw new IllegalArgumentException("DTLS fingerprint");
         }
-        if (remoteSctpPort < 1 || remoteSctpPort > 65535 || remoteMaxMessageSize < 1 || remoteMaxMessageSize > 262144) {
+
+        if (remoteSctpPort < 1 || remoteSctpPort > 65535 || remoteMaxMessageSize < 1
+                || remoteMaxMessageSize > NetherNetFrameDecoder.MESSAGE_LIMIT) {
             throw new IllegalArgumentException("SCTP parameters");
         }
     }

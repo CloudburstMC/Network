@@ -68,24 +68,15 @@ public final class SdpUtil {
     /**
      * Whether an address is one a peer on another network could reach.
      * <p>
-     * {@link InetAddress} covers the obvious cases but not the two that matter most here: carrier
-     * grade NAT, which a tethered or Tailscale peer sits behind, and IPv6 unique local addresses.
+     * Carrier grade NAT, which a tethered or Tailscale peer sits behind, and IPv6 unique local
+     * addresses are the two that matter most here, and neither is covered by the predicates
+     * {@link InetAddress} offers.
      *
      * @param address The address to judge
      * @return Whether it is routable
      */
     private static boolean isRoutable(InetAddress address) {
-        if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isLinkLocalAddress()
-                || address.isSiteLocalAddress() || address.isMulticastAddress()) {
-            return false;
-        }
-        byte[] bytes = address.getAddress();
-        if (bytes.length == 4) {
-            // 100.64.0.0/10
-            return !((bytes[0] & 0xFF) == 100 && (bytes[1] & 0xC0) == 0x40);
-        }
-        // fc00::/7
-        return (bytes[0] & 0xFE) != 0xFC;
+        return EndpointAddress.scope(address) == EndpointAddress.Scope.PUBLIC;
     }
 
     /**

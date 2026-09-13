@@ -79,6 +79,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             if (revoked) {
                 return false;
             }
+
             byte[] actual = hmac("HmacSHA256", secret, utf8(IDENTITY_BINDING + "\0" + audience + "\0"
                     + Base64.getEncoder().encodeToString(canonicalKey)));
             try {
@@ -141,6 +142,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
                 || maxTtlMs <= 0 || maxTtlMs > 120_000) {
             throw new IllegalArgumentException("Admission context");
         }
+
         this.audience = audience;
         this.maxTtlMs = maxTtlMs;
         this.nanoTime = Objects.requireNonNull(nanoTime);
@@ -153,6 +155,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         if (snapshot.size() > 8) {
             throw new IllegalArgumentException("At most eight admission epochs");
         }
+
         Set<String> ids = new HashSet<>();
         for (TicketKey key : snapshot) {
             if (key.keyId() == null || !key.keyId().matches("[A-Z0-9]{4}") || key.secret() == null
@@ -161,6 +164,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
                 throw new IllegalArgumentException("Invalid admission key snapshot");
             }
         }
+
         Map<String, Material> next = new HashMap<>();
         try {
             for (TicketKey key : snapshot) {
@@ -180,6 +184,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             next.values().stream().filter(m -> !keys.containsValue(m)).forEach(Material::retire);
             throw failed;
         }
+
         keys.values().stream().filter(m -> !next.containsValue(m)).forEach(Material::retire);
         keys = Map.copyOf(next);
         epochs.addAll(next.values());
@@ -196,6 +201,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
                 retained.put(entry.getKey(), entry.getValue());
             }
         }
+
         keys = Map.copyOf(retained);
         epochs.removeIf(Material::unused);
     }
@@ -220,22 +226,26 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         if (request == null) {
             return null;
         }
+
         byte[] plaintext = null;
         try {
             String token = request.localUfrag();
             if (token.length() < 8 || !token.startsWith(TOKEN_PREFIX)) {
                 return null;
             }
+
             String keyId = token.substring(4, 8);
             Material key = keys.get(keyId);
             if (key == null || nowMillis < key.notBefore || nowMillis >= key.retireAfter) {
                 return null;
             }
+
             String encoded = token.substring(8);
             byte[] envelope = Base64.getDecoder().decode(encoded);
             if (envelope.length < 117 || envelope.length > 186 || !BASE64.encodeToString(envelope).equals(encoded)) {
                 return null;
             }
+
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key.encryption, "AES"),
                     new GCMParameterSpec(128, Arrays.copyOf(envelope, 12)));
@@ -245,11 +255,13 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             if (plaintext.length < 89) {
                 return null;
             }
+
             ByteBuffer body = ByteBuffer.wrap(plaintext);
             long expiresAt = Integer.toUnsignedLong(body.getInt()) * 1000;
             if (expiresAt <= nowMillis || expiresAt - nowMillis > maxTtlMs) {
                 return null;
             }
+
             byte[] fingerprint = new byte[32];
             body.get(fingerprint);
             int sctp = Short.toUnsignedInt(body.getShort()), max = body.getInt();
@@ -257,17 +269,20 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             body.get(identity);
             String networkId = Long.toUnsignedString(body.getLong());
             int length = Byte.toUnsignedInt(body.get());
-            if (length < 22 || length > 91 || body.remaining() != length) {
+            if (length < 22 || length > VerifiedAdmission.MAX_CLIENT_PASSWORD || body.remaining() != length) {
                 return null;
             }
+
             String remotePassword = new String(plaintext, 67, length, StandardCharsets.US_ASCII);
-            if (sctp < 1 || max < 1 || max > 262144 || !remotePassword.matches("[A-Za-z0-9+/]{22,91}")) {
+            if (sctp < 1 || max < 1 || max > NetherNetFrameDecoder.MESSAGE_LIMIT
+                    || !AdmissionRequest.iceString(remotePassword, 22, VerifiedAdmission.MAX_CLIENT_PASSWORD)) {
                 return null;
             }
+
             String localPassword = BASE64.encodeToString(Arrays.copyOf(
                     hmac("HmacSHA256", key.secret, utf8(ICE_PASSWORD + "\0" + audience + "\0" + token)), 24));
             return new VerifiedAdmission(tokenId(token), token, localPassword, request.remoteUfrag(), remotePassword,
-                    "sha-256 " + HexFormat.ofDelimiter(":").withUpperCase().formatHex(fingerprint), sctp, max,
+                    DtlsFingerprint.format(fingerprint), sctp, max,
                     expiresAt, networkId, HexFormat.of().formatHex(identity), keyId,
                     new Binding(key, identity, expiresAt - nowMillis));
         } catch (Exception invalid) {

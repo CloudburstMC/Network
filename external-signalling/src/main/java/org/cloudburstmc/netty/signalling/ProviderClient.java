@@ -19,8 +19,10 @@ import java.util.function.*;
  */
 public final class ProviderClient implements AutoCloseable {
     public static final String AUTOMATIC = "automatic";
-    public static final String NEW_SERVICE = "new-service", ATTACH_INSTANCE = "attach-instance";
-    public static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work", BEARER_TOKEN = "bearer-token";
+    public static final String NEW_SERVICE = "new-service";
+    public static final String ATTACH_INSTANCE = "attach-instance";
+    public static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work";
+    public static final String BEARER_TOKEN = "bearer-token";
 
     public record Configuration(URI provider, String profile, String label, String registrationMode,
                                 String authorizationScheme,
@@ -33,33 +35,41 @@ public final class ProviderClient implements AutoCloseable {
             if (!"nxs-admission-v1".equals(profile)) {
                 throw new IllegalArgumentException("Unsupported operational profile");
             }
+
             ProviderCrypto.origin(provider);
             if (region != null && (!region.matches("[A-Za-z0-9_-]{1,32}") || pool == null || !pool.matches(
                     "[A-Za-z0-9_-]{1,64}"))) {
                 throw new IllegalArgumentException("Invalid placement");
             }
+
             tags = tags == null ? Map.of() : Collections.unmodifiableMap(new TreeMap<>(tags));
             if (!Set.of(AUTOMATIC, NEW_SERVICE, ATTACH_INSTANCE).contains(registrationMode)) {
                 throw new IllegalArgumentException("Invalid provider registration mode");
             }
+
             if (!Set.of(ANONYMOUS_PROOF_OF_WORK, BEARER_TOKEN).contains(authorizationScheme)) {
                 throw new IllegalArgumentException("Invalid provider authorization scheme");
             }
+
             if ((BEARER_TOKEN.equals(authorizationScheme)) != (authorizationToken != null
                     && !authorizationToken.isBlank())) {
                 throw new IllegalArgumentException("Bearer authorization requires exactly one token");
             }
+
             if (ANONYMOUS_PROOF_OF_WORK.equals(authorizationScheme) && !Set.of(AUTOMATIC, NEW_SERVICE)
                     .contains(registrationMode)) {
                 throw new IllegalArgumentException("Anonymous proof of work can only create a service");
             }
+
             if (ATTACH_INSTANCE.equals(registrationMode) && (region == null || region.isBlank() || pool == null
                     || pool.isBlank())) {
                 throw new IllegalArgumentException("Attached instances require region and pool");
             }
+
             if ((region == null) != (pool == null) || (!tags.isEmpty() && region == null)) {
                 throw new IllegalArgumentException("Provider placement requires region and pool together");
             }
+
             if (tags.size() > 16 || tags.entrySet().stream().anyMatch(
                     e -> !e.getKey().matches("[A-Za-z0-9_.-]{1,32}") || e.getValue() == null || !e.getValue()
                             .equals(e.getValue().trim()) || e.getValue().isEmpty() || e.getValue().length() > 64
@@ -142,7 +152,8 @@ public final class ProviderClient implements AutoCloseable {
                     .build();
     private final AtomicReference<ServerStatus> explicitStatus = new AtomicReference<>();
     private final AtomicBoolean refreshQueued = new AtomicBoolean();
-    private JsonObject state, discovery;
+    private JsonObject state;
+    private JsonObject discovery;
     private JsonObject registrationExtensions = new JsonObject();
     private JsonObject heartbeatExtensions = new JsonObject();
     private PrivateKey privateKey;
@@ -150,10 +161,18 @@ public final class ProviderClient implements AutoCloseable {
     private JsonObject lastProfile;
     /** A delivered epoch, kept out of the persisted state until the transport has accepted it. */
     private JsonObject pendingTicketKey;
-    private long intervalMs = 10000, nextHeartbeat, snapshotClock;
-    private boolean started, closed, scheduledCheckIns;
-    private long nextOutcomes, nextStatusUpdate, minUpdateIntervalMs = 1000, appliedStateRevision;
-    private String hostState = "serving", installedKeyId;
+    private long intervalMs = 10000;
+    private long nextHeartbeat;
+    private long snapshotClock;
+    private boolean started;
+    private boolean closed;
+    private boolean scheduledCheckIns;
+    private long nextOutcomes;
+    private long nextStatusUpdate;
+    private long minUpdateIntervalMs = 1000;
+    private long appliedStateRevision;
+    private String hostState = "serving";
+    private String installedKeyId;
     private JsonObject lastHeartbeat = new JsonObject();
     private ServerStatus lastReportedStatus;
     private Health lastReportedHealth;
@@ -296,16 +315,34 @@ public final class ProviderClient implements AutoCloseable {
         completeRecovery(unsigned("register", recoveryRequest(registrationId)), registrationId);
     }
 
-    private void completeRecovery(JsonObject challenge, String registrationId) throws Exception {
+    /** Member order is the wire format: Gson writes in insertion order and these bytes are signed. */
+    private static JsonObject completion(JsonObject challenge, String nonce, String intent, PrivateKey key)
+            throws Exception {
+        JsonObject completion = new JsonObject();
+        completion.addProperty("protocol", ProviderCrypto.PROTOCOL);
+        completion.addProperty("challengeId", challenge.get("challengeId").getAsString());
+        completion.addProperty("proofNonce", nonce);
+        completion.addProperty("idempotencyKey", intent);
+        completion.addProperty("signature", ProviderCrypto.sign(key, ProviderCrypto.proof(challenge, nonce, intent)));
+        return completion;
+    }
+
+    /** Protocol and signature are schema constants, so {@code require} has already refused them. */
+    private void requireBoundChallenge(JsonObject challenge, String failure) throws IOException {
         ProviderContract.require("challenge", challenge);
+        if (!origin.equals(challenge.get("audience").getAsString())
+                || !ProviderCrypto.contextDigest(challenge.getAsJsonObject("context"))
+                        .equals(challenge.get("contextDigest").getAsString())) {
+            throw new IOException(failure);
+        }
+    }
+
+    private void completeRecovery(JsonObject challenge, String registrationId) throws Exception {
+        requireBoundChallenge(challenge, "Unbound recovery challenge");
         JsonObject context = challenge.getAsJsonObject("context");
-        if (!origin.equals(challenge.get("audience").getAsString()) || !ProviderCrypto.PROTOCOL.equals(
-                challenge.get("protocol").getAsString())
-                || !ProviderCrypto.SIGNATURE.equals(challenge.get("signature").getAsString()) || !"recover".equals(
-                context.get("mode").getAsString())
+        if (!"recover".equals(context.get("mode").getAsString())
                 || !config.profile().equals(context.get("profile").getAsString()) || !registrationId.equals(
                 context.get("registrationId").getAsString())
-                || !ProviderCrypto.contextDigest(context).equals(challenge.get("contextDigest").getAsString())
                 || challenge.get("expiresAt").getAsLong() <= System.currentTimeMillis()
                 || !"sha256-leading-zero-bits-v0".equals(
                 challenge.getAsJsonObject("pow").get("algorithm").getAsString())
@@ -320,13 +357,7 @@ public final class ProviderClient implements AutoCloseable {
             throw new IOException("Recovery key does not match durable state");
         }
         String intent = UUID.randomUUID().toString();
-        JsonObject completion = new JsonObject();
-        completion.addProperty("protocol", ProviderCrypto.PROTOCOL);
-        completion.addProperty("challengeId", challenge.get("challengeId").getAsString());
-        completion.addProperty("proofNonce", "0");
-        completion.addProperty("idempotencyKey", intent);
-        completion.addProperty("signature", ProviderCrypto.sign(key, ProviderCrypto.proof(challenge, "0", intent)));
-        JsonObject recovered = unsigned("complete", completion);
+        JsonObject recovered = unsigned("complete", completion(challenge, "0", intent, key));
         validateRegistration(recovered);
         if (!registrationId.equals(recovered.get("registrationId").getAsString())) {
             throw new IOException("Recovered registration changed");
@@ -399,13 +430,9 @@ public final class ProviderClient implements AutoCloseable {
             state.add("challenge", challenge);
             save();
         }
-        ProviderContract.require("challenge", challenge);
-        if (!ProviderCrypto.PROTOCOL.equals(challenge.get("protocol").getAsString())
-                || !ProviderCrypto.SIGNATURE.equals(challenge.get("signature").getAsString()) || !origin.equals(
-                challenge.get("audience").getAsString()) || !ProviderCrypto.thumbprint(
-                state.getAsJsonObject("publicKeyJwk")).equals(challenge.get("thumbprint").getAsString())
-                || !ProviderCrypto.contextDigest(challenge.getAsJsonObject("context"))
-                .equals(challenge.get("contextDigest").getAsString())) {
+        requireBoundChallenge(challenge, "Unbound registration challenge");
+        if (!ProviderCrypto.thumbprint(state.getAsJsonObject("publicKeyJwk"))
+                .equals(challenge.get("thumbprint").getAsString())) {
             throw new IOException("Unbound registration challenge");
         }
         JsonObject context = challenge.getAsJsonObject("context");
@@ -455,15 +482,7 @@ public final class ProviderClient implements AutoCloseable {
         if (nonce == null) {
             throw new IOException("Challenge expired before proof completed");
         }
-        JsonObject completion = new JsonObject();
-        completion.addProperty("protocol", ProviderCrypto.PROTOCOL);
-        completion.addProperty("challengeId", challenge.get("challengeId").getAsString());
-        completion.addProperty("proofNonce", nonce);
-        completion.addProperty("idempotencyKey", intent);
-        completion.addProperty("signature",
-                ProviderCrypto.sign(privateKey, ProviderCrypto.proof(challenge, nonce, intent)));
-        JsonObject registration = unsigned("complete", completion);
-        ProviderContract.require("registration", registration);
+        JsonObject registration = unsigned("complete", completion(challenge, nonce, intent, privateKey));
         validateRegistration(registration);
         registrationExtensions = ProtocolExtensions.copy(registration);
         registration.remove("extensions");
@@ -488,7 +507,6 @@ public final class ProviderClient implements AutoCloseable {
 
     private void validateRegistration(JsonObject registration) throws IOException {
         ProviderContract.require("registration", registration);
-        ProtocolExtensions.validate(registration);
         boolean hasService = registration.has("serviceId"), hasAddress = registration.has("publicAddress");
         if (hasService != hasAddress) {
             throw new IOException("Incomplete public endpoint metadata");
@@ -809,18 +827,14 @@ public final class ProviderClient implements AutoCloseable {
             return;
         }
         save();
+        int sent = Math.min(100, pending.size());
         JsonArray batch = new JsonArray();
-        for (JsonElement event : pending) {
-            if (batch.size() < 100) {
-                batch.add(event);
-            }
-        }
+        pending.asList().subList(0, sent).forEach(batch::add);
         JsonObject body = new JsonObject();
         body.add("events", batch);
         signed("outcomes", "POST", body);
-        for (JsonElement sent : batch) {
-            pending.remove(sent);
-        }
+        // Dropped by position, and only once the exchange is done, so no view spans the request
+        pending.asList().subList(0, sent).clear();
         save();
     }
 
@@ -1035,8 +1049,7 @@ public final class ProviderClient implements AutoCloseable {
             if ((status == 429 || status == 503 || status == 502 || status == 504) && attempt < attempts - 1) {
                 long delay = 250L << attempt;
                 try {
-                    delay = Math.max(delay,
-                            Long.parseLong(response.headers().firstValue("retry-after").orElse("0")) * 1000);
+                    delay = Math.max(delay, response.headers().firstValueAsLong("retry-after").orElse(0) * 1000);
                 } catch (NumberFormatException ignored) {
                 }
                 if (delay > 10000) {
