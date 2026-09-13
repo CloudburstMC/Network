@@ -28,8 +28,9 @@ before accepting clients. Its supplier overload of `open` refreshes a deduplicat
 snapshot of 1–32 numeric IP/port pairs at each background profile publication. Adapters
 can provide all suitable addresses of a wildcard listener plus operator-configured
 forwarding endpoints; the original single-endpoint overload remains available.
-`EndpointAddress` provides numeric parsing and public/private/special-purpose
-classification for adapters. Publication does not test network reachability or
+`EndpointAddress`, in the NetherNet transport module, provides numeric parsing and
+public/private/loopback/unusable classification for adapters, and is the same
+classifier candidate filtering uses. Publication does not test network reachability or
 configure port forwarding. An IPv6 wildcard listener accepts IPv4 and IPv6 with the
 pinned native stack; a concrete IPv6 bind does not imply IPv4 coverage.
 

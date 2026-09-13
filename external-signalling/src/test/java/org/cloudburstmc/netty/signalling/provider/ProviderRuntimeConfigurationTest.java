@@ -115,7 +115,8 @@ class ProviderRuntimeConfigurationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"example.com:19133", "::1:19133", "[::]:19133", "1.1.1.1:0", "1.1.1.1:65536",
-            "224.0.0.1:19133", "1.1.1.1:1.5", "[fe80::1]:19133"})
+            "224.0.0.1:19133", "1.1.1.1:1.5", "[fe80::1]:19133", "203.0.113.1:19133", "[2001:db8::1]:19133",
+            "255.255.255.255:19133", "198.18.0.1:19133"})
     void refusesAnAdvertisedEndpointAPeerCouldNotUse(String endpoint, @TempDir Path dir) {
         assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "", List.of(endpoint), Map.of())));
     }

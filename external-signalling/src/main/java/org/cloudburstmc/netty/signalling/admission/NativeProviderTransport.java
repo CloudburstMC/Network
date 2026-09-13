@@ -4,6 +4,7 @@ import com.google.gson.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.signalling.ProviderTransport;
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
@@ -28,7 +29,8 @@ public final class NativeProviderTransport implements ProviderTransport {
     private final Supplier<List<InetSocketAddress>> advertisedAddresses;
     private final ScheduledFuture<?> retireTask;
     private List<Epoch> epochs = List.of();
-    private boolean draining, closed;
+    private boolean draining;
+    private boolean closed;
 
     private NativeProviderTransport(NativeAdmissionServerChannel channel, StatelessAdmissionValidator validator,
                                     String incarnation, Supplier<List<InetSocketAddress>> advertisedAddresses) {
@@ -93,6 +95,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         if (incarnation == null || !incarnation.matches("[0-9a-f]{32}")) {
             throw new IllegalArgumentException("Invalid endpoint incarnation");
         }
+
         return "nxs-stateless-host-v1/" + incarnation;
     }
 
@@ -105,24 +108,29 @@ public final class NativeProviderTransport implements ProviderTransport {
         if (closed || draining || !channel.isActive()) {
             return CompletableFuture.failedFuture(new IllegalStateException("Native endpoint unavailable"));
         }
+
         long now = System.currentTimeMillis();
         String keyId = null;
         Set<String> installed = validator.keyIds();
+
         // The provider supplies keys oldest-to-newest and acknowledges its last epoch before publication.
         for (Epoch epoch : epochs) {
             if (epoch.notBefore() <= now && epoch.retireAfter() > now && installed.contains(epoch.id())) {
                 keyId = epoch.id();
             }
         }
+
         if (keyId == null) {
             return CompletableFuture.failedFuture(new IllegalStateException("No active background admission key"));
         }
+
         List<InetSocketAddress> endpoints;
         try {
             endpoints = checkedEndpoints(advertisedAddresses.get());
         } catch (RuntimeException unavailable) {
             return CompletableFuture.failedFuture(unavailable);
         }
+
         JsonArray candidates = new JsonArray();
         int index = 0;
         for (InetSocketAddress endpoint : endpoints) {
@@ -136,16 +144,19 @@ public final class NativeProviderTransport implements ProviderTransport {
             candidate.addProperty("type", "host");
             candidates.add(candidate);
         }
+
         JsonObject capability = new JsonObject();
         capability.addProperty("capability", CAPABILITY);
         capability.addProperty("incarnation", incarnation);
+
         JsonObject profile = new JsonObject();
         profile.add("candidates", candidates);
         profile.add("statelessAdmission", capability);
         profile.addProperty("credentialKeyId", keyId);
         profile.addProperty("dtlsFingerprint", channel.identity().fingerprint());
-        profile.addProperty("maxMessageSize", 262144);
+        profile.addProperty("maxMessageSize", NetherNetFrameDecoder.MESSAGE_LIMIT);
         profile.addProperty("sctpPort", 5000);
+
         return CompletableFuture.completedFuture(profile);
     }
 
@@ -154,13 +165,14 @@ public final class NativeProviderTransport implements ProviderTransport {
         if (unique.isEmpty() || unique.size() > 32) {
             throw new IllegalArgumentException("Publish 1-32 UDP endpoints");
         }
+
         for (InetSocketAddress endpoint : unique) {
-            if (endpoint == null || endpoint.isUnresolved() || endpoint.getPort() == 0 || endpoint.getAddress()
-                    .isAnyLocalAddress()
-                    || endpoint.getAddress().isMulticastAddress() || endpoint.getAddress().isLinkLocalAddress()) {
+            if (endpoint == null || endpoint.isUnresolved() || endpoint.getPort() == 0
+                    || EndpointAddress.scope(endpoint.getAddress()) == EndpointAddress.Scope.UNUSABLE) {
                 throw new IllegalArgumentException("Concrete advertised UDP address and fixed port required");
             }
         }
+
         return List.copyOf(unique);
     }
 
@@ -169,15 +181,18 @@ public final class NativeProviderTransport implements ProviderTransport {
         if (closed) {
             return CompletableFuture.failedFuture(new IllegalStateException("Native endpoint closed"));
         }
+
         try {
             if (keys == null || keys.size() > 8) {
                 throw new IllegalArgumentException("At most eight admission epochs");
             }
+
             validator.installKeys(keys.stream()
                     .map(k -> new StatelessAdmissionValidator.TicketKey(k.keyId(), k.secret(), k.notBefore(),
                             k.retireAfter())).toList());
             epochs = keys.stream().map(k -> new Epoch(k.keyId(), k.notBefore(), k.retireAfter())).toList();
             validator.retireKeys(System.currentTimeMillis());
+
             return CompletableFuture.completedFuture(null);
         } catch (Exception invalid) {
             return CompletableFuture.failedFuture(invalid);
@@ -189,6 +204,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         if (state == null) {
             return CompletableFuture.completedFuture(ApplyResult.REJECTED);
         }
+
         return switch (state) {
             case "serving" -> CompletableFuture.completedFuture(ApplyResult.APPLIED);
             case "draining" -> drain().thenApply(ignored -> ApplyResult.APPLIED);
@@ -226,6 +242,7 @@ public final class NativeProviderTransport implements ProviderTransport {
             epochs = List.of();
             channel.close();
         }
+
         return channel.termination();
     }
 }

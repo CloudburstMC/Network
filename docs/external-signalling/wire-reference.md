@@ -132,7 +132,8 @@ Expiry and server times are integer epoch milliseconds.
 
 ### `complete` request
 
-Canonical arrays use UTF-8 JSON with no whitespace or Unicode normalization.
+Canonical arrays are the UTF-8 encoding of the JSON text that ECMA-262
+`JSON.stringify` produces, with no whitespace or Unicode normalization.
 Use an empty string for a missing context string. `contextDigest` is the
 unpadded base64url SHA-256 digest of:
 

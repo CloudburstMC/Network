@@ -1,4 +1,4 @@
-package org.cloudburstmc.netty.signalling.admission;
+package org.cloudburstmc.netty.util.nethernet;
 
 import org.junit.jupiter.api.Test;
 
@@ -23,23 +23,27 @@ class EndpointAddressTest {
     @Test
     void excludesUnusableAddressesAndOnlyAllowsFixturesExplicitly() throws Exception {
         for (String ip : new String[]{"0.0.0.0", "169.254.1.1", "224.0.0.1", "255.255.255.255", "198.18.0.1", "::",
-                "fe80::1", "fec0::1", "ff02::1", "64:ff9b::808:808", "2001:2::1", "2002:808:808::1"}) {
+                "fe80::1", "fec0::1", "ff02::1", "64:ff9b::808:808", "2001:2::1", "2002:808:808::1",
+                "192.0.2.1", "2001:db8::1", "3fff::1"}) {
             assertFalse(EndpointAddress.advertisable(EndpointAddress.parse(ip), true), ip);
         }
-        for (String ip : new String[]{"127.0.0.1", "::1", "192.0.2.1", "2001:db8::1", "3fff::1"}) {
+        for (String ip : new String[]{"127.0.0.1", "::1"}) {
             assertFalse(EndpointAddress.advertisable(EndpointAddress.parse(ip), false), ip);
             assertTrue(EndpointAddress.advertisable(EndpointAddress.parse(ip), true), ip);
         }
     }
 
     @Test
-    void normalizesMappedIpv4AndRejectsDnsAndAmbiguousLiterals() throws Exception {
+    void normalizesLiteralsAndRejectsNamesAndMalformedForms() throws Exception {
         var mapped = EndpointAddress.parse("::ffff:192.168.1.2");
         assertInstanceOf(Inet4Address.class, mapped);
         assertEquals(EndpointAddress.Scope.PRIVATE, EndpointAddress.scope(mapped));
-        for (String ip : new String[]{"localhost", "game.example", "127.1", "010.0.0.1", "256.0.0.1", "fe80::1%eth0",
-                "[::1]", "2001:::1", "::ffff:192.168.001.1", "8.8.8.8\n"}) {
+        for (String ip : new String[]{"localhost", "game.example", "127.1", "256.0.0.1", "fe80::1%eth0",
+                "[::1]", "2001:::1", "8.8.8.8\n"}) {
             assertThrows(UnknownHostException.class, () -> EndpointAddress.parse(ip), ip);
         }
+        // A leading zero reads as decimal, never octal, so the two forms name the same host
+        assertEquals("10.0.0.1", EndpointAddress.parse("010.0.0.1").getHostAddress());
+        assertEquals("192.168.1.1", EndpointAddress.parse("::ffff:192.168.001.1").getHostAddress());
     }
 }

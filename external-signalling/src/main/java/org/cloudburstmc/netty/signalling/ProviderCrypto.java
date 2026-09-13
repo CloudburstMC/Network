@@ -9,11 +9,14 @@ import java.security.*;
 import java.security.interfaces.ECPublicKey;
 import java.security.spec.*;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * Exact v0 canonical bytes. P1363 explicitly avoids the JVM's default DER ECDSA encoding.
  */
 public final class ProviderCrypto {
+    private static final Pattern BASE64URL = Pattern.compile("[A-Za-z0-9_-]+");
+
     public static final String PROTOCOL = "nethernet-external-signalling-v1";
     public static final String SIGNATURE = "nxs-es384-v1";
 
@@ -21,29 +24,31 @@ public final class ProviderCrypto {
     }
 
     public static KeyPair generate() throws GeneralSecurityException {
-        KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
-        g.initialize(new ECGenParameterSpec("secp384r1"));
-        return g.generateKeyPair();
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp384r1"));
+        return generator.generateKeyPair();
     }
 
-    public static String base64(byte[] b) {
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(b);
+    public static String base64(byte[] bytes) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
-    public static byte[] decode(String s) {
-        if (!s.matches("[A-Za-z0-9_-]+")) {
+    public static byte[] decode(String data) {
+        if (!BASE64URL.matcher(data).matches()) {
             throw new IllegalArgumentException("Invalid base64url");
         }
-        byte[] b = Base64.getUrlDecoder().decode(s);
-        if (!base64(b).equals(s)) {
+
+        byte[] bytes = Base64.getUrlDecoder().decode(data);
+        if (!base64(bytes).equals(data)) {
             throw new IllegalArgumentException("Noncanonical base64url");
         }
-        return b;
+
+        return bytes;
     }
 
-    public static byte[] digest(String s) {
+    public static byte[] digest(String data) {
         try {
-            return MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
+            return MessageDigest.getInstance("SHA-256").digest(data.getBytes(StandardCharsets.UTF_8));
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException(e);
         }
@@ -60,19 +65,20 @@ public final class ProviderCrypto {
     }
 
     private static byte[] coordinate(BigInteger n) {
-        byte[] raw = n.toByteArray(), out = new byte[48];
+        byte[] raw = n.toByteArray();
+        byte[] out = new byte[48];
         System.arraycopy(raw, Math.max(0, raw.length - 48), out, Math.max(0, 48 - raw.length),
                 Math.min(48, raw.length));
         return out;
     }
 
-    public static PublicKey publicKey(JsonObject j) throws GeneralSecurityException {
-        validateJwk(j);
+    public static PublicKey publicKey(JsonObject jwk) throws GeneralSecurityException {
+        validateJwk(jwk);
         AlgorithmParameters p = AlgorithmParameters.getInstance("EC");
         p.init(new ECGenParameterSpec("secp384r1"));
         return KeyFactory.getInstance("EC").generatePublic(new ECPublicKeySpec(
-                new ECPoint(new BigInteger(1, decode(j.get("x").getAsString())),
-                        new BigInteger(1, decode(j.get("y").getAsString()))),
+                new ECPoint(new BigInteger(1, decode(jwk.get("x").getAsString())),
+                        new BigInteger(1, decode(jwk.get("y").getAsString()))),
                 p.getParameterSpec(ECParameterSpec.class)));
     }
 
@@ -80,26 +86,26 @@ public final class ProviderCrypto {
         return KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(decode(encoded)));
     }
 
-    private static void validateJwk(JsonObject j) {
-        if (j.has("d") || !"EC".equals(j.get("kty").getAsString()) || !"P-384".equals(j.get("crv").getAsString())
-                || !j.get("x").getAsString().matches("[A-Za-z0-9_-]{64}") || !j.get("y").getAsString()
+    private static void validateJwk(JsonObject jwk) {
+        if (jwk.has("d") || !"EC".equals(jwk.get("kty").getAsString()) || !"P-384".equals(jwk.get("crv").getAsString())
+                || !jwk.get("x").getAsString().matches("[A-Za-z0-9_-]{64}") || !jwk.get("y").getAsString()
                 .matches("[A-Za-z0-9_-]{64}")) {
             throw new IllegalArgumentException("Invalid public P-384 JWK");
         }
     }
 
-    public static String thumbprint(JsonObject j) {
-        validateJwk(j);
+    public static String thumbprint(JsonObject jwk) {
+        validateJwk(jwk);
         return base64(
-                digest("{\"crv\":\"P-384\",\"kty\":\"EC\",\"x\":\"" + j.get("x").getAsString() + "\",\"y\":\"" + j.get(
+                digest("{\"crv\":\"P-384\",\"kty\":\"EC\",\"x\":\"" + jwk.get("x").getAsString() + "\",\"y\":\"" + jwk.get(
                         "y").getAsString() + "\"}"));
     }
 
     public static String sign(PrivateKey key, String payload) throws GeneralSecurityException {
-        Signature s = Signature.getInstance("SHA384withECDSAinP1363Format");
-        s.initSign(key);
-        s.update(payload.getBytes(StandardCharsets.UTF_8));
-        return base64(s.sign());
+        Signature signature = Signature.getInstance("SHA384withECDSAinP1363Format");
+        signature.initSign(key);
+        signature.update(payload.getBytes(StandardCharsets.UTF_8));
+        return base64(signature.sign());
     }
 
     public static boolean verify(JsonObject key, String signature, String payload) {
@@ -108,10 +114,11 @@ public final class ProviderCrypto {
             if (raw.length != 96) {
                 return false;
             }
-            Signature s = Signature.getInstance("SHA384withECDSAinP1363Format");
-            s.initVerify(publicKey(key));
-            s.update(payload.getBytes(StandardCharsets.UTF_8));
-            return s.verify(raw);
+
+            Signature sig = Signature.getInstance("SHA384withECDSAinP1363Format");
+            sig.initVerify(publicKey(key));
+            sig.update(payload.getBytes(StandardCharsets.UTF_8));
+            return sig.verify(raw);
         } catch (GeneralSecurityException | RuntimeException e) {
             return false;
         }
@@ -125,6 +132,7 @@ public final class ProviderCrypto {
         if (tags == null || tags.isEmpty()) {
             return null;
         }
+
         StringJoiner entries = new StringJoiner(",", "[", "]");
         new TreeMap<>(tags).forEach((key, value) -> entries.add("[" + quote(key) + "," + quote(value) + "]"));
         return base64(digest(entries.toString()));
@@ -140,11 +148,13 @@ public final class ProviderCrypto {
         if (bits < 0 || bits > 24) {
             return false;
         }
+
         for (int i = 0; i < bits; i++) {
             if ((bytes[i / 8] & (128 >> (i % 8))) != 0) {
                 return false;
             }
         }
+
         return true;
     }
 
@@ -154,17 +164,19 @@ public final class ProviderCrypto {
                 sequence, base64(digest(body)));
     }
 
-    public static String origin(URI u) {
-        if (u.getHost() == null || u.getUserInfo() != null || u.getFragment() != null || u.getQuery() != null || !(
-                u.getPath().isEmpty() || u.getPath().equals("/"))) {
+    public static String origin(URI uri) {
+        if (uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null || uri.getQuery() != null || !(
+                uri.getPath().isEmpty() || uri.getPath().equals("/"))) {
             throw new IllegalArgumentException("Invalid provider origin");
         }
-        String host = u.getHost().toLowerCase(Locale.ROOT), scheme = u.getScheme().toLowerCase(Locale.ROOT);
+
+        String host = uri.getHost().toLowerCase(Locale.ROOT), scheme = uri.getScheme().toLowerCase(Locale.ROOT);
         if (!scheme.equals("https") && !(scheme.equals("http") && Set.of("localhost", "127.0.0.1", "[::1]")
                 .contains(host))) {
             throw new IllegalArgumentException("HTTPS provider required");
         }
-        int port = u.getPort();
+
+        int port = uri.getPort();
         return scheme + "://" + host + (
                 port < 0 || (scheme.equals("https") && port == 443) || (scheme.equals("http") && port == 80) ? "" :
                         ":" + port);
@@ -172,8 +184,8 @@ public final class ProviderCrypto {
 
     public static String array(Object... values) {
         StringJoiner out = new StringJoiner(",", "[", "]");
-        for (Object v : values) {
-            out.add(v instanceof String s ? quote(s) : String.valueOf(v));
+        for (Object value : values) {
+            out.add(value instanceof String s ? quote(s) : String.valueOf(value));
         }
         return out.toString();
     }
@@ -194,7 +206,7 @@ public final class ProviderCrypto {
                     if (c < 32 || (Character.isSurrogate(c) && !(Character.isHighSurrogate(c) && i + 1 < s.length()
                             && Character.isLowSurrogate(s.charAt(i + 1))) && !(Character.isLowSurrogate(c) && i > 0
                             && Character.isHighSurrogate(s.charAt(i - 1))))) {
-                        b.append(String.format("\\u%04x", (int) c));
+                        b.append("\\u").append(HexFormat.of().toHexDigits(c));
                     } else {
                         b.append(c);
                     }

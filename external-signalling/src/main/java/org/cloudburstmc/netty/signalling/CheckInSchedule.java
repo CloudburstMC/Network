@@ -11,17 +11,19 @@ import java.time.Instant;
 record CheckInSchedule(long afterMillis, long minUpdateIntervalMillis) {
     static CheckInSchedule parse(JsonObject response) throws IOException {
         try {
-            JsonObject s = response.getAsJsonObject("checkIn");
-            if (number(s, "version") != 1) {
+            JsonObject checkIn = response.getAsJsonObject("checkIn");
+            if (number(checkIn, "version") != 1) {
                 throw new IllegalArgumentException();
             }
-            long after = number(s, "afterMillis"), minimum = number(s, "minUpdateIntervalMillis");
-            long next = number(s, "nextCheckInAt"), expires = number(s, "leaseExpiresAt");
+
+            long after = number(checkIn, "afterMillis"), minimum = number(checkIn, "minUpdateIntervalMillis");
+            long next = number(checkIn, "nextCheckInAt"), expires = number(checkIn, "leaseExpiresAt");
             long received = Instant.parse(response.get("receivedAt").getAsString()).toEpochMilli();
             if (after < 1000 || after > 86400000 || minimum < 1000 || minimum > after
                     || next - received != after || expires <= next || expires - next > 300000) {
                 throw new IllegalArgumentException();
             }
+
             return new CheckInSchedule(after, minimum);
         } catch (RuntimeException invalid) {
             throw new IOException("Invalid provider check-in schedule", invalid);

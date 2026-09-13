@@ -34,15 +34,17 @@ final class LimitedBodySubscriber implements HttpResponse.BodySubscriber<byte[]>
         if (failed) {
             return;
         }
-        for (ByteBuffer b : buffers) {
-            if (b.remaining() > limit - count) {
+
+        for (ByteBuffer buf : buffers) {
+            if (buf.remaining() > limit - count) {
                 failed = true;
                 upstream.cancel();
                 delegate.onError(new IOException("Provider response exceeds limit"));
                 return;
             }
-            count += b.remaining();
+            count += buf.remaining();
         }
+
         delegate.onNext(buffers);
     }
 

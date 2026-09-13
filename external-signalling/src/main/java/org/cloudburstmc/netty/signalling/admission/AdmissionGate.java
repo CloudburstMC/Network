@@ -85,60 +85,66 @@ public final class AdmissionGate {
         if (closed) {
             return null;
         }
-        VerifiedAdmission a = validator.validate(request, nowMillis);
-        if (a == null) {
+
+        VerifiedAdmission verifiedAdmission = validator.validate(request, nowMillis);
+        if (verifiedAdmission == null) {
             invalid++;
             return null;
         }
-        if (claims.containsKey(a.tokenId()) || tuples.containsKey(request.address())) {
+
+        if (claims.containsKey(verifiedAdmission.tokenId()) || tuples.containsKey(request.address())) {
             replayRejected++;
-            a.identityVerifier().close();
+            verifiedAdmission.identityVerifier().close();
             return null;
         }
+
         if (draining) {
             capacityRejected++;
-            a.identityVerifier().close();
+            verifiedAdmission.identityVerifier().close();
             return null;
         }
+
         if (pending >= limits.pending()) {
             capacityRejected++;
             pendingLimitRejected++;
             pendingAtRejection = pending;
-            a.identityVerifier().close();
+            verifiedAdmission.identityVerifier().close();
             return null;
         }
+
         if (tuples.size() >= limits.sessions() || claims.size() >= limits.claims()) {
             capacityRejected++;
-            a.identityVerifier().close();
+            verifiedAdmission.identityVerifier().close();
             return null;
         }
-        Reservation r = new Reservation(a, request.address(), nowMillis, nowNanos);
-        claims.put(r.tokenId, r);
-        tuples.put(r.tuple, r);
+
+        Reservation reservation = new Reservation(verifiedAdmission, request.address(), nowMillis, nowNanos);
+        claims.put(reservation.tokenId, reservation);
+        tuples.put(reservation.tuple, reservation);
         pending++;
-        return r;
+        return reservation;
     }
 
-    public synchronized VerifiedAdmission admission(Reservation r) {
-        return current(r) && !r.closing ? r.admission : null;
+    public synchronized VerifiedAdmission admission(Reservation reservation) {
+        return current(reservation) && !reservation.closing ? reservation.admission : null;
     }
 
     /**
      * Native STUN verification and peer creation succeeded. A used token cannot allocate another peer.
      */
-    public synchronized boolean ready(Reservation r) {
-        if (!current(r) || r.closing || r.ready) {
+    public synchronized boolean ready(Reservation reservation) {
+        if (!current(reservation) || reservation.closing || reservation.ready) {
             return false;
         }
-        r.ready = true;
+        reservation.ready = true;
         pending--;
         accepted++;
         return true;
     }
 
-    public synchronized void connected(Reservation r) {
-        if (current(r) && !r.closing) {
-            r.connected = true;
+    public synchronized void connected(Reservation reservation) {
+        if (current(reservation) && !reservation.closing) {
+            reservation.connected = true;
         }
     }
 
@@ -149,26 +155,31 @@ public final class AdmissionGate {
     /**
      * Call only once native teardown is complete, or when native creation never started.
      */
-    public synchronized boolean finish(Reservation r) {
-        if (!current(r)) {
+    public synchronized boolean finish(Reservation reservation) {
+        if (!current(reservation)) {
             return false;
         }
-        if (!r.ready) {
+
+        if (!reservation.ready) {
             pending--;
         }
-        tuples.remove(r.tuple);
-        r.closed = true;
-        r.admission.identityVerifier().close();
-        r.admission = null;
+
+        tuples.remove(reservation.tuple);
+
+        reservation.closed = true;
+        reservation.admission.identityVerifier().close();
+        reservation.admission = null;
+
         // A copied token with forged STUN integrity must not consume the real client's token.
-        if (!r.ready || closed) {
-            claims.remove(r.tokenId);
+        if (!reservation.ready || closed) {
+            claims.remove(reservation.tokenId);
         }
+
         return true;
     }
 
-    private boolean current(Reservation r) {
-        return !r.closed && claims.get(r.tokenId) == r;
+    private boolean current(Reservation reservation) {
+        return !reservation.closed && claims.get(reservation.tokenId) == reservation;
     }
 
     /**
@@ -176,15 +187,15 @@ public final class AdmissionGate {
      */
     public synchronized List<Reservation> sweep(long nowMillis, long nowNanos) {
         List<Reservation> timedOut = new ArrayList<>();
-        for (Reservation r : claims.values()) {
-            if (!r.closed && !r.closing && (r.admission.identityVerifier().rejected()
-                    || (r.admission.identityVerifier().pending() && nowNanos - r.loginDeadlineNanos >= 0)
-                    || (!r.connected && nowNanos - r.acceptedNanos >= limits.handshakeMillis() * 1_000_000L))) {
-                r.closing = true;
-                timedOut.add(r);
+        for (Reservation reservation : claims.values()) {
+            if (!reservation.closed && !reservation.closing && (reservation.admission.identityVerifier().rejected()
+                    || (reservation.admission.identityVerifier().pending() && nowNanos - reservation.loginDeadlineNanos >= 0)
+                    || (!reservation.connected && nowNanos - reservation.acceptedNanos >= limits.handshakeMillis() * 1_000_000L))) {
+                reservation.closing = true;
+                timedOut.add(reservation);
             }
         }
-        claims.values().removeIf(r -> r.closed && r.expiresAt <= nowMillis);
+        claims.values().removeIf(reservation -> reservation.closed && reservation.expiresAt <= nowMillis);
         return timedOut;
     }
 
@@ -194,12 +205,14 @@ public final class AdmissionGate {
 
     public synchronized List<Reservation> close() {
         closed = true;
+
         List<Reservation> active = new ArrayList<>(tuples.values());
-        for (Reservation r : active) {
-            r.closing = true;
-            r.admission.identityVerifier().close();
+        for (Reservation reservation : active) {
+            reservation.closing = true;
+            reservation.admission.identityVerifier().close();
         }
-        claims.values().removeIf(r -> r.closed);
+
+        claims.values().removeIf(reservation -> reservation.closed);
         return active;
     }
 
@@ -215,6 +228,7 @@ public final class AdmissionGate {
                 && nowNanos - lastPendingWarningNanos < WARNING_INTERVAL_NANOS)) {
             return null;
         }
+
         var warning = new PendingLimitWarning(pendingAtRejection, limits.pending(), pendingLimitRejected);
         pendingLimitRejected = 0;
         lastPendingWarningNanos = nowNanos;

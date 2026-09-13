@@ -33,7 +33,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         final long creationNanos = System.nanoTime();
         final CompletableFuture<Void> closed = new CompletableFuture<>();
         volatile boolean failed;
-        boolean reported, closing;
+        boolean reported;
+        boolean closing;
 
         Session(AdmissionGate.Reservation reservation, AdmittedNetherNetChildChannel child) {
             this.reservation = reservation;
@@ -52,7 +53,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private final Set<CompletableFuture<Void>> admissions = ConcurrentHashMap.newKeySet();
     private final Map<AdmissionGate.Reservation, Session> sessions = new HashMap<>();
     private final ArrayBlockingQueue<Event> events = new ArrayBlockingQueue<>(256);
-    private final AtomicLong droppedEvents = new AtomicLong(), creations = new AtomicLong();
+    private final AtomicLong droppedEvents = new AtomicLong();
+    private final AtomicLong creations = new AtomicLong();
     private final CompletableFuture<Void> termination = new CompletableFuture<>();
     private volatile boolean open = true;
     private volatile InetSocketAddress address;
@@ -77,12 +79,13 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
 
     @Override
     protected void doBind(SocketAddress socketAddress) throws Exception {
-        if (!(socketAddress instanceof InetSocketAddress a) || a.isUnresolved() || a.getPort() == 0 || (
-                !allowWildcardBind && a.getAddress().isAnyLocalAddress())) {
+        if (!(socketAddress instanceof InetSocketAddress inetSocketAddress) || inetSocketAddress.isUnresolved() || inetSocketAddress.getPort() == 0 || (
+                !allowWildcardBind && inetSocketAddress.getAddress().isAnyLocalAddress())) {
             throw new IllegalArgumentException("Resolved explicit interface address and fixed UDP port required");
         }
-        address = a;
-        mux = new IceUdpMuxListener(a.getAddress(), a.getPort(), Math.min(limits.pending(), 4096),
+
+        address = inetSocketAddress;
+        mux = new IceUdpMuxListener(inetSocketAddress.getAddress(), inetSocketAddress.getPort(), Math.min(limits.pending(), 4096),
                 Duration.ofMillis(Math.min(limits.handshakeMillis(), 30_000)), eventLoop(), this::admit);
         maintenance = eventLoop().scheduleWithFixedDelay(this::maintain, 100, 100, TimeUnit.MILLISECONDS);
     }
@@ -91,16 +94,19 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         if (!isOpen() || nativeCloseFailure.get() != null) {
             return CompletableFuture.completedFuture(null);
         }
+
         byte[] ip = NetUtil.createByteArrayFromIpAddressString(request.remoteAddress());
         if (ip == null) {
             return CompletableFuture.completedFuture(null);
         }
+
         AdmissionRequest metadata = new AdmissionRequest(request.localUfrag(), request.remoteUfrag(),
                 new InetSocketAddress(InetAddress.getByAddress(ip), request.remotePort()));
         AdmissionGate.Reservation reservation = gate.reserve(metadata, System.currentTimeMillis(), System.nanoTime());
         if (reservation == null) {
             return CompletableFuture.completedFuture(null);
         }
+
         VerifiedAdmission a = gate.admission(reservation);
         CompletableFuture<Void> settled = new CompletableFuture<>();
         admissions.add(settled);
@@ -116,6 +122,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                             finish(reservation, "native_acceptance_failed");
                         }
                     }
+
                     settled.complete(null);
                     admissions.remove(settled);
                 });
@@ -159,15 +166,18 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 session.closed.completeExceptionally(failure);
             }
         });
+
         // Keep ownership before checks that may fail, so partial setup is included in teardown.
         if (!isOpen() || gate.admission(reservation) == null || a.expiresAt() <= System.currentTimeMillis()) {
             throw new IllegalStateException("Admission expired or cancelled");
         }
+
         String local = peer.localDescription();
         if (!local.contains("a=fingerprint:" + identity.fingerprint() + "\r\n") || !local.contains(
                 "a=ice-ufrag:" + a.localUfrag() + "\r\n")) {
             throw new IllegalStateException("Native identity does not match published profile");
         }
+
         TransportIdentityBinding.install(child, a.identityVerifier());
         child.attr(AdmissionPrincipal.KEY)
                 .set(new AdmissionPrincipal(a.tokenId(), a.networkId(), a.identityBindingHex(), a.keyId()));
@@ -186,9 +196,11 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 session.failed = true;
             }
         });
+
         if (!gate.ready(reservation)) {
             throw new IllegalStateException("Admission cancelled");
         }
+
         pipeline().fireChannelRead(child);
         pipeline().fireChannelReadComplete();
         emit(reservation, "ticket.ice_seen", "token_and_stun_validated", session.creationNanos);
@@ -201,28 +213,34 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         if (!isOpen()) {
             return;
         }
+
         try {
             IceUdpMuxListener listener = mux;
             if (listener != null && listener.failure() != null) {
                 nativeCloseFailure.compareAndSet(null, listener.failure());
             }
+
             if (nativeCloseFailure.get() != null) {
                 close();
                 return;
             }
+
             var warning = gate.pollPendingLimitWarning(System.nanoTime());
             if (warning != null) {
                 log.warn("Pending admission limit reached: pending={}, limit={}, rejectedSinceLastWarning={}",
                         warning.pending(), warning.limit(), warning.rejected());
             }
+
             for (AdmissionGate.Reservation r : gate.sweep(System.currentTimeMillis(), System.nanoTime())) {
                 finish(r, "timeout");
             }
+
             for (Session session : new ArrayList<>(sessions.values())) {
                 if (session.failed || !session.child.isOpen()) {
                     finish(session.reservation, "closed");
                     continue;
                 }
+
                 if (!session.reported && session.child.isActive()) {
                     session.reported = true;
                     gate.connected(session.reservation);
@@ -250,7 +268,9 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         if (session.closing) {
             return;
         }
+
         session.closing = true;
+
         try {
             session.child.close();
         } catch (IllegalStateException unregistered) {
@@ -319,15 +339,19 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         if (maintenance != null) {
             maintenance.cancel(false);
         }
+
         IceUdpMuxListener listener = mux;
         mux = null;
         if (listener != null) {
             listener.close();
         }
+
         for (Session session : sessions.values()) {
             closeChild(session);
         }
+
         sessions.clear();
+
         List<CompletableFuture<Void>> outstanding = new ArrayList<>(nativeClosures);
         outstanding.addAll(admissions);
         CompletableFuture.allOf(outstanding.toArray(CompletableFuture[]::new)).whenComplete((ignored, error) -> {
