@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
@@ -128,8 +129,8 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     public void sendSignal(String targetNetworkId, String data) {
         String actualIdStr = targetNetworkId;
 
-        // If '0' is passed, try to use the discovered ID (Client Mode)
-        if (actualIdStr == null || actualIdStr.equals("0")) {
+        // Nothing to aim at yet, so use whatever discovery has found (Client Mode)
+        if (actualIdStr == null || actualIdStr.equals(NetherNetConstants.DISCOVER_TARGET)) {
             actualIdStr = discoveredServerId.get();
         }
 
