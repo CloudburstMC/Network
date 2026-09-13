@@ -1,5 +1,15 @@
 package org.cloudburstmc.netty.util.nethernet;
 
+import org.bouncycastle.asn1.ASN1BitString;
+import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
+import org.bouncycastle.asn1.sec.ECPrivateKey;
+import org.bouncycastle.asn1.sec.SECObjectIdentifiers;
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
+import org.bouncycastle.openssl.PEMKeyPair;
+import org.bouncycastle.openssl.PEMParser;
+import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
+import org.bouncycastle.util.io.pem.PemObject;
 import org.jose4j.jwk.EcJwkGenerator;
 import org.jose4j.jwk.EllipticCurveJsonWebKey;
 import org.jose4j.jws.AlgorithmIdentifiers;
@@ -12,7 +22,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
-import java.math.BigInteger;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,23 +31,14 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.security.AlgorithmParameters;
 import java.security.GeneralSecurityException;
-import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.spec.ECParameterSpec;
-import java.security.spec.ECPoint;
-import java.security.spec.ECPrivateKeySpec;
-import java.security.spec.ECPublicKeySpec;
-import java.security.interfaces.ECPrivateKey;
-import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Set;
 import java.util.Collections;
@@ -52,7 +54,7 @@ public class ServerIdentity {
     private static final String ALG = AlgorithmIdentifiers.ECDSA_USING_P384_CURVE_AND_SHA384; // ES384 / P-384
     private static final String CURVE = "secp384r1";
     private static final int FIELD_BYTES = 48;
-    private static final byte[] OID_SECP384R1 = {0x2b, (byte) 0x81, 0x04, 0x00, 0x22};
+    private static final JcaPEMKeyConverter CONVERTER = new JcaPEMKeyConverter();
     private static final Set<PosixFilePermission> OWNER_ONLY = PosixFilePermissions.fromString("rw-------");
 
     private final PrivateKey privateKey;
@@ -96,38 +98,56 @@ public class ServerIdentity {
      */
     public static ServerIdentity fromPem(File pem, String domain)
             throws GeneralSecurityException, IOException, JoseException {
-        byte[] der = decodePem(Files.readString(pem.toPath(), StandardCharsets.UTF_8));
+        KeyPair pair = readKeyPair(pem);
+        return new ServerIdentity(pair.getPrivate(), pair.getPublic(), null, domain);
+    }
 
-        Der body = new Der(der).readSequence();
-        // Version 0 marks PKCS#8, which wraps the SEC1 structure after the algorithm identifier
-        if (body.readInteger().signum() == 0) {
-            body.readAny(); // algorithm identifier
-            body = new Der(body.readOctetString()).readSequence();
-            body.readInteger(); // SEC1 version, always 1
+    /**
+     * Reads either shape of EC private key. PKCS#8 wraps the same SEC1 structure, so the public
+     * point is in the same place either way, and the file is useless to us without it.
+     */
+    private static KeyPair readKeyPair(File pem) throws GeneralSecurityException, IOException {
+        // Read the file first, so anything the parser then complains about is the key's fault
+        String armour = Files.readString(pem.toPath(), StandardCharsets.UTF_8);
+        Object parsed;
+        try (PEMParser parser = new PEMParser(new StringReader(armour))) {
+            parsed = parser.readObject();
+        } catch (IOException | RuntimeException malformed) {
+            throw new GeneralSecurityException("Cannot read the EC private key in " + pem, malformed);
         }
 
-        byte[] scalar = body.readOctetString();
-        byte[] point = null;
-        while (body.hasNext() && point == null) {
-            int tag = body.peekTag();
-            byte[] content = body.readAny();
-            if (tag == 0xa1) { // [1] EXPLICIT publicKey BIT STRING
-                point = new Der(content).readBitString();
-            }
+        PrivateKeyInfo info;
+        if (parsed instanceof PEMKeyPair keyPair) {
+            info = keyPair.getPrivateKeyInfo();
+        } else if (parsed instanceof PrivateKeyInfo only) {
+            info = only;
+        } else if (parsed == null) {
+            throw new GeneralSecurityException("No PEM block found in " + pem);
+        } else {
+            throw new GeneralSecurityException("Expected an unencrypted EC private key in " + pem
+                    + ", got " + parsed.getClass().getSimpleName());
+        }
+
+        ASN1BitString point;
+        try {
+            point = ECPrivateKey.getInstance(info.parsePrivateKey()).getPublicKey();
+        } catch (IOException | RuntimeException malformed) {
+            throw new GeneralSecurityException("Cannot read the EC private key in " + pem, malformed);
         }
         if (point == null) {
             throw new GeneralSecurityException("The EC private key in " + pem + " does not carry its public key. "
                     + "Regenerate it with: openssl ecparam -name secp384r1 -genkey -noout");
         }
 
-        AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC");
-        parameters.init(new ECGenParameterSpec(CURVE));
-        ECParameterSpec spec = parameters.getParameterSpec(ECParameterSpec.class);
-
-        KeyFactory factory = KeyFactory.getInstance("EC");
-        PrivateKey privateKey = factory.generatePrivate(new ECPrivateKeySpec(new BigInteger(1, scalar), spec));
-        PublicKey publicKey = factory.generatePublic(new ECPublicKeySpec(decodePoint(point), spec));
-        return new ServerIdentity(privateKey, publicKey, null, domain);
+        KeyPair pair = CONVERTER.getKeyPair(new PEMKeyPair(
+                new SubjectPublicKeyInfo(info.getPrivateKeyAlgorithm(), point.getBytes()), info));
+        try {
+            // Rejects anything that is not a point on P-384, which the assertion algorithm requires
+            IdentityPublicKey.canonical(pair.getPublic());
+        } catch (RuntimeException invalid) {
+            throw new GeneralSecurityException("The key in " + pem + " is not on P-384", invalid);
+        }
+        return pair;
     }
 
     /**
@@ -183,210 +203,17 @@ public class ServerIdentity {
      * Writes SEC1 rather than the PKCS#8 the JDK produces, because that drops the public point and
      * it cannot be recomputed through the standard library.
      */
-    private static String writeSec1Pem(KeyPair pair) throws GeneralSecurityException {
-        ECPrivateKey privateKey = (ECPrivateKey) pair.getPrivate();
-        ECPublicKey publicKey = (ECPublicKey) pair.getPublic();
+    private static String writeSec1Pem(KeyPair pair) throws IOException {
+        SubjectPublicKeyInfo publicKey = SubjectPublicKeyInfo.getInstance(pair.getPublic().getEncoded());
+        ECPrivateKey scalar = ECPrivateKey.getInstance(
+                PrivateKeyInfo.getInstance(pair.getPrivate().getEncoded()).parsePrivateKey());
 
-        byte[] point = new byte[1 + 2 * FIELD_BYTES];
-        point[0] = 0x04;
-        unsigned(publicKey.getW().getAffineX(), point, 1);
-        unsigned(publicKey.getW().getAffineY(), point, 1 + FIELD_BYTES);
-
-        byte[] scalar = new byte[FIELD_BYTES];
-        unsigned(privateKey.getS(), scalar, 0);
-
-        byte[] body = concat(
-                tlv(0x02, new byte[]{1}),
-                tlv(0x04, scalar),
-                tlv(0xa0, tlv(0x06, OID_SECP384R1)),
-                tlv(0xa1, tlv(0x03, concat(new byte[]{0}, point))));
-
-        String base64 = Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(tlv(0x30, body));
-        return "-----BEGIN EC PRIVATE KEY-----\n" + base64 + "\n-----END EC PRIVATE KEY-----\n";
-    }
-
-    private static void unsigned(BigInteger value, byte[] out, int offset) throws GeneralSecurityException {
-        byte[] bytes = value.toByteArray();
-        int from = 0;
-        while (from < bytes.length - 1 && bytes[from] == 0) {
-            from++;
+        StringWriter out = new StringWriter();
+        try (JcaPEMWriter writer = new JcaPEMWriter(out)) {
+            writer.writeObject(new PemObject("EC PRIVATE KEY", new ECPrivateKey(FIELD_BYTES * 8,
+                    scalar.getKey(), publicKey.getPublicKeyData(), SECObjectIdentifiers.secp384r1).getEncoded()));
         }
-        int length = bytes.length - from;
-        if (length > FIELD_BYTES) {
-            throw new GeneralSecurityException("Key component is wider than the P-384 field");
-        }
-        System.arraycopy(bytes, from, out, offset + FIELD_BYTES - length, length);
-    }
-
-    private static byte[] tlv(int tag, byte[] content) {
-        byte[] length;
-        if (content.length < 0x80) {
-            length = new byte[]{(byte) content.length};
-        } else if (content.length < 0x100) {
-            length = new byte[]{(byte) 0x81, (byte) content.length};
-        } else {
-            length = new byte[]{(byte) 0x82, (byte) (content.length >> 8), (byte) content.length};
-        }
-        return concat(new byte[]{(byte) tag}, length, content);
-    }
-
-    private static byte[] concat(byte[]... parts) {
-        int size = 0;
-        for (byte[] part : parts) {
-            size += part.length;
-        }
-        byte[] out = new byte[size];
-        int offset = 0;
-        for (byte[] part : parts) {
-            System.arraycopy(part, 0, out, offset, part.length);
-            offset += part.length;
-        }
-        return out;
-    }
-
-    private static byte[] decodePem(String pem) throws GeneralSecurityException {
-        StringBuilder body = new StringBuilder();
-        boolean inside = false;
-        for (String line : pem.split("\\r\\n|\\n|\\r")) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("-----BEGIN")) {
-                inside = true;
-            } else if (trimmed.startsWith("-----END")) {
-                break;
-            } else if (inside) {
-                body.append(trimmed);
-            }
-        }
-        if (body.isEmpty()) {
-            throw new GeneralSecurityException("No PEM block found");
-        }
-        try {
-            return Base64.getDecoder().decode(body.toString());
-        } catch (IllegalArgumentException e) {
-            throw new GeneralSecurityException("The PEM body is not valid base64", e);
-        }
-    }
-
-    /**
-     * Decodes an uncompressed {@code 0x04 || X || Y} point.
-     */
-    private static ECPoint decodePoint(byte[] point) throws GeneralSecurityException {
-        if (point.length != 1 + 2 * FIELD_BYTES || point[0] != 0x04) {
-            throw new GeneralSecurityException("Expected an uncompressed P-384 public key point, got "
-                    + point.length + " bytes");
-        }
-        return new ECPoint(new BigInteger(1, Arrays.copyOfRange(point, 1, 1 + FIELD_BYTES)),
-                new BigInteger(1, Arrays.copyOfRange(point, 1 + FIELD_BYTES, point.length)));
-    }
-
-    /**
-     * The slice of DER needed to walk a private key structure: tag, length, value.
-     */
-    private static final class Der {
-        private final byte[] buffer;
-        private int offset;
-        private final int limit;
-
-        private Der(byte[] buffer) {
-            this(buffer, 0, buffer.length);
-        }
-
-        private Der(byte[] buffer, int offset, int limit) {
-            this.buffer = buffer;
-            this.offset = offset;
-            this.limit = limit;
-        }
-
-        private boolean hasNext() {
-            return this.offset < this.limit;
-        }
-
-        private int peekTag() throws GeneralSecurityException {
-            if (!hasNext()) {
-                throw new GeneralSecurityException("Truncated DER");
-            }
-            return this.buffer[this.offset] & 0xff;
-        }
-
-        private Der readSequence() throws GeneralSecurityException {
-            expect(0x30);
-            int length = readLength();
-            Der nested = new Der(this.buffer, this.offset, this.offset + length);
-            this.offset += length;
-            return nested;
-        }
-
-        private BigInteger readInteger() throws GeneralSecurityException {
-            expect(0x02);
-            return new BigInteger(readValue());
-        }
-
-        private byte[] readOctetString() throws GeneralSecurityException {
-            expect(0x04);
-            return readValue();
-        }
-
-        private byte[] readBitString() throws GeneralSecurityException {
-            expect(0x03);
-            byte[] value = readValue();
-            if (value.length == 0 || value[0] != 0) {
-                throw new GeneralSecurityException("Expected a whole number of bytes in the bit string");
-            }
-            return Arrays.copyOfRange(value, 1, value.length);
-        }
-
-        /**
-         * Reads one element of any tag and returns its contents.
-         */
-        private byte[] readAny() throws GeneralSecurityException {
-            peekTag();
-            this.offset++;
-            return readValue();
-        }
-
-        private void expect(int tag) throws GeneralSecurityException {
-            if (peekTag() != tag) {
-                throw new GeneralSecurityException(String.format("Expected DER tag 0x%02x, got 0x%02x",
-                        tag, peekTag()));
-            }
-            this.offset++;
-        }
-
-        private byte[] readValue() throws GeneralSecurityException {
-            int length = readLength();
-            byte[] value = Arrays.copyOfRange(this.buffer, this.offset, this.offset + length);
-            this.offset += length;
-            return value;
-        }
-
-        private int readLength() throws GeneralSecurityException {
-            if (this.offset >= this.limit) {
-                throw new GeneralSecurityException("Truncated DER length");
-            }
-            int first = this.buffer[this.offset++] & 0xff;
-            if (first < 0x80) {
-                return checked(first);
-            }
-            int count = first & 0x7f;
-            if (count == 0 || count > 4) {
-                throw new GeneralSecurityException("Unsupported DER length of " + count + " bytes");
-            }
-            int length = 0;
-            for (int i = 0; i < count; i++) {
-                if (this.offset >= this.limit) {
-                    throw new GeneralSecurityException("Truncated DER length");
-                }
-                length = (length << 8) | (this.buffer[this.offset++] & 0xff);
-            }
-            return checked(length);
-        }
-
-        private int checked(int length) throws GeneralSecurityException {
-            if (length < 0 || this.offset + length > this.limit) {
-                throw new GeneralSecurityException("DER element runs past the end of its parent");
-            }
-            return length;
-        }
+        return out.toString();
     }
 
     /**

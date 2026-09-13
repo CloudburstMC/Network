@@ -9,13 +9,13 @@ dependencies {
 
     implementation(libs.gson)
     implementation(libs.jose4j)
+    // Reading and writing the host identity PEM, which the JDK offers no API for
+    implementation(libs.bouncycastle.pkix)
 
     // Annotations only, CLASS retention, so consumers need nothing at runtime
     compileOnly(libs.jspecify)
 
     testImplementation(libs.bundles.junit)
-    // Netty cannot self sign on a modern JDK without it, and the TLS listener needs a certificate
-    testImplementation(libs.bouncycastle.pkix)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
