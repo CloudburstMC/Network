@@ -43,7 +43,15 @@ Trusted signing keys come from Minecraft's authorization service and are cached;
 URLs in the client's assertion cannot select a different trust source. Key
 fetching and verification run on a bounded executor outside the I/O loops. The
 existing negotiation deadline covers validation too, and a full validation queue
-receives HTTP 503. These checks run only during connection setup.
+receives HTTP 503. When the key set cannot be fetched, the offer is answered
+with HTTP 503 rather than 400, so an outage of the trust source is
+distinguishable from a rejected assertion. These checks run only during
+connection setup.
+
+Every rejection is logged at info level with the connection id, the client
+address and the validator's reason; an unreachable trust source is logged at
+warn level. Those messages never contain the client's token. A custom validator
+must keep its exception messages free of tokens for the same reason.
 
 To add application authorization, wrap the default verifier and reject claims
 that your application does not allow:
@@ -60,8 +68,9 @@ signaling.setOfferValidator(sdp -> {
 ```
 
 Validators may run concurrently. A custom validator must return a verified
-`ClientIdentity` or throw an exception to reject the offer. Configure the trusted
-issuer-key constructor of `ClientAssertionValidator` for a private issuer.
+`ClientIdentity` or throw an exception to reject the offer. For a private
+issuer, construct `ClientAssertionValidator` with the issuer's public key, or
+with its JWKS URL when the keys rotate.
 
 For an endpoint that deliberately accepts unvalidated offers, opt out explicitly:
 
@@ -72,10 +81,24 @@ signaling.setOfferValidator(null);
 Accepted child channels expose the verified identity through
 `child.getClientIdentity()` or
 `channel.attr(NetherNetChildChannel.CLIENT_IDENTITY).get()`. It is null when offer
-validation is disabled or unsupported by the signaling path. Applications still
-own Bedrock Login authentication and must check that the Login identity matches
-the verified transport key; NetworkM does not parse Login packets. Set discovery
-authentication flags to match the endpoint's admission policy.
+validation is disabled or unsupported by the signaling path. `getXuid()` and
+`getDisplayName()` read the `xid` and `xname` claims, and `getClaims()` holds the
+rest.
+
+Applications still own Bedrock Login authentication; NetworkM does not parse
+Login packets. Once the Login chain is verified, bind it to the transport:
+
+```java
+String mismatch = NetherNetChildChannel.loginKeyMismatch(channel, loginChainKey);
+if (mismatch != null) {
+    // Disconnect: the login is not from the player who opened this connection.
+}
+```
+
+The check compares the Login chain's signing key with the key that signed the
+offer's fingerprints, so a login cannot ride on another player's authenticated
+transport. It reports a mismatch when the channel carries no validated identity.
+Set discovery authentication flags to match the endpoint's admission policy.
 
 This policy applies to HTTP offers. LAN and Xbox signaling behavior is unchanged,
 as is the server identity assertion attached to answers.

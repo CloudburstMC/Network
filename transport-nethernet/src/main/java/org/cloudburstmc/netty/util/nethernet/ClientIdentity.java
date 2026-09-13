@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.util.nethernet;
 
 import java.security.PublicKey;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,6 +25,36 @@ public final class ClientIdentity {
 
     /** Returns an immutable snapshot of the verified token claims, including nested values. */
     public Map<String, Object> getClaims() { return claims; }
+
+    /**
+     * Returns the player's XUID from the {@code xid} claim, or null when the token carries none.
+     * The claim name is the one observed in Minecraft-issued tokens; the guide does not name it.
+     */
+    public String getXuid() { return stringClaim("xid"); }
+
+    /** Returns the player's display name from the {@code xname} claim, or null when the token carries none. */
+    public String getDisplayName() { return stringClaim("xname"); }
+
+    /**
+     * Checks that a Bedrock Login chain is signed by the key that opened this transport,
+     * which stops a login from riding on another player's authenticated connection.
+     *
+     * @param loginKey the public key the Login chain is signed with
+     * @return null when the keys match, otherwise the reason they do not
+     */
+    public String loginKeyMismatch(PublicKey loginKey) {
+        if (loginKey == null) {
+            return "the login chain carries no key to bind to the transport identity";
+        }
+        if (!Arrays.equals(publicKey.getEncoded(), loginKey.getEncoded())) {
+            return "the login chain is signed with a different key than the one that opened the transport";
+        }
+        return null;
+    }
+
+    private String stringClaim(String name) {
+        return claims.get(name) instanceof String value && !value.isEmpty() ? value : null;
+    }
 
     private static Map<String, Object> immutableClaims(Map<String, Object> source) {
         Map<String, Object> copy = new LinkedHashMap<>();

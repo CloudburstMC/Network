@@ -38,6 +38,16 @@ class ClientAssertionValidatorTest {
     }
 
     @Test
+    void unreachableTrustSourceIsReportedSeparatelyFromBadAssertions() throws Exception {
+        // Port 1 refuses the connection, so the key set fetch fails before any signature check.
+        ClientAssertionValidator validator = new ClientAssertionValidator("https://127.0.0.1:1/keys", ISSUER, AUDIENCE);
+        TrustSourceUnavailableException outage =
+                assertThrows(TrustSourceUnavailableException.class, () -> validator.validate(validOffer()));
+        assertTrue(outage.getMessage().startsWith("Trust source unavailable: "));
+        assertFalse(outage.getMessage().contains(signedToken(claims())));
+    }
+
+    @Test
     void snapshotsNestedClaimsWithoutRetainingMutableCollections() {
         List<String> roles = new ArrayList<>(List.of("player"));
         Map<String, Object> claims = new LinkedHashMap<>();

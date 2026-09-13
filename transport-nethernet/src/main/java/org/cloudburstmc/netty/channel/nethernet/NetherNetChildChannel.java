@@ -11,6 +11,7 @@ import io.netty.util.AttributeKey;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.security.PublicKey;
 import java.util.Objects;
 import java.util.function.DoubleConsumer;
 import java.util.function.Consumer;
@@ -35,6 +36,21 @@ public class NetherNetChildChannel extends NetherNetChannel {
 
     /** Returns the validated offer identity, or null when validation was disabled or unsupported by the signaling path. */
     public ClientIdentity getClientIdentity() { return attr(CLIENT_IDENTITY).get(); }
+
+    /**
+     * Checks a Bedrock Login chain key against the identity that opened the given channel,
+     * including wrappers that delegate attributes to the accepted child.
+     *
+     * @return null when the login key matches the verified transport key, otherwise the reason it does not,
+     *         including when the channel carries no validated identity
+     */
+    public static String loginKeyMismatch(Channel channel, PublicKey loginKey) {
+        ClientIdentity identity = channel == null ? null : channel.attr(CLIENT_IDENTITY).get();
+        if (identity == null) {
+            return "the transport carries no validated identity to bind the login chain to";
+        }
+        return identity.loginKeyMismatch(loginKey);
+    }
 
     void setClientIdentity(ClientIdentity identity) {
         if (identity != null) attr(CLIENT_IDENTITY).set(identity);

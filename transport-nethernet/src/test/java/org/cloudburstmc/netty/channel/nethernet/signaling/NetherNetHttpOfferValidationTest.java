@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.util.nethernet.ClientIdentity;
+import org.cloudburstmc.netty.util.nethernet.TrustSourceUnavailableException;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
@@ -110,6 +111,18 @@ class NetherNetHttpOfferValidationTest {
         channel.runPendingTasks();
         assertTrue(admitted.isEmpty());
         assertTrue(response(channel).startsWith("HTTP/1.1 400"));
+    }
+
+    @Test
+    void unreachableTrustSourceAnswers503InsteadOfRejecting() throws Exception {
+        signaling.setOfferValidator(sdp -> {
+            throw new TrustSourceUnavailableException("Trust source unavailable: connection refused");
+        });
+        EmbeddedChannel channel = offer(validOffer());
+        executor.finishNext();
+        channel.runPendingTasks();
+        assertTrue(admitted.isEmpty());
+        assertTrue(response(channel).startsWith("HTTP/1.1 503"));
     }
 
     @Test

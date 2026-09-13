@@ -14,6 +14,7 @@ import org.jose4j.jwt.consumer.JwtConsumerBuilder;
 import org.jose4j.keys.EllipticCurves;
 import org.jose4j.keys.resolvers.HttpsJwksVerificationKeyResolver;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -42,6 +43,18 @@ public final class ClientAssertionValidator implements NetherNetOfferValidator {
     /** Uses Minecraft's trusted authorization service with a shared, lazily fetched JWKS cache. */
     public ClientAssertionValidator() {
         this.tokenConsumer = MinecraftTrust.CONSUMER;
+    }
+
+    /**
+     * Uses a private issuer's JWKS endpoint, fetched lazily and cached like the Minecraft one.
+     * The URL must come from trusted configuration, never from the offer or JWT headers.
+     *
+     * @param jwksUrl HTTPS location of the issuer's key set
+     * @param issuer required token issuer
+     * @param audience required token audience
+     */
+    public ClientAssertionValidator(String jwksUrl, String issuer, String audience) {
+        this.tokenConsumer = jwksConsumer(Objects.requireNonNull(jwksUrl, "jwksUrl"), issuer, audience);
     }
 
     /**
@@ -108,9 +121,27 @@ public final class ClientAssertionValidator implements NetherNetOfferValidator {
         } catch (GeneralSecurityException e) {
             throw e;
         } catch (Exception e) {
+            // A key set that cannot be fetched is not a bad assertion; report it separately so
+            // the HTTP layer can answer 503 and operators can tell an outage from forgeries.
+            IOException unreachable = trustSourceFailure(e);
+            if (unreachable != null) {
+                throw new TrustSourceUnavailableException("Trust source unavailable: " + unreachable.getMessage());
+            }
             // JWT library exceptions can contain the bearer token; do not expose it in error text.
             throw new GeneralSecurityException("Client assertion validation failed");
         }
+    }
+
+    private static IOException trustSourceFailure(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IOException io) {
+                return io;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return null;
     }
 
     private static String string(Map<String, Object> object, String key) throws GeneralSecurityException {
@@ -187,21 +218,21 @@ public final class ClientAssertionValidator implements NetherNetOfferValidator {
 
     private record ParsedOffer(String identity, String fingerprints) { }
 
-    private static final class MinecraftTrust {
-        private static final JwtConsumer CONSUMER = create();
+    private static JwtConsumer jwksConsumer(String jwksUrl, String issuer, String audience) {
+        Get http = new Get();
+        http.setConnectTimeout(5000);
+        http.setReadTimeout(5000);
+        http.setRetries(0);
+        http.setResponseBodySizeLimit(64 * 1024);
+        HttpsJwks keys = new HttpsJwks(jwksUrl);
+        keys.setSimpleHttpGet(http);
+        return consumer(issuer, audience)
+                .setVerificationKeyResolver(new HttpsJwksVerificationKeyResolver(keys))
+                .setJwsAlgorithmConstraints(AlgorithmConstraints.ConstraintType.PERMIT, AlgorithmIdentifiers.RSA_USING_SHA256)
+                .build();
+    }
 
-        private static JwtConsumer create() {
-            Get http = new Get();
-            http.setConnectTimeout(5000);
-            http.setReadTimeout(5000);
-            http.setRetries(0);
-            http.setResponseBodySizeLimit(64 * 1024);
-            HttpsJwks keys = new HttpsJwks(ISSUER + ".well-known/keys");
-            keys.setSimpleHttpGet(http);
-            return consumer(ISSUER, AUDIENCE)
-                    .setVerificationKeyResolver(new HttpsJwksVerificationKeyResolver(keys))
-                    .setJwsAlgorithmConstraints(AlgorithmConstraints.ConstraintType.PERMIT, AlgorithmIdentifiers.RSA_USING_SHA256)
-                    .build();
-        }
+    private static final class MinecraftTrust {
+        private static final JwtConsumer CONSUMER = jwksConsumer(ISSUER + ".well-known/keys", ISSUER, AUDIENCE);
     }
 }

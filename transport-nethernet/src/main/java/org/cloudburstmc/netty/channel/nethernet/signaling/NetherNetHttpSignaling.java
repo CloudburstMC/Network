@@ -5,6 +5,7 @@ import org.cloudburstmc.netty.channel.nethernet.NetherNetServerStatus;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetOfferValidator;
 import org.cloudburstmc.netty.util.nethernet.ClientAssertionValidator;
 import org.cloudburstmc.netty.util.nethernet.ClientIdentity;
+import org.cloudburstmc.netty.util.nethernet.TrustSourceUnavailableException;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -631,7 +632,17 @@ public class NetherNetHttpSignaling implements NetherNetServerSignaling {
             if (failure != null) {
                 if (pendingExchanges.remove(connectionId, exchange)) {
                     exchange.cancelTimeout();
-                    respond(exchange.ctx, HttpResponseStatus.BAD_REQUEST, "text/plain", "Client assertion rejected");
+                    // Validator messages never carry the bearer token, so they can be logged.
+                    if (failure instanceof TrustSourceUnavailableException) {
+                        log.warn("Offer {} from {} not validated, trust source unreachable: {}",
+                                Long.toUnsignedString(connectionId), exchange.remoteAddress, failure.getMessage());
+                        respond(exchange.ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "text/plain",
+                                "Identity trust source unavailable");
+                    } else {
+                        log.info("Rejected offer {} from {}: {}",
+                                Long.toUnsignedString(connectionId), exchange.remoteAddress, failure.getMessage());
+                        respond(exchange.ctx, HttpResponseStatus.BAD_REQUEST, "text/plain", "Client assertion rejected");
+                    }
                 }
                 return;
             }
