@@ -1,8 +1,26 @@
-plugins {
-    id("com.gradleup.nmcp")
+description = "NetherNet transport for Netty"
+
+// The transport needs Java 21 while the rest of the build stays on its baseline.
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
 }
 
-description = "NetherNet transport for Netty"
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+    options.release.set(21)
+}
+
+tasks.withType<Javadoc>().configureEach {
+    (options as StandardJavadocDocletOptions).addStringOption("-release", "21")
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+    minHeapSize = "512m"
+    maxHeapSize = "1024m"
+}
 
 val webrtcNativePlatform = providers.gradleProperty("webrtcNativePlatform")
 
