@@ -1,14 +1,14 @@
 # netty-transport-nethernet
 
-In NetworkM this module targets Java 21 and uses the
-[slim webrtc-java fork](https://github.com/EduGeyser/webrtc-java),
+This module targets Java 21 and uses the
+[data channels only build of webrtc-java](https://github.com/EduGeyser/webrtc-java),
 with Maven coordinates `io.github.sendablemetatype.webrtc:webrtc-java` and Java
 packages under `io.github.sendablemetatype.webrtc`. Consumers also need matching
 platform native libraries.
 
 NetherNet's identity library uses SLF4J 2.0. Applications that use SLF4J logging
-must provide a backend compatible with the 2.0 API. NetworkM leaves backend
-selection to the application; its tests use the SLF4J bridge to Java logging.
+must provide a backend compatible with the 2.0 API. Backend selection is left
+to the application; the tests use the SLF4J bridge to Java logging.
 
 ## Usage
 
@@ -78,6 +78,8 @@ For an endpoint that deliberately accepts unvalidated offers, opt out explicitly
 signaling.setOfferValidator(null);
 ```
 
+The setting lives on the signaling instance; there is no channel option for it.
+
 Accepted child channels expose the verified identity through
 `child.getClientIdentity()` or
 `channel.attr(NetherNetChildChannel.CLIENT_IDENTITY).get()`. It is null when offer
@@ -85,8 +87,8 @@ validation is disabled or unsupported by the signaling path. `getXuid()` and
 `getDisplayName()` read the `xid` and `xname` claims, and `getClaims()` holds the
 rest.
 
-Applications still own Bedrock Login authentication; NetworkM does not parse
-Login packets. Once the Login chain is verified, bind it to the transport:
+Applications still own Bedrock Login authentication; the transport does not
+parse Login packets. Once the Login chain is verified, bind it to the transport:
 
 ```java
 String mismatch = NetherNetChildChannel.loginKeyMismatch(channel, loginChainKey);
@@ -133,7 +135,8 @@ signaling.setAdvertisementData(data);
 
 Advertisements are encoded when updated and cached for discovery responses.
 An update that cannot fit a UDP datagram fails without replacing the previous
-advertisement. This library support does not enable a LAN listener in EduGeyser.
+advertisement. Library support does not by itself enable a LAN listener in an
+application.
 
 ### Reading and buffering
 
@@ -215,7 +218,7 @@ the build and release checks.
 ### Upstream integration examples
 
 These references were inherited from NetworkCompatible. They illustrate
-upstream API usage; adapt their imports and dependencies for NetworkM.
+upstream API usage; adapt their imports and dependencies for this module.
 
 - [Kas-tle/ProxyPass](https://github.com/Kas-tle/ProxyPass): Uses server and client to debug game packets over various connection types.
 - [MCXboxBroadcast/Broadcaster](https://github.com/MCXboxBroadcast/Broadcaster): Uses server to allow Bedrock clients to transfer to other Bedrock servers via Xbox Live.
