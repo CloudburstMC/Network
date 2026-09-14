@@ -1,0 +1,315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nethernet:control:active-frame:draft-v1",
+  "title": "Draft NXS active-session frame",
+  "description": "Draft only; excludes bootstrap and activation framing. Does not activate a capability in published NXS.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "type",
+    "id",
+    "sequence",
+    "direction",
+    "audience",
+    "instanceId",
+    "generation",
+    "sessionId",
+    "sessionEpoch",
+    "connectionId",
+    "capabilities",
+    "sentAt",
+    "expiresAt",
+    "payload",
+    "payloadSha256",
+    "authentication"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "assisted.answer",
+        "assisted.cancel",
+        "assisted.error",
+        "assisted.offer",
+        "connectivity.report",
+        "diagnostic.answer",
+        "diagnostic.cancel",
+        "diagnostic.error",
+        "diagnostic.offer",
+        "lifecycle.receipt",
+        "lifecycle.request",
+        "outcomes.batch",
+        "outcomes.receipt",
+        "session.draining",
+        "session.ready",
+        "session.reconnect",
+        "session.resync",
+        "state.applied",
+        "state.desired"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$",
+      "minLength": 16,
+      "maxLength": 128
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "direction": {
+      "enum": [
+        "host-to-provider",
+        "provider-to-host"
+      ]
+    },
+    "audience": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 2048,
+      "$comment": "Canonical HTTPS provider origin, or explicit loopback-development HTTP origin; no path/query/fragment/userinfo. Must match trusted expected audience."
+    },
+    "instanceId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "maxLength": 128
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$",
+      "minLength": 16,
+      "maxLength": 128
+    },
+    "sessionEpoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$",
+      "minLength": 16,
+      "maxLength": 128
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "addressed",
+          "assisted-diagnostic",
+          "assisted-gameplay",
+          "request-response"
+        ]
+      },
+      "contains": {
+        "const": "request-response"
+      },
+      "$comment": "Strict ascending ASCII order; exact trusted selected capabilities required."
+    },
+    "sentAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "expiresAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "payload": {
+      "type": "string",
+      "maxLength": 87382,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+      "$comment": "Canonical base64url; decoded bytes at most65536 and strict UTF8. Typed payload validation is required separately."
+    },
+    "payloadSha256": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scheme",
+        "keyId",
+        "signature"
+      ],
+      "properties": {
+        "scheme": {
+          "const": "nxs-control-es384-v1"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "maxLength": 128
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 128,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]{128}$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "direction": {
+            "const": "host-to-provider"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "enum": [
+              "session.ready",
+              "session.resync",
+              "session.draining",
+              "lifecycle.request",
+              "state.applied",
+              "outcomes.batch",
+              "assisted.answer",
+              "assisted.error",
+              "diagnostic.answer",
+              "diagnostic.error"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "type": {
+            "enum": [
+              "session.ready",
+              "session.resync",
+              "session.reconnect",
+              "lifecycle.receipt",
+              "outcomes.receipt",
+              "connectivity.report",
+              "assisted.offer",
+              "assisted.cancel",
+              "diagnostic.offer",
+              "diagnostic.cancel",
+              "state.desired"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "pattern": "^assisted\\."
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "assisted-gameplay"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "pattern": "^diagnostic\\."
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "assisted-diagnostic"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "assisted-gameplay"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "addressed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "assisted-diagnostic"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "addressed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "state.desired"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "addressed"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "x-max-utf8-bytes": 131072,
+  "$comment": "Before JSON schema validation, require canonical unsigned decimal integer tokens (0|[1-9][0-9]*); reject fractional/exponential/-0 tokens even if JSON.parse would round to a safe integer. Reject duplicate JSON member names before schema validation. Additional codec checks: sorted capabilities; canonical audience/base64url; exact SHA256(payload) match; expiresAt>sentAt and TTL<=60000ms; strict expiresAt>now; sentAt<=now+bounded skew<=30000ms; frame expiry<=fixed parent authority and key expiry; key valid at sentAt and now; exact next sequence/current connection context; raw96 ES384 proof with correct separate key family."
+}
