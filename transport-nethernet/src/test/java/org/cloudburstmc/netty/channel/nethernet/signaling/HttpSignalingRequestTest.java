@@ -32,6 +32,7 @@ import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -281,6 +282,100 @@ class HttpSignalingRequestTest {
             read += n;
         }
         return new String(body);
+    }
+
+    @Test
+    void holdsOnlySoManyConnectionsForOneAddress() throws Exception {
+        // A kept connection costs a socket until it goes idle, so one peer must not be able to
+        // take as many as the host has descriptors
+        this.start(this.builder().setMaxConnectionsPerAddress(2));
+
+        List<Socket> held = new ArrayList<>();
+        try {
+            for (int i = 0; i < 2; i++) {
+                held.add(this.keptConnection());
+            }
+            try (Socket refused = new Socket("127.0.0.1", this.port)) {
+                refused.setSoTimeout(10_000);
+                assertEquals(-1, refused.getInputStream().read(), "the third is closed unanswered");
+            }
+        } finally {
+            for (Socket socket : held) {
+                socket.close();
+            }
+        }
+
+        // Closing them gives the allowance back, once the server has noticed they went
+        try (Socket reused = this.eventuallyKept()) {
+            assertNotNull(reused, "a closed connection frees its place");
+        }
+    }
+
+    @Test
+    void countsNoConnectionAgainstATrustedProxy() throws Exception {
+        // Every client behind a proxy shares its address, so counting them together would throttle
+        // all of them at once
+        this.start(this.builder().setMaxConnectionsPerAddress(1).setTrustedProxies(List.of("127.0.0.1")));
+
+        try (Socket first = this.keptConnection(); Socket second = this.keptConnection()) {
+            assertNotNull(first);
+            assertNotNull(second);
+        }
+    }
+
+    @Test
+    void refusesAJoinWhenTooManyAreAlreadyWaiting() throws Exception {
+        // The handler accepts the offer and never answers, so the join stays pending
+        this.start(this.builder().setMaxPendingJoins(1));
+        this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) -> {
+        });
+
+        Thread first = new Thread(() -> {
+            try {
+                this.status("POST", "/v1/join/1", TestOffers.selfSigned());
+            } catch (Exception ignored) {
+                // The test ends while it is still waiting for an answer
+            }
+        });
+        first.setDaemon(true);
+        first.start();
+
+        // Wait for it to be registered rather than guessing at a delay
+        for (int i = 0; i < 100 && this.signaling.pendingJoins() < 1; i++) {
+            Thread.sleep(20);
+        }
+        assertEquals(1, this.signaling.pendingJoins(), "the first join is waiting for an answer");
+        assertEquals(503, this.status("POST", "/v1/join/2", TestOffers.selfSigned()),
+                "the second is refused rather than opening another peer connection");
+    }
+
+    /** Retries until the allowance frees up, since a peer closing is not instant on this side. */
+    private Socket eventuallyKept() throws Exception {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return this.keptConnection();
+            } catch (IOException refused) {
+                if (attempt >= 100) {
+                    throw refused;
+                }
+                Thread.sleep(20);
+            }
+        }
+    }
+
+    /** A connection that has made one request and been told it may stay. */
+    private Socket keptConnection() throws Exception {
+        Socket socket = new Socket("127.0.0.1", this.port);
+        socket.setSoTimeout(10_000);
+        socket.getOutputStream().write(
+                "GET /v1/join HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n\r\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+        socket.getOutputStream().flush();
+        BufferedReader in = new BufferedReader(
+                new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+        assertEquals(200, readStatus(in));
+        this.readBody(in);
+        return socket;
     }
 
     /** A GET over TLS, trusting whatever the listener presents, since this test made it. */

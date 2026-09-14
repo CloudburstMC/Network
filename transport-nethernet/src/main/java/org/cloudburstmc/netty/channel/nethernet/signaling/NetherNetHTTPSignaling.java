@@ -32,6 +32,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFactory;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
@@ -90,6 +91,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     private final Random random = new SecureRandom();
     private final Map<String, Promise<String>> pendingAnswers = new ConcurrentHashMap<>();
+    private final Map<InetAddress, Integer> connectionsPerAddress = new ConcurrentHashMap<>();
 
     private final PlayerFilter playerFilter;
     private final MotdProvider motdProvider;
@@ -109,6 +111,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final TokenTrust tokenTrust;
     private final boolean serveHttp;
     private final boolean proxyProtocol;
+    private final int maxConnectionsPerAddress;
+    private final int maxPendingJoins;
 
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
@@ -123,6 +127,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.sslContext = builder.sslContext;
         this.serverIdentity = builder.identity;
         this.trustedProxies = builder.trustedProxies;
+        this.maxConnectionsPerAddress = builder.maxConnectionsPerAddress;
+        this.maxPendingJoins = builder.maxPendingJoins;
         this.iceOnLocalPort = builder.iceOnLocalPort;
         this.advertisedAddresses = builder.advertisedAddresses;
         this.iceServers = builder.iceServers;
@@ -160,6 +166,10 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                     @Override
                     protected void initChannel(Channel ch) {
                         ChannelPipeline p = ch.pipeline();
+                        // Counted before anything is read, so a peer holding sockets open is capped
+                        // whatever it goes on to send
+                        p.addLast(new ConnectionLimiter());
+
                         // A PROXY header precedes the TLS handshake, so it is read before any of this
                         if (proxyProtocol) {
                             p.addLast(new OptionalProxyProtocol());
@@ -190,6 +200,49 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 future.channel().close();
             }
         });
+    }
+
+    /**
+     * Caps how many connections one address may hold open at once.
+     * <p>
+     * Anyone on the internet can reach this endpoint, and a kept connection costs a socket until
+     * it goes idle, so without a cap a single peer can hold as many as the host has descriptors.
+     * A trusted reverse proxy is exempt, since every client behind it shares its address and
+     * counting them together would throttle all of them at once.
+     */
+    private class ConnectionLimiter extends ChannelInboundHandlerAdapter {
+        private InetAddress counted;
+
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) {
+            InetAddress peer = ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress();
+            if (trustedProxies.contains(peer)) {
+                ctx.fireChannelActive();
+                return;
+            }
+
+            if (connectionsPerAddress.merge(peer, 1, Integer::sum) > maxConnectionsPerAddress) {
+                release(peer);
+                log.debug("Refused a connection from {}, already holding {}", peer, maxConnectionsPerAddress);
+                ctx.close();
+                return;
+            }
+            this.counted = peer;
+            ctx.fireChannelActive();
+        }
+
+        @Override
+        public void channelInactive(ChannelHandlerContext ctx) {
+            if (this.counted != null) {
+                release(this.counted);
+                this.counted = null;
+            }
+            ctx.fireChannelInactive();
+        }
+
+        private void release(InetAddress peer) {
+            connectionsPerAddress.computeIfPresent(peer, (address, held) -> held <= 1 ? null : held - 1);
+        }
     }
 
     /**
@@ -422,6 +475,15 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     /**
+     * How many joins are waiting for an answer, which is what {@code setMaxPendingJoins} caps.
+     *
+     * @return The joins in flight
+     */
+    public int pendingJoins() {
+        return this.pendingAnswers.size();
+    }
+
+    /**
      * Answers an SDP offer, whether it arrived over this server's HTTP endpoint or was handed in
      * from outside it.
      * <p>
@@ -438,6 +500,13 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
                                                  @Nullable InetSocketAddress clientAddress,
                                                  @Nullable String host) {
+        // Ahead of the signature check, so a flood cannot make us verify its way to the limit
+        if (pendingAnswers.size() >= maxPendingJoins) {
+            log.warn("Refusing joins, {} are already waiting for an answer", pendingAnswers.size());
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(OfferRejected.Reason.UNAVAILABLE, "too many joins in flight", null));
+        }
+
         JwtClaims claims;
         try {
             claims = IdentityUtils.validateSdp(sdpOffer, tokenTrust);
@@ -613,6 +682,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private ServerIdentity identity;
         private SslContext sslContext;
         private IpRangeSet trustedProxies = IpRangeSet.empty();
+        private int maxConnectionsPerAddress = 8;
+        private int maxPendingJoins = 64;
         private boolean iceOnLocalPort = true;
         private Set<String> advertisedAddresses = Set.of();
         private List<IceServerInfo> iceServers = List.of();
@@ -726,6 +797,38 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             } catch (Exception e) {
                 throw new IllegalArgumentException("Cannot read the TLS certificate " + certificateChain, e);
             }
+        }
+
+        /**
+         * Caps the connections one address may hold at once. Trusted proxies are exempt, since
+         * every client behind one shares its address.
+         *
+         * @param maxConnectionsPerAddress Connections per address, must be positive
+         * @return This builder
+         */
+        public Builder setMaxConnectionsPerAddress(int maxConnectionsPerAddress) {
+            if (maxConnectionsPerAddress < 1) {
+                throw new IllegalArgumentException("maxConnectionsPerAddress");
+            }
+            this.maxConnectionsPerAddress = maxConnectionsPerAddress;
+            return this;
+        }
+
+        /**
+         * Caps how many joins may be waiting for an answer at once. Each one holds a peer
+         * connection open until it is answered or times out, so this bounds what the host spends
+         * on connections nobody has completed. Joins past it are refused as unavailable, whoever
+         * they came from: it guards a finite resource rather than one peer's share of it.
+         *
+         * @param maxPendingJoins Joins in flight, must be positive
+         * @return This builder
+         */
+        public Builder setMaxPendingJoins(int maxPendingJoins) {
+            if (maxPendingJoins < 1) {
+                throw new IllegalArgumentException("maxPendingJoins");
+            }
+            this.maxPendingJoins = maxPendingJoins;
+            return this;
         }
 
         /**
