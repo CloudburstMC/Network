@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.AbstractChannel;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelConfig;
@@ -19,6 +20,7 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.util.function.Consumer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -158,30 +160,53 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
 
         ByteBuf framed = payload.retainedDuplicate();
-        int maxPayload = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
         int totalLength = framed.readableBytes();
-        int segments = (totalLength + maxPayload - 1) / maxPayload;
-        if (segments == 0) {
-            log.debug("Nothing sent for an empty outbound message");
-        }
 
         try {
-            // Absolute reads, so every offset starts where the readable bytes do
-            int start = framed.readerIndex();
-            for (int i = 0, offset = 0; i < segments; i++, offset += maxPayload) {
-                int chunkSize = Math.min(maxPayload, totalLength - offset);
-                ByteBuffer chunk = ByteBuffer.allocateDirect(1 + chunkSize);
-
-                chunk.put((byte) (segments - 1 - i));
-                framed.getBytes(start + offset, chunk);
-                reliableChannel.sendMessage(chunk.flip());
+            int segments = segment(framed, alloc(), NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1,
+                    reliableChannel::sendMessage);
+            if (segments == 0) {
+                log.debug("Nothing sent for an empty outbound message");
+            } else {
+                log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
             }
-            log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
         } catch (Exception e) {
             pipeline().fireExceptionCaught(e);
         } finally {
             framed.release();
         }
+    }
+
+    /**
+     * Splits a message into segments carrying the countdown header, handing each to {@code sender}.
+     * <p>
+     * A segment is passed as a view of a pooled buffer that is released once {@code sender}
+     * returns, so a sender that keeps the bytes must copy them. The native send does.
+     *
+     * @param framed     The message to split, read absolutely so its own indexes are left alone
+     * @param allocator  Where the segment buffers come from
+     * @param maxPayload The most payload one segment may carry, excluding the header byte
+     * @param sender     Takes each segment, in order
+     * @return How many segments were handed over
+     */
+    static int segment(ByteBuf framed, ByteBufAllocator allocator, int maxPayload,
+                       Consumer<ByteBuffer> sender) {
+        int totalLength = framed.readableBytes();
+        int segments = (totalLength + maxPayload - 1) / maxPayload;
+        int start = framed.readerIndex();
+
+        for (int i = 0, offset = 0; i < segments; i++, offset += maxPayload) {
+            int chunkSize = Math.min(maxPayload, totalLength - offset);
+            ByteBuf chunk = allocator.directBuffer(1 + chunkSize, 1 + chunkSize);
+            try {
+                chunk.writeByte(segments - 1 - i);
+                chunk.writeBytes(framed, start + offset, chunkSize);
+                sender.accept(chunk.nioBuffer(chunk.readerIndex(), chunk.readableBytes()));
+            } finally {
+                chunk.release();
+            }
+        }
+        return segments;
     }
 
     @Override
