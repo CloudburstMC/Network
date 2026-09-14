@@ -19,9 +19,10 @@ class EndpointConnectivityControllerTest {
     static final class FakeMonitor implements Monitor {
         Optional<Sample> sample = Optional.empty();
         boolean closed, fail;
+        int closeFailures, closeCalls;
         Runnable beforeRead = () -> {};
         public Optional<Sample> read() { if (closed || fail) throw new IllegalStateException(); beforeRead.run(); return sample; }
-        public void close() { closed = true; }
+        public void close() { closeCalls++; if (closeFailures-- > 0) throw new IllegalStateException("close failed"); closed = true; }
         void success(Family family, String ip, int port, long revision, long responses, long age) {
             sample = Optional.of(new Sample(SERVERS.get(family), endpoint(ip, port), TransactionState.SUCCEEDED,
                     responses, 0, revision, Optional.of(Duration.ofMillis(age))));
@@ -164,5 +165,76 @@ class EndpointConnectivityControllerTest {
         assertTrue(delayed.freshStunEndpoint().isEmpty());
         assertEquals(2, f.opens, "Native transaction failure must not create fresh monitors or reset native age");
         f.controller.close();
+    }
+
+    @Test void lateDirectCompletionCannotStartFallbackOrExtendAReport() {
+        var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST))));
+        var late = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
+        f.clock.addAndGet(Duration.ofSeconds(10).toNanos());
+        assertFalse(f.controller.completeDirectCheck(late, CheckOutcome.FAILED));
+        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
+        assertNull(f.monitors.get(Family.IPV4));
+        var current = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
+        f.clock.addAndGet(Duration.ofSeconds(9).toNanos());
+        assertTrue(f.controller.completeDirectCheck(current, CheckOutcome.SUCCEEDED));
+        var report = f.snapshot().families().get(Family.IPV4);
+        assertEquals(current.expiresAtNanos(), report.directCheckExpiresAtNanos().orElseThrow());
+        assertEquals(CheckOutcome.SUCCEEDED, report.directCheckAt(f.clock.get()));
+        f.clock.addAndGet(Duration.ofSeconds(1).toNanos());
+        assertEquals(CheckOutcome.UNKNOWN, report.directCheckAt(f.clock.get()));
+        var expired = f.snapshot().families().get(Family.IPV4);
+        assertEquals(CheckOutcome.UNKNOWN, expired.directCheck());
+        assertEquals(State.AWAITING_DIRECT_CHECK, expired.state());
+        assertTrue(expired.directCheckExpiresAtNanos().isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> f.controller.beginDirectCheck(Family.IPV4, Duration.ofMinutes(6)));
+        assertThrows(IllegalArgumentException.class, () -> f.controller.beginDirectCheck(Family.IPV4, Duration.ZERO));
+        f.controller.close();
+    }
+
+    @Test void expiredFailureBecomesUnknownWhilePreviouslyStartedStunStaysWarm() {
+        var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST))));
+        var check = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
+        assertTrue(f.controller.completeDirectCheck(check, CheckOutcome.FAILED));
+        f.snapshot(); var monitor = f.monitors.get(Family.IPV4);
+        monitor.success(Family.IPV4, "8.8.8.8", 40000, 1, 1, 0);
+        var first = f.snapshot();
+        f.clock.addAndGet(Duration.ofSeconds(11).toNanos());
+        monitor.success(Family.IPV4, "8.8.8.8", 40000, 1, 2, 0);
+        var expired = f.snapshot();
+        var family = expired.families().get(Family.IPV4);
+        assertEquals(CheckOutcome.UNKNOWN, family.directCheck());
+        assertEquals(State.STUN_FRESH, family.state());
+        assertEquals(first.candidateRevision(), expired.candidateRevision());
+        assertFalse(monitor.closed);
+        assertEquals(2, f.opens, "Report expiry must not replace either family's warm monitor");
+        f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.UNKNOWN);
+        assertEquals(State.STUN_FRESH, f.state(Family.IPV4));
+        assertFalse(monitor.closed);
+        f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.SUCCEEDED);
+        assertTrue(monitor.closed, "A fresh successful direct check retires fallback");
+        assertEquals(State.DIRECT_CHECK_SUCCEEDED, f.state(Family.IPV4));
+        assertTrue(f.snapshot().families().get(Family.IPV4).freshStunEndpoint().isEmpty());
+        f.controller.close();
+    }
+
+    @Test void failedCloseRetainsOwnedHandleWithoutFreshEndpointOrDuplicateMonitor() {
+        var f = new Fixture(automatic(List.of()));
+        f.snapshot(); var monitor = f.monitors.get(Family.IPV4);
+        monitor.success(Family.IPV4, "8.8.8.8", 40000, 1, 1, 0);
+        assertTrue(f.snapshot().families().get(Family.IPV4).freshStunEndpoint().isPresent());
+        monitor.fail = true; monitor.closeFailures = 3;
+        assertEquals(State.MONITOR_FAILED, f.state(Family.IPV4));
+        assertTrue(f.snapshot().families().get(Family.IPV4).freshStunEndpoint().isEmpty());
+        assertEquals(1, monitor.closeCalls, "Ordinary snapshots do not spin a failed close");
+        assertThrows(IllegalStateException.class, () -> f.controller.replaceStunServer(Family.IPV4, SERVERS.get(Family.IPV4)));
+        assertEquals(2, f.opens, "Replacement cannot open while its previous handle failed to close");
+        assertThrows(IllegalStateException.class, f.controller::close);
+        assertFalse(monitor.closed);
+        assertTrue(f.snapshot().families().values().stream().allMatch(s -> s.state() == State.CLOSED
+                && s.freshStunEndpoint().isEmpty() && s.directCheck() == CheckOutcome.UNKNOWN));
+        f.controller.close();
+        assertTrue(monitor.closed);
+        assertEquals(4, monitor.closeCalls);
+        assertEquals(2, f.opens);
     }
 }

@@ -35,12 +35,19 @@ a monitor leaves the listener and other peers owned by the channel intact.
 
 For a family with direct candidates, `beginDirectCheck` supplies an opaque token and
 its exact candidate list. `completeDirectCheck` accepts only the current token once;
-replaced, duplicated and post-close results are ignored. `UNKNOWN` remains awaiting
-a check; only `FAILED` allows STUN fallback. A completed discovery cut with no direct
+replaced, duplicated, expired and post-close results are ignored. Request and result
+share one fixed monotonic deadline from `beginDirectCheck`, default 30 seconds and
+explicitly bounded to five minutes. Completion cannot renew that deadline. Fresh
+snapshots expire old results to `UNKNOWN`; `directCheckAt` checks a retained report's
+deadline too. Initially `UNKNOWN` remains awaiting a check; only a timely `FAILED`
+result selects STUN fallback. A completed discovery cut with no direct
 candidate can proceed to STUN immediately. Configured endpoints never enable STUN,
 even after a failed check. These outcomes describe the caller's check; a successful
 regional check does not prove reachability from arbitrary sources. Authenticating,
-scoping and expiring those external check results belongs to the integration layer.
+scoping those external check results belongs to the integration layer. Reporting
+expiry or a later `UNKNOWN` does not retire an already selected STUN fallback: its
+native monitor stays warm during a reporting/control-plane outage. A fresh direct
+success, explicit monitor/configuration replacement or closure retires that monitor.
 
 `snapshot()` starts eligible monitors and copies native observations; it sends no
 refresh packet itself. Native code refreshes independently with zero players.
@@ -54,6 +61,10 @@ The scope of both revisions is this live controller, not provider generation or
 admission incarnation. A failed native transaction retains historical metadata only
 until its original freshness bound. A terminal monitor read/open failure remains
 failed without an allocation retry loop; an explicit server replacement can retry.
+If native close itself fails, the controller withdraws the endpoint and retains the
+owned handle for explicit close/replacement retry. Snapshots do not spin retries or
+reopen a duplicate. `close()` reports failed teardown and can be retried; a `CLOSED`
+snapshot withdraws authority but does not claim native destruction succeeded.
 
 Only public mapped addresses appear as `freshStunEndpoint`. Private/loopback
 responses remain visible as ineligible observations. No observation marks a host
