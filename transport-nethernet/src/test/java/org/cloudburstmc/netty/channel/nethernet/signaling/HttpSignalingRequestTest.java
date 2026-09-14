@@ -363,6 +363,45 @@ class HttpSignalingRequestTest {
         }
     }
 
+    @Test
+    void refusesDuplicatePendingNetworkIdsWithoutReplacingTheirAnswer() throws Exception {
+        this.start(this.builder().setMaxPendingJoins(2));
+        var created = new java.util.concurrent.atomic.AtomicInteger();
+        this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
+                created.incrementAndGet());
+        String offer = TestOffers.selfSigned();
+        var first = this.signaling.acceptOffer("same-id", offer, null, "example.test");
+        var duplicate = this.signaling.acceptOffer("same-id", offer, null, "example.test");
+        assertTrue(duplicate.isCompletedExceptionally(), "a duplicate cannot replace a pending answer");
+        assertEquals(1, created.get(), "only the original offer may allocate a peer");
+        this.signaling.sendFullSdp("same-id", ANSWER);
+        assertTrue(first.get(2, java.util.concurrent.TimeUnit.SECONDS).startsWith("v=0"));
+    }
+
+    @Test
+    void capsConcurrentOffersBeforeCreatingPeers() throws Exception {
+        var bothValidated = new java.util.concurrent.CyclicBarrier(2);
+        this.start(this.builder().setMaxPendingJoins(1).setPlayerFilter((host, player) -> {
+            try { bothValidated.await(3, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (Exception failure) { throw new IllegalStateException(failure); }
+            return true;
+        }));
+        var created = new java.util.concurrent.atomic.AtomicInteger();
+        this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
+                created.incrementAndGet());
+        String offer = TestOffers.selfSigned();
+        var first = java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                this.signaling.acceptOffer("one", offer, null, "example.test"));
+        var second = java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                this.signaling.acceptOffer("two", offer, null, "example.test"));
+        var a = first.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        var b = second.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(1, created.get(), "the cap applies across callers");
+        assertTrue(a.isCompletedExceptionally() ^ b.isCompletedExceptionally());
+        this.signaling.sendFullSdp("one", ANSWER);
+        this.signaling.sendFullSdp("two", ANSWER);
+    }
+
     /** A connection that has made one request and been told it may stay. */
     private Socket keptConnection() throws Exception {
         Socket socket = new Socket("127.0.0.1", this.port);
