@@ -1,13 +1,13 @@
-# NetherNet External Signalling
+# NetherNet External Signaling
 
-Java 17 client for the open [NXS v1 specification](../docs/external-signalling/README.md).
-Published coordinates follow Cloudburst conventions: `org.cloudburstmc.netty:netty-external-signalling`.
+Java 17 client for the open [NXS v1 specification](../docs/external-signaling/README.md).
+Published coordinates follow Cloudburst conventions: `org.cloudburstmc.netty:netty-external-signaling`.
 The independent provider and fixtures require no product account or proprietary control plane.
 
 ```sh
-./gradlew --max-workers=2 :external-signalling:test :transport-nethernet:test
-./gradlew --max-workers=2 :external-signalling:providerStub
-node docs/external-signalling/fixtures.mjs
+./gradlew --max-workers=2 :external-signaling:test :transport-nethernet:test
+./gradlew --max-workers=2 :external-signaling:providerStub
+node docs/external-signaling/fixtures.mjs
 ```
 
 `ProviderClient` supports new-service registration by advertised anonymous proof of work
@@ -41,7 +41,7 @@ migration after admission. Java validates the NXS1 token from incoming
 ICE metadata; native code verifies STUN integrity before creating a peer. The
 first request stays native during asynchronous validation, and acceptance does
 not depend on a client retry. Established transport packets stay native. The optional native test task is
-`:external-signalling:nativeAdmissionTest`, which runs against the published binding
+`:external-signaling:nativeAdmissionTest`, which runs against the published binding
 selected by the `libdatachannel` version in `gradle/libs.versions.toml`. Its native
 classifier resolves at that same version, so headers and native binaries cannot skew
 apart. Native tests prove transport conformance, not stock-client gameplay.

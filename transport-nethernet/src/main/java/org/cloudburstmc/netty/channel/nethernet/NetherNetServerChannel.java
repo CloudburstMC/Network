@@ -46,13 +46,13 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     /**
      * Creates a NetherNetServerChannel.
      *
-     * @param signaling The NetherNetServerSignaling instance for signalling.
+     * @param signaling The NetherNetServerSignaling instance for signaling.
      */
     public NetherNetServerChannel(NetherNetServerSignaling signaling) {
         this.signaling = signaling;
         this.config = new DefaultNetherServerChannelConfig(this);
 
-        // Prefer the signalling identity so answers are signed with a key clients can attribute to us
+        // Prefer the signaling identity so answers are signed with a key clients can attribute to us
         this.serverIdentity = signaling.serverIdentity();
         if (this.serverIdentity == null) {
             try {
@@ -79,7 +79,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     /**
      * Pins ICE to the bound address, so the transport uses one predictable port rather than an
-     * ephemeral one per connection. Skipped when the signalling holds that UDP port itself.
+     * ephemeral one per connection. Skipped when the signaling holds that UDP port itself.
      *
      * @param config The configuration to derive from.
      * @return The configuration with the bound address applied.
@@ -116,7 +116,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     }
 
     /**
-     * @param clientAddress The address the peer signalled from, or null if it is not known. ICE
+     * @param clientAddress The address the peer signaled from, or null if it is not known. ICE
      *                      replaces it with the negotiated pair once the connection is up, but
      *                      until then it is all the child channel has to report.
      */
@@ -258,7 +258,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         /**
-         * Checks the address the peer signalled from, once it is clear neither side gathered
+         * Checks the address the peer signaled from, once it is clear neither side gathered
          * anything the other can reach.
          *
          * @param local The description this side gathered
@@ -305,7 +305,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                         Long.toUnsignedString(this.connectionId), candidate, extractCandidateType(candidate));
             }
 
-            // Skip sending candidate if the signalling doesn't support trickle ICE
+            // Skip sending candidate if the signaling doesn't support trickle ICE
             if (!signaling.usesTrickleIce()) {
                 return;
             }

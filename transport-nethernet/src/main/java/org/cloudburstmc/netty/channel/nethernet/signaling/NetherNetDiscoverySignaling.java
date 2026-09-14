@@ -166,7 +166,7 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
 
     @Override
     public void setNotFoundHandler(NetherNetClientSignaling.NotFoundHandler handler) {
-        // Nothing to do for discovery signalling
+        // Nothing to do for discovery signaling
     }
 
     @Override

@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class TransportIdentityBindingTest {
     @Test
-    void builtInSignallingUsesTheSameOneShotCanonicalComparison() throws Exception {
+    void builtInSignalingUsesTheSameOneShotCanonicalComparison() throws Exception {
         var generator = KeyPairGenerator.getInstance("EC");
         generator.initialize(new ECGenParameterSpec("secp384r1"));
         var original = (ECPublicKey) generator.generateKeyPair().getPublic();

@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
- * Canonical schema is owned by docs/external-signalling; JVM and other implementations consume the same resource.
+ * Canonical schema is owned by docs/external-signaling; JVM and other implementations consume the same resource.
  */
 final class ProviderContract {
     private static final JsonObject SCHEMA;

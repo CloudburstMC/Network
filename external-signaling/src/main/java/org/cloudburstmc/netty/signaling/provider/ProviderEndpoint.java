@@ -81,7 +81,7 @@ public record ProviderEndpoint(InetSocketAddress bind, List<InetSocketAddress> a
     public List<String> warnings() {
         List<String> messages = new ArrayList<>();
         if (advertised.stream().noneMatch(endpoint -> EndpointAddress.scope(endpoint.getAddress()) == EndpointAddress.Scope.PUBLIC)) {
-            messages.add("Only private/shared or local addresses are advertised. Clients need LAN, VPN or routed connectivity to these endpoints. External signalling providers may advertise them; Warden does not relay game traffic.");
+            messages.add("Only private/shared or local addresses are advertised. Clients need LAN, VPN or routed connectivity to these endpoints. External signaling providers may advertise them; Warden does not relay game traffic.");
         }
 
         if (advertised.stream().allMatch(endpoint -> endpoint.getAddress() instanceof Inet6Address)) {
