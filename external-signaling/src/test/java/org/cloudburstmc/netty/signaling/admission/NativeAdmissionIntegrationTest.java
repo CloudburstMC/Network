@@ -3,11 +3,13 @@ package org.cloudburstmc.netty.signaling.admission;
 import com.google.gson.JsonObject;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.CompositeByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
@@ -464,6 +466,7 @@ class NativeAdmissionIntegrationTest {
                 new ServerBootstrap().group(rakGroup).channelFactory(RakChannelFactory.server(NioDatagramChannel.class))
                         .childHandler(new ChannelInboundHandlerAdapter()).bind("127.0.0.1", 49191).sync().channel();
         var endpoint = new NativeAdmissionServerChannel(id, validator, new AdmissionGate.Limits(4, 8, 2, 10_000));
+        NetherNetChildChannel receivingClient = null;
         AtomicInteger inboundMask = new AtomicInteger();
         AtomicReference<AdmittedNetherNetChildChannel> child = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -484,6 +487,9 @@ class NativeAdmissionIntegrationTest {
 
                             @Override
                             protected void channelRead0(ChannelHandlerContext ctx, ByteBuf data) {
+                                if (reliable) {
+                                    assertEquals(3, assertInstanceOf(CompositeByteBuf.class, data).numComponents());
+                                }
                                 inboundMask.getAndUpdate(mask -> mask | (reliable ? 1 : 2));
                                 // Nonzero reader index catches the old transport offset bug.
                                 ByteBuf echo =
@@ -520,6 +526,27 @@ class NativeAdmissionIntegrationTest {
                     PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withBindAddress(loopback),
                     Runnable::run)) {
                 CountDownLatch echoed = new CountDownLatch(2);
+                receivingClient = new NetherNetChildChannel(null, client, null, null);
+                receivingClient.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
+                    @Override
+                    protected void channelRead0(ChannelHandlerContext ctx, ByteBuf data) {
+                        boolean reliable = data.getUnsignedByte(data.readerIndex()) == 11;
+                        byte[] expected = new byte[reliable ? 20013 : 7];
+                        Arrays.fill(expected, (byte) (reliable ? 11 : 22));
+                        assertArrayEquals(expected, ByteBufUtil.getBytes(data));
+                        if (reliable) {
+                            assertEquals(3, assertInstanceOf(CompositeByteBuf.class, data).numComponents());
+                        }
+                        echoed.countDown();
+                    }
+
+                    @Override
+                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable error) {
+                        failure.compareAndSet(null, error);
+                        ctx.close();
+                    }
+                });
+                group.register(receivingClient).sync();
                 List<DataChannel> channels = new ArrayList<>();
                 for (int index = 0; index < 2; index++) {
                     boolean reliable = index == 0;
@@ -527,23 +554,8 @@ class NativeAdmissionIntegrationTest {
                     DataChannel dc = client.createDataChannel(label, DataChannelInitSettings.DEFAULT.withReliability(
                             new DataChannelReliability(!reliable, !reliable, 0, 0)));
                     channels.add(dc);
-                    var decoder = new NetherNetFrameDecoder();
                     byte[] payload = new byte[reliable ? 20013 : 7];
                     Arrays.fill(payload, (byte) (reliable ? 11 : 22));
-                    dc.onMessage.register(DataChannelCallback.Message.handleBinary((d, buffer) -> {
-                        ByteBuf frame = Unpooled.buffer(buffer.remaining()).writeBytes(buffer);
-                        try {
-                            ByteBuf decoded = decoder.decode(frame, reliable);
-                            if (decoded != null) {
-                                byte[] message = ByteBufUtil.getBytes(decoded);
-                                decoded.release();
-                                assertArrayEquals(payload, message);
-                                echoed.countDown();
-                            }
-                        } catch (Throwable error) {
-                            failure.compareAndSet(null, error);
-                        }
-                    }));
                     dc.onOpen.register(d -> {
                         int chunks = (payload.length + 9998) / 9999;
                         for (int i = 0; i < chunks; i++) {
@@ -554,6 +566,7 @@ class NativeAdmissionIntegrationTest {
                         }
                     });
                 }
+                receivingClient.setDataChannels(channels.get(0), channels.get(1));
                 client.setLocalDescription("offer", "clientFixtureUf", "p".repeat(32));
                 var answer = TestSignalingProvider.answer(client.localDescription(), id.fingerprint(), port,
                         System.currentTimeMillis() + 30_000, TestSignalingProvider.AUDIENCE, false);
@@ -621,6 +634,9 @@ class NativeAdmissionIntegrationTest {
             System.out.println(
                     "native-adapter PASS fixedUdp=49190 hostCreations=1 channels=3 replayRejected=true perJoinControl=0 cleanup=true raknetPong=49191");
         } finally {
+            if (receivingClient != null) {
+                receivingClient.close().awaitUninterruptibly();
+            }
             endpoint.close().awaitUninterruptibly();
             rak.close().awaitUninterruptibly();
             group.shutdownGracefully(0, 2, TimeUnit.SECONDS).sync();
