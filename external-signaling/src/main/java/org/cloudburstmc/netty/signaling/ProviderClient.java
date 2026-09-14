@@ -1036,14 +1036,17 @@ public final class ProviderClient implements AutoCloseable {
                 b.header("authorization", "Bearer " + bearerToken);
             }
             if (signed) {
-                long now = System.currentTimeMillis(), generation = state.get("generation").getAsLong(), sequence =
-                        state.get("sequence").getAsLong();
+                long now = System.currentTimeMillis();
+                long generation = state.get("generation").getAsLong();
+                long sequence = state.get("sequence").getAsLong();
                 String path = uri.getRawPath() + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery());
-                b.header("nxs-instance-id", registration("instanceId")).header("nxs-key-id", registration("keyId"))
+                b.header("nxs-instance-id", registration("instanceId"))
+                        .header("nxs-key-id", registration("keyId"))
                         .header("nxs-timestamp", Long.toString(now))
                         .header("nxs-signature-version", ProviderCrypto.SIGNATURE)
                         .header("nxs-generation", Long.toString(generation))
-                        .header("nxs-sequence", Long.toString(sequence)).header("idempotency-key", intent)
+                        .header("nxs-sequence", Long.toString(sequence))
+                        .header("idempotency-key", intent)
                         .header("nxs-signature", ProviderCrypto.sign(privateKey,
                                 ProviderCrypto.request(origin, method, path, now, registration("instanceId"),
                                         registration("keyId"), intent, generation, sequence, raw)));
