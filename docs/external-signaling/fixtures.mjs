@@ -4,7 +4,7 @@ import {createHash, createHmac, createCipheriv, createPrivateKey, createPublicKe
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 
-const protocol = 'nethernet-external-signalling-v1', signature = 'nxs-es384-v1';
+const protocol = 'nethernet-external-signaling-v1', signature = 'nxs-es384-v1';
 const path = name => fileURLToPath(new URL(name, import.meta.url));
 const read = name => JSON.parse(readFileSync(path(name), 'utf8'));
 const write = (name, value) => writeFileSync(path(name), JSON.stringify(value, null, 2) + '\n');
@@ -83,7 +83,7 @@ if (updateAdmission) {
 }
 assert.deepEqual(v.expected, expected);
 const provenance = {
-  specification: 'urn:nethernet:external-signalling:v1',
+  specification: 'urn:nethernet:external-signaling:v1',
   files: Object.fromEntries(['stateless-admission-v1.fixtures.json', 'cloudburst-protocol-vectors.v1.json'].map(
       name => [name, digest(readFileSync(path(name))).toString('hex')]))
 };
