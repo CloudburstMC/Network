@@ -123,6 +123,7 @@ public final class ControlFrameCodec {
     public static Frame decode(String wire) {
         if (wire == null || wire.length() > MAX_FRAME_BYTES
                 || wire.getBytes(StandardCharsets.UTF_8).length > MAX_FRAME_BYTES) throw invalid("frame size");
+        if (wire.startsWith("\uFEFF")) throw invalid("JSON byte order mark");
         try (JsonReader reader = new JsonReader(new StringReader(wire))) {
             reader.setStrictness(Strictness.STRICT);
             JsonObject object = readObject(reader, false);

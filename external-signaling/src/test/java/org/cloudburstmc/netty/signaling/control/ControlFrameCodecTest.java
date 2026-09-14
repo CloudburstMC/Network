@@ -108,6 +108,7 @@ class ControlFrameCodecTest {
     @Test
     void rejectsDuplicatesUnknownFieldsWrongTypesAndNonStrictJson() throws Exception {
         String wire = fixtures().getAsJsonArray("vectors").get(0).getAsJsonObject().get("frame").toString();
+        assertThrows(IllegalArgumentException.class, () -> ControlFrameCodec.decode("\uFEFF" + wire));
         for (String invalid : List.of(
                 wire.replace("\"version\":1", "\"version\":1,\"version\":1"),
                 wire.replace("\"version\":1", "\"version\":1,\"\\u0076ersion\":1"),

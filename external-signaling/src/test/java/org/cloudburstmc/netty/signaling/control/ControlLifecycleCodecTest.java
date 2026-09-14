@@ -92,6 +92,7 @@ class ControlLifecycleCodecTest {
     @Test
     void duplicateAndLossyFieldsCannotChangeIntentIdentity() throws Exception {
         String original = fixtures().getAsJsonArray("vectors").get(0).getAsJsonObject().get("intent").toString();
+        assertThrows(IllegalArgumentException.class, () -> ControlLifecycleCodec.decodeIntent("\uFEFF" + original));
         for (String changed : List.of(original.replace("\"generation\":3", "\"generation\":3,\"\\u0067eneration\":3"),
                 original.replace("\"generation\":3", "\"generation\":3.000000000000001"),
                 original.replace("\"generation\":3", "\"generation\":3e0"),
