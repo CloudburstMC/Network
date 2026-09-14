@@ -28,6 +28,7 @@ final class ControlJson {
 
     static JsonObject parse(String wire, int maximum) {
         if (wire == null || wire.length() > maximum || wire.getBytes(StandardCharsets.UTF_8).length > maximum) throw invalid("size");
+        if (wire.startsWith("\uFEFF")) throw invalid("JSON byte order mark");
         try (JsonReader reader = new JsonReader(new StringReader(wire))) {
             reader.setStrictness(Strictness.STRICT);
             JsonElement value = read(reader, 0);
