@@ -36,6 +36,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     protected final Queue<Object> pendingWrites = new ConcurrentLinkedQueue<>();
 
+    private volatile NetherNetMessageAssembler reliableAssembler;
+    private volatile NetherNetMessageAssembler unreliableAssembler;
+
     protected volatile boolean open = true;
 
     protected NetherNetChannel(Channel parent, InetSocketAddress remote, InetSocketAddress local) {
@@ -59,6 +62,16 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     public void setDataChannels(DataChannel reliable, DataChannel unreliable) {
+        NetherNetMessageAssembler reliableMessages = new NetherNetMessageAssembler("reliable");
+        NetherNetMessageAssembler unreliableMessages = new NetherNetMessageAssembler("unreliable");
+        synchronized (this) {
+            if (!open) {
+                throw new IllegalStateException("Channel closed");
+            }
+            closeMessageAssemblers();
+            reliableAssembler = reliableMessages;
+            unreliableAssembler = unreliableMessages;
+        }
         this.reliableChannel = reliable;
         this.unreliableChannel = unreliable;
 
@@ -66,10 +79,10 @@ public abstract class NetherNetChannel extends AbstractChannel {
         this.reliableChannel.onClosed.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
 
         this.reliableChannel.onMessage.register(
-                DataChannelCallback.Message.handleBinary(new MessageAssembler("reliable")));
+                DataChannelCallback.Message.handleBinary((channel, data) -> onMessage(reliableMessages, data)));
         if (this.unreliableChannel != null) {
             this.unreliableChannel.onMessage.register(
-                    DataChannelCallback.Message.handleBinary(new MessageAssembler("unreliable")));
+                    DataChannelCallback.Message.handleBinary((channel, data) -> onMessage(unreliableMessages, data)));
         }
 
         if (reliableChannel.isOpen()) {
@@ -77,66 +90,24 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
     }
 
-    /**
-     * Reassembles the segmented messages of one data channel. The two channels are separate
-     * streams, so each needs its own assembler.
-     */
-    private final class MessageAssembler implements DataChannelCallback.BinaryMessage {
-        private final ByteBuf assemblyBuf = config.getAllocator().buffer();
-        private final String label;
-        private int currentSegmentCount = -1;
-
-        MessageAssembler(String label) {
-            this.label = label;
+    private void onMessage(NetherNetMessageAssembler assembler, ByteBuffer data) {
+        // The native ByteBuffer expires when this callback returns.
+        ByteBuf packet = assembler.decode(data, alloc());
+        if (packet == null) {
+            return;
         }
-
-        @Override
-        public void onBinary(DataChannel channel, ByteBuffer data) {
-            if (!data.hasRemaining()) {
-                log.debug("Empty message on the {} channel", label);
-                return;
-            }
-
-            int segments = data.get() & 0xFF;
-
-            if (currentSegmentCount == -1) {
-                currentSegmentCount = segments;
-            } else {
-                if (segments != currentSegmentCount - 1) {
-                    log.debug("Discarding {} assembled bytes on the {} channel: segment {} does not follow {}",
-                            assemblyBuf.readableBytes(), label, segments, currentSegmentCount);
-                    assemblyBuf.clear();
-                    currentSegmentCount = -1;
+        try {
+            eventLoop().execute(() -> {
+                if (!isOpen() || (assembler != reliableAssembler && assembler != unreliableAssembler)) {
+                    packet.release();
                     return;
                 }
-                currentSegmentCount = segments;
-            }
-
-            if (data.hasRemaining()) {
-                byte[] payload = new byte[data.remaining()];
-                data.get(payload);
-                assemblyBuf.writeBytes(payload);
-            }
-
-            if (segments == 0) {
-                try {
-                    if (assemblyBuf.isReadable()) {
-                        ByteBuf packet = assemblyBuf.copy();
-                        assemblyBuf.skipBytes(assemblyBuf.readableBytes());
-
-                        log.trace("Read {} bytes from the {} channel", packet.readableBytes(), label);
-                        eventLoop().execute(() -> {
-                            pipeline().fireChannelRead(packet);
-                            pipeline().fireChannelReadComplete();
-                        });
-                    }
-                } catch (Exception e) {
-                    log.error("Error processing packet", e);
-                } finally {
-                    assemblyBuf.clear();
-                    currentSegmentCount = -1;
-                }
-            }
+                pipeline().fireChannelRead(packet);
+                pipeline().fireChannelReadComplete();
+            });
+        } catch (RuntimeException | Error e) {
+            packet.release();
+            throw e;
         }
     }
 
@@ -246,6 +217,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * Closes the data channels and peer connection, dropping their listeners first.
      */
     protected void closeWebRTC() {
+        closeMessageAssemblers();
         if (reliableChannel != null) {
             deregisterAll(reliableChannel);
             reliableChannel.close();
@@ -260,6 +232,17 @@ public abstract class NetherNetChannel extends AbstractChannel {
             deregisterAll(peerConnection);
             peerConnection.close();
             peerConnection = null;
+        }
+    }
+
+    private synchronized void closeMessageAssemblers() {
+        if (reliableAssembler != null) {
+            reliableAssembler.close();
+            reliableAssembler = null;
+        }
+        if (unreliableAssembler != null) {
+            unreliableAssembler.close();
+            unreliableAssembler = null;
         }
     }
 

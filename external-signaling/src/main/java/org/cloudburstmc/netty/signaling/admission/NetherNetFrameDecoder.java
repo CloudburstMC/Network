@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.CompositeByteBuf;
 
 /**
  * Bounded countdown framing. Unordered traffic must fit one SCTP message.
@@ -24,7 +25,7 @@ import io.netty.buffer.ByteBuf;
 public final class NetherNetFrameDecoder {
     public static final int FRAME_LIMIT = 10000;
     public static final int MESSAGE_LIMIT = 262144;
-    private ByteBuf assembly;
+    private CompositeByteBuf assembly;
     private int expected = -1;
 
     /**
@@ -34,6 +35,9 @@ public final class NetherNetFrameDecoder {
     public ByteBuf decode(ByteBuf frame, boolean reliable) {
         try {
             return assemble(frame, reliable);
+        } catch (RuntimeException | Error e) {
+            clear();
+            throw e;
         } finally {
             frame.release();
         }
@@ -70,10 +74,12 @@ public final class NetherNetFrameDecoder {
         }
 
         if (this.assembly == null) {
-            this.assembly = frame.alloc().buffer(payload, MESSAGE_LIMIT);
+            // Every frame already belongs to Netty. Retain its payload instead of copying it.
+            // The countdown bounds components and prevents automatic consolidation.
+            this.assembly = frame.alloc().compositeBuffer(remaining + 1);
         }
 
-        this.assembly.writeBytes(frame, start + 1, payload);
+        this.assembly.addComponent(true, frame.retainedSlice(start + 1, payload));
         this.expected = remaining - 1;
         if (remaining != 0) {
             return null;
