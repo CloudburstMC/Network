@@ -1,0 +1,198 @@
+{
+  "format": "nethernet-control-frame-fixtures-v1",
+  "warning": "PUBLIC TEST KEYS; NEVER USE IN PRODUCTION",
+  "keys": {
+    "machine": {
+      "keyId": "machine_test_01",
+      "publicKeyJwk": {
+        "kty": "EC",
+        "x": "XwFmvNoR4BJL3FhkfAnP2YjYTXWSIj_Z8vB-IHU6_QKJZhpC7p0SdIl3PFjO9xeL",
+        "y": "UIuUcjAzfMTFf-oqEv5k143rJdiYExszFiAu5vBJA_G9jiVgM_T17gmvEQXkC727",
+        "crv": "P-384"
+      },
+      "privateKeyJwk": {
+        "kty": "EC",
+        "x": "XwFmvNoR4BJL3FhkfAnP2YjYTXWSIj_Z8vB-IHU6_QKJZhpC7p0SdIl3PFjO9xeL",
+        "y": "UIuUcjAzfMTFf-oqEv5k143rJdiYExszFiAu5vBJA_G9jiVgM_T17gmvEQXkC727",
+        "crv": "P-384",
+        "d": "G85XukHZxYhmQIdw9JooFPdBjEdsAeestoxObgdRZnv7qH-RJ6FXzEwxAxpcb6bu"
+      },
+      "privateKeyPkcs8": "MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDAbzle6QdnFiGZAh3D0migU90GMR2wB56y2jE5uB1Fme_uof5EnoVfMTDEDGlxvpu6hZANiAARfAWa82hHgEkvcWGR8Cc_ZiNhNdZIiP9ny8H4gdTr9AolmGkLunRJ0iXc8WM73F4tQi5RyMDN8xMV_6ioS_mTXjesl2JgTGzMWIC7m8EkD8b2OJWAz9PXuCa8RBeQLvbs"
+    },
+    "providerControl": {
+      "keyId": "provider_control_test_01",
+      "publicKeyJwk": {
+        "kty": "EC",
+        "x": "CCE9cTNsTfi8A8AmKF2RzC1yU7kvdH65Khzq4S9YX6yU4GOUAXwXgSqUIdgQp_hu",
+        "y": "m73Q4WCCkHJCVC9ZLTkP5zME2WywIJw7jhyFqw4vWUm_AgE29wFgUs6a6v2yoMji",
+        "crv": "P-384"
+      },
+      "privateKeyJwk": {
+        "kty": "EC",
+        "x": "CCE9cTNsTfi8A8AmKF2RzC1yU7kvdH65Khzq4S9YX6yU4GOUAXwXgSqUIdgQp_hu",
+        "y": "m73Q4WCCkHJCVC9ZLTkP5zME2WywIJw7jhyFqw4vWUm_AgE29wFgUs6a6v2yoMji",
+        "crv": "P-384",
+        "d": "fCgBngSDjeQyNi4cA56eOFE2zZ9oc13pRiAXZF4cvbWaWT8rAYfHf07D8h2ryLlC"
+      },
+      "privateKeyPkcs8": "MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDB8KAGeBION5DI2LhwDnp44UTbNn2hzXelGIBdkXhy9tZpZPysBh8d_TsPyHavIuUKhZANiAAQIIT1xM2xN-LwDwCYoXZHMLXJTuS90frkqHOrhL1hfrJTgY5QBfBeBKpQh2BCn-G6bvdDhYIKQckJUL1ktOQ_nMwTZbLAgnDuOHIWrDi9ZSb8CATb3AWBSzprq_bKgyOI"
+    }
+  },
+  "vectors": [
+    {
+      "name": "host-lifecycle-unicode",
+      "keyFamily": "machine",
+      "payloadUtf8": "{\"message\":\"café 😀    \",\"escaped\":\"\\n\\\"\\\\\",\"surrogate\":\"\\ud800\"}",
+      "frame": {
+        "version": 1,
+        "type": "lifecycle.request",
+        "id": "frame_vector_00000",
+        "sequence": 1,
+        "direction": "host-to-provider",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJtZXNzYWdlIjoiY2Fmw6kg8J-YgCDigKgg4oCpIiwiZXNjYXBlZCI6IlxuXCJcXCIsInN1cnJvZ2F0ZSI6Ilx1ZDgwMCJ9",
+        "payloadSha256": "j9RCdxVaaz6x7t9iRgudG-qCuhKpxYjZLgZc1cVOZrE",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "machine_test_01",
+          "signature": "PXQKVJLotxN4oa0I_9qEqeCVBZV1JFLyOM9BwnYRqLeQlw27FvDOB0mjFQ9c8mZZrTj93vn68v95JH6sB5c22s9B2HrR0TxfkzSm1duMOf-6_fHqilv0fFSYeMdxsFDo"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"host-to-provider\",\"https://provider.example\",\"lifecycle.request\",\"frame_vector_00000\",1,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"request-response\"],1789400000000,1789400015000,\"machine_test_01\",\"j9RCdxVaaz6x7t9iRgudG-qCuhKpxYjZLgZc1cVOZrE\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    },
+    {
+      "name": "provider-gameplay-offer",
+      "keyFamily": "providerControl",
+      "payloadUtf8": "{\"kind\":\"gameplay\",\"attemptId\":\"attempt_gameplay_01\"}",
+      "frame": {
+        "version": 1,
+        "type": "assisted.offer",
+        "id": "frame_vector_00001",
+        "sequence": 2,
+        "direction": "provider-to-host",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "addressed",
+          "assisted-gameplay",
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJraW5kIjoiZ2FtZXBsYXkiLCJhdHRlbXB0SWQiOiJhdHRlbXB0X2dhbWVwbGF5XzAxIn0",
+        "payloadSha256": "M7UZBOYkWYX-yBUmNeRpINVyVRXuWAiQqDOJOt7eliA",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "provider_control_test_01",
+          "signature": "4uKv_AF8J2ZtXouzCZZd2XX_J8O0YMcM-6bEIn2eFH0UQHpxATtE1R4LUPklvZtPbRQeYzJJMRe7Ss7fYWK4Thy_EyGnxLkOulW2uDvdlxaeDusR2wdFH8tzlJEndl-L"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"provider-to-host\",\"https://provider.example\",\"assisted.offer\",\"frame_vector_00001\",2,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"addressed\",\"assisted-gameplay\",\"request-response\"],1789400000000,1789400015000,\"provider_control_test_01\",\"M7UZBOYkWYX-yBUmNeRpINVyVRXuWAiQqDOJOt7eliA\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    },
+    {
+      "name": "provider-diagnostic-offer",
+      "keyFamily": "providerControl",
+      "payloadUtf8": "{\"kind\":\"diagnostic\",\"jobId\":\"probe_job_01\"}",
+      "frame": {
+        "version": 1,
+        "type": "diagnostic.offer",
+        "id": "frame_vector_00002",
+        "sequence": 3,
+        "direction": "provider-to-host",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "addressed",
+          "assisted-diagnostic",
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJraW5kIjoiZGlhZ25vc3RpYyIsImpvYklkIjoicHJvYmVfam9iXzAxIn0",
+        "payloadSha256": "Se_noOWOX3cCC8lN_f1eAQKnipTWb22iRvjhVVyR_9U",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "provider_control_test_01",
+          "signature": "EOSDG8yhhI0yBDbqyuHg2Q0TW8v8x-TqEUd_tngM56u-l3ztfE3IbZKo9QmIAdbZKPOnb_wVV-nafkdGAGp5JCvXB4UosCKqXDGW6v4EDsen2QrVxFynrDvbGYXrUrkQ"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"provider-to-host\",\"https://provider.example\",\"diagnostic.offer\",\"frame_vector_00002\",3,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"addressed\",\"assisted-diagnostic\",\"request-response\"],1789400000000,1789400015000,\"provider_control_test_01\",\"Se_noOWOX3cCC8lN_f1eAQKnipTWb22iRvjhVVyR_9U\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    },
+    {
+      "name": "host-empty-payload",
+      "keyFamily": "machine",
+      "payloadUtf8": "",
+      "frame": {
+        "version": 1,
+        "type": "session.resync",
+        "id": "frame_vector_00003",
+        "sequence": 4,
+        "direction": "host-to-provider",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "",
+        "payloadSha256": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "machine_test_01",
+          "signature": "Fyj5C3ZrAMTj5lbIg1bBD0e-tfX5feBf-GwyTRB8x5sGlv5y3KLHUjgVWhz9ciX8jBpmUYjpFiQ3dEbSNYzT7Stjnv1L_9mFsBJaIlyQ2jNobuaOlIOc4kxfHbT7LVjm"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"host-to-provider\",\"https://provider.example\",\"session.resync\",\"frame_vector_00003\",4,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"request-response\"],1789400000000,1789400015000,\"machine_test_01\",\"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    }
+  ]
+}
