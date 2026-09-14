@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 CloudburstMC
+ * Copyright 2026 CloudburstMC
  *
  * CloudburstMC licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -14,12 +14,15 @@
  * under the License.
  */
 
-rootProject.name = "network"
+package org.cloudburstmc.netty.signaling.admission;
 
-plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+/**
+ * Validates admission metadata using locally installed keys. No network calls.
+ */
+@FunctionalInterface
+public interface AdmissionValidator {
+    /**
+     * Return connection settings, or null to reject. Native code separately verifies STUN integrity.
+     */
+    VerifiedAdmission validate(AdmissionRequest request, long nowMillis);
 }
-
-include("transport-raknet")
-include("transport-nethernet")
-include("external-signaling")
