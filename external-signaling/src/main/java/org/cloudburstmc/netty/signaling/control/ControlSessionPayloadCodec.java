@@ -85,8 +85,10 @@ public final class ControlSessionPayloadCodec {
             case "status" -> {
                 String query = ControlJson.string(value, "query");
                 if (query.equals("current-writer")) {
-                    ControlJson.fields(value, "query", "writer", "capabilities", "activatedAt", "sessionExpiresAt",
+                    ControlJson.fields(value, "query", "writer", "writerEnabled", "capabilities", "activatedAt", "sessionExpiresAt",
                             "authoritySourceCheckedAt", "authorityExpiresAt");
+                    if (!value.get("writerEnabled").isJsonPrimitive() || !value.getAsJsonPrimitive("writerEnabled").isBoolean()) throw ControlJson.invalid("writer policy flag");
+                    if (fence(value, "writer").transport().equals("legacy-http") && value.get("writerEnabled").getAsBoolean()) throw ControlJson.invalid("legacy controlled writer enabled");
                     current(value, true);
                 } else if (query.equals("intent-receipt")) {
                     ControlJson.fields(value, "query", "intentDigest", "receipt");
@@ -139,7 +141,7 @@ public final class ControlSessionPayloadCodec {
         // A proposal only. A losing CAS must never install it or advertise addressed readiness.
         return new ControlWriterFence(transport, currentWriter.sessionEpoch() + 1,
                 ControlJson.string(prepared, "pendingSessionId"), connection, currentWriter.keyId(),
-                currentWriter.transport().equals("legacy-http") ? 1 : currentWriter.machineKeyRevision());
+                currentWriter.machineKeyRevision());
     }
 
     static void associateResponse(ControlSessionCodec.Response response, ControlSessionCodec.Request request) {
@@ -188,7 +190,7 @@ public final class ControlSessionPayloadCodec {
                 }
                 ControlWriterFence wanted = new ControlWriterFence(transport, expected.sessionEpoch() + 1,
                         ControlJson.string(prepared, "pendingSessionId"), connection, expected.keyId(),
-                        expected.transport().equals("legacy-http") ? 1 : expected.machineKeyRevision());
+                        expected.machineKeyRevision());
                 long activatedAt = timestamp(result, "activatedAt");
                 if (!fence(result, "writer").equals(wanted) || !result.get("capabilities").equals(prepared.get("capabilities"))
                         || activatedAt < timestamp(prepared, "preparedAt") || activatedAt >= timestamp(prepared, "expiresAt")
