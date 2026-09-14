@@ -13,6 +13,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.io.InputStreamReader;
 import java.io.BufferedReader;
@@ -20,13 +21,17 @@ import javax.net.ssl.SSLSocket;
 import java.security.cert.X509Certificate;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -185,6 +190,97 @@ class HttpSignalingRequestTest {
         this.start(this.builder());
 
         assertThrows(IOException.class, this::secureStatus);
+    }
+
+    @Test
+    void answersASecondRequestOnTheConnectionItWasAskedToKeep() throws Exception {
+        // A real client sends its status check and its join down one connection. Closing after the
+        // first leaves the second unanswered: TCP takes the bytes into a half closed socket and the
+        // client waits forever for a reply that cannot come.
+        this.start(this.builder());
+        this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
+                this.signaling.sendFullSdp(networkId, ANSWER));
+
+        try (Socket socket = new Socket("127.0.0.1", this.port)) {
+            socket.setSoTimeout(10_000);
+            OutputStream out = socket.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+
+            out.write(("GET /v1/join HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n\r\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            assertEquals(200, readStatus(in), "the status check");
+            String body = readBody(in);
+
+            byte[] offer = TestOffers.selfSigned().getBytes(StandardCharsets.US_ASCII);
+            out.write(("POST /v1/join/42 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n"
+                    + "Content-Type: application/sdp\r\nContent-Length: " + offer.length + "\r\n\r\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            out.write(offer);
+            out.flush();
+
+            assertEquals(200, readStatus(in), "the join, on the same connection");
+            assertFalse(body.isEmpty(), "the status check still carried its body");
+        }
+    }
+
+    @Test
+    void tellsAClientWhenItMayNotKeepTheConnection() throws Exception {
+        // HTTP/1.1 keeps a connection unless the response says otherwise, so a server that closes
+        // has to say so or the client will reuse a socket that is already gone
+        this.start(this.builder());
+
+        try (Socket socket = new Socket("127.0.0.1", this.port)) {
+            socket.setSoTimeout(10_000);
+            socket.getOutputStream().write(
+                    "GET /v1/join HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+                            .getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+            assertEquals(200, readStatus(in));
+            assertTrue(this.headers(in).contains("connection: close"),
+                    "a client that will not reuse the socket is told the server agrees");
+        }
+    }
+
+    private static int readStatus(BufferedReader in) throws IOException {
+        String status = in.readLine();
+        if (status == null) {
+            throw new IOException("the listener closed without answering");
+        }
+        return Integer.parseInt(status.split(" ")[1]);
+    }
+
+    /** Reads the header block, lower cased so a comparison does not depend on how it was spelled. */
+    private List<String> headers(BufferedReader in) throws IOException {
+        List<String> headers = new ArrayList<>();
+        for (String line = in.readLine(); line != null && !line.isEmpty(); line = in.readLine()) {
+            headers.add(line.toLowerCase(Locale.ROOT));
+        }
+        return headers;
+    }
+
+    /** Reads the headers, then exactly the body they declare. */
+    private String readBody(BufferedReader in) throws IOException {
+        int length = 0;
+        for (String header : this.headers(in)) {
+            if (header.startsWith("content-length:")) {
+                length = Integer.parseInt(header.substring("content-length:".length()).trim());
+            }
+        }
+        char[] body = new char[length];
+        int read = 0;
+        while (read < length) {
+            int n = in.read(body, read, length - read);
+            if (n < 0) {
+                throw new IOException("the body ended early");
+            }
+            read += n;
+        }
+        return new String(body);
     }
 
     /** A GET over TLS, trusting whatever the listener presents, since this test made it. */
