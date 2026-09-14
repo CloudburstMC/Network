@@ -46,7 +46,7 @@ class ProviderJourneysTest {
                 ProviderClient instance = client(stub, directory.resolve(journey), configuration, transport);
                 try {
                     JsonObject result = instance.start().get(20, TimeUnit.SECONDS);
-                    assertEquals("nethernet-external-signalling-v1", result.get("protocol").getAsString());
+                    assertEquals("nethernet-external-signaling-v1", result.get("protocol").getAsString());
                     assertEquals("nxs-admission-v1", result.get("profile").getAsString());
                     assertFalse(result.has("extensions"), "A provider needs no product extension");
                     assertEquals(bearer ? 0 : 2, stub.challengeDifficulty);

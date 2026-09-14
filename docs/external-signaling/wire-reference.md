@@ -8,10 +8,10 @@ replaces its earlier operation surface in place.
 
 | Field | v1 value |
 | --- | --- |
-| Registration/request protocol | `nethernet-external-signalling-v1` |
+| Registration/request protocol | `nethernet-external-signaling-v1` |
 | Machine request signature | `nxs-es384-v1` |
 | Operational profile | `nxs-admission-v1` |
-| Discovery path | `/.well-known/nethernet-external-signalling` |
+| Discovery path | `/.well-known/nethernet-external-signaling` |
 | Stateless capability | `nethernet.stateless-admission.v1` |
 | Stateless carrier prefix | `NXS1` |
 

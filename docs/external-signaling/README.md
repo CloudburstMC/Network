@@ -9,7 +9,7 @@ The [wire reference](wire-reference.md), [schema](nxs-v1.schema.json) and
 ## 1. Register with a provider
 
 Configure the provider's HTTPS origin and fetch
-`/.well-known/nethernet-external-signalling`. Check its supported authentication
+`/.well-known/nethernet-external-signaling`. Check its supported authentication
 and use the operation URLs it returns. All URLs must remain on that origin;
 never follow redirects when discovering or sending credentials.
 

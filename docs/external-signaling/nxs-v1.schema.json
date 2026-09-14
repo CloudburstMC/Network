@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:nethernet:external-signalling:v1",
+  "$id": "urn:nethernet:external-signaling:v1",
   "title": "NetherNet External Signaling v1",
   "type": "object",
   "required": [
@@ -11,7 +11,7 @@
   ],
   "properties": {
     "protocol": {
-      "const": "nethernet-external-signalling-v1"
+      "const": "nethernet-external-signaling-v1"
     },
     "mode": {
       "enum": [
@@ -249,7 +249,7 @@
       ],
       "properties": {
         "protocol": {
-          "const": "nethernet-external-signalling-v1"
+          "const": "nethernet-external-signaling-v1"
         },
         "signature": {
           "const": "nxs-es384-v1"
@@ -291,7 +291,7 @@
       ],
       "properties": {
         "protocol": {
-          "const": "nethernet-external-signalling-v1"
+          "const": "nethernet-external-signaling-v1"
         }
       }
     },
@@ -312,7 +312,7 @@
       ],
       "properties": {
         "protocol": {
-          "const": "nethernet-external-signalling-v1"
+          "const": "nethernet-external-signaling-v1"
         },
         "extensions": {
           "$ref": "#/$defs/extensions"
@@ -407,7 +407,7 @@
           "minLength": 1
         },
         "protocol": {
-          "const": "nethernet-external-signalling-v1"
+          "const": "nethernet-external-signaling-v1"
         },
         "profile": {
           "const": "nxs-admission-v1"
@@ -872,7 +872,7 @@
   "x-canonicalization": "UTF-8 JSON arrays, no whitespace, no Unicode normalization, epoch milliseconds as integers, absent context strings are empty",
   "description": "Registration, heartbeat and stateless join feedback for the experimental NXS contract.",
   "x-profile": "nxs-admission-v1",
-  "x-discovery-path": "/.well-known/nethernet-external-signalling",
+  "x-discovery-path": "/.well-known/nethernet-external-signaling",
   "x-headers": [
     "nxs-instance-id",
     "nxs-key-id",

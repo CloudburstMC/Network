@@ -130,7 +130,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
     @Test
     void fixturesHavePinnedHashesAndCanonicalFrames() throws Exception {
         var provenance = fixture("provenance.json");
-        assertEquals("urn:nethernet:external-signalling:v1", provenance.get("specification").getAsString());
+        assertEquals("urn:nethernet:external-signaling:v1", provenance.get("specification").getAsString());
         for (var entry : provenance.getAsJsonObject("files").entrySet()) {
             try (var in = Objects.requireNonNull(getClass().getResourceAsStream("/nxs/" + entry.getKey()))) {
                 assertEquals(entry.getValue().getAsString(), HexFormat.of()

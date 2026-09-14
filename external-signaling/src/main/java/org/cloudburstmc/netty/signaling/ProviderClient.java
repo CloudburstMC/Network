@@ -213,7 +213,7 @@ public final class ProviderClient implements AutoCloseable {
             if (started) {
                 throw new IllegalStateException("Already started");
             }
-            discovery = exchange(URI.create(origin + "/.well-known/nethernet-external-signalling"), "GET", null, false,
+            discovery = exchange(URI.create(origin + "/.well-known/nethernet-external-signaling"), "GET", null, false,
                     null, null);
             validateDiscovery();
             state = store.read();
