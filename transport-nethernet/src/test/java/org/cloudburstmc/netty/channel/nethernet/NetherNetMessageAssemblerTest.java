@@ -140,4 +140,61 @@ class NetherNetMessageAssemblerTest {
         }
         allocator.assertReleased();
     }
+
+    @Test
+    void aMessageThatLosesItsTailDoesNotEatTheNextOne() {
+        try (var assembler = new NetherNetMessageAssembler("unreliable")) {
+            assertNull(assembler.decode(frame(2, 1), allocator));
+            assertNull(assembler.decode(frame(1, 2), allocator));
+            // The last fragment never arrives and the next message opens instead
+            assertNull(assembler.decode(frame(2, 7), allocator));
+            assertNull(assembler.decode(frame(1, 8), allocator));
+            ByteBuf message = assembler.decode(frame(0, 9), allocator);
+
+            assertNotNull(message, "the following message should still complete");
+            try {
+                assertArrayEquals(new byte[]{7, 8, 9}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+    }
+
+    @Test
+    void aMessageWithAGapIsDroppedWithoutTakingTheNextWithIt() {
+        try (var assembler = new NetherNetMessageAssembler("unreliable")) {
+            assertNull(assembler.decode(frame(2, 1), allocator));
+            // The middle fragment never arrives, so the message cannot be completed
+            assertNull(assembler.decode(frame(0, 3), allocator));
+            ByteBuf message = assembler.decode(frame(0, 9), allocator);
+
+            assertNotNull(message, "the assembler should be clean again");
+            try {
+                assertArrayEquals(new byte[]{9}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+    }
+
+    @Test
+    void aGappedMessageIsFollowedOutToItsLastFragment() {
+        try (var assembler = new NetherNetMessageAssembler("unreliable")) {
+            assertNull(assembler.decode(frame(4, 1), allocator));
+            // Two fragments go missing, so the rest of this message is followed out and dropped
+            assertNull(assembler.decode(frame(1, 4), allocator));
+            assertNull(assembler.decode(frame(0, 5), allocator));
+            ByteBuf message = assembler.decode(frame(0, 9), allocator);
+
+            assertNotNull(message, "the assembler should be clean again");
+            try {
+                assertArrayEquals(new byte[]{9}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+    }
 }
