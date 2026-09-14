@@ -545,14 +545,10 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
         // Register the pending answer before firing the callback so a fast answer isn't missed
         Promise<String> answer = loop.newPromise();
-        // Validation may run on different callers. Reserve atomically before allocating a peer,
-        // and never replace the answer owned by another offer for this network ID.
-        synchronized (pendingAnswers) {
-            if (pendingAnswers.size() >= maxPendingJoins || pendingAnswers.containsKey(networkId)) {
-                return CompletableFuture.failedFuture(new OfferRejected(OfferRejected.Reason.UNAVAILABLE,
-                        "join capacity exhausted or network ID already pending", null));
-            }
-            pendingAnswers.put(networkId, answer);
+        // Never replace the answer owned by another offer for this network ID.
+        if (pendingAnswers.putIfAbsent(networkId, answer) != null) {
+            return CompletableFuture.failedFuture(new OfferRejected(OfferRejected.Reason.UNAVAILABLE,
+                    "network ID already pending", null));
         }
 
         ScheduledFuture<?> timeout = loop.schedule(

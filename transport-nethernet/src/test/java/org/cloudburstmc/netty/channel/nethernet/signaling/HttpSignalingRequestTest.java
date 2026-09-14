@@ -379,9 +379,9 @@ class HttpSignalingRequestTest {
     }
 
     @Test
-    void capsConcurrentOffersBeforeCreatingPeers() throws Exception {
+    void refusesConcurrentDuplicateOffersBeforeCreatingPeers() throws Exception {
         var bothValidated = new java.util.concurrent.CyclicBarrier(2);
-        this.start(this.builder().setMaxPendingJoins(1).setPlayerFilter((host, player) -> {
+        this.start(this.builder().setMaxPendingJoins(2).setPlayerFilter((host, player) -> {
             try { bothValidated.await(3, java.util.concurrent.TimeUnit.SECONDS); }
             catch (Exception failure) { throw new IllegalStateException(failure); }
             return true;
@@ -391,15 +391,16 @@ class HttpSignalingRequestTest {
                 created.incrementAndGet());
         String offer = TestOffers.selfSigned();
         var first = java.util.concurrent.CompletableFuture.supplyAsync(() ->
-                this.signaling.acceptOffer("one", offer, null, "example.test"));
+                this.signaling.acceptOffer("same-id", offer, null, "example.test"));
         var second = java.util.concurrent.CompletableFuture.supplyAsync(() ->
-                this.signaling.acceptOffer("two", offer, null, "example.test"));
+                this.signaling.acceptOffer("same-id", offer, null, "example.test"));
         var a = first.get(5, java.util.concurrent.TimeUnit.SECONDS);
         var b = second.get(5, java.util.concurrent.TimeUnit.SECONDS);
-        assertEquals(1, created.get(), "the cap applies across callers");
+        assertEquals(1, created.get(), "concurrent duplicates must not allocate a second peer");
         assertTrue(a.isCompletedExceptionally() ^ b.isCompletedExceptionally());
-        this.signaling.sendFullSdp("one", ANSWER);
-        this.signaling.sendFullSdp("two", ANSWER);
+        this.signaling.sendFullSdp("same-id", ANSWER);
+        var accepted = a.isCompletedExceptionally() ? b : a;
+        assertTrue(accepted.get(2, java.util.concurrent.TimeUnit.SECONDS).startsWith("v=0"));
     }
 
     /** A connection that has made one request and been told it may stay. */
