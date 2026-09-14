@@ -545,7 +545,11 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
         // Register the pending answer before firing the callback so a fast answer isn't missed
         Promise<String> answer = loop.newPromise();
-        pendingAnswers.put(networkId, answer);
+        // Never replace the answer owned by another offer for this network ID.
+        if (pendingAnswers.putIfAbsent(networkId, answer) != null) {
+            return CompletableFuture.failedFuture(new OfferRejected(OfferRejected.Reason.UNAVAILABLE,
+                    "network ID already pending", null));
+        }
 
         ScheduledFuture<?> timeout = loop.schedule(
                 () -> answer.tryFailure(new TimeoutException("Timed out waiting for SDP answer")),
