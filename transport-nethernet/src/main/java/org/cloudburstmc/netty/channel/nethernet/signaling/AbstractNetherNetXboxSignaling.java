@@ -28,6 +28,7 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jspecify.annotations.Nullable;
 
 import javax.net.ssl.SSLException;
 
@@ -94,11 +95,11 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     /**
-     * TLS for the signalling websocket, which carries the Xbox token in its upgrade request.
+     * TLS for the signaling websocket, which carries the Xbox token in its upgrade request.
      * <p>
      * Netty leaves {@code endpointIdentificationAlgorithm} unset, which validates the chain but not
      * the name on it, so without this any publicly trusted certificate would be accepted for the
-     * signalling host.
+     * signaling host.
      */
     static SslContext signalingSslContext() throws SSLException {
         return SslContextBuilder.forClient()
@@ -193,7 +194,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void setAdvertisementData(PongData pongData) {
-        // Nothing to do for Xbox signalling
+        // Nothing to do for Xbox signaling
     }
 
     @Override
@@ -267,42 +268,14 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
             } else if (json.has("turnAuthServers")) {
                 servers = json.getAsJsonArray("turnAuthServers");
             }
-
-            if (servers != null) {
-                for (JsonElement el : servers) {
-                    JsonObject server = el.getAsJsonObject();
-                    List<String> urls = new ArrayList<>();
-
-                    JsonArray urlsArray = null;
-                    if (server.has("Urls")) {
-                        urlsArray = server.getAsJsonArray("Urls");
-                    } else if (server.has("urls")) {
-                        urlsArray = server.getAsJsonArray("urls");
-                    }
-
-                    if (urlsArray != null) {
-                        urlsArray.forEach(u -> urls.add(u.getAsString()));
-
-                        IceServerInfo.Builder info = new IceServerInfo.Builder().setUrls(urls);
-
-                        if (server.has("Username")) {
-                            info.setUsername(server.get("Username").getAsString());
-                        } else if (server.has("username")) {
-                            info.setUsername(server.get("username").getAsString());
-                        }
-
-                        if (server.has("Password")) {
-                            info.setPassword(server.get("Password").getAsString());
-                        } else if (server.has("password")) {
-                            info.setPassword(server.get("password").getAsString());
-                        } else if (server.has("Credential")) {
-                            info.setPassword(server.get("Credential").getAsString());
-                        } else if (server.has("credential")) {
-                            info.setPassword(server.get("credential").getAsString());
-                        }
-
-                        result.add(info.build());
-                    }
+            if (servers == null || servers.isEmpty()) {
+                log.debug("No TURN servers in response.");
+                return result;
+            }
+            for (JsonElement el : servers) {
+                IceServerInfo info = parseTurnServer(el);
+                if (info != null) {
+                    result.add(info);
                 }
             }
         } catch (Exception e) {
@@ -310,5 +283,42 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         }
         log.debug("Successfully parsed {} ICE servers.", result.size());
         return result;
+    }
+
+    protected @Nullable IceServerInfo parseTurnServer(JsonElement el) {
+        JsonObject server = el.getAsJsonObject();
+        List<String> urls = new ArrayList<>();
+
+        JsonArray urlsArray = null;
+        if (server.has("Urls")) {
+            urlsArray = server.getAsJsonArray("Urls");
+        } else if (server.has("urls")) {
+            urlsArray = server.getAsJsonArray("urls");
+        }
+
+        if (urlsArray == null) {
+            return null;
+        }
+        urlsArray.forEach(u -> urls.add(u.getAsString()));
+
+        IceServerInfo.Builder info = new IceServerInfo.Builder().setUrls(urls);
+
+        if (server.has("Username")) {
+            info.setUsername(server.get("Username").getAsString());
+        } else if (server.has("username")) {
+            info.setUsername(server.get("username").getAsString());
+        }
+
+        if (server.has("Password")) {
+            info.setPassword(server.get("Password").getAsString());
+        } else if (server.has("password")) {
+            info.setPassword(server.get("password").getAsString());
+        } else if (server.has("Credential")) {
+            info.setPassword(server.get("Credential").getAsString());
+        } else if (server.has("credential")) {
+            info.setPassword(server.get("credential").getAsString());
+        }
+
+        return info.build();
     }
 }
