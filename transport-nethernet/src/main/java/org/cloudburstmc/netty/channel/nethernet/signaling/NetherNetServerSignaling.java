@@ -14,7 +14,7 @@ import java.util.List;
 
 public interface NetherNetServerSignaling extends NetherNetSignaling {
     /**
-     * Binds the signalling medium to listen for incoming connections (Server mode).
+     * Binds the signaling medium to listen for incoming connections (Server mode).
      *
      * @param localAddress The local address to bind to.
      * @param eventLoop    The owning channel's event loop.
@@ -46,10 +46,10 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
          *
          * @param connectionId    The unique connection ID for this session.
          * @param remoteNetworkId The Network ID of the remote peer.
-         * @param payload         The initial signalling payload from the remote peer.
-         * @param clientAddress   The address the peer signalled from, seeding the child channel
-         *                        before ICE settles, or null if the signalling cannot tell.
-         * @param player          The peer's validated identity, or null if this signalling does
+         * @param payload         The initial signaling payload from the remote peer.
+         * @param clientAddress   The address the peer signaled from, seeding the child channel
+         *                        before ICE settles, or null if the signaling cannot tell.
+         * @param player          The peer's validated identity, or null if this signaling does
          *                        not validate one.
          */
         void onConnect(long connectionId, String remoteNetworkId, String payload,
@@ -57,7 +57,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     }
 
     /**
-     * Returns the ICE servers (STUN/TURN) obtained from the signalling handshake.
+     * Returns the ICE servers (STUN/TURN) obtained from the signaling handshake.
      * Returns empty list if none available or not applicable.
      */
     default List<IceServerInfo> getIceServers() {
@@ -67,7 +67,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     /**
      * Returns the identity used to sign SDP answers, or null to have the channel generate an ephemeral one.
      *
-     * @return The server identity, or null if this signalling has none
+     * @return The server identity, or null if this signaling has none
      */
     default ServerIdentity serverIdentity() {
         return null;
@@ -83,7 +83,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     }
 
     /**
-     * Whether this signalling can deliver ICE candidates incrementally after the answer has been sent.
+     * Whether this signaling can deliver ICE candidates incrementally after the answer has been sent.
      *
      * @return true if candidates are trickled as they are gathered
      */

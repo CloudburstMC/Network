@@ -64,7 +64,7 @@ class ForwardedForTest {
 
     private InetSocketAddress observed() throws Exception {
         InetSocketAddress address = seen.poll(10, TimeUnit.SECONDS);
-        assertNotNull(address, "the signalling server never reported a client address");
+        assertNotNull(address, "the signaling server never reported a client address");
         return address;
     }
 
@@ -102,7 +102,7 @@ class ForwardedForTest {
 
     @Test
     void ignoresAHostnameRatherThanResolvingIt() throws Exception {
-        // Resolving here would block the signalling event loop on DNS and let the header stand for
+        // Resolving here would block the signaling event loop on DNS and let the header stand for
         // whatever the answer happened to be
         int port = start(List.of("127.0.0.0/8"));
         get(port, "localhost");

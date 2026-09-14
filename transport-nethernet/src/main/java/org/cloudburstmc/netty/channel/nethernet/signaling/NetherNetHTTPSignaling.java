@@ -18,7 +18,6 @@ import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.util.AsciiString;
 import io.netty.util.AttributeKey;
 import io.netty.util.NetUtil;
-import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
@@ -78,7 +77,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * This class implements a signalling server using HTTP(S) for the NetherNet protocol.
+ * This class implements a signaling server using HTTP(S) for the NetherNet protocol.
  * <p>
  * Follows <a href="https://github.com/Mojang/bedrock-protocol-docs/blob/7330880ab78ef001cad0b9cdfedb3aa3eaa6d4af/NetherNetOnboardingGuide.md">...</a>
  */
@@ -356,7 +355,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     @Override
     public void setAdvertisementData(PongData pongData) {
-        // Nothing to do for HTTP signalling
+        // Nothing to do for HTTP signaling
     }
 
     @Override
@@ -370,7 +369,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     /**
-     * Whether ICE may gather on the port signalling is bound to. Set it false when another
+     * Whether ICE may gather on the port signaling is bound to. Set it false when another
      * transport already holds the UDP side of that port, so ICE uses its own.
      */
     @Override
@@ -379,7 +378,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     /**
-     * The STUN and TURN servers ICE may use, which this signalling takes from its configuration
+     * The STUN and TURN servers ICE may use, which this signaling takes from its configuration
      * rather than from a handshake, since it speaks to nothing that would hand them out.
      */
     @Override
@@ -435,7 +434,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         EventLoop loop = this.eventLoop;
         if (loop == null || newConnectionHandler == null) {
             return CompletableFuture.failedFuture(
-                    new OfferRejected(OfferRejected.Reason.UNAVAILABLE, "signalling is not bound", null));
+                    new OfferRejected(OfferRejected.Reason.UNAVAILABLE, "signaling is not bound", null));
         }
 
         CompletableFuture<String> result = new CompletableFuture<>();
@@ -475,7 +474,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             REJECTED,
             /** Nothing produced an answer in time. */
             TIMEOUT,
-            /** Signalling is not in a state to answer. */
+            /** Signaling is not in a state to answer. */
             UNAVAILABLE
         }
 
@@ -505,12 +504,12 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     @Override
     public void setSignalHandler(long connectionId, SignalHandler handler) {
-        // Nothing to do for HTTP signalling
+        // Nothing to do for HTTP signaling
     }
 
     @Override
     public void removeSignalHandler(long connectionId) {
-        // Nothing to do for HTTP signalling
+        // Nothing to do for HTTP signaling
     }
 
     @Override
@@ -718,10 +717,10 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets whether ICE may gather on the port signalling binds to. Defaults to true. Set it
+         * Sets whether ICE may gather on the port signaling binds to. Defaults to true. Set it
          * false when another transport, such as RakNet, already holds the UDP side of that port.
          *
-         * @param iceOnLocalPort Whether ICE may use the signalling port
+         * @param iceOnLocalPort Whether ICE may use the signaling port
          * @return This builder
          */
         public Builder setIceOnLocalPort(boolean iceOnLocalPort) {
@@ -790,7 +789,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * Sets whether to serve the HTTP join endpoint. Defaults to true. With it off nothing is
          * listened on and offers have to be handed in through
          * {@link NetherNetHTTPSignaling#acceptOffer}, which is how an endpoint outside this process
-         * drives signalling.
+         * drives signaling.
          *
          * @param serveHttp Whether to bind the join endpoint
          * @return This builder
@@ -835,9 +834,9 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Builds the signalling instance.
+         * Builds the signaling instance.
          *
-         * @return A new signalling instance
+         * @return A new signaling instance
          * @throws IllegalStateException If no identity was set
          */
         public NetherNetHTTPSignaling build() {

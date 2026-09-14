@@ -143,7 +143,7 @@ class SdpUtilTest {
     }
 
     @Test
-    void infersNothingWhenThePeerSignalledFromThisNetwork() {
+    void infersNothingWhenThePeerSignaledFromThisNetwork() {
         // A path already exists, and the guess would point back into our own network
         assertTrue(SdpUtil.inferredPeerCandidates(HOST_ONLY_OFFER,
                 new InetSocketAddress("192.168.1.5", 44321)).isEmpty());

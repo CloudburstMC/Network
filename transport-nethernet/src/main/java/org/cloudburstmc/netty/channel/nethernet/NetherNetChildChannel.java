@@ -13,7 +13,7 @@ import java.net.SocketAddress;
 public class NetherNetChildChannel extends NetherNetChannel {
 
     /**
-     * The signalling connection ID this channel was accepted for.
+     * The signaling connection ID this channel was accepted for.
      * <p>
      * A child arrives on the server pipeline carrying nothing that ties it back to the offer that
      * produced it, and arrival order does not follow the order answers were produced in.
@@ -22,8 +22,8 @@ public class NetherNetChildChannel extends NetherNetChannel {
             AttributeKey.valueOf(NetherNetChildChannel.class, "connectionId");
 
     /**
-     * The peer whose validated identity assertion opened this channel, when the signalling that
-     * accepted it validates one. Signalling that carries no identity leaves it unset, so treat an
+     * The peer whose validated identity assertion opened this channel, when the signaling that
+     * accepted it validates one. Signaling that carries no identity leaves it unset, so treat an
      * absent value as an unauthenticated transport rather than an authenticated one.
      * <p>
      * Whatever identity your protocol presents after the transport is up is not tied to this one.

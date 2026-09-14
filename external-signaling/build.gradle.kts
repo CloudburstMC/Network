@@ -18,7 +18,7 @@ dependencies {
 }
 
 tasks.jar {
-    manifest.attributes["Automatic-Module-Name"] = "org.cloudburstmc.netty.signalling"
+    manifest.attributes["Automatic-Module-Name"] = "org.cloudburstmc.netty.signaling"
 }
 
 
@@ -56,13 +56,13 @@ tasks.register<Test>("nativeAdmissionTest") {
 tasks.register<JavaExec>("providerStub") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
-    mainClass.set("org.cloudburstmc.netty.signalling.IndependentProviderStub")
+    mainClass.set("org.cloudburstmc.netty.signaling.IndependentProviderStub")
 }
 
 tasks.register<JavaExec>("providerBench") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
-    mainClass.set("org.cloudburstmc.netty.signalling.ProviderBench")
+    mainClass.set("org.cloudburstmc.netty.signaling.ProviderBench")
     listOf(
         "providerOrigin", "providerState", "providerMode", "providerToken", "providerRegistrationMode",
         "providerRegion", "providerPool", "providerTags", "providerHoldSeconds", "providerStopFile",

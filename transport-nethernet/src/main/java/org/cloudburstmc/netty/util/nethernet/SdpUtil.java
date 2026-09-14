@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Helpers for the SDP documents exchanged during signalling.
+ * Helpers for the SDP documents exchanged during signaling.
  */
 public final class SdpUtil {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(SdpUtil.class);
@@ -113,7 +113,7 @@ public final class SdpUtil {
     }
 
     /**
-     * Candidates for the address a peer signalled from, one per port it gathered locally.
+     * Candidates for the address a peer signaled from, one per port it gathered locally.
      * <p>
      * A peer that holds no reflexive candidate of its own offers nothing a host on another network
      * can reach, and its own checks die on the first NAT they meet. Its public address is known
@@ -122,17 +122,17 @@ public final class SdpUtil {
      * check opens the path in both directions.
      * <p>
      * Nothing is inferred for a peer that already carries a reflexive or relayed candidate, or that
-     * signalled from an address on this network, since there is a real path in both cases.
+     * signaled from an address on this network, since there is a real path in both cases.
      *
      * @param sdp          The offer to read the peer's ports out of
-     * @param signalledFrom The address the offer arrived from, or null if it is not known
+     * @param signaledFrom The address the offer arrived from, or null if it is not known
      * @return Candidate lines to add to the peer connection, empty when there is nothing to infer
      */
-    public static List<String> inferredPeerCandidates(String sdp, InetSocketAddress signalledFrom) {
-        if (signalledFrom == null) {
+    public static List<String> inferredPeerCandidates(String sdp, InetSocketAddress signaledFrom) {
+        if (signaledFrom == null) {
             return List.of();
         }
-        InetAddress from = signalledFrom.getAddress();
+        InetAddress from = signaledFrom.getAddress();
         if (from == null || !isRoutable(from)) {
             return List.of();
         }

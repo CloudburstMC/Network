@@ -88,7 +88,7 @@ class ProxyProtocolTest {
 
     private InetSocketAddress observed() throws Exception {
         InetSocketAddress address = seen.poll(10, TimeUnit.SECONDS);
-        assertNotNull(address, "the signalling server never reported a client address");
+        assertNotNull(address, "the signaling server never reported a client address");
         return address;
     }
 

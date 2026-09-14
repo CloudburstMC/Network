@@ -45,7 +45,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
     /**
      * Creates a NetherNetClientChannel.
      *
-     * @param signaling The NetherNetClientSignaling instance for signalling.
+     * @param signaling The NetherNetClientSignaling instance for signaling.
      */
     public NetherNetClientChannel(NetherNetClientSignaling signaling) {
         super(null, null, null);

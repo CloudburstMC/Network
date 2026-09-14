@@ -80,7 +80,7 @@ class NetherNetHTTPSignalingBuilderTest {
                 .setIceServers(null)
                 .build();
 
-        assertTrue(signaling.allowsIceOnLocalPort(), "ICE may use the signalling port unless told otherwise");
+        assertTrue(signaling.allowsIceOnLocalPort(), "ICE may use the signaling port unless told otherwise");
         assertEquals(List.of(), signaling.getIceServers());
         // Nothing configured means nothing is filtered out of an answer
         assertEquals(SDP, SdpUtil.withAdvertisedCandidates(SDP, Set.of()));

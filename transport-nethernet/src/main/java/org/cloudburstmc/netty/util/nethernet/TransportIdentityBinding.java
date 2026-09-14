@@ -14,7 +14,7 @@ import java.util.Arrays;
  * On RakNet the encryption handshake does this on its own: the session key comes out of an ECDH
  * against the chain's identity key, so only its holder can read what follows. NetherNet runs over
  * DTLS and skips that handshake, which leaves the chain unbound, and a chain is replayable until
- * something binds it. The signalling assertion binds it here, because the peer proved it holds the
+ * something binds it. The signaling assertion binds it here, because the peer proved it holds the
  * key the assertion names before the transport was accepted, and that is the same key the chain is
  * signed with.
  * <p>
@@ -47,7 +47,7 @@ public final class TransportIdentityBinding {
         try {
             expected = IdentityPublicKey.canonical(player.clientPublicKey());
         } catch (Exception invalid) {
-            throw new IllegalArgumentException("Invalid signalling identity", invalid);
+            throw new IllegalArgumentException("Invalid signaling identity", invalid);
         }
         return new IdentityKeyVerifier() {
             @Override

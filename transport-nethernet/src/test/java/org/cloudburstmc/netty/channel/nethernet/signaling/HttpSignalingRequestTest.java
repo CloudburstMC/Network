@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * What the signalling endpoint answers to requests it should not serve. Anyone on the internet can
+ * What the signaling endpoint answers to requests it should not serve. Anyone on the internet can
  * reach this, so the refusals matter as much as the join it exists for.
  */
 class HttpSignalingRequestTest {
@@ -137,7 +137,7 @@ class HttpSignalingRequestTest {
     }
 
     @Test
-    void refusesAnOfferWithNothingBehindTheSignalling() throws Exception {
+    void refusesAnOfferWithNothingBehindTheSignaling() throws Exception {
         // Bound, but no transport is listening for connections yet
         this.start(this.builder());
 
