@@ -188,7 +188,9 @@
         "capabilities",
         "clientNonce",
         "expectedWriter",
-        "sessionDurationMillis"
+        "sessionDurationMillis",
+        "intentCreatedAt",
+        "intentExpiresAt"
       ],
       "properties": {
         "transport": {
@@ -208,6 +210,12 @@
         },
         "sessionDurationMillis": {
           "$ref": "#/$defs/duration"
+        },
+        "intentCreatedAt": {
+          "$ref": "#/$defs/uint"
+        },
+        "intentExpiresAt": {
+          "$ref": "#/$defs/uint"
         }
       },
       "allOf": [
