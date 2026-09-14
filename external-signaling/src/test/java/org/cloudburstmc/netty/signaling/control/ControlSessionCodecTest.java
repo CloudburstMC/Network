@@ -173,6 +173,23 @@ class ControlSessionCodecTest {
     }
 
     @Test
+    void legacyRevisionAndDisabledCurrentStatusAreExplicitWithoutRenewingGrant() throws Exception {
+        var preparation = verified("prepared-legacy");
+        var legacy = ControlWriterFence.read(ControlSessionPayloadCodec.decodeRequest("prepare", request("prepare-legacy").payloadBytes()).getAsJsonObject("expectedWriter"));
+        assertEquals(4, legacy.machineKeyRevision());
+        assertEquals(4, ControlSessionPayloadCodec.checkActivationAssociation(request("activate-legacy"), preparation, null, legacy, now()).machineKeyRevision());
+        verified("activated-legacy"); verified("disabled-current-writer"); verified("legacy-status-result");
+        var envelope = vector("legacy-status-result").getAsJsonObject("envelope");
+        var inner = JsonParser.parseString(vector("legacy-status-result").get("payloadUtf8").getAsString()).getAsJsonObject();
+        inner.addProperty("writerEnabled", true);
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.decodeResponse(replacePayload(envelope, inner).toString()));
+        inner.addProperty("writerEnabled", false); inner.getAsJsonObject("writer").remove("machineKeyRevision");
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.decodeResponse(replacePayload(envelope, inner).toString()));
+        inner.getAsJsonObject("writer").addProperty("machineKeyRevision", 0);
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.decodeResponse(replacePayload(envelope, inner).toString()));
+    }
+
+    @Test
     void prepareIntentCannotSlideAcrossDeliveryRetriesOrShorterPreparedLifetime() throws Exception {
         var envelope = vector("prepare-ws").getAsJsonObject("envelope");
         var inner = JsonParser.parseString(vector("prepare-ws").get("payloadUtf8").getAsString()).getAsJsonObject();

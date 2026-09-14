@@ -115,7 +115,8 @@
         "sessionEpoch",
         "sessionId",
         "connectionId",
-        "keyId"
+        "keyId",
+        "machineKeyRevision"
       ],
       "properties": {
         "transport": {
@@ -132,6 +133,9 @@
         },
         "keyId": {
           "$ref": "#/$defs/identifier"
+        },
+        "machineKeyRevision": {
+          "$ref": "#/$defs/positive"
         }
       }
     },
@@ -592,7 +596,8 @@
         "activatedAt",
         "sessionExpiresAt",
         "authoritySourceCheckedAt",
-        "authorityExpiresAt"
+        "authorityExpiresAt",
+        "writerEnabled"
       ],
       "properties": {
         "query": {
@@ -653,6 +658,9 @@
               "type": "null"
             }
           ]
+        },
+        "writerEnabled": {
+          "type": "boolean"
         }
       },
       "allOf": [
@@ -684,6 +692,9 @@
               },
               "authorityExpiresAt": {
                 "type": "null"
+              },
+              "writerEnabled": {
+                "const": false
               }
             }
           },

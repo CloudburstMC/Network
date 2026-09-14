@@ -89,7 +89,7 @@ explicit payload fields and checked independently of response-proof expiry.
 `WriterFence` is a closed union:
 
 ```text
-legacy: {transport:"legacy-http",sessionEpoch:0,sessionId:"",connectionId:"",keyId}
+legacy: {transport:"legacy-http",sessionEpoch:0,sessionId:"",connectionId:"",keyId,machineKeyRevision:positive}
 active: {transport:"websocket"|"https",sessionEpoch:positive,
          sessionId:opaque,connectionId:opaque,keyId,machineKeyRevision:positive}
 ```
@@ -248,7 +248,7 @@ Status requests are closed variants:
 Status response payloads are closed variants:
 
 ```text
-{query:"current-writer",writer,capabilities,activatedAt,sessionExpiresAt,
+{query:"current-writer",writer,writerEnabled,capabilities,activatedAt,sessionExpiresAt,
  authoritySourceCheckedAt,authorityExpiresAt}
 {query:"intent-receipt",intentDigest,receipt}
 ```
@@ -308,3 +308,9 @@ The stable `prepare` payload includes integer `intentCreatedAt` and `intentExpir
 `preparedAt` records actual first provider commit time. The immutable prepared deadline is the minimum of `intentExpiresAt`, `preparedAt + 60,000`, and any shorter parent deadline. Every replay returns that same result; a shorter proof lifetime cannot create a fresh preparation. Retain compact preparation replay records through the fixed intent deadline plus bounded clock uncertainty, then reject all recreation of that old intent. No per-epoch history without an expiry is necessary.
 
 A client journals activation before send. It can abandon an expired preparation only when activation was never attempted. An ambiguous activation requires strong current-writer reconciliation; a current status after the original deadline may establish that the expected writer was never replaced only when activation also rechecks expiry at its commit linearization point. A fresh preparation always uses a new stable intent.
+
+### Current writer policy and first activation key revision
+
+Every writer fence, including `legacy-http`, carries the actual positive selected `machineKeyRevision`. First control activation propagates it; it does not reset the revision to one.
+
+Only `current-writer` status includes `writerEnabled`, a boolean current canonical policy flag (always false for a legacy writer). This flag is independent of fixed grant expiry. True never establishes readiness, an expired original grant remains expired, and an activated receipt reports its original commit rather than later policy. Clients require explicit synchronization of the exact active enabled binding plus current deadlines before becoming ready. Disabled controlled writers retain their original historical grant for reconciliation.

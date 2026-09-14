@@ -94,8 +94,24 @@ if (process.argv.includes('--write')) {
     authoritySourceCheckedAt: now, authorityExpiresAt: now + 300000});
   const status = request('current-writer', 'status', {query: 'current-writer'}, 'machineCandidate');
   const rotatedWriter = {...currentWriter, keyId: keys.machineCandidate.keyId, machineKeyRevision: 3};
-  response('rotated-current-writer', 'status', status, {query: 'current-writer', writer: rotatedWriter, capabilities,
+  response('rotated-current-writer', 'status', status, {query: 'current-writer', writer: rotatedWriter, writerEnabled: true, capabilities,
     activatedAt: now - 1000, sessionExpiresAt: now - 1000 + duration, authoritySourceCheckedAt: now, authorityExpiresAt: now + 300000});
+  response('disabled-current-writer', 'status', status, {query: 'current-writer', writer: rotatedWriter, writerEnabled: false, capabilities,
+    activatedAt: now - 1000, sessionExpiresAt: now - 1000 + duration, authoritySourceCheckedAt: now, authorityExpiresAt: now + 300000});
+  const legacyWriter = {transport: 'legacy-http', sessionEpoch: 0, sessionId: '', connectionId: '', keyId: keys.machine.keyId, machineKeyRevision: 4};
+  const legacyStatus = request('legacy-status', 'status', {query: 'current-writer'});
+  response('legacy-status-result', 'status', legacyStatus, {query: 'current-writer', writer: legacyWriter, writerEnabled: false, capabilities: [],
+    activatedAt: null, sessionExpiresAt: null, authoritySourceCheckedAt: null, authorityExpiresAt: null});
+  const legacyPrepare = request('prepare-legacy', 'prepare', {transport: 'https', capabilities: ['request-response'], clientNonce: 'legacy_client_nonce_0001',
+    expectedWriter: legacyWriter, sessionDurationMillis: duration, intentCreatedAt: now, intentExpiresAt: now + 60000});
+  const legacyPrepared = response('prepared-legacy', 'prepared', legacyPrepare, {pendingSessionId: 'legacy_new_session_0001', transport: 'https',
+    capabilities: ['request-response'], clientNonce: 'legacy_client_nonce_0001', connectionId: 'legacy_new_connection_0001', expectedWriter: legacyWriter,
+    intentDigest: requestIntentDigest(legacyPrepare.envelope), preparedAt: now, expiresAt: now + 60000, sessionDurationMillis: duration});
+  const legacyActivate = request('activate-legacy', 'activate', {expectedWriter: legacyWriter, preparedProof: b64(JSON.stringify(legacyPrepared.envelope)), connectionProof: null});
+  response('activated-legacy', 'activated', legacyActivate, {intentDigest: requestIntentDigest(legacyActivate.envelope),
+    writer: {...legacyWriter, transport: 'https', sessionEpoch: 1, sessionId: 'legacy_new_session_0001', connectionId: 'legacy_new_connection_0001'},
+    capabilities: ['request-response'], activatedAt: now + 100, sessionExpiresAt: now + 100 + duration,
+    authoritySourceCheckedAt: now, authorityExpiresAt: now + 300000});
   const unknown = request('unknown-intent', 'status', {query: 'intent-receipt', intentDigest: hash('unknown-intent')}, 'machineCandidate');
   response('unknown-intent-result', 'status', unknown, {query: 'intent-receipt', intentDigest: hash('unknown-intent'), receipt: null});
   const bodyUtf8 = ' {"heartbeat":"café 😀 \\u2028", "desired":false}\n';

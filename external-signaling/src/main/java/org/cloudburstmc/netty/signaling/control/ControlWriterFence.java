@@ -7,8 +7,9 @@ public record ControlWriterFence(String transport, long sessionEpoch, String ses
                                  String keyId, long machineKeyRevision) {
     public ControlWriterFence {
         ControlJson.identifier(keyId);
+        ControlJson.safe(machineKeyRevision, true);
         if ("legacy-http".equals(transport)) {
-            if (sessionEpoch != 0 || !"".equals(sessionId) || !"".equals(connectionId) || machineKeyRevision != 0) throw ControlJson.invalid("legacy writer");
+            if (sessionEpoch != 0 || !"".equals(sessionId) || !"".equals(connectionId)) throw ControlJson.invalid("legacy writer");
         } else {
             if (!"websocket".equals(transport) && !"https".equals(transport)) throw ControlJson.invalid("writer transport");
             ControlJson.safe(sessionEpoch, true);
@@ -23,11 +24,10 @@ public record ControlWriterFence(String transport, long sessionEpoch, String ses
 
     static ControlWriterFence read(JsonObject value) {
         String transport = ControlJson.string(value, "transport");
-        if (transport.equals("legacy-http")) ControlJson.fields(value, "transport", "sessionEpoch", "sessionId", "connectionId", "keyId");
-        else ControlJson.fields(value, "transport", "sessionEpoch", "sessionId", "connectionId", "keyId", "machineKeyRevision");
+        ControlJson.fields(value, "transport", "sessionEpoch", "sessionId", "connectionId", "keyId", "machineKeyRevision");
         return new ControlWriterFence(transport, ControlJson.number(value, "sessionEpoch"), ControlJson.string(value, "sessionId"),
                 ControlJson.string(value, "connectionId"), ControlJson.string(value, "keyId"),
-                transport.equals("legacy-http") ? 0 : ControlJson.number(value, "machineKeyRevision"));
+                ControlJson.number(value, "machineKeyRevision"));
     }
 
     JsonObject object() {
@@ -37,7 +37,7 @@ public record ControlWriterFence(String transport, long sessionEpoch, String ses
         value.addProperty("sessionId", sessionId);
         value.addProperty("connectionId", connectionId);
         value.addProperty("keyId", keyId);
-        if (!transport.equals("legacy-http")) value.addProperty("machineKeyRevision", machineKeyRevision);
+        value.addProperty("machineKeyRevision", machineKeyRevision);
         return value;
     }
 }
