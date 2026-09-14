@@ -18,6 +18,9 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
+import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController;
 import io.netty.channel.*;
 import io.netty.util.NetUtil;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -75,6 +78,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private volatile boolean open = true;
     private volatile InetSocketAddress address;
     private volatile IceUdpMuxListener mux;
+    private EndpointConnectivityController connectivity;
     private ScheduledFuture<?> maintenance;
 
     public NativeAdmissionServerChannel(NativeHostIdentity identity, AdmissionValidator validator,
@@ -336,6 +340,51 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         return listener.stats();
     }
 
+    /**
+     * Explicit opt-in after binding. Observations never mutate the provider profile or admission
+     * incarnation. The controller polls on demand; native code independently maintains STUN.
+     * Closing this channel closes its monitors before releasing the gameplay listener.
+     */
+    public CompletionStage<EndpointConnectivityController> enableConnectivity(EndpointSelection selection,
+            Map<EndpointSelection.Family, InetSocketAddress> numericStunServers, Duration maxObservationAge) {
+        // Own caller collections before crossing the event-loop boundary.
+        Map<EndpointSelection.Family, InetSocketAddress> servers = Map.copyOf(numericStunServers);
+        CompletableFuture<EndpointConnectivityController> result = new CompletableFuture<>();
+        try {
+            eventLoop().execute(() -> {
+                try {
+                    if (!isActive() || connectivity != null || !selection.bind().equals(address)) {
+                        throw new IllegalStateException("Connectivity requires the same active mux and one controller");
+                    }
+                    IceUdpMuxListener listener = mux;
+                    connectivity = new EndpointConnectivityController(selection, servers, maxObservationAge, server -> {
+                        StunUdpMuxMonitor monitor = listener.monitorStun(server.getAddress().getHostAddress(), server.getPort());
+                        return new EndpointConnectivityController.Monitor() {
+                            @Override public Optional<EndpointConnectivityController.Sample> read() {
+                                return monitor.binding(0).map(binding -> {
+                                    try {
+                                        var mapped = binding.mappedPort() == 0 ? null : new InetSocketAddress(
+                                                EndpointAddress.parse(binding.mappedAddress()), binding.mappedPort());
+                                        return new EndpointConnectivityController.Sample(new InetSocketAddress(
+                                                EndpointAddress.parse(binding.serverAddress()), binding.serverPort()), mapped,
+                                                EndpointConnectivityController.TransactionState.valueOf(binding.state().name()),
+                                                binding.successfulResponses(), binding.failedTransactions(), binding.mappingRevision(),
+                                                binding.lastSuccessAge());
+                                    } catch (UnknownHostException invalid) {
+                                        throw new IllegalStateException("Native STUN observation is not numeric", invalid);
+                                    }
+                                });
+                            }
+                            @Override public void close() { monitor.close(); }
+                        };
+                    });
+                    result.complete(connectivity);
+                } catch (Exception failure) { result.completeExceptionally(failure); }
+            });
+        } catch (RuntimeException unavailable) { result.completeExceptionally(unavailable); }
+        return result;
+    }
+
     public NativeHostIdentity identity() {
         return identity;
     }
@@ -354,6 +403,11 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         gate.close();
         if (maintenance != null) {
             maintenance.cancel(false);
+        }
+
+        if (connectivity != null) {
+            try { connectivity.close(); }
+            catch (RuntimeException failure) { nativeCloseFailure.compareAndSet(null, failure); }
         }
 
         IceUdpMuxListener listener = mux;
