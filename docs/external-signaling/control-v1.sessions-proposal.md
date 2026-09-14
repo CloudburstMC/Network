@@ -295,3 +295,8 @@ rejection; interrupted rotation reconciled using the persisted candidate key; no
 secret fields in replay receipts; expired preparation/authority; and proof-domain,
 direction, audience and connection substitution. Fixture state examples are not
 evidence of a deployed atomic authority implementation.
+
+All signed audiences and trusted expected origins use the shared strict
+[control origin profile](control-v1.origins.md). IDN/xn-- and trailing-dot
+providers cannot advertise this optional profile; existing core origin handling
+remains available and unchanged. Never normalize input after signing.

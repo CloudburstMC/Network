@@ -238,13 +238,14 @@ IDs match `[A-Za-z0-9_-]{16,128}`; instance/key IDs match
 2048 characters. These constraints are part of wire parsing, not loose JSON
 Schema numeric coercion.
 
-Before activation, add shared origin acceptance/rejection vectors for canonical
-IPv6 versus expanded/uppercase forms, unusual numeric IPv4, invalid/default/
-leading-zero ports, Unicode hosts and encoded delimiters. The draft Java codec
-currently inherits core Java URI origin handling; TypeScript uses WHATWG URL.
-Standard DNS and canonical loopback origins interoperate, but all literal-origin
-normalization edge cases are not yet proven equivalent. Resolve this with a
-codec-specific canonical guard without silently changing the existing core helper.
+Every draft control audience now uses the shared strict
+[control origin profile](control-v1.origins.md): lowercase ASCII DNS, canonical
+IPv4 or bracketed lowercase/compressed IPv6, with canonical non-default ports.
+HTTP is limited to exact localhost, 127.0.0.1 and [::1]. Alternate literal or port
+spellings are rejected without normalization. IDN/xn-- and trailing-dot providers
+cannot advertise this optional profile until a future agreed normalization
+profile; existing core origin handling remains unchanged. Shared adversarial
+vectors prove Java/Worker agreement across all draft carriers.
 
 Every active frame uses ES384/P-384 with a raw 96-byte IEEE-P1363 signature,
 encoded as canonical unpadded base64url. Reject DER and other curves. Host frames

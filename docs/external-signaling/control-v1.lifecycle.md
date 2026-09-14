@@ -71,3 +71,8 @@ bytes and noncanonical base64url. Independent Node fixtures in
 `control-v1.lifecycle.fixtures.json` include Unicode and exact whitespace/body
 digest checks. Their body examples test the carrier and digest contract only;
 they do not assert existing operation-schema conformance or deployed replay behavior.
+
+All signed audiences and trusted expected origins use the shared strict
+[control origin profile](control-v1.origins.md). IDN/xn-- and trailing-dot
+providers cannot advertise this optional profile; existing core origin handling
+remains available and unchanged. Never normalize input after signing.

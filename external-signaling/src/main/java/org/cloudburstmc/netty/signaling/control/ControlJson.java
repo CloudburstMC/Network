@@ -12,7 +12,6 @@ import org.cloudburstmc.netty.signaling.ProviderCrypto;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -132,8 +131,7 @@ final class ControlJson {
     }
 
     static void audience(String value) {
-        if (value == null || value.length() > 2048 || URI.create(value).getPort() > 65535
-                || !value.equals(ProviderCrypto.origin(URI.create(value)))) throw invalid("audience");
+        ControlOrigin.requireCanonical(value);
     }
 
     static byte[] base64(String value, int maximum, boolean emptyAllowed) {
