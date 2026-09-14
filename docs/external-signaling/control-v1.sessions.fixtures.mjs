@@ -61,7 +61,7 @@ if (process.argv.includes('--write')) {
       authentication: {scheme, keyId: keys.providerControl.keyId, signature: ''}}, 'providerControl', {requestName: requestVector.name, payloadUtf8});
   }
   const prepare = request('prepare-ws', 'prepare', {transport: 'websocket', capabilities, clientNonce: 'client_nonce_vector_01',
-    expectedWriter: currentWriter, sessionDurationMillis: duration});
+    expectedWriter: currentWriter, sessionDurationMillis: duration, intentCreatedAt: now, intentExpiresAt: now + 60000});
   const preparedPayload = {pendingSessionId: 'session_candidate_0002', transport: 'websocket', capabilities,
     clientNonce: 'client_nonce_vector_01', connectionId: null, expectedWriter: currentWriter,
     intentDigest: requestIntentDigest(prepare.envelope), preparedAt: now, expiresAt: now + 60000, sessionDurationMillis: duration};
@@ -80,7 +80,7 @@ if (process.argv.includes('--write')) {
       authoritySourceCheckedAt: now, authorityExpiresAt: now + 300000});
   }
   const prepareHttp = request('prepare-https', 'prepare', {transport: 'https', capabilities: ['request-response'],
-    clientNonce: 'http_client_nonce_0001', expectedWriter: activatedWriter, sessionDurationMillis: duration});
+    clientNonce: 'http_client_nonce_0001', expectedWriter: activatedWriter, sessionDurationMillis: duration, intentCreatedAt: now, intentExpiresAt: now + 60000});
   const preparedHttp = response('prepared-https', 'prepared', prepareHttp, {pendingSessionId: 'http_session_candidate_0001',
     transport: 'https', capabilities: ['request-response'], clientNonce: 'http_client_nonce_0001', connectionId: 'http_writer_candidate_0001',
     expectedWriter: activatedWriter, intentDigest: requestIntentDigest(prepareHttp.envelope), preparedAt: now,

@@ -105,7 +105,7 @@ the exact accepted physical socket.
 
 | Payload | Exact proposed fields |
 | --- | --- |
-| prepare request | `{transport:"websocket"|"https",capabilities,clientNonce,expectedWriter,sessionDurationMillis}` |
+| prepare request | `{transport:"websocket"|"https",capabilities,clientNonce,expectedWriter,sessionDurationMillis,intentCreatedAt,intentExpiresAt}` |
 | prepared response | `{pendingSessionId,transport,capabilities,clientNonce,connectionId,expectedWriter,intentDigest,preparedAt,expiresAt,sessionDurationMillis}` |
 | upgrade request | `{preparedProof}` |
 | connection-challenge response | `{pendingSessionId,transport:"websocket",capabilities,clientNonce,connectionId,preparedProofSha256,expiresAt,sessionDurationMillis}` |
@@ -300,3 +300,11 @@ All signed audiences and trusted expected origins use the shared strict
 [control origin profile](control-v1.origins.md). IDN/xn-- and trailing-dot
 providers cannot advertise this optional profile; existing core origin handling
 remains available and unchanged. Never normalize input after signing.
+
+### Fixed preparation intent and bounded replay retention
+
+The stable `prepare` payload includes integer `intentCreatedAt` and `intentExpiresAt`, with a positive lifetime of at most 60,000 ms. Delivery retries preserve both fields and the request ID/payload digest; their outer `expiresAt` cannot exceed `intentExpiresAt`. First commit rejects `now >= intentExpiresAt` and a creation time farther in the future than the negotiated clock allowance. The provider checks this at the serialized mutation/commit point.
+
+`preparedAt` records actual first provider commit time. The immutable prepared deadline is the minimum of `intentExpiresAt`, `preparedAt + 60,000`, and any shorter parent deadline. Every replay returns that same result; a shorter proof lifetime cannot create a fresh preparation. Retain compact preparation replay records through the fixed intent deadline plus bounded clock uncertainty, then reject all recreation of that old intent. No per-epoch history without an expiry is necessary.
+
+A client journals activation before send. It can abandon an expired preparation only when activation was never attempted. An ambiguous activation requires strong current-writer reconciliation; a current status after the original deadline may establish that the expected writer was never replaced only when activation also rechecks expiry at its commit linearization point. A fresh preparation always uses a new stable intent.

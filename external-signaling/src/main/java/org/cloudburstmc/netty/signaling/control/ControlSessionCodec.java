@@ -93,6 +93,11 @@ public final class ControlSessionCodec {
         }
         ControlProof.verify(signingBytes(request), request.authentication(), ControlFrameCodec.KeyFamily.MACHINE, key,
                 request.sentAt(), request.expiresAt(), context.now(), context.authorityExpiresAt(), context.clockSkewMillis());
+        if (request.action().equals("prepare")) {
+            JsonObject payload = ControlSessionPayloadCodec.decodeRequest("prepare", request.payloadBytes());
+            if (context.now() >= ControlJson.number(payload, "intentExpiresAt")
+                    || ControlJson.number(payload, "intentCreatedAt") > context.now() + context.clockSkewMillis()) throw ControlJson.invalid("prepare intent time");
+        }
         return request;
     }
 
@@ -192,7 +197,8 @@ public final class ControlSessionCodec {
         common(request.version(), request.requestId(), request.audience(), request.instanceId(), request.generation(), request.sentAt(),
                 request.expiresAt(), request.payload(), request.payloadSha256(), request.authentication(), signature);
         ControlProof.path(request.encodedPathAndQuery());
-        ControlSessionPayloadCodec.decodeRequest(request.action(), request.payloadBytes());
+        JsonObject payload = ControlSessionPayloadCodec.decodeRequest(request.action(), request.payloadBytes());
+        if (request.action().equals("prepare") && request.expiresAt() > ControlJson.number(payload, "intentExpiresAt")) throw ControlJson.invalid("prepare delivery deadline");
     }
 
     private static void validate(Response response, boolean signature) {

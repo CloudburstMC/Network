@@ -15,11 +15,13 @@ public final class ControlSessionPayloadCodec {
         JsonObject value = parse(originalBytes);
         switch (action) {
             case "prepare" -> {
-                ControlJson.fields(value, "transport", "capabilities", "clientNonce", "expectedWriter", "sessionDurationMillis");
+                ControlJson.fields(value, "transport", "capabilities", "clientNonce", "expectedWriter", "sessionDurationMillis", "intentCreatedAt", "intentExpiresAt");
                 selected(value);
                 nonce(value);
                 fence(value, "expectedWriter");
                 duration(value);
+                long created = timestamp(value, "intentCreatedAt"), expires = timestamp(value, "intentExpiresAt");
+                if (expires <= created || expires - created > MAX_PREPARATION_MILLIS) throw ControlJson.invalid("prepare intent lifetime");
             }
             case "upgrade" -> {
                 ControlJson.fields(value, "preparedProof");
@@ -145,6 +147,7 @@ public final class ControlSessionPayloadCodec {
         JsonObject intent = decodeRequest(request.action(), request.payloadBytes());
         switch (response.kind()) {
             case "prepared" -> {
+                if (timestamp(result, "expiresAt") > timestamp(intent, "intentExpiresAt")) throw ControlJson.invalid("prepare intent deadline");
                 for (String field : List.of("transport", "capabilities", "clientNonce", "expectedWriter", "sessionDurationMillis")) {
                     if (!result.get(field).equals(intent.get(field))) throw ControlJson.invalid("prepared request association");
                 }

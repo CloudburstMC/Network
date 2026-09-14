@@ -173,6 +173,33 @@ class ControlSessionCodecTest {
     }
 
     @Test
+    void prepareIntentCannotSlideAcrossDeliveryRetriesOrShorterPreparedLifetime() throws Exception {
+        var envelope = vector("prepare-ws").getAsJsonObject("envelope");
+        var inner = JsonParser.parseString(vector("prepare-ws").get("payloadUtf8").getAsString()).getAsJsonObject();
+        inner.remove("intentCreatedAt");
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.decodeRequest(replacePayload(envelope, inner).toString()));
+        inner.addProperty("intentCreatedAt", now()); inner.addProperty("intentExpiresAt", now() + 60001);
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.decodeRequest(replacePayload(envelope, inner).toString()));
+        inner.addProperty("intentExpiresAt", now() + 29999);
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.decodeRequest(replacePayload(envelope, inner).toString()));
+        inner.addProperty("intentCreatedAt", now() + 1001); inner.addProperty("intentExpiresAt", now() + 50000);
+        var future = ControlSessionCodec.sign(ControlSessionCodec.decodeRequest(replacePayload(envelope, inner).toString()), privateKey("machine"));
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.verifyRequest(ControlSessionCodec.encode(future), context(future), key("machine")));
+        inner.addProperty("intentCreatedAt", now()); inner.addProperty("intentExpiresAt", now() + 50000);
+        var shortened = ControlSessionCodec.sign(ControlSessionCodec.decodeRequest(replacePayload(envelope, inner).toString()), privateKey("machine"));
+        var responseEnvelope = vector("prepared-ws").getAsJsonObject("envelope");
+        responseEnvelope.addProperty("requestIntentDigest", ControlSessionCodec.requestIntentDigest(shortened));
+        var result = JsonParser.parseString(vector("prepared-ws").get("payloadUtf8").getAsString()).getAsJsonObject();
+        result.addProperty("intentDigest", ControlSessionCodec.requestIntentDigest(shortened));
+        var response = ControlSessionCodec.sign(ControlSessionCodec.decodeResponse(replacePayload(responseEnvelope, result).toString()), privateKey("providerControl"));
+        assertThrows(IllegalArgumentException.class, () -> ControlSessionCodec.verifyResponse(ControlSessionCodec.encode(response),
+                new ControlSessionCodec.ResponseContext(shortened, now(), now() + 300000, 1000), key("providerControl")));
+        result.addProperty("expiresAt", now() + 40000); responseEnvelope.addProperty("expiresAt", now() + 40000);
+        var bounded = ControlSessionCodec.sign(ControlSessionCodec.decodeResponse(replacePayload(responseEnvelope, result).toString()), privateKey("providerControl"));
+        ControlSessionCodec.verifyResponse(ControlSessionCodec.encode(bounded), new ControlSessionCodec.ResponseContext(shortened, now(), now() + 300000, 1000), key("providerControl"));
+    }
+
+    @Test
     void closedPayloadsRejectDuplicateLossySecretAndWrongVariantFields() throws Exception {
         var original = vector("prepare-ws").getAsJsonObject("envelope");
         String inner = vector("prepare-ws").get("payloadUtf8").getAsString();
