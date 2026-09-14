@@ -177,7 +177,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
             if (receipt != null && receipt.disposition().equals("committed")) {
                 if (pending.candidate() != null && !credential.keyId().equals(pending.candidate().keyId())) throw ControlJson.invalid("rotation current key reconciliation");
                 persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(), null, snapshot.pendingBootstrap(), grant(current)));
+                long continuationAttempt = attempt; State continuationState = state;
                 completeReceipt(receipt);
+                // CompletableFuture completion may synchronously close, replace or resynchronize this client.
+                // A newly queued intent alone keeps this reconciliation valid and is delivered after sync.
+                if (attempt != continuationAttempt || state != continuationState) return;
             } else {
                 if (!credential.equals(snapshot.currentKey())) { halt(); return; }
                 if (receipt != null) persistPendingReceipt(receipt);
@@ -249,6 +253,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 var verified = verifiedReply(reply, request);
                 JsonObject prepared = ControlSessionPayloadCodec.decodeResponse("prepared", verified.response().payloadBytes());
                 if (clock.nowMillis() >= ControlJson.number(prepared, "expiresAt")) throw ControlJson.invalid("expired prepared response");
+                Candidate previousCandidate = candidate; candidate = null;
+                // Fence the old physical callback before aborting a superseded standby connection.
+                if (previousCandidate != null && previousCandidate != active && previousCandidate.link != null) previousCandidate.link.abort();
                 candidate = new Candidate(); candidate.prepared = verified;
                 if (ControlJson.string(prepared, "transport").equals("https")) { activate(candidate); return; }
                 state = State.STANDBY;
@@ -446,11 +453,14 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private void halt() {
+        if (state == State.CLOSED) return;
         state = State.UNRESOLVED; attempt++; operationInFlight = false; synchronizationInFlight = false; authority = null;
         cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
         Candidate oldCandidate = candidate, oldActive = active; candidate = null; active = null;
         if (oldCandidate != null && oldCandidate.link != null) oldCandidate.link.abort();
         if (oldActive != null && oldActive != oldCandidate && oldActive.link != null) oldActive.link.abort();
+        var result = pendingResult; pendingResult = null;
+        if (result != null) result.completeExceptionally(new IllegalStateException("Control client halted; durable intent retained for reconciliation"));
     }
     private void fail() {
         if (state == State.CLOSED || state == State.UNRESOLVED) return;

@@ -321,6 +321,76 @@ class ControlClientCoordinatorTest {
         assertNotNull(redirected.journal.value.pending()); assertFalse(future.isDone()); assertFalse(redirected.client.ready());
     }
 
+    @Test void reconciledReceiptCompletionMayCloseWithoutResumingOldStatusContinuation() throws Exception {
+        var h = new Harness(); h.ready();
+        var result = h.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
+        var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
+        int[] writesAtClose = {0};
+        result.thenRun(() -> {
+            try { h.client.close(); } catch (IOException e) { throw new IllegalStateException(e); }
+            writesAtClose[0] = h.journal.writes.size();
+            h.journal.fail = true; // A real file journal rejects writes after close.
+        });
+        h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
+        assertEquals(receipt, result.join());
+        assertEquals(ControlClientCoordinator.State.CLOSED, h.client.state());
+        assertEquals(writesAtClose[0], h.journal.writes.size());
+        assertTrue(h.requests.isEmpty());
+    }
+
+    @Test void reconciledReceiptCompletionMayReplaceTransportWithOnlyOnePrepare() throws Exception {
+        var h = new Harness(); h.ready();
+        var result = h.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
+        var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
+        result.thenRun(() -> h.client.replaceTransport("https", List.of("request-response")));
+        h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
+        assertEquals(receipt, result.join());
+        assertEquals(1, h.requests.size());
+        h.respondPrepare(); h.respondActivation(); h.synchronizedReady();
+        assertEquals("https", h.writer.transport());
+    }
+
+    @Test void reconciledReceiptCompletionMaySubmitTheNextIntentWithoutLosingItsFuture() throws Exception {
+        var h = new Harness(); h.ready();
+        var first = h.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
+        var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
+        List<CompletableFuture<ControlLifecycleCodec.Receipt>> next = new ArrayList<>();
+        first.thenRun(() -> next.add(h.client.submit("heartbeat", new byte[]{42}, true).toCompletableFuture()));
+        h.client.reconcilePending(); h.respondStatus(); h.respondStatus(); h.synchronizedReady();
+        assertEquals(1, next.size()); assertFalse(next.get(0).isDone());
+        assertEquals(2, h.journal.value.pending().intent().sequence());
+        var operation = h.operations.get(1); var secondReceipt = h.receipt("committed");
+        operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, ControlLifecycleCodec.encodeReceipt(secondReceipt)));
+        assertEquals(secondReceipt, next.get(0).join());
+    }
+
+    @Test void reconcilingAnUnactivatedPrepareClosesEachSupersededStandbyLink() throws Exception {
+        var h = new Harness(); h.client.start(); h.respondStatus(); h.respondPrepare();
+        var original = h.journal.value.pendingBootstrap();
+        for (int i = 0; i < 3; i++) {
+            var previous = h.links.get(i);
+            h.client.reconcilePending(); h.respondStatus(); h.respondPrepare();
+            assertEquals(1, previous.abortCalls);
+            assertEquals(original, h.journal.value.pendingBootstrap());
+            previous.challenge(); // A superseded connection cannot activate its old candidate.
+            assertTrue(h.requests.isEmpty());
+            assertEquals(ControlClientCoordinator.State.STANDBY, h.client.state());
+        }
+        h.links.get(3).challenge(); h.respondActivation(); h.synchronizedReady();
+    }
+
+    @Test void failureToPersistAReceivedReceiptCompletesCallerExceptionallyAndKeepsTheBarrier() throws Exception {
+        var h = new Harness(); h.ready();
+        var result = h.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
+        var operation = h.operations.get(0); var receipt = h.receipt("committed");
+        h.journal.fail = true;
+        operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, ControlLifecycleCodec.encodeReceipt(receipt)));
+        assertEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state());
+        assertNotNull(h.journal.value.pending());
+        assertTrue(result.isCompletedExceptionally());
+        assertTrue(h.requests.isEmpty());
+    }
+
     @Test void sharedClockContinuesAgingAfterWallRollbackAndDoesNotLoseSubmillisecondElapsedTime() {
         long[] wall = {1000}, nanos = {0}; var clock = ControlClientClock.monotonic(() -> wall[0], () -> nanos[0]);
         assertEquals(1000, clock.nowMillis()); nanos[0] += 500_000; assertEquals(1000, clock.nowMillis()); nanos[0] += 500_000; assertEquals(1001, clock.nowMillis());
