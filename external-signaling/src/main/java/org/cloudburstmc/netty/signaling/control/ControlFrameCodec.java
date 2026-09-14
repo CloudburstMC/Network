@@ -9,7 +9,6 @@ import org.cloudburstmc.netty.signaling.ProviderCrypto;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -303,11 +302,7 @@ public final class ControlFrameCodec {
         if (frame.expiresAt() <= frame.sentAt() || frame.expiresAt() - frame.sentAt() > MAX_FRAME_TTL_MILLIS) {
             throw invalid("frame lifetime");
         }
-        if (frame.audience() == null || frame.audience().length() > 2048
-                || URI.create(frame.audience()).getPort() > 65535
-                || !frame.audience().equals(ProviderCrypto.origin(URI.create(frame.audience())))) {
-            throw invalid("canonical audience");
-        }
+        ControlOrigin.requireCanonical(frame.audience());
         List<String> capabilities = frame.capabilities();
         if (!capabilities.contains("request-response") || capabilities.size() > CAPABILITIES.size()) throw invalid("capabilities");
         String previous = "";
