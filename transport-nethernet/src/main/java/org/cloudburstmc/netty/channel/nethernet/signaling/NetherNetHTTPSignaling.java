@@ -46,6 +46,10 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.handler.ssl.OptionalSslHandler;
@@ -172,6 +176,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                         p.addLast(new HttpServerCodec());
                         p.addLast(new HttpObjectAggregator(8 * 1024));
                         p.addLast(new HttpLoggingHandler(log));
+                        // A kept connection that goes quiet is one nobody will come back to
+                        p.addLast(new IdleStateHandler(IDLE_SECONDS, 0, 0));
                         p.addLast(new SignalingHandler());
                     }
                 });
@@ -223,13 +229,20 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
     }
 
+    /** How long a kept connection may sit unused before it is closed. */
+    private static final int IDLE_SECONDS = 30;
+
     private class SignalingHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) {
             if (req.decoderResult().isFailure()) {
-                respondEmptyWithStatus(ctx, HttpResponseStatus.BAD_REQUEST);
+                respondEmptyWithStatus(ctx, HttpResponseStatus.BAD_REQUEST, false);
                 return;
             }
+
+            // A client sends its status check and its join on one connection, so what it asked for
+            // here decides whether the next request has anywhere to land
+            boolean keepAlive = HttpUtil.isKeepAlive(req);
 
             String path = new QueryStringDecoder(req.uri()).path();
             HttpMethod method = req.method();
@@ -238,7 +251,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
             if (path.equals("/v1/join")) {
                 if (!HttpMethod.GET.equals(method)) {
-                    respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
+                    respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED, keepAlive);
                     return;
                 }
 
@@ -247,21 +260,21 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                     motd = motdProvider.getMotd(host, remoteAddress);
                 } catch (Exception e) {
                     log.error("MOTD provider failed", e);
-                    respondEmptyWithStatus(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR);
+                    respondEmptyWithStatus(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, keepAlive);
                     return;
                 }
 
-                respondWithString(ctx, motd.toJson(), "application/json");
+                respondWithString(ctx, motd.toJson(), "application/json", keepAlive);
                 return;
             }
 
             if (!path.startsWith("/v1/join/")) {
-                respondEmptyWithStatus(ctx, HttpResponseStatus.NOT_FOUND);
+                respondEmptyWithStatus(ctx, HttpResponseStatus.NOT_FOUND, keepAlive);
                 return;
             }
 
             if (!HttpMethod.POST.equals(method)) {
-                respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
+                respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED, keepAlive);
                 return;
             }
 
@@ -269,7 +282,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
             // Reject empty, or anything with a further path segment
             if (networkId.isEmpty() || networkId.indexOf('/') >= 0) {
-                respondEmptyWithStatus(ctx, HttpResponseStatus.NOT_FOUND);
+                respondEmptyWithStatus(ctx, HttpResponseStatus.NOT_FOUND, keepAlive);
                 return;
             }
 
@@ -279,7 +292,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             acceptOffer(networkId, sdpOffer, remoteAddress, host).whenComplete((sdpAnswer, failure) -> {
                 if (failure == null) {
                     log.trace("Signed SDP answer: " + sdpAnswer);
-                    respondWithString(ctx, sdpAnswer, "application/sdp");
+                    respondWithString(ctx, sdpAnswer, "application/sdp", keepAlive);
                     return;
                 }
 
@@ -291,7 +304,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                     case REJECTED -> HttpResponseStatus.FORBIDDEN;
                     case TIMEOUT -> HttpResponseStatus.GATEWAY_TIMEOUT;
                     case UNAVAILABLE -> HttpResponseStatus.SERVICE_UNAVAILABLE;
-                });
+                }, keepAlive);
             });
         }
 
@@ -328,24 +341,46 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object event) {
+            if (event instanceof IdleStateEvent idle && idle.state() == IdleState.READER_IDLE) {
+                ctx.close(); // Routine, so it closes without the noise of an exception
+                return;
+            }
+            ctx.fireUserEventTriggered(event);
+        }
+
+        @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             log.error("Signaling handler error", cause);
             ctx.close();
         }
     }
 
-    private void respondEmptyWithStatus(ChannelHandlerContext ctx, HttpResponseStatus status) {
+    private void respondEmptyWithStatus(ChannelHandlerContext ctx, HttpResponseStatus status, boolean keepAlive) {
         FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.EMPTY_BUFFER);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        respond(ctx, response, keepAlive);
     }
 
-    private void respondWithString(ChannelHandlerContext ctx, String body, String contentType) {
+    private void respondWithString(ChannelHandlerContext ctx, String body, String contentType, boolean keepAlive) {
         ByteBuf bodyBuf = Unpooled.wrappedBuffer(body.getBytes(StandardCharsets.UTF_8));
         FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, bodyBuf);
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, contentType);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bodyBuf.readableBytes());
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        respond(ctx, response, keepAlive);
+    }
+
+    /**
+     * Closing a connection the client still believes is open leaves its next request unanswered:
+     * TCP accepts the bytes into a half-closed socket, so the client waits for a reply that can
+     * never come. Either the connection is kept, or the response says it is not.
+     */
+    private void respond(ChannelHandlerContext ctx, FullHttpResponse response, boolean keepAlive) {
+        HttpUtil.setKeepAlive(response, keepAlive);
+        ChannelFuture written = ctx.writeAndFlush(response);
+        if (!keepAlive) {
+            written.addListener(ChannelFutureListener.CLOSE);
+        }
     }
 
     @Override
