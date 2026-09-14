@@ -78,7 +78,7 @@ public final class IndependentProviderStub implements AutoCloseable {
             throw new Failure(400, "payload_limit");
         }
         JsonObject body = raw.isEmpty() ? new JsonObject() : JsonParser.parseString(raw).getAsJsonObject();
-        if (path.equals("/.well-known/nethernet-external-signalling")) {
+        if (path.equals("/.well-known/nethernet-external-signaling")) {
             JsonObject d = new JsonObject();
             d.addProperty("provider", origin);
             d.addProperty("controlOrigin", origin);

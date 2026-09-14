@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public final class ProviderCrypto {
     private static final Pattern BASE64URL = Pattern.compile("[A-Za-z0-9_-]+");
 
-    public static final String PROTOCOL = "nethernet-external-signalling-v1";
+    public static final String PROTOCOL = "nethernet-external-signaling-v1";
     public static final String SIGNATURE = "nxs-es384-v1";
 
     private ProviderCrypto() {
