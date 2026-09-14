@@ -15,6 +15,7 @@ final class NetherNetMessageAssembler implements AutoCloseable {
     private final String label;
     private CompositeByteBuf assembly;
     private int expected = -1;
+    private boolean dropping;
     private boolean closed;
 
     NetherNetMessageAssembler(String label) {
@@ -33,9 +34,25 @@ final class NetherNetMessageAssembler implements AutoCloseable {
 
         int remaining = data.get() & 0xFF;
         if (expected != -1 && remaining != expected) {
-            log.debug("Discarding assembled message on the {} channel: expected segment {}, got {}",
-                    label, expected, remaining);
-            clear();
+            if (remaining > expected) {
+                // A countdown only ever falls, so the rest of the message being assembled will
+                // never arrive and this fragment opens a new one
+                log.debug("Restarting assembly on the {} channel: expected segment {}, got {}",
+                        label, expected, remaining);
+                clear();
+            } else {
+                // Fragments went missing inside this message, so it can never be completed.
+                // Follow its countdown out rather than assembling, so the next one starts clean
+                log.debug("Dropping a gapped message on the {} channel: expected segment {}, got {}",
+                        label, expected, remaining);
+                clear();
+                dropping = true;
+            }
+        }
+
+        if (dropping) {
+            expected = remaining == 0 ? -1 : remaining - 1;
+            dropping = remaining != 0;
             return null;
         }
 
@@ -83,6 +100,7 @@ final class NetherNetMessageAssembler implements AutoCloseable {
             assembly = null;
         }
         expected = -1;
+        dropping = false;
     }
 
     @Override
