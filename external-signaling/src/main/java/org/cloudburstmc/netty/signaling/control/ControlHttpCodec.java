@@ -10,6 +10,7 @@ import java.util.List;
 /** Draft signed operational HTTP carrier. This does not select routes, reserve sequence or commit state. */
 public final class ControlHttpCodec {
     public static final int MAX_ENVELOPE_BYTES = 16384;
+    public static final String PROOF_HEADER = "Nxs-Control-Proof";
 
     public record Request(int version, String audience, String method, String encodedPathAndQuery, long sentAt,
                           long expiresAt, ControlLifecycleCodec.Intent intent, String sessionId, long sessionEpoch,

@@ -20,7 +20,7 @@ public final class JdkControlLink implements ControlClientIo.Link {
             JdkWebSocketTransport.Limits limits, Executor receiverExecutor,
             ScheduledExecutorService scheduler, Consumer<String> received) {
         String proof = Base64.getUrlEncoder().withoutPadding().encodeToString(ControlSessionCodec.encode(upgrade).getBytes(StandardCharsets.UTF_8));
-        return connect(client, endpoint, upgrade, Map.of("Nxs-Control-Proof", proof), limits, receiverExecutor, scheduler, received);
+        return connect(client, endpoint, upgrade, Map.of(ControlHttpCodec.PROOF_HEADER, proof), limits, receiverExecutor, scheduler, received);
     }
 
     public static JdkControlLink connect(HttpClient client, URI endpoint, ControlSessionCodec.Request upgrade,
