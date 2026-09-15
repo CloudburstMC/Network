@@ -63,11 +63,19 @@ public final class ProviderNativeBench {
         NativeProviderTransport nativeHost = null;
         ProviderClient provider = null;
         try {
-            nativeHost = NativeProviderTransport.open(bootstrap, new InetSocketAddress("127.0.0.1", port),
+            String advertisedAddress = System.getProperty("providerAdvertisedAddress");
+            var bind = new InetSocketAddress("127.0.0.1", port);
+            var advertised = advertisedAddress == null ? bind : new InetSocketAddress(
+                    org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(advertisedAddress), port);
+            nativeHost = NativeProviderTransport.open(bootstrap, bind, advertised,
                     state.resolve("host-cert.pem"), state.resolve("host-key.pem"),
                     new AdmissionGate.Limits(4, 8, 2, 10_000)).toCompletableFuture().get(10, TimeUnit.SECONDS);
             provider = new ProviderClient(
-                    new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration"),
+                    new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration",
+                            ProviderClient.NEW_SERVICE, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null,
+                            null, null, Map.of(), ProviderClient.ControlTransport.HTTP,
+                            Boolean.getBoolean("providerDiagnosticAdmission"),
+                            advertisedAddress == null ? "discovered" : "defined"),
                     new ProviderStateStore(state), nativeHost,
                     () -> new ServerStatus("Automatic native server", 1234, "fixture-only", "Integration", 0, 4, 0),
                     () -> new ProviderClient.Health(true, true, 4, 0, "nethernet", "provider-native-bench"),

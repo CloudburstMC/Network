@@ -16,6 +16,7 @@ import java.util.concurrent.*;
 public final class IndependentProviderStub implements AutoCloseable {
     final HttpServer server;
     String origin;
+    volatile Runnable heartbeatResponseHook = () -> { };
     String operationPrefix = "/example/";
     final Map<String, JsonObject> challenges = new HashMap<>(), keys = new HashMap<>(), placements = new HashMap<>();
     JsonObject registration;
@@ -43,9 +44,16 @@ public final class IndependentProviderStub implements AutoCloseable {
     int epoch = 1, profileRevision;
     final List<String> operationsSeen = new CopyOnWriteArrayList<>();
 
-    public IndependentProviderStub() throws IOException {
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        origin = "http://127.0.0.1:" + server.getAddress().getPort();
+    public IndependentProviderStub() throws IOException { this(null); }
+
+    IndependentProviderStub(javax.net.ssl.SSLContext tls) throws IOException {
+        if (tls == null) server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        else {
+            var https = HttpsServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            https.setHttpsConfigurator(new HttpsConfigurator(tls));
+            server = https;
+        }
+        origin = (tls == null ? "http://127.0.0.1:" : "https://localhost:") + server.getAddress().getPort();
         server.createContext("/", this::handle);
         server.start();
     }
@@ -55,6 +63,7 @@ public final class IndependentProviderStub implements AutoCloseable {
         JsonObject response;
         try {
             response = dispatch(e);
+            if (e.getRequestURI().getPath().endsWith("/heartbeat")) heartbeatResponseHook.run();
         } catch (Failure f) {
             status = f.status;
             response = new JsonObject();

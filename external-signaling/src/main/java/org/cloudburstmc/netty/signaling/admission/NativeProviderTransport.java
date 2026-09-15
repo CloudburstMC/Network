@@ -53,6 +53,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     private final boolean controlled;
     private final boolean version2;
     private NativeCandidateSnapshot candidateSnapshot;
+    private List<NativeCandidateSnapshot.Candidate> ordinaryCandidateOrder = List.of();
     private volatile long candidateGeneration = 1;
     private MaintainedCandidatePublisher candidatePublisher;
     private volatile List<Epoch> epochs = List.of();
@@ -216,16 +217,31 @@ public final class NativeProviderTransport implements ProviderTransport {
     private boolean replaceCandidateMaterial(NativeCandidateSnapshot next) {
         if (!version2 || closed || draining || !channel.isActive()) throw new IllegalStateException("Controlled v2 listener unavailable");
         if (candidateSnapshot.equals(next)) return false;
+        if (candidateGeneration >= 9007199254740991L) throw new IllegalStateException("Candidate revision exhausted");
         long nextGeneration = Math.incrementExact(candidateGeneration);
         candidateSnapshot = next;
         candidateGeneration = nextGeneration;
         if (diagnosticGate != null && diagnosticPolicy != null) {
-            var retained = new HashSet<DiagnosticHostPolicy.Endpoint>();
-            for (var endpoint : diagnosticPolicy.endpoints()) if (containsEndpoint(next, endpoint)) retained.add(endpoint);
-            diagnosticGate.retainEndpoints(retained);
+            diagnosticGate.retainEndpoints(Set.of());
         }
         if (update != null) invalidateUpdate();
         return true;
+    }
+
+    /** Ordinary supplier changes are sampled only on background work, never on packet callbacks. */
+    private NativeCandidateSnapshot currentCandidates() {
+        if (version2) return candidateSnapshot;
+        var advertised = checkedEndpoints(advertisedAddresses.get());
+        var next = NativeCandidateSnapshot.hosts(advertised);
+        ordinaryCandidateOrder = advertised.stream().map(endpoint -> new NativeCandidateSnapshot.Candidate(endpoint, NativeCandidateSnapshot.Type.HOST)).toList();
+        if (candidateSnapshot == null) candidateSnapshot = next;
+        else if (!candidateSnapshot.equals(next)) {
+            if (diagnosticGate != null) diagnosticGate.retainEndpoints(Set.of());
+            if (candidateGeneration >= 9007199254740991L) throw new IllegalStateException("Candidate revision exhausted");
+            candidateSnapshot = next;
+            candidateGeneration++;
+        }
+        return candidateSnapshot;
     }
 
     @Override public boolean supportsMaintainedCandidateLeases() { return candidatePublisher != null; }
@@ -250,11 +266,21 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     /** Trusted local configuration, serialized on this listener; no installation acknowledgement or control owner. */
     @Override public CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy) {
+        long started = System.nanoTime();
+        long remaining = Math.min(300000, policy.expiresAt() - System.currentTimeMillis());
+        if (remaining <= 0) return CompletableFuture.failedFuture(new IllegalArgumentException("Expired diagnostic configuration"));
+        return configureDiagnostics(policy, started + TimeUnit.MILLISECONDS.toNanos(remaining));
+    }
+
+    @Override public CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy, long deadlineNanos) {
         Objects.requireNonNull(policy);
+        long remaining = deadlineNanos - System.nanoTime();
+        if (remaining <= 0 || remaining > TimeUnit.MINUTES.toNanos(5))
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Diagnostic deadline"));
         var result = new CompletableFuture<Void>();
         final long mutation;
         synchronized (this) {
-            if (closed || !channel.isActive()) return CompletableFuture.failedFuture(new IllegalStateException("Native listener unavailable"));
+            if (closed || draining || !channel.isActive()) return CompletableFuture.failedFuture(new IllegalStateException("Native listener unavailable"));
             if (diagnosticConfiguring) return CompletableFuture.failedFuture(new IllegalStateException("Diagnostic configuration already in flight"));
             diagnosticConfiguring = true; mutation = ++diagnosticMutation;
         }
@@ -264,15 +290,21 @@ public final class NativeProviderTransport implements ProviderTransport {
                 synchronized (NativeProviderTransport.this) {
                     try {
                         long now = diagnosticNow();
-                        if (diagnosticMutation != mutation || closed || !channel.isActive()) throw new IllegalStateException("Diagnostic configuration cancelled");
+                        if (diagnosticMutation != mutation || closed || draining || !channel.isActive()) throw new IllegalStateException("Diagnostic configuration cancelled");
                         if (now >= policy.expiresAt() || policy.endpointExpiries().values().stream().anyMatch(expiry -> now >= expiry))
                             throw new IllegalArgumentException("Expired diagnostic configuration");
-                        NativeCandidateSnapshot current = version2 ? candidateSnapshot : NativeCandidateSnapshot.hosts(checkedEndpoints(advertisedAddresses.get()));
-                        if (!incarnation.equals(policy.context().incarnation()) || policy.endpoints().stream().anyMatch(endpoint -> !containsEndpoint(current, endpoint)))
+                        NativeCandidateSnapshot current = currentCandidates();
+                        if (!incarnation.equals(policy.context().incarnation()) || policy.endpoints().stream().anyMatch(endpoint -> endpoint.candidateRevision() != candidateGeneration || !containsEndpoint(current, endpoint)))
                             throw new IllegalArgumentException("Diagnostic listener or endpoint mismatch");
-                        if (diagnosticMutation != mutation || closed || !channel.isActive()) throw new IllegalStateException("Diagnostic configuration cancelled");
-                        diagnosticGate = channel.installDiagnostics(policy, diagnosticGate);
-                        diagnosticPolicy = policy;
+                        if (diagnosticMutation != mutation || closed || draining || !channel.isActive()) throw new IllegalStateException("Diagnostic configuration cancelled");
+                        long nanosLeft = deadlineNanos - System.nanoTime();
+                        if (nanosLeft <= 0) throw new IllegalArgumentException("Expired diagnostic configuration");
+                        long expiry = Math.min(policy.expiresAt(), System.currentTimeMillis() + TimeUnit.NANOSECONDS.toMillis(nanosLeft));
+                        var endpointExpiries = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
+                        policy.endpointExpiries().forEach((endpoint, limit) -> endpointExpiries.put(endpoint, Math.min(limit, expiry)));
+                        var bounded = new DiagnosticHostPolicy(policy.context(), policy.keys(), policy.endpoints(), expiry, endpointExpiries);
+                        diagnosticGate = channel.installDiagnostics(bounded, diagnosticGate);
+                        diagnosticPolicy = bounded;
                     } catch (Throwable problem) { failure = problem; }
                     finally { diagnosticConfiguring = false; }
                 }
@@ -353,8 +385,8 @@ public final class NativeProviderTransport implements ProviderTransport {
 
         List<NativeCandidateSnapshot.Candidate> endpoints;
         try {
-            endpoints = version2 ? candidateSnapshot.candidates() : checkedEndpoints(advertisedAddresses.get()).stream()
-                    .map(endpoint -> new NativeCandidateSnapshot.Candidate(endpoint, NativeCandidateSnapshot.Type.HOST)).toList();
+            NativeCandidateSnapshot current = currentCandidates();
+            endpoints = version2 ? current.candidates() : ordinaryCandidateOrder;
         } catch (RuntimeException unavailable) {
             return CompletableFuture.failedFuture(unavailable);
         }
@@ -388,8 +420,8 @@ public final class NativeProviderTransport implements ProviderTransport {
         profile.addProperty("sctpPort", 5000);
 
         long capturedGeneration = candidateGeneration;
-        return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, () -> {
-            if (version2 && (candidateGeneration != capturedGeneration || closed || draining || !channel.isActive()))
+        return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, capturedGeneration, () -> {
+            if (candidateGeneration != capturedGeneration || closed || draining || !channel.isActive())
                 throw new IllegalStateException("Native endpoint snapshot changed or closed");
         }));
     }
@@ -556,6 +588,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     public synchronized CompletionStage<Void> drain() {
         if (controlled) invalidateUpdate();
         draining = true;
+        disableDiagnostics();
         if (candidatePublisher != null) candidatePublisher.close();
         channel.drainAdmissions();
         return CompletableFuture.completedFuture(null);

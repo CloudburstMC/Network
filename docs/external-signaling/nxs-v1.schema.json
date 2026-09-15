@@ -392,7 +392,12 @@
           }
         }
       },
-      "x-max-utf8-bytes": 16384
+      "x-max-utf8-bytes": 16384,
+      "properties": {
+        "org.nethernet.connectivity": {
+          "$ref": "#/$defs/connectivityObservation"
+        }
+      }
     },
     "recovery": {
       "type": "object",
@@ -1458,6 +1463,120 @@
       },
       "additionalProperties": false,
       "description": "Provider-issued composite native owner. Parsing or an old receipt does not prove current ownership or native readiness."
+    },
+    "connectivityObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "critical",
+        "data"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "critical": {
+          "const": false
+        },
+        "data": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "diagnostics",
+                "candidateRevision",
+                "method"
+              ],
+              "properties": {
+                "diagnostics": {
+                  "type": "boolean"
+                },
+                "candidateRevision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "method": {
+                  "enum": [
+                    "defined",
+                    "discovered"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "method",
+                "candidateRevision",
+                "checks"
+              ],
+              "properties": {
+                "method": {
+                  "enum": [
+                    "defined",
+                    "discovered"
+                  ]
+                },
+                "candidateRevision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "checks": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "region",
+                      "family",
+                      "outcome",
+                      "checkedAt",
+                      "expiresAt"
+                    ],
+                    "properties": {
+                      "region": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[A-Za-z0-9_-]+$"
+                      },
+                      "family": {
+                        "enum": [
+                          4,
+                          6
+                        ]
+                      },
+                      "outcome": {
+                        "enum": [
+                          "established",
+                          "not-established",
+                          "unknown"
+                        ]
+                      },
+                      "checkedAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "expiresAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     }
   },
   "x-context-order": [

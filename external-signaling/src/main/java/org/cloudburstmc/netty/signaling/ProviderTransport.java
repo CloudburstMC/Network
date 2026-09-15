@@ -70,12 +70,20 @@ public interface ProviderTransport {
      */
     final class HostProfileSnapshot {
         private final JsonObject profile;
+        private final long candidateRevision;
         private final Runnable current;
         public HostProfileSnapshot(JsonObject profile, Runnable requireCurrent) {
+            this(profile, 0, requireCurrent);
+        }
+        public HostProfileSnapshot(JsonObject profile, long candidateRevision, Runnable requireCurrent) {
+            if (candidateRevision < 0 || candidateRevision > 9007199254740991L) throw new IllegalArgumentException("Candidate revision");
+            this.candidateRevision = candidateRevision;
             this.profile = Objects.requireNonNull(profile, "profile").deepCopy();
             this.current = Objects.requireNonNull(requireCurrent, "requireCurrent");
         }
         public JsonObject profile() { return profile.deepCopy(); }
+        /** Zero means this adapter has no revisioned native capture. */
+        public long candidateRevision() { return candidateRevision; }
         public void requireCurrent() { current.run(); }
     }
 
@@ -127,6 +135,10 @@ public interface ProviderTransport {
     default boolean supportsDiagnosticAdmission() { return false; }
     default CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy) {
         throw new UnsupportedOperationException("Diagnostic admission unavailable");
+    }
+    /** Original successful-heartbeat monotonic deadline; asynchronous installation must not renew it. */
+    default CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy, long deadlineNanos) {
+        throw new UnsupportedOperationException("Bounded diagnostic configuration unavailable");
     }
     default CompletionStage<Void> disableDiagnostics() {
         throw new UnsupportedOperationException("Diagnostic admission unavailable");

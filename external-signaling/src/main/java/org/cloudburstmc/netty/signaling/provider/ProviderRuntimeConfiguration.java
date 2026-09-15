@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
 public record ProviderRuntimeConfiguration(
     URI origin, Path stateDirectory, String authorizationToken, String region, String pool,
     Map<String, String> tags, String label, String bindAddress, int udpPort,
-    List<InetSocketAddress> advertisedEndpoints, int capacity, ProviderClient.ControlTransport controlTransport
+    List<InetSocketAddress> advertisedEndpoints, int capacity, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission
 ) {
     /**
      * @param settings   What the host has configured for the provider
@@ -88,7 +88,7 @@ public record ProviderRuntimeConfiguration(
         }
 
         var runtime = new ProviderRuntimeConfiguration(origin, state, token, region, pool, Map.copyOf(tags), label,
-            bind, port, List.copyOf(endpoints), capacity, settings.controlTransport());
+            bind, port, List.copyOf(endpoints), capacity, settings.controlTransport(), settings.diagnosticAdmission());
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
@@ -109,8 +109,12 @@ public record ProviderRuntimeConfiguration(
      *                           anything else is a registration tag
      */
     public record Settings(String endpoint, String token, List<String> advertiseAddresses,
-                           Map<String, String> data, ProviderClient.ControlTransport controlTransport) {
+                           Map<String, String> data, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission) {
         public Settings { Objects.requireNonNull(controlTransport); }
+        public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
+                        ProviderClient.ControlTransport controlTransport) {
+            this(endpoint, token, advertiseAddresses, data, controlTransport, false);
+        }
         public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data) {
             this(endpoint, token, advertiseAddresses, data, ProviderClient.ControlTransport.HTTP);
         }
@@ -123,7 +127,7 @@ public record ProviderRuntimeConfiguration(
     public ProviderClient.Configuration clientConfiguration() {
         return new ProviderClient.Configuration(origin, profile(), label, ProviderClient.AUTOMATIC,
             authorizationToken == null ? ProviderClient.ANONYMOUS_PROOF_OF_WORK : ProviderClient.BEARER_TOKEN,
-            authorizationToken, region, pool, tags, controlTransport);
+            authorizationToken, region, pool, tags, controlTransport, diagnosticAdmission, advertisedEndpoints.isEmpty() ? "discovered" : "defined");
     }
 
     private static InetSocketAddress endpoint(String value) throws IOException {

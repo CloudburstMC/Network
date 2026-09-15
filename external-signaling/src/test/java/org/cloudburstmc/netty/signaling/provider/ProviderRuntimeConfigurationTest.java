@@ -58,6 +58,18 @@ class ProviderRuntimeConfigurationTest {
     }
 
     @Test
+    void diagnosticOptInAndMethodComeFromOrdinaryLocalSettings(@TempDir Path dir) throws Exception {
+        assertEquals(false, runtime(dir).clientConfiguration().diagnosticAdmission());
+        for (var endpoints : List.of(List.<String>of(), List.of("1.1.1.1:19132"))) {
+            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", endpoints, Map.of(),
+                    org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, true);
+            var configured = runtime(dir, settings).clientConfiguration();
+            assertEquals(true, configured.diagnosticAdmission());
+            assertEquals(endpoints.isEmpty() ? "discovered" : "defined", configured.connectivityMethod());
+        }
+    }
+
+    @Test
     void readsTheSettingsWithoutLeakingTheToken(@TempDir Path dir) throws Exception {
         ProviderRuntimeConfiguration result = runtime(dir, settings(PROVIDER, "configured-secret",
                 List.of("1.1.1.1:29133", "[2606:4700:4700::1111]:39133", "1.1.1.1:29133"),
