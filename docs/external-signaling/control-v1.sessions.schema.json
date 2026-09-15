@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nethernet.org/external-signaling/control-v1.sessions.schema.json",
   "title": "Draft bootstrap/HTTP envelopes and closed decoded payloads",
-  "$comment": "Not activated. In addition to schema: canonical unsigned integer tokens, duplicate-key rejection, strict UTF-8, canonical base64url, original-byte digests/signatures, canonical trusted audience/exact HTTP target, sorted capabilities, transport dependencies, byte ceilings and cross-field deadline/proof/intent/fence association are mandatory. Select the decoded payload definition from authenticated envelope action/kind. A schema-valid proof is not trusted authority or an atomic transition.",
+  "$comment": "Not activated. In addition to schema: canonical unsigned integer tokens, duplicate-key rejection, strict UTF-8, canonical base64url, original-byte digests/signatures, canonical trusted audience/exact HTTP target, sorted capabilities, transport dependencies, byte ceilings and cross-field deadline/proof/intent/fence association are mandatory. Select the decoded payload definition from authenticated envelope action/kind. A schema-valid proof is not trusted authority or an atomic transition. cancel-intent permits heartbeat only, matches the full nested subject/current writer and returns a correlated committed, rejected or cancelled terminal receipt. Cancelled prevents operational commit but may leave historical in-flight archive handoff.",
   "oneOf": [
     {
       "$ref": "#/$defs/request"
@@ -39,6 +39,12 @@
     },
     {
       "$ref": "#/$defs/receiptStatus"
+    },
+    {
+      "$ref": "#/$defs/cancelIntent"
+    },
+    {
+      "$ref": "#/$defs/cancelResult"
     }
   ],
   "$defs": {
@@ -831,7 +837,8 @@
             "committed",
             "rejected",
             "expired",
-            "unknown"
+            "unknown",
+            "cancelled"
           ]
         },
         "committedAt": {
@@ -959,7 +966,8 @@
             "prepare",
             "upgrade",
             "activate",
-            "status"
+            "status",
+            "cancel-intent"
           ]
         },
         "requestId": {
@@ -1055,7 +1063,8 @@
             "prepared",
             "connection-challenge",
             "activated",
-            "status"
+            "status",
+            "cancel-intent"
           ]
         },
         "requestId": {
@@ -1173,6 +1182,42 @@
           }
         }
       ]
+    },
+    "cancelIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent",
+        "expectedWriter",
+        "reason"
+      ],
+      "properties": {
+        "intent": {
+          "$ref": "control-v1.lifecycle.schema.json#/$defs/intent"
+        },
+        "expectedWriter": {
+          "$ref": "#/$defs/activeWriter"
+        },
+        "reason": {
+          "const": "native-application-replaced"
+        }
+      }
+    },
+    "cancelResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intentDigest",
+        "receipt"
+      ],
+      "properties": {
+        "intentDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "receipt": {
+          "$ref": "control-v1.lifecycle.schema.json#/$defs/receipt"
+        }
+      }
     }
   }
 }

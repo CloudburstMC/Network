@@ -3,44 +3,216 @@
   "$id": "https://nethernet.org/external-signaling/control-v1.lifecycle.schema.json",
   "title": "Draft control lifecycle intent, WS wrapper and redacted receipt",
   "$comment": "Not activated. Wire parsing must additionally reject duplicate keys, noncanonical unsigned integer tokens and invalid UTF-8; enforce original-byte SHA-256, total UTF-8 byte limits and receipt association. JSON Schema cannot express those rules.",
-  "oneOf": [{"$ref": "#/$defs/intent"}, {"$ref": "#/$defs/wsRequest"}, {"$ref": "#/$defs/receipt"}],
+  "oneOf": [
+    {
+      "$ref": "#/$defs/intent"
+    },
+    {
+      "$ref": "#/$defs/wsRequest"
+    },
+    {
+      "$ref": "#/$defs/receipt"
+    }
+  ],
   "$defs": {
-    "uint": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
-    "positive": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
-    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
-    "opaque": {"type": "string", "pattern": "^[A-Za-z0-9_-]{16,128}$"},
-    "digest": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
-    "operation": {"enum": ["heartbeat", "outcomes", "rotate", "retire", "deregister"]},
+    "uint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positive": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "opaque": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "operation": {
+      "enum": [
+        "heartbeat",
+        "outcomes",
+        "rotate",
+        "retire",
+        "deregister"
+      ]
+    },
     "intent": {
-      "type": "object", "additionalProperties": false,
-      "required": ["version", "audience", "operation", "instanceId", "generation", "sequence", "idempotencyKey", "payloadSha256"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "audience",
+        "operation",
+        "instanceId",
+        "generation",
+        "sequence",
+        "idempotencyKey",
+        "payloadSha256"
+      ],
       "properties": {
-        "version": {"const": 1}, "audience": {"type": "string", "maxLength": 2048},
-        "operation": {"$ref": "#/$defs/operation"}, "instanceId": {"$ref": "#/$defs/identifier"},
-        "generation": {"$ref": "#/$defs/positive"}, "sequence": {"$ref": "#/$defs/positive"},
-        "idempotencyKey": {"$ref": "#/$defs/opaque"}, "payloadSha256": {"$ref": "#/$defs/digest"}
+        "version": {
+          "const": 1
+        },
+        "audience": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "generation": {
+          "$ref": "#/$defs/positive"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positive"
+        },
+        "idempotencyKey": {
+          "$ref": "#/$defs/opaque"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/digest"
+        }
       }
     },
     "wsRequest": {
-      "type": "object", "additionalProperties": false, "required": ["intent", "body"],
-      "properties": {"intent": {"$ref": "#/$defs/intent"}, "body": {"type": "string", "maxLength": 60075, "pattern": "^[A-Za-z0-9_-]*$"}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent",
+        "body"
+      ],
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/intent"
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 60075,
+          "pattern": "^[A-Za-z0-9_-]*$"
+        }
+      }
     },
     "receipt": {
-      "type": "object", "additionalProperties": false,
-      "required": ["version", "intentDigest", "operation", "instanceId", "generation", "sequence", "idempotencyKey", "disposition", "committedAt", "commitRevision", "code"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "intentDigest",
+        "operation",
+        "instanceId",
+        "generation",
+        "sequence",
+        "idempotencyKey",
+        "disposition",
+        "committedAt",
+        "commitRevision",
+        "code"
+      ],
       "properties": {
-        "version": {"const": 1}, "intentDigest": {"$ref": "#/$defs/digest"},
-        "operation": {"$ref": "#/$defs/operation"}, "instanceId": {"$ref": "#/$defs/identifier"},
-        "generation": {"$ref": "#/$defs/positive"}, "sequence": {"$ref": "#/$defs/positive"},
-        "idempotencyKey": {"$ref": "#/$defs/opaque"},
-        "disposition": {"enum": ["committed", "rejected", "expired", "unknown"]},
-        "committedAt": {"anyOf": [{"$ref": "#/$defs/uint"}, {"type": "null"}]},
-        "commitRevision": {"anyOf": [{"$ref": "#/$defs/uint"}, {"type": "null"}]},
-        "code": {"anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]}
+        "version": {
+          "const": 1
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "generation": {
+          "$ref": "#/$defs/positive"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positive"
+        },
+        "idempotencyKey": {
+          "$ref": "#/$defs/opaque"
+        },
+        "disposition": {
+          "enum": [
+            "committed",
+            "rejected",
+            "expired",
+            "unknown",
+            "cancelled"
+          ]
+        },
+        "committedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       },
-      "if": {"properties": {"disposition": {"const": "committed"}}},
-      "then": {"properties": {"committedAt": {"$ref": "#/$defs/uint"}, "commitRevision": {"$ref": "#/$defs/uint"}, "code": {"type": "null"}}},
-      "else": {"properties": {"committedAt": {"type": "null"}, "commitRevision": {"type": "null"}}}
+      "if": {
+        "properties": {
+          "disposition": {
+            "const": "committed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "committedAt": {
+            "$ref": "#/$defs/uint"
+          },
+          "commitRevision": {
+            "$ref": "#/$defs/uint"
+          },
+          "code": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "committedAt": {
+            "type": "null"
+          },
+          "commitRevision": {
+            "type": "null"
+          }
+        }
+      }
     }
   }
 }
