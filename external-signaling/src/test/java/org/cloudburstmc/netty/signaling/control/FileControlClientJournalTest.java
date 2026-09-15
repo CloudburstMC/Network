@@ -64,4 +64,24 @@ class FileControlClientJournalTest {
         assertThrows(IllegalArgumentException.class, () -> new ControlClientJournal.Pending(intent, ProviderCrypto.base64("{}".getBytes(StandardCharsets.UTF_8)), null, null));
         assertThrows(IllegalArgumentException.class, () -> new ControlClientJournal.Pending(intent, ProviderCrypto.base64(body), state.currentKey(), null));
     }
+
+    @Test void authorityFloorSurvivesReopenAndCannotBeRemovedOrRegressedByAnotherSnapshotWrite() throws Exception {
+        var h = new ControlClientCoordinatorTest.Harness(); h.sourceRevision = 4; h.ready();
+        var expected = h.client.snapshot();
+        try (var journal = new FileControlClientJournal(directory)) { journal.commit(expected); }
+        h.client.synchronize(); var exchange = h.authorityRequests.remove(); h.sourceRevision = 0;
+        var older = new ControlClientJournal.AuthorityFloor(h.authorityWire(exchange));
+        var regressed = new ControlClientJournal.Snapshot(expected.subject(), expected.currentKey(), expected.writer(), expected.lastSequence(),
+                expected.pending(), expected.pendingBootstrap(), expected.grant(), older);
+        var removed = new ControlClientJournal.Snapshot(expected.subject(), expected.currentKey(), expected.writer(), expected.lastSequence(),
+                expected.pending(), expected.pendingBootstrap(), expected.grant());
+        try (var journal = new FileControlClientJournal(directory)) {
+            // commit without a prior explicit read must still load and preserve the on-disk floor.
+            assertThrows(IOException.class, () -> journal.commit(removed));
+            assertThrows(IOException.class, () -> journal.commit(regressed));
+            assertEquals(expected, journal.read().orElseThrow());
+            assertEquals(5, journal.read().orElseThrow().authorityFloor().value().source().sourceRevision());
+        }
+        h.client.close();
+    }
 }

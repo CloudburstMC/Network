@@ -32,6 +32,8 @@ public final class FileControlClientJournal implements ControlClientJournal {
     private final ProviderStateStore store;
     private final Path file;
     private boolean closed;
+    private boolean floorLoaded;
+    private AuthorityFloor retainedFloor;
 
     public FileControlClientJournal(Path directory) throws IOException {
         Files.createDirectories(directory);
@@ -43,13 +45,16 @@ public final class FileControlClientJournal implements ControlClientJournal {
 
     @Override public synchronized Optional<Snapshot> read() throws IOException {
         open();
-        if (!Files.exists(file)) return Optional.empty();
+        if (!Files.exists(file)) {
+            if (retainedFloor != null) throw new IOException("Control authority floor disappeared");
+            floorLoaded = true; return Optional.empty();
+        }
         protect(file, false);
         if (Files.size(file) > MAX_JOURNAL_BYTES) throw new IOException("Control journal exceeds size limit");
         try {
             JsonObject value = ControlJson.parse(Files.readString(file, StandardCharsets.UTF_8), MAX_JOURNAL_BYTES);
             List<String> fields = new ArrayList<>(List.of("version", "subject", "currentKey", "writer", "lastSequence"));
-            for (String name : List.of("pending", "pendingBootstrap", "grant")) if (value.has(name)) fields.add(name);
+            for (String name : List.of("pending", "pendingBootstrap", "grant", "authorityFloor")) if (value.has(name)) fields.add(name);
             ControlJson.fields(value, fields.toArray(String[]::new)); ControlJson.version(value);
             JsonObject subject = ControlJson.object(value, "subject"); ControlJson.fields(subject, "audience", "instanceId", "generation");
             Pending pending = null;
@@ -69,14 +74,20 @@ public final class FileControlClientJournal implements ControlClientJournal {
                 grant = new Grant(ControlJson.strings(item, "capabilities"), ControlJson.number(item, "activatedAt"), ControlJson.number(item, "sessionExpiresAt"),
                         ControlJson.number(item, "authoritySourceCheckedAt"), ControlJson.number(item, "authorityExpiresAt"));
             }
-            return Optional.of(new Snapshot(new Subject(ControlJson.string(subject, "audience"), ControlJson.string(subject, "instanceId"), ControlJson.number(subject, "generation")),
+            AuthorityFloor floor = value.has("authorityFloor") ? new AuthorityFloor(ControlJson.string(value, "authorityFloor")) : null;
+            checkFloor(floor);
+            var result = new Snapshot(new Subject(ControlJson.string(subject, "audience"), ControlJson.string(subject, "instanceId"), ControlJson.number(subject, "generation")),
                     credential(ControlJson.object(value, "currentKey")), ControlWriterFence.read(ControlJson.object(value, "writer")), ControlJson.number(value, "lastSequence"), pending,
-                    value.has("pendingBootstrap") ? new Bootstrap(ControlJson.string(value, "pendingBootstrap")) : null, grant));
+                    value.has("pendingBootstrap") ? new Bootstrap(ControlJson.string(value, "pendingBootstrap")) : null, grant, floor);
+            retainedFloor = floor; floorLoaded = true; return Optional.of(result);
         } catch (IllegalArgumentException failure) { throw new IOException("Invalid control journal", failure); }
     }
 
     @Override public synchronized void commit(Snapshot snapshot) throws IOException {
         open();
+        if (!floorLoaded) read();
+        try { checkFloor(snapshot.authorityFloor()); }
+        catch (IllegalArgumentException failure) { throw new IOException("Control authority floor regression", failure); }
         JsonObject value = new JsonObject(); value.addProperty("version", 1);
         JsonObject subject = new JsonObject(); subject.addProperty("audience", snapshot.subject().audience()); subject.addProperty("instanceId", snapshot.subject().instanceId());
         subject.addProperty("generation", snapshot.subject().generation()); value.add("subject", subject);
@@ -87,6 +98,7 @@ public final class FileControlClientJournal implements ControlClientJournal {
             if (pending.receipt() != null) item.addProperty("receipt", ControlLifecycleCodec.encodeReceipt(pending.receipt())); value.add("pending", item);
         }
         if (snapshot.pendingBootstrap() != null) value.addProperty("pendingBootstrap", snapshot.pendingBootstrap().originalRequest());
+        if (snapshot.authorityFloor() != null) value.addProperty("authorityFloor", snapshot.authorityFloor().originalResponse());
         if (snapshot.grant() != null) {
             Grant grant = snapshot.grant(); JsonObject item = new JsonObject(); item.add("capabilities", ControlProof.capabilitiesObject(grant.capabilities()));
             item.addProperty("activatedAt", grant.activatedAt()); item.addProperty("sessionExpiresAt", grant.sessionExpiresAt());
@@ -95,6 +107,12 @@ public final class FileControlClientJournal implements ControlClientJournal {
         if (value.toString().getBytes(StandardCharsets.UTF_8).length > MAX_JOURNAL_BYTES) throw new IOException("Control journal exceeds size limit");
         store.write(value);
         protect(file, false);
+        retainedFloor = snapshot.authorityFloor(); floorLoaded = true;
+    }
+
+    private void checkFloor(AuthorityFloor next) {
+        if (retainedFloor != null && next == null) throw ControlJson.invalid("removed journal authority floor");
+        if (next != null) next.requireAtLeast(retainedFloor);
     }
 
     @Override public synchronized void close() throws IOException { if (!closed) { closed = true; store.close(); } }

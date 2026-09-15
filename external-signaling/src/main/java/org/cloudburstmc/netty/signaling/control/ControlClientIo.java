@@ -22,18 +22,13 @@ public interface ControlClientIo {
         interface Task { void cancel(); }
         Task schedule(Runnable action, long delayMillis);
     }
-    /** This is trusted synchronization output, not a deserialized unauthenticated frame payload. */
-    record Authority(ControlWriterFence writer, long sourceCheckedAt, long expiresAt) {
-        public Authority {
-            ControlJson.safe(sourceCheckedAt, false); ControlJson.safe(expiresAt, false);
-            if (expiresAt <= sourceCheckedAt) throw ControlJson.invalid("synchronized authority");
-        }
-    }
     CompletionStage<HttpReply> bootstrap(URI endpoint, ControlSessionCodec.Request request);
+    /** Raw bounded response. The coordinator checks exact HTTPS provenance and provider-control proof. */
+    CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request);
     CompletionStage<HttpReply> operation(URI endpoint, ControlHttpCodec.Request request, byte[] originalBody);
     Link openWebSocket(URI endpoint, ControlSessionCodec.Request upgradeProof, Consumer<String> received);
     /** Completes only after required state/keys are applied and the provider confirms this exact active binding. */
-    CompletionStage<Authority> synchronize(ControlWriterFence writer, ControlClientJournal.Grant fixedGrant);
+    CompletionStage<Void> synchronize(ControlWriterFence writer, ControlClientJournal.Grant fixedGrant, ControlAuthorityCodec.Verified authority);
     /** Only verified session.ready/session.resync/state.desired during active synchronization; never assisted work. */
     void onSynchronizationFrame(ControlFrameCodec.Frame frame);
     /** Receives verified active frames after activation; standby traffic never reaches this hook. */
