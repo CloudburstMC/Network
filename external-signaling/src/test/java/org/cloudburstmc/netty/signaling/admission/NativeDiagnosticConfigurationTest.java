@@ -31,11 +31,13 @@ class NativeDiagnosticConfigurationTest {
         final int port;
         final NativeHostIdentity identity;
         final NativeProviderTransport transport;
+        final AtomicReference<List<InetSocketAddress>> advertised = new AtomicReference<>();
         final AtomicInteger children = new AtomicInteger();
         Host(String address) throws Exception { this(address,true); }
         Host(String address, boolean controlled) throws Exception {
             bind = InetAddress.getByName(address); port = port(bind);
             var fixture = new NativeDiagnosticHostTest(); fixture.directory=directory; identity=fixture.identity();
+            advertised.set(List.of(new InetSocketAddress(bind,port)));
             var bootstrap=new ServerBootstrap().group(group)
                 .childHandler(new ChannelInitializer<Channel>() { protected void initChannel(Channel channel) {
                     children.incrementAndGet(); channel.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
@@ -43,22 +45,23 @@ class NativeDiagnosticConfigurationTest {
                     });
                 } });
             transport=(controlled ? NativeProviderTransport.openControlledVersion2(bootstrap,new InetSocketAddress(bind,port),snapshot(port),directory.resolve("host.crt"),directory.resolve("host.key"),AdmissionGate.Limits.defaults())
-                : NativeProviderTransport.open(bootstrap,new InetSocketAddress(bind,port),directory.resolve("host.crt"),directory.resolve("host.key"),AdmissionGate.Limits.defaults()))
+                : NativeProviderTransport.open(bootstrap,new InetSocketAddress(bind,port),advertised::get,directory.resolve("host.crt"),directory.resolve("host.key"),AdmissionGate.Limits.defaults()))
                 .toCompletableFuture().get(5,TimeUnit.SECONDS);
             transport.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001","test-player-secret-of-at-least32bytes"))).toCompletableFuture().get();
         }
         NativeCandidateSnapshot snapshot(int selectedPort) { return NativeCandidateSnapshot.hosts(List.of(new InetSocketAddress(bind,selectedPort))); }
         DiagnosticHostPolicy policy(long endpointExpiry) throws Exception {
-            var profile=transport.hostProfile().toCompletableFuture().get();
+            var snapshot=transport.captureHostProfile().toCompletableFuture().get();
+            var profile=snapshot.profile();
             var context=new Context("https://provider.example","test-host",profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString(),1);
             var endpoint=new DiagnosticHostPolicy.Endpoint(bind instanceof Inet6Address?6:4,
-                DiagnosticAdmissionCodec.address(bind instanceof Inet6Address?6:4,bind.getHostAddress()),port,7);
+                DiagnosticAdmissionCodec.address(bind instanceof Inet6Address?6:4,bind.getHostAddress()),port,snapshot.candidateRevision());
             return new DiagnosticHostPolicy(context,List.of(diagnosticKey),Set.of(endpoint),endpointExpiry);
         }
         void configure(DiagnosticHostPolicy policy) throws Exception { transport.configureDiagnostics(policy).toCompletableFuture().get(5,TimeUnit.SECONDS); }
         Client client(long expiry) throws Exception { return new Client(bind,port,expiry); }
         void connect(Client client,DiagnosticHostPolicy policy) throws Exception {
-            client.connect(identity,policy.context(),diagnosticKey,bind instanceof Inet6Address?6:4,bind.getHostAddress(),port,false);
+            client.connect(identity,policy.context(),diagnosticKey,bind instanceof Inet6Address?6:4,bind.getHostAddress(),port,false,policy.endpoints().iterator().next().candidateRevision(),null,null);
         }
         public void close() throws Exception {
             transport.close().toCompletableFuture().get(6,TimeUnit.SECONDS);
@@ -96,6 +99,36 @@ class NativeDiagnosticConfigurationTest {
                 assertTrue(results.get(0).cleanupComplete());assertEquals(0,host.children.get());assertEquals(0,host.transport.channel().creationAttempts());
             }
             host.transport.disableDiagnostics().toCompletableFuture().get();assertTrue(host.transport.channel().isServing());
+        }
+    }
+    @Test @Timeout(25) void ordinarySnapshotRevisionFencesRemapAbaAndDrain() throws Exception {
+        for(String address:List.of("127.0.0.1","::1")) try(Host host=new Host(address,false)) {
+            var first=host.transport.captureHostProfile().toCompletableFuture().get();
+            var policy=host.policy(System.currentTimeMillis()+20000);
+            assertEquals(1,first.candidateRevision());host.configure(policy);
+            assertEquals(first.candidateRevision(),host.transport.captureHostProfile().toCompletableFuture().get().candidateRevision());
+            host.advertised.set(List.of(new InetSocketAddress(host.bind,host.port+1)));
+            var second=host.transport.captureHostProfile().toCompletableFuture().get();
+            assertTrue(second.candidateRevision()>first.candidateRevision());assertThrows(IllegalStateException.class,first::requireCurrent);
+            host.advertised.set(List.of(new InetSocketAddress(host.bind,host.port)));
+            var third=host.transport.captureHostProfile().toCompletableFuture().get();
+            assertTrue(third.candidateRevision()>second.candidateRevision());
+            assertThrows(ExecutionException.class,()->host.transport.configureDiagnostics(policy).toCompletableFuture().get());
+            var current=host.policy(System.currentTimeMillis()+20000);host.configure(current);
+            host.transport.drain().toCompletableFuture().get();assertThrows(IllegalStateException.class,third::requireCurrent);
+            assertThrows(ExecutionException.class,()->host.transport.configureDiagnostics(current).toCompletableFuture().get());
+        }
+    }
+    @Test @Timeout(15) void queuedConfigurationUsesOriginalMonotonicDeadline() throws Exception {
+        try(Host host=new Host("127.0.0.1",false)) {
+            var policy=host.policy(System.currentTimeMillis()+20000);
+            CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+            host.transport.channel().eventLoop().execute(()->{entered.countDown();try{release.await(3,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}});
+            assertTrue(entered.await(2,TimeUnit.SECONDS));
+            var pending=host.transport.configureDiagnostics(policy,System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(100)).toCompletableFuture();
+            try {Thread.sleep(150);} finally {release.countDown();}
+            assertThrows(ExecutionException.class,()->pending.get(3,TimeUnit.SECONDS));
+            assertTrue(host.transport.diagnosticDroppedResultCount().isEmpty());assertTrue(host.transport.channel().isServing());
         }
     }
     @Test @Timeout(25) void queuedConfigurationCannotSurviveDisableRemapOrClose() throws Exception {

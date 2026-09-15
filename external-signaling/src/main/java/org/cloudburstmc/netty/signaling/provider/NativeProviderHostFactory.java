@@ -31,6 +31,7 @@ import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.EnumMap;
 import java.util.concurrent.CompletableFuture;
@@ -43,7 +44,6 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
     /** Complete configured set, otherwise public addresses owned by the gameplay listener. */
     public static final String EXPLICIT_OR_PUBLIC_LOCAL = "explicit-or-public-local";
     public static final String MAINTAINED_V1 = "maintained-v1";
-    public static final String DIAGNOSTIC_INSTALL_V1 = "install-v1";
 
     @FunctionalInterface
     interface EndpointSource {
@@ -134,22 +134,14 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             if (mode != null && !mode.equals("nethernet-control-v1")) throw new IllegalArgumentException("Unknown provider control mode");
             String publication = options.get("candidatePublication");
             String diagnostic = options.get("diagnosticAdmission");
-            if (diagnostic != null && (!DIAGNOSTIC_INSTALL_V1.equals(diagnostic) || mode == null
-                    || !EXPLICIT_OR_PUBLIC_LOCAL.equals(options.get("endpointPolicy"))))
-                throw new IllegalArgumentException("Diagnostic installation requires controlled mode and explicit-or-public-local endpoint policy");
+            if (diagnostic != null && !Set.of("true", "false").contains(diagnostic))
+                throw new IllegalArgumentException("diagnosticAdmission must be a boolean");
             if (publication != null) {
                 if (!MAINTAINED_V1.equals(publication) || mode == null) throw new IllegalArgumentException("Maintained publication requires controlled mode");
                 var selected = maintainedSelection(udpBind, options);
                 var servers = stunServers(selected, options);
                 var identity = ProviderHostIdentity.ensure(Path.of(directory));
                 return NativeProviderTransport.openControlledMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
-                        .thenApply(transport -> new Host(transport, transport.channel(), List.of()));
-            }
-            if (diagnostic != null) {
-                var selected = maintainedSelection(udpBind, options);
-                var identity = ProviderHostIdentity.ensure(Path.of(directory));
-                var direct = NativeCandidateSnapshot.hosts(selected.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
-                return NativeProviderTransport.openControlledVersion2(bootstrap, selected.bind(), direct, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
                         .thenApply(transport -> new Host(transport, transport.channel(), List.of()));
             }
             EndpointSource endpoints = endpointSource(udpBind, options);

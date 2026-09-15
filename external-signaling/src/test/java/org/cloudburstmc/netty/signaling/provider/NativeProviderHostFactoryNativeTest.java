@@ -25,14 +25,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Tag("native")
 class NativeProviderHostFactoryNativeTest {
-    @Test void diagnosticOptionOpensRealV2ListenerWithoutMaintainedPublicationOrPlayerReadiness(@TempDir Path directory) throws Exception {
+    @Test void diagnosticOptionUsesOrdinaryListenerWithoutControlledModeOrStun(@TempDir Path directory) throws Exception {
         var group = new DefaultEventLoopGroup(1);
         try {
             for (String ip : List.of("127.0.0.1", "::1")) {
                 int port;
                 try (var reservation = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(ip), 0))) { port = reservation.getLocalPort(); }
                 var options = new HashMap<String, String>(); options.put("stateDirectory", directory.resolve(ip.equals("::1") ? "v6" : "v4").toString());
-                options.put("controlMode", "nethernet-control-v1"); options.put("diagnosticAdmission", NativeProviderHostFactory.DIAGNOSTIC_INSTALL_V1);
+                options.put("diagnosticAdmission", "true");
                 options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
                 options.put("advertisedEndpoints", "[{\"address\":\"" + (ip.equals("::1") ? "2606:4700:4700::1111" : "8.8.8.8") + "\",\"port\":43000}]");
                 options.put("stunServers", "unused: diagnostics do not opt into STUN");
@@ -42,15 +42,15 @@ class NativeProviderHostFactoryNativeTest {
                 var host = new NativeProviderHostFactory().open(bootstrap, new InetSocketAddress(InetAddress.getByName(ip), port), options).toCompletableFuture().get(10, TimeUnit.SECONDS);
                 try {
                     var nativeHost = (org.cloudburstmc.netty.signaling.admission.NativeProviderTransport) host.transport();
-                    assertTrue(nativeHost.supportsDiagnosticAdmission()); assertTrue(nativeHost.supportsNativeIdentityCapture());
-                    assertFalse(nativeHost.supportsMaintainedCandidateLeases()); assertFalse(nativeHost.channel().isServing());
+                    assertTrue(nativeHost.supportsDiagnosticAdmission()); assertFalse(nativeHost.supportsNativeIdentityCapture());
+                    assertFalse(nativeHost.supportsMaintainedCandidateLeases()); assertTrue(nativeHost.channel().isServing());
                     nativeHost.installTicketKeys(List.of(new ProviderTransport.TicketKey("A001", "public-test-only-player-admission-secret"))).toCompletableFuture().get(5, TimeUnit.SECONDS);
                     var snapshot = nativeHost.captureHostProfile().toCompletableFuture().get(5, TimeUnit.SECONDS);
-                    var profile = CandidateLeaseCodec.readProfile(snapshot.profile()); long now = System.currentTimeMillis();
-                    var context = new DiagnosticAdmissionCodec.Context("https://provider.example", "factory_host", profile.nativeIncarnation(), 1);
+                    var profile = snapshot.profile(); assertFalse(profile.has("version")); assertTrue(snapshot.candidateRevision() > 0); long now = System.currentTimeMillis();
+                    var context = new DiagnosticAdmissionCodec.Context("https://provider.example", "factory_host", profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString(), 1);
                     var policy = new DiagnosticHostPolicy(context, List.of(new DiagnosticAdmissionCodec.Key("D001", "public-test-only-diagnostic-epoch-secret", now, now + 60000)), java.util.Set.of(), now + 60000);
                     nativeHost.configureDiagnostics(policy).toCompletableFuture().get(5, TimeUnit.SECONDS);
-                    assertFalse(nativeHost.channel().isServing()); assertEquals(0, nativeHost.channel().nativeStats()[2]);
+                    assertTrue(nativeHost.channel().isServing()); assertEquals(0, nativeHost.channel().nativeStats()[2]);
                     nativeHost.disableDiagnostics().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 } finally { host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
                 try (var reclaimed = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(ip), port))) { assertEquals(port, reclaimed.getLocalPort()); }

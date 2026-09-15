@@ -522,3 +522,19 @@ admission fixtures. The Java tests consume the same schema/fixtures and exercise
 an independent provider with no product accounts. Native tests separately cover
 local admission and real UDP/ICE/DTLS/SCTP. Report stock-client gameplay separately
 from these checks.
+
+### Optional connectivity observation
+
+An opted-in host may include `org.nethernet.connectivity` in the ordinary authenticated heartbeat extensions:
+
+```json
+{"version":1,"critical":false,"data":{"diagnostics":true,"candidateRevision":1,"method":"defined"}}
+```
+
+`method` is `defined` when the local configuration supplies advertised endpoints, or `discovered` when they are derived locally. It does not assert successful traversal. Incarnation, DTLS fingerprint and candidate endpoints remain in the existing `hostProfile`; unchanged profiles retain their existing revision association. The positive `candidateRevision` belongs to that native listener and advances when endpoint material changes, including a change back to an earlier endpoint. It does not advance for an ordinary heartbeat or key renewal.
+
+The Network runtime defaults diagnostic admission off. Opt-in supports direct `host` candidates only in this revision; reflexive candidates are neither advertised as diagnostic-capable nor installed without a bounded observation freshness contract. After a successful heartbeat, the host configures the same-mux diagnostic gate from its actual installed admission keys and authenticated registration generation, with a fixed maximum five-minute lifetime (also bounded by any shorter check-in lease). Queueing, retries and a failed heartbeat cannot extend that lifetime. Long provider check-in schedules can leave the diagnostic gate expired between successes; there is no second polling lifecycle. Draining/closing disables diagnostics without giving the provider control of player serving state.
+
+The first successful heartbeat installs the local policy; a subsequent ordinary heartbeat advertises this observation only while that installed native snapshot and fixed deadline remain current. This is local opt-in, not a new installation acknowledgement protocol or proof of reachability. The provider must bind diagnostic jobs to the current authenticated profile, incarnation, candidate revision and bounded lease; a probe can still race a later local withdrawal. No secret appears in the extension, and existing signed diagnostic admission/answer formats remain unchanged.
+
+The host may explicitly withdraw this opt-in with `diagnostics:false`, retaining its method and candidate revision. Provider heartbeat feedback uses the same optional extension envelope with data `{method,candidateRevision,checks}`; each of at most six checks contains `{region,family,outcome,checkedAt,expiresAt}`. Outcomes are `established`, `not-established` or `unknown`, with separate IPv4/IPv6 observations. The provider excludes stale checks. Feedback describes connectivity observations, does not command serving state or assert routing eligibility, and contains no raw internal probe report.

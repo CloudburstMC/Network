@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.signaling;
 
 import com.google.gson.*;
+import org.cloudburstmc.netty.signaling.diagnostic.*;
 
 import java.io.*;
 import java.net.URI;
@@ -41,13 +42,17 @@ public final class ProviderClient implements AutoCloseable {
     public static final String BEARER_TOKEN = "bearer-token";
 
     public enum ControlTransport { HTTP, AUTO }
+    private static final String CONNECTIVITY_EXTENSION = "org.nethernet.connectivity";
+    private static final long DIAGNOSTIC_VALIDITY_MILLIS = 300000;
 
     public record Configuration(URI provider, String profile, String label, String registrationMode,
                                 String authorizationScheme,
                                 String authorizationToken, String region, String pool, Map<String, String> tags,
-                                ControlTransport controlTransport) {
+                                ControlTransport controlTransport, boolean diagnosticAdmission, String connectivityMethod) {
         public Configuration {
             Objects.requireNonNull(controlTransport);
+            if (!Set.of("defined", "discovered").contains(connectivityMethod)) throw new IllegalArgumentException("Unknown connectivity method");
+            if (diagnosticAdmission && !"https".equals(provider.getScheme())) throw new IllegalArgumentException("Diagnostics require HTTPS");
             Objects.requireNonNull(provider);
             Objects.requireNonNull(profile);
             Objects.requireNonNull(registrationMode);
@@ -96,6 +101,13 @@ public final class ProviderClient implements AutoCloseable {
                             || e.getValue().codePoints().anyMatch(c -> c < 32 || c == 127))) {
                 throw new IllegalArgumentException("Invalid provider placement tags");
             }
+        }
+
+        public Configuration(URI provider, String profile, String label, String registrationMode,
+                             String authorizationScheme, String authorizationToken, String region, String pool,
+                             Map<String, String> tags, ControlTransport controlTransport) {
+            this(provider, profile, label, registrationMode, authorizationScheme, authorizationToken, region, pool,
+                    tags, controlTransport, false, "discovered");
         }
 
         public Configuration(URI provider, String profile, String label, String registrationMode,
@@ -202,6 +214,9 @@ public final class ProviderClient implements AutoCloseable {
     private volatile String lastControlCarrier = "none";
     private String hostState = "serving";
     private String installedKeyId;
+    private List<ProviderTransport.TicketKey> installedTicketKeys = List.of();
+    private ProviderTransport.HostProfileSnapshot diagnosticInstalledSnapshot;
+    private long diagnosticInstalledDeadline, diagnosticInstalledExpiresAt;
     private JsonObject lastHeartbeat = new JsonObject();
     private ServerStatus lastReportedStatus;
     private Health lastReportedHealth;
@@ -591,6 +606,8 @@ public final class ProviderClient implements AutoCloseable {
             throw new IOException("Too many admission key epochs");
         }
         if (retained.isEmpty()) {
+            disableDiagnosticAdmission();
+            installedTicketKeys = List.of();
             state.add("ticketKeys", retained);
             installedKeyId = null;
             if (!state.has("keyRequestId")) {
@@ -607,6 +624,7 @@ public final class ProviderClient implements AutoCloseable {
                     key.has("notBefore") ? key.get("notBefore").getAsLong() : 0,
                     key.has("retireAfter") ? key.get("retireAfter").getAsLong() : Long.MAX_VALUE));
         }
+        if (!keys.equals(installedTicketKeys)) disableDiagnosticAdmission();
         transport.installTicketKeys(List.copyOf(keys)).toCompletableFuture().get(10, TimeUnit.SECONDS);
         // Only an epoch set the transport accepted is recorded, so the next heartbeat cannot advertise
         // a key that was never installed, and a bad one cannot survive a restart
@@ -614,6 +632,7 @@ public final class ProviderClient implements AutoCloseable {
         pendingTicketKey = null;
         save();
         installedKeyId = keys.get(keys.size() - 1).keyId();
+        installedTicketKeys = List.copyOf(keys);
     }
 
     /**
@@ -676,8 +695,22 @@ public final class ProviderClient implements AutoCloseable {
         // Key delivery and application acknowledgements can need an immediate second exchange.
         for (int exchange = 0; exchange < 3; exchange++) {
             JsonObject body = new JsonObject(), profile = null;
+            ProviderTransport.HostProfileSnapshot diagnosticSnapshot = null;
             if (installedKeyId != null && hostState.equals("serving")) {
-                profile = transport.hostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                if (config.diagnosticAdmission()) {
+                    if (!transport.supportsDiagnosticAdmission()) throw new IOException("Diagnostic transport unavailable");
+                    try {
+                        diagnosticSnapshot = transport.captureHostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                        profile = diagnosticSnapshot.profile();
+                        if (!directDiagnosticProfile(diagnosticSnapshot)) {
+                            disableDiagnosticAdmission();
+                            diagnosticSnapshot = null;
+                        }
+                    } catch (Exception unavailable) {
+                        disableDiagnosticAdmission();
+                        throw unavailable;
+                    }
+                } else profile = transport.hostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
                 if (profile == null) {
                     throw new IOException("Transport profile unavailable");
                 }
@@ -702,7 +735,22 @@ public final class ProviderClient implements AutoCloseable {
             Health health = healthSupplier.get();
             body.addProperty("healthy", health.healthy());
             body.addProperty("acceptingPlayers", health.acceptingPlayers() && installedKeyId != null && hostState.equals("serving"));
-            if (!heartbeatExtensions.isEmpty()) body.add("extensions", heartbeatExtensions.deepCopy());
+            JsonObject extensions = heartbeatExtensions.deepCopy();
+            boolean diagnosticsAdvertised = diagnosticSnapshot != null && diagnosticInstallationCurrent(diagnosticSnapshot);
+            if (diagnosticsAdvertised) {
+                diagnosticSnapshot.requireCurrent();
+                var data = new JsonObject();
+                data.addProperty("diagnostics", true);
+                data.addProperty("candidateRevision", diagnosticSnapshot.candidateRevision());
+                data.addProperty("method", config.connectivityMethod());
+                var extension = new JsonObject();
+                extension.addProperty("version", 1);
+                extension.addProperty("critical", false);
+                extension.add("data", data);
+                extensions.add(CONNECTIVITY_EXTENSION, extension);
+            } else if (diagnosticSnapshot == null || diagnosticInstalledSnapshot != null) disableDiagnosticAdmission();
+            if (!extensions.isEmpty()) body.add("extensions", extensions);
+            ProtocolExtensions.validate(body);
             body.addProperty("capacity", health.capacity());
             body.addProperty("load", health.load());
             if (health.playerCount() != null) {
@@ -729,6 +777,7 @@ public final class ProviderClient implements AutoCloseable {
             }
             long requestStarted = System.nanoTime();
             JsonObject response = signed("heartbeat", "POST", body);
+            long diagnosticSuccessNanos = System.nanoTime(), diagnosticSuccessMillis = System.currentTimeMillis();
             ProtocolExtensions.validate(response);
             if (body.has("hostProfile")) {
                 if (!response.has("hostProfileRevision") || response.get("hostProfileRevision").isJsonNull()) {
@@ -801,12 +850,85 @@ public final class ProviderClient implements AutoCloseable {
             lastReportedStatus = status;
             lastReportedHealth = health;
             lastHeartbeat = response.deepCopy();
+            if (diagnosticSnapshot != null) {
+                configureDiagnosticAdmission(diagnosticSnapshot, response, diagnosticSuccessMillis, diagnosticSuccessNanos);
+                if (!diagnosticsAdvertised) again = true;
+            }
             // Serving state belongs to this host. Provider routing decisions never command its listener.
             if (!again) {
                 return;
             }
         }
         nextHeartbeat = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+    }
+
+    private static boolean directDiagnosticProfile(ProviderTransport.HostProfileSnapshot snapshot) {
+        JsonObject profile = snapshot.profile();
+        if (snapshot.candidateRevision() < 1 || !profile.has("statelessAdmission") || !profile.has("candidates")) return false;
+        JsonArray candidates = profile.getAsJsonArray("candidates");
+        if (candidates.isEmpty() || candidates.size() > 32) return false;
+        for (JsonElement item : candidates) {
+            JsonObject candidate = item.getAsJsonObject();
+            if (!"host".equals(candidate.get("type").getAsString()) || !"udp".equals(candidate.get("protocol").getAsString())) return false;
+        }
+        return true;
+    }
+
+    private boolean diagnosticInstallationCurrent(ProviderTransport.HostProfileSnapshot snapshot) {
+        if (diagnosticInstalledSnapshot == null || closing.get() || closed
+                || diagnosticInstalledDeadline - System.nanoTime() <= 0 || System.currentTimeMillis() >= diagnosticInstalledExpiresAt
+                || diagnosticInstalledSnapshot.candidateRevision() != snapshot.candidateRevision()) return false;
+        try {
+            diagnosticInstalledSnapshot.requireCurrent();
+            snapshot.requireCurrent();
+            return diagnosticInstalledSnapshot.profile().get("statelessAdmission").equals(snapshot.profile().get("statelessAdmission"));
+        } catch (RuntimeException replaced) { return false; }
+    }
+
+    private void disableDiagnosticAdmission() throws Exception {
+        diagnosticInstalledSnapshot = null;
+        diagnosticInstalledDeadline = diagnosticInstalledExpiresAt = 0;
+        if (config.diagnosticAdmission() && transport.supportsDiagnosticAdmission())
+            transport.disableDiagnostics().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    private void configureDiagnosticAdmission(ProviderTransport.HostProfileSnapshot snapshot, JsonObject response,
+                                               long successMillis, long successNanos) throws Exception {
+        try {
+            if (closing.get() || closed || !hostState.equals("serving")) throw new IOException("Diagnostic host no longer serving");
+            snapshot.requireCurrent();
+            JsonObject profile = snapshot.profile();
+            long expiresAt = successMillis + DIAGNOSTIC_VALIDITY_MILLIS;
+            if (response.has("checkIn")) expiresAt = Math.min(expiresAt,
+                    response.getAsJsonObject("checkIn").get("leaseExpiresAt").getAsLong());
+            long lifetime = expiresAt - successMillis;
+            if (lifetime <= 0) throw new IOException("Diagnostic heartbeat lease expired");
+            long deadline = successNanos + TimeUnit.MILLISECONDS.toNanos(lifetime);
+            if (deadline - System.nanoTime() <= 0) throw new IOException("Diagnostic heartbeat lease expired");
+            var context = new DiagnosticAdmissionCodec.Context(origin, registration("instanceId"),
+                    profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString(), state.get("generation").getAsLong());
+            var keys = installedTicketKeys.stream().map(key -> new DiagnosticAdmissionCodec.Key(key.keyId(), key.secret(),
+                    key.notBefore(), Math.min(key.retireAfter(), 9007199254740991L))).toList();
+            var endpoints = new HashSet<DiagnosticHostPolicy.Endpoint>();
+            for (JsonElement item : profile.getAsJsonArray("candidates")) {
+                JsonObject candidate = item.getAsJsonObject();
+                var address = org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(candidate.get("address").getAsString());
+                int family = address instanceof java.net.Inet6Address ? 6 : 4;
+                endpoints.add(new DiagnosticHostPolicy.Endpoint(family, DiagnosticAdmissionCodec.address(family, address.getHostAddress()),
+                        candidate.get("port").getAsBigDecimal().intValueExact(), snapshot.candidateRevision()));
+            }
+            snapshot.requireCurrent();
+            transport.configureDiagnostics(new DiagnosticHostPolicy(context, keys, endpoints, expiresAt), deadline)
+                    .toCompletableFuture().get(10, TimeUnit.SECONDS);
+            snapshot.requireCurrent();
+            if (closing.get() || closed || deadline - System.nanoTime() <= 0) throw new IOException("Diagnostic installation expired");
+            diagnosticInstalledSnapshot = snapshot;
+            diagnosticInstalledDeadline = deadline;
+            diagnosticInstalledExpiresAt = expiresAt;
+        } catch (Exception failure) {
+            disableDiagnosticAdmission();
+            throw failure;
+        }
     }
 
     private void flushEvents() throws Exception {
@@ -864,6 +986,7 @@ public final class ProviderClient implements AutoCloseable {
         JsonObject document = new JsonObject();
         document.add("extensions", extensions.deepCopy());
         JsonObject validated = ProtocolExtensions.copy(document);
+        if (validated.has(CONNECTIVITY_EXTENSION)) throw new IllegalArgumentException("Connectivity extension is owned by this client");
         return submit(() -> {
             heartbeatExtensions = validated;
             if (started) heartbeat();
@@ -908,6 +1031,7 @@ public final class ProviderClient implements AutoCloseable {
 
     public CompletableFuture<Void> deregister() {
         return submit(() -> {
+            disableDiagnosticAdmission();
             signed("deregister", "POST", new JsonObject());
             if (websocket != null) websocket.close();
             transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
@@ -967,6 +1091,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private void drainAndReport() throws Exception {
+        disableDiagnosticAdmission();
         if (!hostState.equals("closed")) {
             transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
             hostState = "draining";
