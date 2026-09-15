@@ -6,6 +6,9 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.DefaultEventLoopGroup;
 import org.cloudburstmc.netty.signaling.ProviderCrypto;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
+import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,6 +25,41 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Tag("native")
 class NativeProviderHostFactoryNativeTest {
+    @Test void diagnosticOptionOpensRealV2ListenerWithoutMaintainedPublicationOrPlayerReadiness(@TempDir Path directory) throws Exception {
+        var group = new DefaultEventLoopGroup(1);
+        try {
+            for (String ip : List.of("127.0.0.1", "::1")) {
+                int port;
+                try (var reservation = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(ip), 0))) { port = reservation.getLocalPort(); }
+                var options = new HashMap<String, String>(); options.put("stateDirectory", directory.resolve(ip.equals("::1") ? "v6" : "v4").toString());
+                options.put("controlMode", "nethernet-control-v1"); options.put("diagnosticAdmission", NativeProviderHostFactory.DIAGNOSTIC_INSTALL_V1);
+                options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
+                options.put("advertisedEndpoints", "[{\"address\":\"" + (ip.equals("::1") ? "2606:4700:4700::1111" : "8.8.8.8") + "\",\"port\":43000}]");
+                options.put("stunServers", "unused: diagnostics do not opt into STUN");
+                var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
+                    @Override protected void initChannel(Channel channel) { channel.close(); }
+                });
+                var host = new NativeProviderHostFactory().open(bootstrap, new InetSocketAddress(InetAddress.getByName(ip), port), options).toCompletableFuture().get(10, TimeUnit.SECONDS);
+                try {
+                    var nativeHost = (org.cloudburstmc.netty.signaling.admission.NativeProviderTransport) host.transport();
+                    assertTrue(nativeHost.supportsDiagnosticAdmission()); assertTrue(nativeHost.supportsNativeIdentityCapture());
+                    assertFalse(nativeHost.supportsMaintainedCandidateLeases()); assertFalse(nativeHost.channel().isServing());
+                    nativeHost.installTicketKeys(List.of(new ProviderTransport.TicketKey("A001", "public-test-only-player-admission-secret"))).toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    var snapshot = nativeHost.captureHostProfile().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    var profile = CandidateLeaseCodec.readProfile(snapshot.profile()); long now = System.currentTimeMillis();
+                    var context = new DiagnosticAdmissionCodec.Context("https://provider.example", "factory_host", profile.nativeIncarnation(), 1);
+                    var binding = new DiagnosticAdmission.Binding(context, "authority:1", 1, "profile:1", CandidateLeaseCodec.profileDigest(profile), 1, "A".repeat(43),
+                            profile.dtlsFingerprint().substring(8).replace(":", "").toLowerCase(java.util.Locale.ROOT));
+                    var policy = new DiagnosticAdmission.Policy(binding, List.of(new DiagnosticAdmissionCodec.Key("D001", "public-test-only-diagnostic-epoch-secret", now, now + 60000)), List.of(), now, now + 60000);
+                    var installed = nativeHost.installDiagnosticPolicy(policy, snapshot::requireCurrent).toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    installed.requireCurrent(); assertSame(installed, nativeHost.captureDiagnosticInstallation().orElseThrow());
+                    assertFalse(nativeHost.channel().isServing()); assertEquals(0, nativeHost.channel().nativeStats()[2]);
+                    assertTrue(nativeHost.withdrawDiagnosticPolicy(installed).toCompletableFuture().get(5, TimeUnit.SECONDS));
+                } finally { host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+                try (var reclaimed = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(ip), port))) { assertEquals(port, reclaimed.getLocalPort()); }
+            }
+        } finally { group.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly(); }
+    }
     @Test void maintainedConfiguredHostsNeverCreateMonitorsOrPublishMissingFamilies(@TempDir Path directory) throws Exception {
         var group = new DefaultEventLoopGroup(1);
         try {

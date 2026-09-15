@@ -16,6 +16,14 @@ import java.util.concurrent.CompletionException;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NativeProviderHostFactoryTest {
+    @Test void diagnosticOptionRequiresExplicitControlledV2SelectionBeforeIdentity(@TempDir Path directory) {
+        for (Map<String, String> selected : List.of(Map.of("diagnosticAdmission", "true"), Map.of("diagnosticAdmission", "install-v1"),
+                Map.of("diagnosticAdmission", "install-v1", "controlMode", "nethernet-control-v1"))) {
+            var options = new HashMap<>(selected); options.put("stateDirectory", directory.resolve("identity").toString());
+            assertThrows(CompletionException.class, () -> new NativeProviderHostFactory().open(new ServerBootstrap(), endpoint("127.0.0.1", 19133), options).toCompletableFuture().join());
+            assertFalse(Files.exists(directory.resolve("identity")));
+        }
+    }
     @Test void maintainedPathAllowsEmptyBindFirstAndConfiguredEndpointsSuppressStunParsing() throws Exception {
         var empty = NativeProviderHostFactory.maintainedSelection(endpoint("10.0.0.1", 19133), strict("[]"));
         assertTrue(empty.candidates().isEmpty());

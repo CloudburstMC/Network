@@ -28,6 +28,8 @@ final class ControlledProviderApplication {
     private ProviderTransport.HostProfileSnapshot liveSnapshot;
     private String acceptedDigest;
     private Consumer<Throwable> fatal = ignored -> { };
+    private Consumer<String> diagnosticNotice = ignored -> { };
+    private final ControlledDiagnosticApplication diagnostics;
     private boolean installed, demand = true, permanentlyDrained, nativeClosed;
     private volatile boolean closed;
     private long nextHeartbeat, nextUpdate, snapshotClock;
@@ -56,12 +58,16 @@ final class ControlledProviderApplication {
         issuedOwnership = data.has("nativeOwnership");
         maintainedCandidates = data.has("candidatePublication");
         if (maintainedCandidates && !transport.supportsMaintainedCandidateLeases()) throw new IllegalArgumentException("Maintained candidate transport required");
+        diagnostics = new ControlledDiagnosticApplication(storage, transport, executor, clock, () -> data, this::save,
+                () -> nativeOwnerCurrent() ? liveNativeOwner : null, () -> demand = true, code -> diagnosticNotice.accept(code));
     }
     static boolean requiresNativeCancellation(ControlLifecycleCodec.Intent intent, byte[] originalBody) {
         if (!intent.operation().equals("heartbeat")) return false;
         ControlLifecycleCodec.verifyBody(intent, originalBody);
         var body = ControlledProviderJson.parse(new String(originalBody, StandardCharsets.UTF_8), ControlLifecycleCodec.MAX_HTTP_BODY_BYTES);
-        return body.has("hostProfile") || body.has("candidateLeases") || body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean();
+        String diagnostic = ControlledProviderJson.rootProperty(new String(originalBody, StandardCharsets.UTF_8), "diagnosticAdmission", ControlLifecycleCodec.MAX_HTTP_BODY_BYTES);
+        return body.has("hostProfile") || body.has("candidateLeases") || body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean()
+                || diagnostic != null && ControlDiagnosticHeartbeatCodec.decodeRequest(diagnostic).installed() != null;
     }
     CompletionStage<Void> acknowledgeOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
         byte[] owned = originalBody.clone();
@@ -92,6 +98,7 @@ final class ControlledProviderApplication {
         }, executor);
     }
     void onFatal(Consumer<Throwable> callback) { fatal = Objects.requireNonNull(callback); }
+    void onDiagnostic(Consumer<String> callback) { diagnosticNotice = Objects.requireNonNull(callback); }
     void invalidate() { version.incrementAndGet(); }
     void request() { demand = true; }
     /** Runs on the application executor, including while a control response is awaited. */
@@ -103,6 +110,7 @@ final class ControlledProviderApplication {
     }
     boolean due() {
         if (closed) return false;
+        if (diagnostics.lost()) demand = true;
         if (demand || clock.nowMillis() >= nextHeartbeat || !snapshotCurrent(liveSnapshot) || ownerRequired() && !nativeOwnerCurrent()) return true;
         if (acceptedCandidates != null) try { acceptedCandidates.requireCurrent(); } catch (IllegalStateException expired) { return true; }
         if (clock.nowMillis() < nextUpdate) return false;
@@ -188,8 +196,15 @@ final class ControlledProviderApplication {
                 if (!result.receipt().disposition().equals("committed")) throw new IllegalStateException("Heartbeat did not commit");
                 // Status reconciliation has no body. The old intent is settled; only a new actual heartbeat can deliver state.
                 if (!result.hasBody()) return round(pass, count + 1);
-                result.requireCurrent(); var response = ControlledProviderJson.parse(new String(result.bodyBytes().orElseThrow(), StandardCharsets.UTF_8), ControlResultCodec.MAX_BODY_BYTES);
-                return apply(pass, result, body, response, started).thenComposeAsync(ignored -> {
+                result.requireCurrent(); String originalResponse = new String(result.bodyBytes().orElseThrow(), StandardCharsets.UTF_8);
+                var response = ControlledProviderJson.parse(originalResponse, ControlResultCodec.MAX_BODY_BYTES);
+                String diagnosticWire = ControlledProviderJson.rootProperty(originalResponse, "diagnosticAdmission", ControlResultCodec.MAX_BODY_BYTES);
+                var diagnosticResponse = diagnosticWire == null ? null : ControlDiagnosticHeartbeatCodec.decodeResponse(diagnosticWire);
+                // The old ACK was checked through its actual send and original authenticated response.
+                // Deliberate replacement below must not make that historical claim self-invalidating.
+                result.requireCurrent(); if (pass.diagnosticClaim != null) pass.diagnosticClaim.delivered(); pass.diagnosticClaim = null;
+                return apply(pass, result, body, response, started).thenComposeAsync(ignored ->
+                        diagnostics.apply(diagnosticResponse, () -> { pass.check(); result.requireCurrent(); }, pass.candidates), executor).thenComposeAsync(ignored -> {
                     pass.check();
                     // Provider acceptance can survive a cancelled pass whose native application was disabled.
                     // This committed heartbeat must acknowledge the application now installed before READY.
@@ -207,6 +222,8 @@ final class ControlledProviderApplication {
     private CompletionStage<JsonObject> retainedHeartbeat(Pass pass, byte[] original) {
         pass.check();
         var body = ControlledProviderJson.parse(new String(original, StandardCharsets.UTF_8), 65536);
+        String diagnostic = ControlledProviderJson.rootProperty(new String(original, StandardCharsets.UTF_8), "diagnosticAdmission", 65536);
+        if (diagnostic != null) pass.diagnosticClaim = diagnostics.retain(ControlDiagnosticHeartbeatCodec.decodeRequest(diagnostic));
         if (body.has("candidateLeases")) {
             var retained = pendingCandidatePublication;
             if (retained == null || !retained.bodyDigest().equals(ControlFrameCodec.payloadDigest(original))
@@ -301,6 +318,10 @@ final class ControlledProviderApplication {
             body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
             var listing = status.get(); if (listing != null) body.add("serverStatus", JSON.toJsonTree(listing));
             if (liveBasis != null && !body.has("hostProfile")) body.add("applicationAck", applicationAcknowledgement());
+            if (diagnostics.enabled) {
+                var prepared = diagnostics.prepare(); pass.diagnosticClaim = prepared.claim();
+                body.add("diagnosticAdmission", JsonParser.parseString(ControlDiagnosticHeartbeatCodec.encodeRequest(prepared.request())));
+            }
             lastHealth = observation; lastStatus = listing; return body;
         }, executor);
     }
@@ -372,6 +393,7 @@ final class ControlledProviderApplication {
             next.addProperty("keyRequestId", ids.get()); // Lost one-time material requires a new independent request.
         }
         schedule(response, started); lastResponse = response.deepCopy(); lastResponse.remove("ticketKey");
+        if (lastResponse.has("diagnosticAdmission")) lastResponse.getAsJsonObject("diagnosticAdmission").add("expected", JsonNull.INSTANCE);
         if (body.has("candidateLeases")) {
             // A new key deliberately clears the old profile association in next, but the original
             // response's already validated lease deadline still bounds this refresh.
@@ -541,6 +563,7 @@ final class ControlledProviderApplication {
         ProviderTransport.HostProfileSnapshot endpointOwner, latestSnapshot;
         ProviderTransport.CandidateLeaseSnapshot candidates;
         CandidateLeaseCodec.NativeOwner leaseOwner;
+        ControlledDiagnosticApplication.Claim diagnosticClaim;
         boolean leased;
         Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; }
         void own(ProviderTransport.HostProfileSnapshot snapshot) {
@@ -552,6 +575,7 @@ final class ControlledProviderApplication {
             exchange.requireCurrent();
             if (closed || version.get() != owner || clock.nowMillis() >= exchange.deadlineMillis()) throw new IllegalStateException("Application owner expired or changed");
             if (endpointOwner != null) endpointOwner.requireCurrent();
+            if (diagnosticClaim != null) diagnosticClaim.requireCurrent();
             if (leased) {
                 candidates.requireCurrent();
                 if (!nativeOwnerCurrent() || !Objects.equals(leaseOwner, liveNativeOwner)) throw new IllegalStateException("Candidate publication native owner changed");
