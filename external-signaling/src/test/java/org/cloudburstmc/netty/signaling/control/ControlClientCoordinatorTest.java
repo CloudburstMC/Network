@@ -306,6 +306,131 @@ class ControlClientCoordinatorTest {
         assertEquals(receipt, pending.join().receipt()); assertNull(h.journal.value.pending());
     }
 
+    @Test void verifiedTerminalNoCommitResolvesReceiptOnlyAndRetainsSequenceBeforeCallbacks() throws Exception {
+        for (String disposition : List.of("rejected", "expired")) {
+            var h = new Harness(); h.ready();
+            var first = h.client.submit("heartbeat", "[]".getBytes(StandardCharsets.UTF_8), true).toCompletableFuture();
+            var receipt = h.receipt(disposition); var originalKey = h.journal.value.currentKey();
+            List<CompletableFuture<ControlOperationResult>> next = new ArrayList<>();
+            first.thenRun(() -> {
+                assertNull(h.journal.value.pending()); assertEquals(1, h.journal.value.lastSequence());
+                next.add(h.client.submit("heartbeat", "{}".getBytes(StandardCharsets.UTF_8), true).toCompletableFuture());
+            });
+            var operation = h.operations.get(0);
+            // The wire codec requires an empty body for terminal no-commit outcomes.
+            assertThrows(IllegalArgumentException.class, () -> ControlResultCodec.create(receipt, "{\"ignored\":true}".getBytes(StandardCharsets.UTF_8)));
+            String wire = resultWire(receipt);
+            operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, wire));
+            assertEquals(receipt, first.join().receipt()); assertFalse(first.join().hasBody());
+            assertEquals(originalKey, h.journal.value.currentKey()); assertEquals(2, h.journal.value.pending().intent().sequence());
+            assertEquals(1, next.size()); assertFalse(next.get(0).isDone());
+            h.client.close();
+        }
+    }
+
+    @Test void rejectedDeregistrationKeepsClientLiveAndMayCloseInCompletionWithoutResuming() throws Exception {
+        var h = new Harness(); h.ready();
+        var future = h.client.submit("deregister", "[]".getBytes(StandardCharsets.UTF_8), false).toCompletableFuture();
+        var receipt = h.receipt("rejected"); int[] writes = {0};
+        future.thenRun(() -> {
+            assertTrue(h.client.ready()); assertNull(h.journal.value.pending());
+            try { h.client.close(); } catch (IOException e) { throw new IllegalStateException(e); }
+            writes[0] = h.journal.writes.size(); h.journal.fail = true;
+        });
+        h.incoming(h.links.get(0), h.writer, "lifecycle.receipt", resultWire(receipt).getBytes(StandardCharsets.UTF_8), 1);
+        assertEquals(receipt, future.join().receipt()); assertFalse(future.join().hasBody());
+        assertEquals(ControlClientCoordinator.State.CLOSED, h.client.state()); assertEquals(writes[0], h.journal.writes.size());
+        assertTrue(h.requests.isEmpty());
+    }
+
+    @Test void rejectedReceiptCannotResolveBeforeDurableRemovalAndCandidateIsNeverPromoted() throws Exception {
+        var h = new Harness(); h.ready(); var selected = h.journal.value.currentKey();
+        var future = h.client.rotateMachineKey().toCompletableFuture(); var original = h.journal.value.pending();
+        var receipt = h.receipt("rejected"); h.journal.fail = true;
+        h.incoming(h.links.get(0), h.writer, "lifecycle.receipt", resultWire(receipt).getBytes(StandardCharsets.UTF_8), 1);
+        assertEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state());
+        assertEquals(original, h.journal.value.pending()); assertEquals(selected, h.journal.value.currentKey());
+        assertFalse(future.isDone() && !future.isCompletedExceptionally());
+    }
+
+    @Test void rejectedRotationUnderOriginalWriterDiscardsCandidateButDoesNotRotatePhysicalSession() throws Exception {
+        var h = new Harness(); h.ready(); var selected = h.journal.value.currentKey(); var writer = h.writer;
+        var future = h.client.rotateMachineKey().toCompletableFuture(); var receipt = h.receipt("rejected");
+        h.incoming(h.links.get(0), writer, "lifecycle.receipt", resultWire(receipt).getBytes(StandardCharsets.UTF_8), 1);
+        assertEquals(receipt, future.join().receipt()); assertFalse(future.join().hasBody());
+        assertNull(h.journal.value.pending()); assertEquals(selected, h.journal.value.currentKey()); assertEquals(writer, h.journal.value.writer());
+        assertTrue(h.client.ready()); assertEquals(0, h.links.get(0).closeCalls);
+        h.client.close();
+    }
+
+    @Test void rejectedRotationReconcilesOnlyAfterPositiveOriginalKeyStatusAndSurvivesRestart() throws Exception {
+        var h = new Harness(); h.ready(); var selected = h.journal.value.currentKey();
+        h.client.rotateMachineKey(); var original = h.journal.value.pending();
+        var receipt = h.receipt("rejected"); h.receipts.put(receipt.intentDigest(), receipt);
+        h.client.close(); h.newClient(); h.client.start();
+        var candidate = h.next("status"); assertEquals(original.candidate().keyId(), candidate.request.authentication().keyId());
+        candidate.reply.complete(new ControlClientIo.HttpReply(candidate.endpoint, "POST", candidate.endpoint, 503, "{}"));
+        assertEquals(original, h.journal.value.pending()); h.respondStatus(); assertEquals(original, h.journal.value.pending());
+        h.respondStatus(); assertNull(h.journal.value.pending()); assertEquals(selected, h.journal.value.currentKey());
+        assertEquals(1, h.journal.value.lastSequence());
+        h.respondPrepare(); h.links.get(1).challenge(); h.respondActivation(); h.synchronizedReady();
+        assertTrue(h.links.get(1).sent.isEmpty()); h.client.close();
+    }
+
+    @Test void rejectedReceiptUnderSelectedCandidateCannotContradictItsNoCommitMeaning() throws Exception {
+        var h = new Harness(); h.ready(); h.client.rotateMachineKey(); var pending = h.journal.value.pending();
+        var receipt = h.receipt("rejected"); h.receipts.put(receipt.intentDigest(), receipt);
+        h.writer = new ControlWriterFence(h.writer.transport(), h.writer.sessionEpoch(), h.writer.sessionId(), h.writer.connectionId(),
+                pending.candidate().keyId(), h.writer.machineKeyRevision() + 1);
+        h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
+        assertEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state());
+        assertEquals(pending, h.journal.value.pending()); assertNotEquals(pending.candidate(), h.journal.value.currentKey());
+    }
+
+    @Test void rejectedStrongReceiptCompletionMayCloseReplaceOrSubmitWithoutStaleContinuation() throws Exception {
+        for (String action : List.of("close", "replace", "submit")) {
+            var h = new Harness(); h.ready();
+            var future = h.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
+            var receipt = h.receipt("rejected"); h.receipts.put(receipt.intentDigest(), receipt);
+            int[] writes = {0};
+            future.thenRun(() -> {
+                if (action.equals("close")) {
+                    try { h.client.close(); } catch (IOException e) { throw new IllegalStateException(e); }
+                    writes[0] = h.journal.writes.size(); h.journal.fail = true;
+                } else if (action.equals("replace")) h.client.replaceTransport("https", List.of("request-response"));
+                else h.client.submit("heartbeat", "{}".getBytes(StandardCharsets.UTF_8), true);
+            });
+            h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
+            assertEquals(receipt, future.join().receipt()); assertFalse(future.join().hasBody());
+            if (action.equals("close")) {
+                assertEquals(ControlClientCoordinator.State.CLOSED, h.client.state()); assertEquals(writes[0], h.journal.writes.size());
+                assertTrue(h.requests.isEmpty());
+            } else if (action.equals("replace")) {
+                assertEquals(1, h.requests.size()); h.respondPrepare(); h.respondActivation(); h.synchronizedReady();
+                assertEquals("https", h.writer.transport());
+            } else { h.synchronizedReady(); assertEquals(2, h.journal.value.pending().intent().sequence()); assertEquals(2, h.operations.size()); }
+            h.client.close();
+        }
+    }
+
+    @Test void carrierExpiryAndUnknownStatusRetryOriginalIntentWithFreshCarrierInsteadOfTerminalExpiry() throws Exception {
+        var h = new Harness(); h.ready();
+        var future = h.client.submit("heartbeat", " []\n".getBytes(StandardCharsets.UTF_8), true).toCompletableFuture();
+        var original = h.journal.value.pending(); var expired = h.operations.get(0); var late = h.receipt("rejected");
+        h.time.advance(30_000); assertFalse(future.isDone()); assertEquals(original, h.journal.value.pending());
+        // A rejected reply arriving after its carrier deadline remains untrusted delivery.
+        expired.reply.complete(new ControlClientIo.HttpReply(expired.endpoint, "POST", expired.endpoint, 200, resultWire(late)));
+        assertEquals(original, h.journal.value.pending());
+        h.time.advance(h.time.nextDelay()); h.respondStatus(); h.respondStatus();
+        h.respondPrepare(); h.links.get(1).challenge(); h.respondActivation(); h.synchronizedReady();
+        assertFalse(future.isDone()); assertEquals(original.intent(), h.journal.value.pending().intent());
+        var retried = h.operations.get(1); assertEquals(original.intent(), retried.request.intent());
+        assertArrayEquals(original.bodyBytes(), retried.body); assertTrue(retried.request.expiresAt() > expired.request.expiresAt());
+        var unknown = h.receipt("unknown"); retried.reply.complete(new ControlClientIo.HttpReply(retried.endpoint, "POST", retried.endpoint, 200, resultWire(unknown)));
+        assertFalse(future.isDone()); assertEquals(original.intent(), h.journal.value.pending().intent());
+        h.client.close();
+    }
+
     @Test void oneOffHttpsPreservesWebSocketWriterAndPersistentFallbackActivatesNewEpoch() throws Exception {
         var h = new Harness(); h.ready(); var before = h.writer; byte[] body = (" ".repeat(45057)).getBytes(StandardCharsets.UTF_8);
         var future = h.client.submit("heartbeat", body, false).toCompletableFuture(); assertEquals(1, h.operations.size()); assertTrue(h.links.get(0).sent.isEmpty());
