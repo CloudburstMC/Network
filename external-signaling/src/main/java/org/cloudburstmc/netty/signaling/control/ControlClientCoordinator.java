@@ -114,6 +114,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
         private final ControlAuthorityCodec.Verified proof;
         private final long deadline;
         private CompletableFuture<ControlSynchronizationResult> confirmation;
+        private CompletableFuture<ControlOperationResult> heartbeatWaiter;
+        private ControlLifecycleCodec.Intent heartbeatIntent;
         private ControlStateCodec.Acknowledgement acknowledgement;
         private boolean appliedCalled, sent, received;
         SynchronizationExchange(ControlAuthorityCodec.Verified proof, long deadline) { this.proof = proof; this.deadline = deadline; }
@@ -135,15 +137,26 @@ public final class ControlClientCoordinator implements AutoCloseable {
         @Override public CompletionStage<ControlOperationResult> heartbeat(byte[] originalBody) { synchronized (ControlClientCoordinator.this) {
             requireCurrent(); Objects.requireNonNull(originalBody);
             if (appliedCalled) throw new IllegalStateException("Application confirmation already started");
+            if (heartbeatWaiter != null) throw new IllegalStateException("Synchronization heartbeat is still running");
             var pending = snapshot.pending();
-            if (pending == null) return submit("heartbeat", originalBody.clone(), null, false, id(), this);
-            if (!pending.intent().operation().equals("heartbeat") || pending.candidate() != null || !Arrays.equals(originalBody, pending.bodyBytes()))
+            if (pending != null && (!pending.intent().operation().equals("heartbeat") || pending.candidate() != null || !Arrays.equals(originalBody, pending.bodyBytes())))
                 throw new IllegalStateException("Cannot replace a retained lifecycle intent during synchronization");
-            if (pending.receipt() != null && !pending.receipt().disposition().equals("unknown"))
+            if (pending != null && pending.receipt() != null && !pending.receipt().disposition().equals("unknown"))
                 throw new IllegalStateException("Unresolved heartbeat receipt requires explicit reconciliation");
-            if (pendingResult == null) pendingResult = new CompletableFuture<>();
-            var result = pendingResult; pendingSynchronization = this; forceHttp = false; deliverPending();
-            return result.minimalCompletionStage();
+            // The immutable global result survives replacement. This exchange's application wait must
+            // settle on invalidation so its real cleanup can release synchronizationIo naturally.
+            var waiter = new CompletableFuture<ControlOperationResult>(); heartbeatWaiter = waiter;
+            try {
+                if (pending == null) submit("heartbeat", originalBody.clone(), null, false, id(), this);
+                else {
+                    if (pendingResult == null) pendingResult = new CompletableFuture<>();
+                    heartbeatIntent = pending.intent(); pendingSynchronization = this; forceHttp = false; deliverPending();
+                }
+            } catch (RuntimeException failure) {
+                if (heartbeatWaiter == waiter) heartbeatWaiter = null;
+                waiter.completeExceptionally(failure);
+            }
+            return waiter.minimalCompletionStage();
         } }
         @Override public CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis basis) { synchronized (ControlClientCoordinator.this) {
             requireCurrent(); Objects.requireNonNull(basis);
@@ -206,7 +219,15 @@ public final class ControlClientCoordinator implements AutoCloseable {
             if (confirmation != null) confirmation.complete(ControlSynchronizationResult.awaitingSource());
         }
         private void cancelConfirmation() {
+            var waiter = heartbeatWaiter; heartbeatWaiter = null; heartbeatIntent = null;
+            if (waiter != null) waiter.completeExceptionally(new IllegalStateException("Synchronization heartbeat superseded or unavailable"));
             if (confirmation != null) confirmation.completeExceptionally(new IllegalStateException("Application confirmation superseded or unavailable"));
+        }
+        private void completeHeartbeat(ControlOperationResult result) {
+            if (heartbeatWaiter == null || heartbeatIntent == null
+                    || !ControlLifecycleCodec.intentDigest(heartbeatIntent).equals(result.receipt().intentDigest())) return;
+            var waiter = heartbeatWaiter; heartbeatWaiter = null; heartbeatIntent = null;
+            waiter.complete(result);
         }
     }
 
@@ -279,6 +300,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         persist(new ControlClientJournal.Snapshot(subject, snapshot.currentKey(), snapshot.writer(), intent.sequence(), pending, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
         CompletableFuture<ControlOperationResult> result = new CompletableFuture<>(); pendingResult = result; forceHttp = https;
         pendingSynchronization = synchronization;
+        if (synchronization != null) synchronization.heartbeatIntent = intent;
         deliverPending();
         return result.minimalCompletionStage();
     }
@@ -962,6 +984,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
     private void completeResult(ControlOperationResult value) {
         var result = pendingResult; pendingResult = null;
+        var exchange = synchronizationExchange;
+        if (exchange != null) exchange.completeHeartbeat(value);
         if (result != null) result.complete(value);
     }
 

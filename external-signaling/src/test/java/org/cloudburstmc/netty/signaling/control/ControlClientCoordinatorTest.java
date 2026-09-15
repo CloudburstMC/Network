@@ -73,6 +73,9 @@ class ControlClientCoordinatorTest {
         boolean cancelNativeClaims; URI cancelRoute;
         boolean durableOutcomes; final List<CompletableFuture<Void>> outcomeAcks = new ArrayList<>();
         Runnable onOutcomeAck;
+        java.util.function.Function<Synchronization, CompletionStage<ControlSynchronizationResult>> actualSynchronization;
+        interface OutcomeAck { CompletionStage<Void> apply(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt); }
+        OutcomeAck actualOutcomeAck;
         boolean autoReady = true, nullSynchronizationResult, failApplicationDispatch;
         ControlStateCodec.AppliedBasis appliedBasis;
         ControlStateCodec.Summary sourceState;
@@ -121,6 +124,7 @@ class ControlClientCoordinatorTest {
         @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt) {
             assertEquals("committed", journal.value.pending().receipt().disposition());
             assertEquals(intent, journal.value.pending().intent()); assertArrayEquals(body, journal.value.pending().bodyBytes());
+            if (actualOutcomeAck != null) return actualOutcomeAck.apply(intent, body, receipt);
             var work = new CompletableFuture<Void>(); outcomeAcks.add(work);
             if (onOutcomeAck != null) onOutcomeAck.run();
             return work;
@@ -137,6 +141,9 @@ class ControlClientCoordinatorTest {
             assertEquals(authority.floor(), journal.value.authorityFloor().value());
             if (absentSynchronization) return null;
             synchronizationExchanges.add(exchange);
+            if (actualSynchronization != null) {
+                var outcome = actualSynchronization.apply(exchange); synchronizationResults.add(outcome); return outcome;
+            }
             var result = new CompletableFuture<Void>(); synchronizations.add(result);
             var outcome = result.thenCompose(ignored -> nullSynchronizationResult ? CompletableFuture.<ControlSynchronizationResult>completedFuture(null) : exchange.applied(appliedBasis));
             synchronizationResults.add(outcome); return outcome;

@@ -157,7 +157,7 @@ class ControlOperationCoordinatorTest {
         h.synchronizations.get(0).complete(null);
         assertFalse(h.client.ready()); assertNotNull(h.journal.value.pending());
         reply(h, 0, receipt, "{\"ticketKey\":\"must-be-withheld-after-scope-expiry\"}");
-        var reconciled = result.toCompletableFuture().join(); assertFalse(reconciled.hasBody()); assertNull(h.journal.value.pending());
+        assertTrue(result.toCompletableFuture().isCompletedExceptionally(), "Invalid application pass has already settled"); assertNull(h.journal.value.pending());
         assertFalse(h.client.ready()); assertEquals(3, h.bootstrapCalls); assertTrue(h.links.isEmpty());
     }
 

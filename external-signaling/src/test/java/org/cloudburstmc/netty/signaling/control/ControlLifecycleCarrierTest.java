@@ -51,7 +51,8 @@ class ControlLifecycleCarrierTest {
         var result = lane.heartbeat(body(0)); var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
         oldLink.closed.completeExceptionally(new java.io.IOException("socket lost after commit"));
         h.time.advance(200); h.respondStatus(); h.respondStatus();
-        assertEquals(receipt, result.toCompletableFuture().join().receipt()); assertFalse(result.toCompletableFuture().join().hasBody());
+        assertTrue(result.toCompletableFuture().isCompletedExceptionally(), "Old synchronization waiter is fenced; status still settles its durable intent");
+        assertNull(h.journal.value.pending());
         h.synchronizations.get(0).completeExceptionally(new IllegalStateException("old application pass expired"));
         h.respondPrepare(); h.links.get(1).challenge(); h.respondActivation(); h.synchronizedReady();
         var current = h.client.snapshot(); assertNotEquals(oldWriter, current.writer()); assertTrue(h.operations.isEmpty()); assertEquals(1, current.lastSequence());
@@ -62,7 +63,8 @@ class ControlLifecycleCarrierTest {
         var h = activated("websocket"); var lane = h.synchronizationExchanges.get(0); var writer = h.writer;
         var result = lane.heartbeat(body(0)); var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
         h.time.advance(30001); h.respondStatus(); h.respondStatus();
-        assertEquals(receipt, result.toCompletableFuture().join().receipt()); assertFalse(result.toCompletableFuture().join().hasBody());
+        assertTrue(result.toCompletableFuture().isCompletedExceptionally(), "Expired application pass cannot consume later receipt delivery");
+        assertNull(h.journal.value.pending());
         h.synchronizations.get(0).completeExceptionally(new IllegalStateException("expired original application pass"));
         h.time.advance(1000); h.synchronizedReady();
         assertEquals(writer, h.client.snapshot().writer()); assertEquals(1, h.links.size()); assertTrue(h.operations.isEmpty()); assertEquals(1, h.links.get(0).sent.size());

@@ -18,6 +18,8 @@ Adopting a heartbeat whose earlier WebSocket send is still awaiting a receipt do
 
 The handle is bound to its attempt, synchronization generation, installed verified source proof, writer, fixed grant and fixed synchronization deadline. Both HTTP proofs and WebSocket frames are capped by that original absolute deadline, even when application work was queued or earlier heartbeat rounds consumed most of it. Supersession, key retirement, timeout or closure invalidates it. A late response may still supply independently valid commit knowledge, but its body is withheld from an invalidated synchronization owner. Normal operation receipts during an already-running synchronization cannot bypass the same barrier.
 
+Each synchronization heartbeat has an exchange-owned application waiter. Invalidation fails this waiter while retaining the global intent and receipt recovery state. The actual application then finishes its admission cleanup before the coordinator releases its synchronization work slot; the coordinator never clears that occupied slot merely because a timer fired. This prevents a lost heartbeat reply from leaving a replacement socket permanently unable to synchronize. Retried exchanges do not accumulate completion subscriptions on the retained global operation.
+
 The concrete adapter must use its serialized application executor for parsing/applying bodies and state/key updates. Callback completion can reenter the coordinator monitor; do not block that monitor waiting for application work. The application chain should perform these steps:
 
 1. Recheck `exchange.requireCurrent()` and choose the retained heartbeat bytes, if present, or construct the real initial heartbeat.
