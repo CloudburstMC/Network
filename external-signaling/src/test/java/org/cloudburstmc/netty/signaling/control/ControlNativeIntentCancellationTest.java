@@ -101,8 +101,11 @@ class ControlNativeIntentCancellationTest {
             original.whenComplete((ignored, failure) -> next.set(h.client.submit("outcomes", "{}".getBytes(StandardCharsets.UTF_8), true)));
             h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
             assertNotEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state()); assertNotNull(next.get());
-            h.synchronizedReady(); assertEquals("outcomes", h.journal.value.pending().intent().operation());
+            h.respondAuthority(); assertEquals("outcomes", h.journal.value.pending().intent().operation()); assertFalse(h.client.ready());
             assertEquals(2, h.operations.size()); assertTrue(h.requests.isEmpty());
+            var operation = h.operations.get(1); var outcomesReceipt = h.receipt("committed");
+            operation.reply().complete(new ControlClientIo.HttpReply(operation.endpoint(), "POST", operation.endpoint(), 200, ControlClientCoordinatorTest.resultWire(outcomesReceipt)));
+            assertEquals(outcomesReceipt, next.get().toCompletableFuture().join().receipt()); h.synchronizedReady(); assertNull(h.journal.value.pending());
         }
     }
     @Test void nativeReconciliationFencesHeldOperationAndAllowsNextHeartbeat() throws Exception {
