@@ -28,7 +28,13 @@ public final class ControlClientCoordinator implements AutoCloseable {
         AUTHORITY_EXPIRED, BACKOFF, UNRESOLVED, DEREGISTERED, CLOSED }
     public record Config(String audience, URI prepare, URI activate, URI status, URI upgrade, URI authority,
                          Map<String, URI> operations, String transport, List<String> capabilities,
-                         long sessionDurationMillis, long proofMillis, long baseBackoffMillis, long maxBackoffMillis) {
+                         long sessionDurationMillis, long proofMillis, long baseBackoffMillis, long maxBackoffMillis, URI cancelIntent) {
+        public Config(String audience, URI prepare, URI activate, URI status, URI upgrade, URI authority,
+                      Map<String, URI> operations, String transport, List<String> capabilities,
+                      long sessionDurationMillis, long proofMillis, long baseBackoffMillis, long maxBackoffMillis) {
+            this(audience, prepare, activate, status, upgrade, authority, operations, transport, capabilities,
+                    sessionDurationMillis, proofMillis, baseBackoffMillis, maxBackoffMillis, null);
+        }
         public Config {
             ControlOrigin.requireCanonical(audience); operations = Map.copyOf(operations); capabilities = List.copyOf(capabilities);
             ControlProof.capabilities(transport, capabilities);
@@ -37,6 +43,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     || maxBackoffMillis > 300000) throw ControlJson.invalid("client timing bounds");
             for (URI endpoint : List.of(prepare, activate, status, authority)) endpoint(audience, endpoint, false);
             endpoint(audience, upgrade, true);
+            if (cancelIntent != null) endpoint(audience, cancelIntent, false);
             operations.values().forEach(endpoint -> endpoint(audience, endpoint, false));
         }
     }
@@ -73,7 +80,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private boolean operationInFlight, synchronizationInFlight;
     private CompletableFuture<ControlOperationResult> pendingResult;
     private SynchronizationExchange synchronizationExchange, pendingSynchronization;
-    private boolean forceHttp;
+    private boolean forceHttp, cancellationInFlight, cancellationWriterSelected;
+    private String cancellationIntentDigest;
 
     private record PendingApplicationFrame(ControlFrameCodec.Frame frame, ControlFrameCodec.VerificationKey key,
             ControlAuthorityCodec.Verified proof, long attempt, long synchronization) { }
@@ -282,7 +290,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (outcomeAcknowledgementIo != null) return; // Timeout/cancellation never releases unsettled application work.
         attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; state = State.RECONCILING;
         cancel(retry); retry = null;
-        var pending = snapshot.pending();
+        var pending = snapshot.pending(); cancellationInFlight = false; cancellationWriterSelected = false;
+        cancellationIntentDigest = pending != null && pending.intent().operation().equals("heartbeat")
+                && io.requiresNativeIntentCancellation(pending.intent(), pending.bodyBytes()) ? ControlLifecycleCodec.intentDigest(pending.intent()) : null;
         if (committedOutcome(pending)) { acknowledgeOutcome(pending.receipt(), this::recover); return; }
         var credential = pending != null && pending.candidate() != null ? pending.candidate() : snapshot.currentKey();
         currentStatus(credential, !credential.equals(snapshot.currentKey()));
@@ -342,6 +352,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private void acceptCurrent(ControlClientJournal.Credential credential, ControlWriterFence writer, JsonObject current, long currentRequestIssuedAt) {
+        if (snapshot.pending() == null) cancellationIntentDigest = null;
+        if (cancellationIntentDigest != null && config.cancelIntent() == null) { halt(); return; }
         var bootstrap = snapshot.pendingBootstrap();
         if (bootstrap != null) {
             var original = ControlSessionCodec.decodeRequest(bootstrap.originalRequest());
@@ -378,7 +390,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 && samePhysicalWriter(active.writer, writer) && !active.link.closed().toCompletableFuture().isDone()
                 && clock.nowMillis() < snapshot.grant().sessionExpiresAt()) {
             // A committed machine rotation changes selected key/revision without replacing this socket or its frame sequences.
-            active.writer = writer; authority = null; scheduleRotation(); synchronize(); return;
+            active.writer = writer; authority = null; scheduleRotation(); cancellationWriterSelected = true;
+            if (!cancelBeforeSynchronization()) synchronize(); return;
         }
         beginPrepare();
     }
@@ -464,8 +477,40 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (previous != null && previous != active && previous.link != null) previous.link.close();
         outgoingSequence = 0; incomingSequence = 1; authority = null;
         scheduleRotation();
-        state = State.SYNCHRONIZING;
-        synchronize();
+        state = State.SYNCHRONIZING; cancellationWriterSelected = true;
+        if (!cancelBeforeSynchronization()) synchronize();
+    }
+
+    /** A retained native claim can be cancelled under the selected writer before source/application readiness. */
+    private boolean cancelBeforeSynchronization() {
+        if (cancellationIntentDigest == null) return false;
+        if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return true;
+        var pending = snapshot.pending();
+        if (pending == null) { cancellationIntentDigest = null; return false; }
+        if (!pending.intent().operation().equals("heartbeat") || !cancellationIntentDigest.equals(ControlLifecycleCodec.intentDigest(pending.intent()))) { halt(); return true; }
+        if (config.cancelIntent() == null) { halt(); return true; }
+        if (cancellationInFlight || !cancellationWriterSelected) return true;
+        var writer = snapshot.writer(); var grant = snapshot.grant(); var credential = snapshot.currentKey();
+        if (grant == null || clock.nowMillis() >= grant.sessionExpiresAt() || !ownsActiveWriter()) { recover(); return true; }
+        cancellationInFlight = true; state = State.RECONCILING;
+        var payload = new JsonObject(); payload.add("intent", ControlJson.parse(ControlLifecycleCodec.encodeIntent(pending.intent()), ControlLifecycleCodec.MAX_INTENT_BYTES));
+        payload.add("expectedWriter", writer.object()); payload.addProperty("reason", "native-application-replaced");
+        var request = request("cancel-intent", config.cancelIntent(), payload, id(), credential,
+                Math.min(clock.nowMillis() + config.proofMillis(), grant.sessionExpiresAt()));
+        watch(() -> io.bootstrap(config.cancelIntent(), request), request.expiresAt(), reply -> {
+            var result = response(reply, request);
+            if (!writer.equals(snapshot.writer()) || !credential.equals(snapshot.currentKey()) || !grant.equals(snapshot.grant()) || !ownsActiveWriter()
+                    || snapshot.pending() == null || !pending.intent().equals(snapshot.pending().intent())) throw ControlJson.invalid("cancellation current writer");
+            var receipt = ControlLifecycleCodec.decodeReceipt(ControlJson.object(result, "receipt").toString());
+            ControlLifecycleCodec.verifyReceipt(receipt, pending.intent());
+            persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null,
+                    snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
+            cancellationInFlight = false; cancellationWriterSelected = false; cancellationIntentDigest = null; pendingSynchronization = null;
+            long generation = attempt; State previous = state;
+            completeResult(ControlOperationResult.reconciled(receipt));
+            if (generation == attempt && state == previous) synchronize();
+        });
+        return true;
     }
 
     /** Explicit demand only; idle authority expiry does not start a source or strong-status polling loop. */
@@ -478,6 +523,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private void beginAuthorityRefresh() {
+        if (cancelBeforeSynchronization()) return;
         if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED || pendingAuthority != null || synchronizationInFlight) return;
         // Deadline expiry fences consumers; it does not make unabortable underlying work disappear.
         if (authorityIo != null || synchronizationIo != null) { authorityUnavailable(); return; }
@@ -590,7 +636,13 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 cancel(synchronizationTimeout); synchronizationTimeout = null; synchronizationInFlight = false;
                 Throwable cause = failure;
                 while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) cause = cause.getCause();
-                if (cause instanceof ControlClientIo.ReconciliationRequired) { halt(); return; }
+                if (cause instanceof ControlClientIo.ReconciliationRequired) {
+                    var pending = snapshot.pending();
+                    if (pending == null || !pending.intent().operation().equals("heartbeat")) { halt(); return; }
+                    cancellationIntentDigest = ControlLifecycleCodec.intentDigest(pending.intent());
+                    attempt++; if (!resetAuthorityWork()) return; authority = null; cancellationWriterSelected = true;
+                    cancelBeforeSynchronization(); return;
+                }
                 // Delivery has already been consumed. Only the installed inner authority/current trust applies here.
                 if (failure != null || result == null || !result.belongsTo(exchange, proof.response().state())
                         || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()
@@ -760,6 +812,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private void deliverPending() {
+        if (cancelBeforeSynchronization()) return;
         expireAuthority();
         var pending = snapshot.pending(); var grant = snapshot.grant();
         boolean initialHeartbeat = pendingSynchronization != null && pendingSynchronization.current()
@@ -894,7 +947,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
 
     /** Only a verified provider terminal decision; carrier clocks never call this. */
     private static boolean terminalNoCommit(ControlLifecycleCodec.Receipt receipt) {
-        return receipt.disposition().equals("rejected") || receipt.disposition().equals("expired");
+        return receipt.disposition().equals("rejected") || receipt.disposition().equals("expired") || receipt.disposition().equals("cancelled");
     }
 
     private void persistPendingReceipt(ControlLifecycleCodec.Receipt receipt) {
@@ -908,7 +961,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private ControlSessionCodec.VerifiedResponse verifiedReply(ControlClientIo.HttpReply reply, ControlSessionCodec.Request request) {
-        URI endpoint = switch (request.action()) { case "prepare" -> config.prepare(); case "activate" -> config.activate(); default -> config.status(); };
+        URI endpoint = switch (request.action()) { case "prepare" -> config.prepare(); case "activate" -> config.activate(); case "cancel-intent" -> config.cancelIntent(); default -> config.status(); };
         checkedReply(reply, endpoint, "POST", ControlSessionCodec.MAX_ENVELOPE_BYTES);
         if (reply.status() != 200) throw ControlJson.invalid("bootstrap HTTPS response");
         return verify(reply.body(), request);
