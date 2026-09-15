@@ -109,6 +109,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         private ControlStateCodec.Acknowledgement acknowledgement;
         private boolean appliedCalled, sent, received;
         SynchronizationExchange(ControlAuthorityCodec.Verified proof, long deadline) { this.proof = proof; this.deadline = deadline; }
+        @Override public long deadlineMillis() { return deadline; }
         private boolean current() {
             return synchronizationExchange == this && generation == attempt && version == synchronizationVersion
                     && state == State.SYNCHRONIZING && synchronizationInFlight && clock.nowMillis() < deadline
