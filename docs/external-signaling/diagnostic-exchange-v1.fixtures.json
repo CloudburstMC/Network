@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "notice": "Public deterministic wire fixtures, never credentials or production random challenges.",
+  "attemptIdHex": "000102030405060708090a0b0c0d0e0f",
+  "nonces": {
+    "proberReliable": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "proberUnreliable": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "hostReliable": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "hostUnreliable": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+  },
+  "completionDigestHex": "adeb2ef530b3d5b6cb5d5e119109ca9908a5f5bd3b29ff83c4dc8c4e3d83fcc2",
+  "frames": [
+    {
+      "kind": 2,
+      "channel": 0,
+      "payloadHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "frameHex": "004e584450010200000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    },
+    {
+      "kind": 3,
+      "channel": 1,
+      "payloadHex": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "frameHex": "004e584450010301000102030405060708090a0b0c0d0e0f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+    },
+    {
+      "kind": 4,
+      "channel": 0,
+      "payloadHex": "adeb2ef530b3d5b6cb5d5e119109ca9908a5f5bd3b29ff83c4dc8c4e3d83fcc2",
+      "frameHex": "004e584450010400000102030405060708090a0b0c0d0e0fadeb2ef530b3d5b6cb5d5e119109ca9908a5f5bd3b29ff83c4dc8c4e3d83fcc2"
+    }
+  ]
+}
