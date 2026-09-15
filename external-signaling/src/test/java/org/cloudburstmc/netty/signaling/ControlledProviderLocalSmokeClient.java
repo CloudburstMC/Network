@@ -79,8 +79,19 @@ public final class ControlledProviderLocalSmokeClient {
                     registration.addProperty("instanceId", id); registration.addProperty("registrationId", string(value, "registrationId")); registration.addProperty("keyId", string(value, "keyId"));
                     registration.addProperty("leaseGeneration", reporting.generation()); state.add("registration", registration); store.write(state);
                 }
+                // The older in-process peer fixture owns its destructive result poll. Its scope is
+                // native installation/exchange only; the external-workload scenario uses the real
+                // application poll, authenticated upload and durable receipt settlement instead.
+                ProviderTransport reportedTransport = nativeTransport;
+                if (diagnosticCheck && !externalDiagnosticCheck) reportedTransport = (ProviderTransport) java.lang.reflect.Proxy.newProxyInstance(
+                        ProviderTransport.class.getClassLoader(), new Class<?>[]{ProviderTransport.class}, (proxy, method, args) -> {
+                            if (method.getName().equals("pollDiagnosticResults")) return List.of();
+                            if (method.getName().equals("diagnosticDroppedResultCount")) return OptionalLong.empty();
+                            try { return method.invoke(nativeTransport, args); }
+                            catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
+                        });
                 client = new ProviderClient(new ProviderClient.Configuration(URI.create(string(config, "origin")), "nxs-admission-v1", "Local controlled fixture",
-                        ProviderClient.NEW_SERVICE, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null, null, null, Map.of(), control), store, nativeTransport, () -> null,
+                        ProviderClient.NEW_SERVICE, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null, null, null, Map.of(), control), store, reportedTransport, () -> null,
                         () -> new ProviderClient.Health(true, true, 10, 0, "fixture", "fixture"), ignored -> { });
                 emit("starting", id, mode, null); started = client.start();
             } catch (Throwable failure) {
@@ -218,8 +229,12 @@ public final class ControlledProviderLocalSmokeClient {
             var captured = new ExternalDiagnostic(document, policy, capture, listener);
             requireExternalDiagnosticCurrent(captured);
             requireNoPlayerActivity();
-            if (nativeTransport.channel().liveNativePeers() != 0 || !nativeTransport.pollDiagnosticResults(2).isEmpty())
+            if (nativeTransport.channel().liveNativePeers() != 0)
                 throw new IllegalStateException("External diagnostic started with prior native activity");
+            var previousReports = root.getAsJsonObject("controlDiagnosticCompletions");
+            if (previousReports != null && (!previousReports.getAsJsonArray("pending").isEmpty()
+                    || number(previousReports, "recorded") != 0 || number(previousReports, "unknown") != 0))
+                throw new IllegalStateException("External diagnostic started with prior report activity");
             event.add("installation", acknowledgement(document));
             event.addProperty("policyNotBefore", document.notBefore()); event.addProperty("policyExpiresAt", document.expiresAt());
             event.addProperty("keyId", document.activeKeyId()); event.addProperty("hostFingerprintHex", document.binding().hostFingerprintHex());
@@ -239,28 +254,38 @@ public final class ControlledProviderLocalSmokeClient {
             if (!externalDiagnosticCheck || externalDiagnostic == null || diagnosticComplete)
                 throw new IllegalStateException("Unexpected external diagnostic result command");
             var captured = externalDiagnostic;
-            final long pollDeadline = Math.min(deadline, System.nanoTime() + TimeUnit.SECONDS.toNanos(20));
-            DiagnosticAdmission.Completion result = null;
+            // READY plus explicit readiness can consume the two-per-30-second authority refresh
+            // budget. Upload waits for that existing gate without changing its original evidence.
+            final long pollDeadline = Math.min(deadline, System.nanoTime() + TimeUnit.SECONDS.toNanos(60));
+            JsonObject queue = null;
             while (System.nanoTime() < pollDeadline) {
                 requireExternalDiagnosticCurrent(captured); requireNoPlayerActivity();
-                var results = nativeTransport.pollDiagnosticResults(2);
-                if (results.size() > 1) throw new IllegalStateException("Multiple external diagnostic completions");
-                if (!results.isEmpty()) { result = results.get(0); break; }
+                var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144);
+                var candidate = root.getAsJsonObject("controlDiagnosticCompletions");
+                if (candidate != null && number(candidate, "recorded") == 1
+                        && candidate.getAsJsonArray("pending").isEmpty()
+                        && candidate.has("acknowledgement") && candidate.getAsJsonObject("acknowledgement").get("settled").getAsBoolean()) {
+                    var journal = ControlledProviderJson.parse(Files.readString(directory.resolve("control-session/provider-state.json")), 196608);
+                    if (!journal.has("pending")) { queue = candidate; break; }
+                }
                 long remaining = pollDeadline - System.nanoTime();
                 if (remaining > 0) TimeUnit.NANOSECONDS.sleep(Math.min(TimeUnit.MILLISECONDS.toNanos(20), remaining));
             }
-            if (result == null) throw new TimeoutException("External diagnostic exceeded its original bounded result wait");
+            if (queue == null) throw new TimeoutException("External diagnostic upload did not durably settle within its bounded wait");
             requireExternalDiagnosticCurrent(captured); requireNoPlayerActivity();
-            if (nativeTransport.channel().liveNativePeers() != 0 || !nativeTransport.pollDiagnosticResults(1).isEmpty())
+            for (String counter : List.of("unknown", "invalidNative", "nativeDropped", "unsettledBatches"))
+                if (number(queue, counter) != 0) throw new IllegalStateException("External diagnostic upload has unexpected unknown/loss accounting");
+            if (nativeTransport.channel().liveNativePeers() != 0)
                 throw new IllegalStateException("External diagnostic did not release its only native peer");
-            var event = diagnosticCompletion(captured.policy(), result, captured.listener());
+            var event = readyFields("diagnostic upload settlement");
             event.add("installation", acknowledgement(captured.document()));
+            event.add("queue", queue.deepCopy());
             event.addProperty("policyExpiresAt", captured.document().expiresAt()); event.addProperty("playerChildren", playerChildren);
             event.addProperty("creationAttempts", nativeTransport.channel().creationAttempts()); event.addProperty("liveNativePeers", nativeTransport.channel().liveNativePeers());
-            event.addProperty("nativeServing", nativeTransport.channel().isServing()); event.addProperty("gameplay", false);
             requireExternalDiagnosticCurrent(captured); remainingMillis(1);
-            diagnosticComplete = true; emit("diagnostic_complete", id, mode, event);
+            diagnosticComplete = true; emit("diagnostic_upload_settled", id, mode, event);
         }
+
         private void requireExternalDiagnosticCurrent(ExternalDiagnostic captured) {
             captured.capture().requireCurrent();
             if (nativeTransport.captureDiagnosticInstallation().orElse(null) != captured.capture()
