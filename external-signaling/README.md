@@ -34,6 +34,29 @@ classifier candidate filtering uses. Publication does not test network reachabil
 configure port forwarding. An IPv6 wildcard listener accepts IPv4 and IPv6 with the
 pinned native stack; a concrete IPv6 bind does not imply IPv4 coverage.
 
+Controlled integrations can explicitly call `NativeProviderTransport.openControlledVersion2`
+with a `NativeCandidateSnapshot`, then call `replaceCandidates` as endpoint material changes.
+This is a separate API opt-in; the existing factory and all unversioned overloads retain
+1–32 candidates. A v2 profile includes `version: 2` and allows 0–32 candidates. Empty startup
+binds the gameplay listener before discovery; withdrawing the final candidate preserves its
+incarnation, certificate, admission keys and established peers. The controlled application
+reports `acceptingPlayers: false` for an empty advertisement while truthfully acknowledging
+its native serving state. This withdraws new endpoint discovery; it does not revoke already
+issued tickets or prove network reachability.
+
+Candidate snapshots own resolved numeric UDP endpoints, derive IPv4/IPv6 family, and carry
+`HOST` or `SRFLX` type. Canonical ordering and the material revision ignore input order and
+duplicates. Unchanged replacements preserve ownership; A → B → A creates new ownership even
+though A has the same deterministic material revision. `captureHostProfile` returns immutable
+profile bytes and a nonblocking ownership guard, retained through asynchronous publication,
+native staging, durable storage and readiness confirmation. Legacy adapters cannot return
+versioned profiles through the default capture method without providing that guard.
+
+`SRFLX` is representable for later discovery work but is rejected by both v2 open and
+replacement publication until a bounded candidate lease protocol exists. This API does not
+start STUN, open another UDP socket or enable automatic mapped-candidate publication. Typed
+factory/platform hint integration and same-mux warm STUN remain separate work.
+
 All endpoints share one admission incarnation. The first authenticated source tuple
 owns its ticket, including when several address families are advertised; subsequent
 tuples cannot use that ticket to create another peer. This does not introduce path

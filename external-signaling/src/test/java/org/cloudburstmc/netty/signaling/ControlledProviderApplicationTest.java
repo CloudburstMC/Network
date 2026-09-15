@@ -42,6 +42,7 @@ class ControlledProviderApplicationTest {
         final List<byte[]> originalBodies = new ArrayList<>();
         java.util.function.Consumer<JsonObject> inspectBody = ignored -> { };
         byte[] retained;
+        java.util.function.Supplier<CompletionStage<ControlSynchronizationResult>> appliedOverride;
         final String target; ControlStateCodec.AppliedBasis applied; boolean current = true, rejectApplied; long desiredRevision = 1; String profileRevision, acceptedBasisSha256;
         ControlStateCodec.TicketPolicy policy = new ControlStateCodec.TicketPolicy("A001", List.of(new ControlStateCodec.TicketEpoch("A001", 0, null)));
         Exchange(Executor executor, AtomicLong now, String target) { this.executor = executor; this.now = now; this.target = target; deadline = now.get() + 30000; }
@@ -76,6 +77,7 @@ class ControlledProviderApplicationTest {
         }
         @Override public CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis value) {
             requireCurrent(); applied = value;
+            if (appliedOverride != null) return appliedOverride.get();
             if (rejectApplied) return CompletableFuture.failedFuture(new IOException("Socket replaced before application confirmation"));
             return CompletableFuture.completedFuture(ControlSynchronizationResult.awaitingSource());
         }

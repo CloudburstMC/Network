@@ -25,6 +25,7 @@ final class ControlledProviderApplication {
     private final Supplier<String> ids = ControlClientCoordinator.secureIdentifiers();
     private JsonObject data, extensions = new JsonObject(), lastResponse = new JsonObject(), liveProfile;
     private ControlStateCodec.AppliedBasis liveBasis;
+    private ProviderTransport.HostProfileSnapshot liveSnapshot;
     private String acceptedDigest;
     private Consumer<Throwable> fatal = ignored -> { };
     private boolean installed, demand = true, permanentlyDrained, nativeClosed;
@@ -57,7 +58,7 @@ final class ControlledProviderApplication {
     void request() { demand = true; }
     boolean due() {
         if (closed) return false;
-        if (demand || clock.nowMillis() >= nextHeartbeat) return true;
+        if (demand || clock.nowMillis() >= nextHeartbeat || !snapshotCurrent(liveSnapshot)) return true;
         if (clock.nowMillis() < nextUpdate) return false;
         var current = health.get();
         return !Objects.equals(status.get(), lastStatus) || lastHealth == null
@@ -79,7 +80,7 @@ final class ControlledProviderApplication {
             if (liveBasis != null && acceptedDigest != null && acceptedDigest.equals(ControlStateCodec.appliedBasisDigest(liveBasis))
                     && !due() && exchange.pendingHeartbeat().isEmpty()) {
                 return validateLive(pass).thenComposeAsync(valid -> {
-                    pass.check(); if (valid) return exchange.applied(liveBasis); demand = true; return initialize(pass);
+                    pass.check(); if (valid) return confirmApplied(pass); demand = true; return initialize(pass);
                 }, executor);
             }
             return initialize(pass);
@@ -88,7 +89,7 @@ final class ControlledProviderApplication {
             if (failure == null) return CompletableFuture.completedFuture(result);
             // A failed/late transition cannot leave a just-enabled snapshot admitting new players.
             // The coordinator keeps this I/O lane occupied until cleanup actually settles.
-            liveBasis = null; acceptedDigest = null;
+            liveBasis = null; liveSnapshot = null; acceptedDigest = null;
             return transport.applyState("draining").handle((ignored, cleanupFailure) -> {
                 throw new CompletionException(unwrap(failure));
             }).thenApply(ignored -> result);
@@ -126,7 +127,7 @@ final class ControlledProviderApplication {
                             && Objects.equals(body.get("applicationAck"), applicationAcknowledgement()))
                         return validateLive(pass).thenComposeAsync(valid -> {
                             pass.check(); if (!valid) throw new IllegalStateException("Native application ceased to match its basis");
-                            return pass.exchange.applied(liveBasis);
+                            return confirmApplied(pass);
                         }, executor);
                     return round(pass, count + 1);
                 }, executor);
@@ -140,7 +141,7 @@ final class ControlledProviderApplication {
         // A non-accepting publication still binds the old native incarnation and endpoint set.
         // Only an exact current native profile permits an application-lane retry of its original bytes.
         return CompletableFuture.completedFuture(null).thenComposeAsync(ignored -> {
-            pass.check(); return transport.hostProfile();
+            pass.check(); return captureProfile(pass);
         }, executor).handleAsync((actual, failure) -> {
             pass.check();
             if (failure != null || actual == null || !actual.equals(body.get("hostProfile")))
@@ -170,7 +171,7 @@ final class ControlledProviderApplication {
         CompletionStage<Boolean> validation = liveBasis == null ? CompletableFuture.completedFuture(false) : validateLive(pass);
         return validation.thenComposeAsync(valid -> {
             pass.check();
-            if (!valid) { liveBasis = null; acceptedDigest = null; }
+            if (!valid) { liveBasis = null; liveSnapshot = null; acceptedDigest = null; }
             return heartbeatAfterValidation(pass);
         }, executor);
     }
@@ -178,7 +179,7 @@ final class ControlledProviderApplication {
         pass.check();
         boolean serving = !permanentlyDrained && "serving".equals(string(data, "reportedState"));
         CompletionStage<JsonObject> profile = serving && !data.getAsJsonArray("keys").isEmpty()
-                ? transport.hostProfile() : CompletableFuture.completedFuture(null);
+                ? captureProfile(pass) : CompletableFuture.completedFuture(null);
         return profile.thenApplyAsync(actual -> {
             pass.check(); var body = new JsonObject();
             if (actual != null) {
@@ -191,7 +192,7 @@ final class ControlledProviderApplication {
             if (data.has("keyRequestId")) body.addProperty("keyRequestId", string(data, "keyRequestId"));
             var observation = health.get();
             body.addProperty("healthy", observation.healthy());
-            body.addProperty("acceptingPlayers", observation.acceptingPlayers() && liveBasis != null && liveBasis.state().equals("serving") && !permanentlyDrained);
+            body.addProperty("acceptingPlayers", observation.acceptingPlayers() && liveBasis != null && liveBasis.state().equals("serving") && !permanentlyDrained && hasAdvertisedCandidates(actual));
             body.addProperty("capacity", observation.capacity()); body.addProperty("load", observation.load());
             body.addProperty("protocolVersion", observation.protocolVersion());
             if (observation.build() != null) body.addProperty("build", observation.build());
@@ -241,25 +242,27 @@ final class ControlledProviderApplication {
             for (var old : next.getAsJsonArray("keys")) if (string(old.getAsJsonObject(), "keyId").equals(string(key, "keyId"))) throw new IllegalStateException("Admission key identity reused");
             var installedKey = new JsonObject(); installedKey.addProperty("keyId", string(key, "keyId")); installedKey.addProperty("secret", string(key, "secret")); installedKey.addProperty("notBefore", 0);
             next.getAsJsonArray("keys").add(installedKey); next.remove("keyRequestId"); next.remove("profile"); next.remove("basis");
-            acceptedDigest = null; liveBasis = null; liveProfile = null;
+            acceptedDigest = null; liveBasis = null; liveSnapshot = null; liveProfile = null;
         } else if (next.has("keyRequestId") && response.has("keyRequest")
                 && string(next, "keyRequestId").equals(string(response.getAsJsonObject("keyRequest"), "id"))) {
             next.addProperty("keyRequestId", ids.get()); // Lost one-time material requires a new independent request.
         }
         schedule(response, started); lastResponse = response.deepCopy(); lastResponse.remove("ticketKey");
         if (freshKey || basis == null) {
-            acceptedDigest = null; liveBasis = null;
+            acceptedDigest = null; liveBasis = null; liveSnapshot = null;
             return install(pass, next, false, guard);
         }
         next.addProperty("basis", ControlStateCodec.encodeAppliedBasis(basis));
         next.addProperty("appliedRevision", basis.desiredRevision()); next.addProperty("reportedState", basis.state());
         if (policy == null) next.remove("policy"); else next.addProperty("policy", ControlStateCodec.encodeTicketPolicy(policy));
         if (!basis.state().equals("serving")) {
-            guard.run(); liveBasis = null; acceptedDigest = null;
+            // The owned response now requires no serving profile. Our own close may retire that capture.
+            guard.run(); pass.endpointOwner = null; pass.latestSnapshot = null;
+            liveBasis = null; liveSnapshot = null; acceptedDigest = null;
             if (!nativeClosed && !permanentlyDrained) begin(pass, guard);
             return transport.applyState(basis.state()).thenAcceptAsync(applied -> {
                 guard.run(); if (applied != ProviderTransport.ApplyResult.APPLIED) throw new IllegalStateException("Nonserving state was not applied");
-                save(next); guard.run(); nativeClosed |= basis.state().equals("closed"); liveBasis = basis; liveProfile = null; acceptedDigest = accepted;
+                save(next); guard.run(); nativeClosed |= basis.state().equals("closed"); liveBasis = basis; liveSnapshot = null; liveProfile = null; acceptedDigest = accepted;
             }, executor);
         }
         if (permanentlyDrained) throw new IllegalStateException("Permanently drained native instance cannot acknowledge serving");
@@ -275,30 +278,30 @@ final class ControlledProviderApplication {
         return applyServing(pass, next, basis, accepted, guard);
     }
     private CompletionStage<Void> applyServing(Pass pass, JsonObject next, ControlStateCodec.AppliedBasis basis, String accepted, Runnable guard) {
-        return install(pass, next, true, guard).thenComposeAsync(ignored -> transport.hostProfile(), executor).thenComposeAsync(actual -> {
+        return install(pass, next, true, guard).thenComposeAsync(ignored -> captureProfile(pass), executor).thenComposeAsync(actual -> {
             guard.run();
             return transport.applyState("serving").thenComposeAsync(serving -> {
                 guard.run();
                 if (serving != ProviderTransport.ApplyResult.APPLIED || actual == null || !actual.equals(next.getAsJsonObject("profile"))) {
-                    liveBasis = null; acceptedDigest = null;
+                    liveBasis = null; liveSnapshot = null; acceptedDigest = null;
                     return transport.applyState("draining").thenRunAsync(() -> {
                         guard.run(); var changed = data.deepCopy(); changed.remove("profile"); changed.remove("basis"); save(changed);
                     }, executor);
                 }
-                liveBasis = basis; liveProfile = actual.deepCopy(); acceptedDigest = accepted;
+                liveBasis = basis; liveSnapshot = pass.latestSnapshot; liveProfile = actual.deepCopy(); acceptedDigest = accepted;
                 return CompletableFuture.completedFuture(null);
             }, executor);
         }, executor);
     }
     private CompletionStage<Void> install(Pass pass, JsonObject next, boolean enable, Runnable deliveryGuard) {
         Runnable guard = deliveryGuard == null ? pass::check : deliveryGuard;
-        guard.run(); liveBasis = null; acceptedDigest = null;
+        guard.run(); liveBasis = null; liveSnapshot = null; acceptedDigest = null;
         var update = begin(pass, guard); var keys = nativeKeys(next.getAsJsonArray("keys"));
         return transport.installTicketKeys(update, keys).thenComposeAsync(ignored -> {
             guard.run(); save(next); guard.run(); installed = true;
             if (!enable) return CompletableFuture.completedFuture(null);
             // Profile equality must be checked while staging remains disabled, before commit.
-            return transport.hostProfile().thenComposeAsync(actual -> {
+            return captureProfile(pass).thenComposeAsync(actual -> {
                 guard.run(); if (actual == null || !actual.equals(next.getAsJsonObject("profile"))) return CompletableFuture.completedFuture(null);
                 return transport.commitAdmissionUpdate(update, guard).thenComposeAsync(applied -> {
                     guard.run(); if (applied != ProviderTransport.ApplyResult.APPLIED) throw new IllegalStateException("Admission commit refused");
@@ -316,11 +319,33 @@ final class ControlledProviderApplication {
     }
     private CompletionStage<Boolean> validateLive(Pass pass) {
         pass.check(); var basis = liveBasis; if (basis == null) return CompletableFuture.completedFuture(false);
+        if (basis.state().equals("serving")) {
+            if (liveSnapshot == null || !snapshotCurrent(liveSnapshot)) return CompletableFuture.completedFuture(false);
+            pass.own(liveSnapshot);
+        }
         return transport.applyState(basis.state()).thenComposeAsync(applied -> {
             pass.check(); if (applied != ProviderTransport.ApplyResult.APPLIED) return CompletableFuture.completedFuture(false);
             if (!basis.state().equals("serving")) return CompletableFuture.completedFuture(true);
-            return transport.hostProfile().thenApplyAsync(profile -> { pass.check(); return profile != null && profile.equals(liveProfile); }, executor);
+            return captureProfile(pass).thenApplyAsync(profile -> { pass.check(); return profile.equals(liveProfile); }, executor);
         }, executor);
+    }
+    private CompletionStage<JsonObject> captureProfile(Pass pass) {
+        pass.check();
+        return transport.captureHostProfile().thenApplyAsync(snapshot -> {
+            pass.own(snapshot); return snapshot.profile();
+        }, executor);
+    }
+    private static boolean snapshotCurrent(ProviderTransport.HostProfileSnapshot snapshot) {
+        if (snapshot == null) return true;
+        try { snapshot.requireCurrent(); return true; }
+        catch (IllegalStateException unavailable) { return false; }
+    }
+    private static boolean hasAdvertisedCandidates(JsonObject profile) {
+        return profile == null || !profile.has("version") || !profile.getAsJsonArray("candidates").isEmpty();
+    }
+    private CompletionStage<ControlSynchronizationResult> confirmApplied(Pass pass) {
+        pass.check();
+        return pass.exchange.applied(liveBasis).thenApplyAsync(result -> { pass.check(); return result; }, executor);
     }
     private void schedule(JsonObject response, long started) {
         if (!response.has("checkIn")) { nextHeartbeat = started + 10000; nextUpdate = clock.nowMillis() + 1000; return; }
@@ -350,14 +375,14 @@ final class ControlledProviderApplication {
         return List.copyOf(keys);
     }
     CompletionStage<Void> drain() {
-        invalidate(); permanentlyDrained = true; liveBasis = null; acceptedDigest = null;
+        invalidate(); permanentlyDrained = true; liveBasis = null; liveSnapshot = null; acceptedDigest = null;
         return transport.drain().thenRunAsync(() -> { var next = data.deepCopy(); next.addProperty("reportedState", "draining"); save(next); demand = true; }, executor);
     }
-    void close() { closed = true; invalidate(); liveBasis = null; acceptedDigest = null; }
+    void close() { closed = true; invalidate(); liveBasis = null; liveSnapshot = null; acceptedDigest = null; }
     private void save(JsonObject next) {
         try { storage.saveApplication(next); data = storage.application(); }
         catch (IOException error) {
-            closed = true; invalidate(); liveBasis = null; acceptedDigest = null;
+            closed = true; invalidate(); liveBasis = null; liveSnapshot = null; acceptedDigest = null;
             // Persistence outside synchronization (for example a key request) must also fence admission.
             try { transport.applyState("draining"); } finally { fatal.accept(error); }
             throw new CompletionException(error);
@@ -365,8 +390,18 @@ final class ControlledProviderApplication {
     }
     private final class Pass {
         final ControlClientIo.Synchronization exchange; final long owner;
+        ProviderTransport.HostProfileSnapshot endpointOwner, latestSnapshot;
         Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; }
-        void check() { exchange.requireCurrent(); if (closed || version.get() != owner || clock.nowMillis() >= exchange.deadlineMillis()) throw new IllegalStateException("Application owner expired or changed"); }
+        void own(ProviderTransport.HostProfileSnapshot snapshot) {
+            check(); Objects.requireNonNull(snapshot).requireCurrent();
+            if (endpointOwner == null) endpointOwner = snapshot;
+            latestSnapshot = snapshot; check();
+        }
+        void check() {
+            exchange.requireCurrent();
+            if (closed || version.get() != owner || clock.nowMillis() >= exchange.deadlineMillis()) throw new IllegalStateException("Application owner expired or changed");
+            if (endpointOwner != null) endpointOwner.requireCurrent();
+        }
     }
     private static Throwable unwrap(Throwable failure) {
         while (failure instanceof CompletionException && failure.getCause() != null) failure = failure.getCause();
