@@ -49,7 +49,10 @@ Candidate snapshots own resolved numeric UDP endpoints, derive IPv4/IPv6 family,
 duplicates. Unchanged replacements preserve ownership; A → B → A creates new ownership even
 though A has the same deterministic material revision. `captureHostProfile` returns immutable
 profile bytes and a nonblocking ownership guard, retained through asynchronous publication,
-native staging, durable storage and readiness confirmation. Legacy adapters cannot return
+native staging, durable storage and readiness confirmation. The synchronization carrier retains
+that guard through its own journal save and signing, checks it immediately before actual
+HTTPS/WebSocket sends, and guards response delivery and signed readiness confirmation. A
+failed guard preserves any durable original intent for strong reconciliation. Legacy adapters cannot return
 versioned profiles through the default capture method without providing that guard.
 
 `SRFLX` is representable for later discovery work but is rejected by both v2 open and

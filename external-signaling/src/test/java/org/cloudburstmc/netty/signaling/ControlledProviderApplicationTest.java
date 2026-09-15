@@ -49,6 +49,9 @@ class ControlledProviderApplicationTest {
         @Override public long deadlineMillis() { return deadline; }
         @Override public Optional<byte[]> pendingHeartbeat() { return Optional.ofNullable(retained); }
         @Override public void requireCurrent() { if (!current || now.get() >= deadline) throw new IllegalStateException("expired pass"); }
+        @Override public CompletionStage<ControlOperationResult> heartbeat(byte[] bytes, Runnable guard) {
+            guard.run(); return heartbeat(bytes);
+        }
         @Override public CompletionStage<ControlOperationResult> heartbeat(byte[] bytes) {
             requireCurrent(); var body = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject(); bodies.add(body); originalBodies.add(bytes.clone()); inspectBody.accept(body);
             return CompletableFuture.supplyAsync(() -> {
@@ -74,6 +77,9 @@ class ControlledProviderApplicationTest {
                 retained = null; // A committed result settles the pending original before the next heartbeat.
                 return ControlledApplicationResultFixture.delivered(result.toString(), this::requireCurrent);
             }, executor);
+        }
+        @Override public CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis value, Runnable guard) {
+            guard.run(); return applied(value);
         }
         @Override public CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis value) {
             requireCurrent(); applied = value;

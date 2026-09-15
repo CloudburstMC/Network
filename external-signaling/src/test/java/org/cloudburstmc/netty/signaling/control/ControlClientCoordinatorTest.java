@@ -27,11 +27,13 @@ class ControlClientCoordinatorTest {
     static final String ORIGIN = "https://provider.example";
     static final List<String> CAPS = List.of("addressed", "request-response");
     static final class Time implements ControlClientClock, ControlClientIo.Scheduler {
-        long now = 1_000_000; final List<Timer> timers = new ArrayList<>();
+        long now = 1_000_000; final List<Timer> timers = new ArrayList<>(); Runnable afterSchedule;
         record Timer(long due, Runnable action, boolean[] cancelled) { }
         @Override public long nowMillis() { return now; }
         @Override public Task schedule(Runnable action, long delay) {
-            assertTrue(delay >= 0); boolean[] cancelled = {false}; timers.add(new Timer(now + delay, action, cancelled)); return () -> cancelled[0] = true;
+            assertTrue(delay >= 0); boolean[] cancelled = {false}; timers.add(new Timer(now + delay, action, cancelled));
+            var callback = afterSchedule; afterSchedule = null; if (callback != null) callback.run();
+            return () -> cancelled[0] = true;
         }
         void advance(long millis) {
             now += millis;

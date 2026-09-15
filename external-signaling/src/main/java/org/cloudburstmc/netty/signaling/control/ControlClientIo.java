@@ -36,11 +36,22 @@ public interface ControlClientIo {
         /** Selected writer carrier (HTTPS for an HTTPS writer/oversized body); never replaces transport or bypasses the journal. */
         CompletionStage<ControlOperationResult> heartbeat(byte[] originalBody);
         /**
+         * Retain this nonblocking application guard through journal persistence, signing and each actual send.
+         * Implementations must also guard delivered bodies. They may not downgrade to an unguarded heartbeat.
+         */
+        default CompletionStage<ControlOperationResult> heartbeat(byte[] originalBody, Runnable requireCurrentApplication) {
+            throw new UnsupportedOperationException("Guarded application heartbeat unavailable");
+        }
+        /**
          * Call only after actual native application and durable save. The coordinator compares the exact basis
          * with cached authority; WebSocket confirmation additionally requires a matching signed session.ready.
          * One call per synchronization pass. A source mismatch returns awaitingSource without a database query.
          */
         CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis basis);
+        /** Retain the nonblocking application guard through final signed send and readiness confirmation. */
+        default CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis basis, Runnable requireCurrentApplication) {
+            throw new UnsupportedOperationException("Guarded application confirmation unavailable");
+        }
         /** Recheck immediately before and after asynchronous state/key application. */
         void requireCurrent();
     }

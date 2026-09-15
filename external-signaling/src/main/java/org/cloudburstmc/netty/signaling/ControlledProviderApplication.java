@@ -113,7 +113,7 @@ final class ControlledProviderApplication {
         return request.thenComposeAsync(body -> {
             pass.check(); byte[] bytes = retained.orElseGet(() -> JSON.toJson(body).getBytes(StandardCharsets.UTF_8));
             long started = clock.nowMillis();
-            return pass.exchange.heartbeat(bytes).thenComposeAsync(result -> {
+            return pass.exchange.heartbeat(bytes, pass::check).thenComposeAsync(result -> {
                 pass.check();
                 if (!result.receipt().disposition().equals("committed")) throw new IllegalStateException("Heartbeat did not commit");
                 // Status reconciliation has no body. The old intent is settled; only a new actual heartbeat can deliver state.
@@ -345,7 +345,7 @@ final class ControlledProviderApplication {
     }
     private CompletionStage<ControlSynchronizationResult> confirmApplied(Pass pass) {
         pass.check();
-        return pass.exchange.applied(liveBasis).thenApplyAsync(result -> { pass.check(); return result; }, executor);
+        return pass.exchange.applied(liveBasis, pass::check).thenApplyAsync(result -> { pass.check(); return result; }, executor);
     }
     private void schedule(JsonObject response, long started) {
         if (!response.has("checkIn")) { nextHeartbeat = started + 10000; nextUpdate = clock.nowMillis() + 1000; return; }
