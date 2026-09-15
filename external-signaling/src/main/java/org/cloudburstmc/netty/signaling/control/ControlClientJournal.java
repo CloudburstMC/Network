@@ -75,7 +75,7 @@ public interface ControlClientJournal extends AutoCloseable {
         public ControlAuthorityCodec.Floor value() {
             var response = ControlAuthorityCodec.decodeResponse(originalResponse);
             return new ControlAuthorityCodec.Floor(response.audience(), response.instanceId(), response.generation(), response.source(),
-                    response.writer(), response.capabilities(), response.subjectExpiresAt(), response.permissions());
+                    response.writer(), response.capabilities(), response.subjectExpiresAt(), response.permissions(), response.state());
         }
         public void requireAtLeast(AuthorityFloor previous) {
             if (previous != null) ControlAuthorityCodec.checkFloor(ControlAuthorityCodec.decodeResponse(originalResponse), previous.value());

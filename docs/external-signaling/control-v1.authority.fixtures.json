@@ -88,7 +88,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "machine_test_01",
-          "signature": "3OczaZ7SSPZQMgYqG-j2dO2ky4Zgj-lu7r-KeLBZAOpRTCxaS_qWHus_kK8TZAHoMx6AbGnApdsJ7rwD76CEV2gzkBxh3Ed3mVBBsbS0FuKCBaKRGa8ytxwf0nD1cxmp"
+          "signature": "8FQQyAwWwOvb_iDHZyWvFmXTpT9Btv3Bejqfd0IJriCWtxOrCPr4pmzHFZ68ZawxZXAkJoVoq3agNlprvezG-vaCaRUmeBDQ9vIV8Rv2RTPipq54EKD3zuOfH7BTjw8W"
         }
       },
       "signingText": "[\"nethernet-control-authority-request-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"POST\",\"/control/authority?profile=1\",\"authority_ws_request_0001\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],1800000000000,1800000030000,1800000300000,\"machine_test_01\"]",
@@ -120,7 +120,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "provider_control_test_01",
-          "signature": "GflW2r9i4xctCC5NWsALpHibwTQ1HCehmvn0XyuLbKg5dQm7_zirGgsNrUOkpNgqJZ1MQC3UUrfPvVyNLxmIdptOlCSWvOnOL4Ufty6-RcdRvBVN1iSxhtart3dLAPDL"
+          "signature": "GBcM4pwrv3pVKydWIdxEbI_lJEaIq1nBxxRNLCG1OuLN5qUYm4AkwiAZerSuicmn5AvzAzYEQpo4xqDJSlvR4ovrGNvWRDPe6hT9nFpWkCLQpAvGfeElHsLnrKKqPcwF"
         },
         "requestDigest": "7GyPwUCXHSVgUN4kRLM0CaBQC1ojANP6UXrNvWJ1IOs",
         "sourceId": "control:p17",
@@ -130,11 +130,16 @@
         "sourceExpiresAt": 1800000299000,
         "subjectExpiresAt": 1800000900000,
         "authorityExpiresAt": 1800000180000,
+        "state": {
+          "desiredRevision": 12,
+          "desiredState": "serving",
+          "appliedBasisSha256": null
+        },
         "permissions": [
           "control.status"
         ]
       },
-      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"authority_ws_request_0001\",\"7GyPwUCXHSVgUN4kRLM0CaBQC1ojANP6UXrNvWJ1IOs\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.status\"],1800000000000,1800000030000,\"provider_control_test_01\"]",
+      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"authority_ws_request_0001\",\"7GyPwUCXHSVgUN4kRLM0CaBQC1ojANP6UXrNvWJ1IOs\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.status\"],12,\"serving\",null,1800000000000,1800000030000,\"provider_control_test_01\"]",
       "requestName": "ws-request"
     },
     {
@@ -169,7 +174,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "machine_test_01",
-          "signature": "7RkYlvxR6GWSaibHVXJ-jLGX7fkaNwAcW5UfPHkWHkRc5MidgSEXaWK8f7usoa7MbxMRVrgkvnqO2p2tFBRtoSi_UGYcAs2WK_lg7QAf81fuZtkTDttMsj1hLjzWscvF"
+          "signature": "qPYNtHEUTzcwWz9SLL76s81LIv8lIDpC8wNxIfzDD8zUbNEciMB-PvIpM7-xRfwj5HxMTVLH9x0-ic_tnAYmirj6n2KSRyzeDqQeuuKAClzb4zl6E3Jg87olHXfgsflP"
         }
       },
       "signingText": "[\"nethernet-control-authority-request-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"POST\",\"/control/authority?profile=1\",\"authority_assisted_request_0001\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"addressed\",\"assisted-diagnostic\",\"assisted-gameplay\",\"request-response\"],1800000000000,1800000030000,1800000300000,\"machine_test_01\"]",
@@ -204,7 +209,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "provider_control_test_01",
-          "signature": "mrNoNFuUZ4y993YI9B4oJamvuAGoj3mB2X85166MoeN8gBrDqHbhF9AHawzmgggfWEqH0ugsyaPOEzNO6ovkm-VhH6XKc-5DHyPwL4YPx_VgPSDNY5S3Ymg7LVKDYI7B"
+          "signature": "LcpME-33GIafIO61AiUPCu797ZIuKsUSpJe_NTWdKuAM1dcc793hSekpxCxOahPI84wgoZvKBC1Je8GlTqGVmXV_UfuhmI2Plfd-r4Tev45XyJWtbOHEg5EUdgzqBFiw"
         },
         "requestDigest": "962ME196ubBIYvRqf_X_WlQnUObT5Blemk3hMKWXMdU",
         "sourceId": "control:p17",
@@ -214,12 +219,17 @@
         "sourceExpiresAt": 1800000299000,
         "subjectExpiresAt": 1800000900000,
         "authorityExpiresAt": 1800000180000,
+        "state": {
+          "desiredRevision": 12,
+          "desiredState": "serving",
+          "appliedBasisSha256": "OejmiH8GyzzDrrBRNEufTBX8RUCEchNUBg69oeFGv7I"
+        },
         "permissions": [
           "control.assisted",
           "control.status"
         ]
       },
-      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"authority_assisted_request_0001\",\"962ME196ubBIYvRqf_X_WlQnUObT5Blemk3hMKWXMdU\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"addressed\",\"assisted-diagnostic\",\"assisted-gameplay\",\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.assisted\",\"control.status\"],1800000000000,1800000030000,\"provider_control_test_01\"]",
+      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"authority_assisted_request_0001\",\"962ME196ubBIYvRqf_X_WlQnUObT5Blemk3hMKWXMdU\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"addressed\",\"assisted-diagnostic\",\"assisted-gameplay\",\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.assisted\",\"control.status\"],12,\"serving\",\"OejmiH8GyzzDrrBRNEufTBX8RUCEchNUBg69oeFGv7I\",1800000000000,1800000030000,\"provider_control_test_01\"]",
       "requestName": "assisted-request"
     },
     {
@@ -251,7 +261,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "machine_test_01",
-          "signature": "oQH0l19yOrFH2yf_JjMaYo6j19n-zBYMMW_20ngCZJUPy4_dusMdaook8BStIhCw1hh4ovVkjERUMvGsC1FcL_4dPQVYz8SAECkfCqTfxaxmyLryKDgR2tTi7TgzlJCG"
+          "signature": "51lARHgQyEnVI_xiwn6jLkCivzKmNxpn69BcCET-MJkXtLK4M33hjinPO91enjmNbyMIfcyrV-5yYHB28E2FLV0YMB03bOvRiQM0ZKPOmxMs-685lYyezrPP4LAB7-Zn"
         }
       },
       "signingText": "[\"nethernet-control-authority-request-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"POST\",\"/control/authority?profile=1\",\"authority_https_request_0001\",\"game-server-1\",3,\"https\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],1800000000000,1800000030000,1800000300000,\"machine_test_01\"]",
@@ -283,7 +293,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "provider_control_test_01",
-          "signature": "CfcPtyh0M6ok3Y4jemcChqYkRI_KIIP9izK2g3OCnmzw8gofLcuD0Ub24e6hW5IovJe42w6qH-TQn_rj6NMZS70M2AkrefRsoIu_qMSb7mUCAO8XXfe5SerOKtvbi4fr"
+          "signature": "iPJrbBBs6aLsJii6iWbdXslWYQjSrOIBTdCWQlLiYElhNUQ3leXJ3VKgGKTUbhxSfx0PxOOnO-Z5O65Cp2LM9ZtntzFRhwrg86FSQ0zZZwifG22rhqg_N44pQa8tjmVg"
         },
         "requestDigest": "q5k4HCOFWhjLImbZp5jF53OxHO_-eEAAgAAoFufinDg",
         "sourceId": "control:p17",
@@ -293,11 +303,16 @@
         "sourceExpiresAt": 1800000299000,
         "subjectExpiresAt": 1800000900000,
         "authorityExpiresAt": 1800000180000,
+        "state": {
+          "desiredRevision": 12,
+          "desiredState": "draining",
+          "appliedBasisSha256": "46fAUKXfW24msvo1_iqwNbE3dftzlJfMVgTuBGCVzMo"
+        },
         "permissions": [
           "control.status"
         ]
       },
-      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"authority_https_request_0001\",\"q5k4HCOFWhjLImbZp5jF53OxHO_-eEAAgAAoFufinDg\",\"game-server-1\",3,\"https\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.status\"],1800000000000,1800000030000,\"provider_control_test_01\"]",
+      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://agent.warden.cloud\",\"authority_https_request_0001\",\"q5k4HCOFWhjLImbZp5jF53OxHO_-eEAAgAAoFufinDg\",\"game-server-1\",3,\"https\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.status\"],12,\"draining\",\"46fAUKXfW24msvo1_iqwNbE3dftzlJfMVgTuBGCVzMo\",1800000000000,1800000030000,\"provider_control_test_01\"]",
       "requestName": "https-request"
     },
     {
@@ -329,7 +344,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "machine_test_01",
-          "signature": "VfwW1A5_R7q7szOKRlvBHGlnWaTWBd5CXg6SHg1CrSCOf6ENar2tGuoCbtiJSAApAosmnm-t727Qu6spnHN5NolfdCwg6zGi8_O3IgdBPTjgg7y8Qp8VA99IRtWW2RsN"
+          "signature": "xAPlG5Zg6A2Z--I2DWsXwtYIi0DVxIEwKaQNyNawSBvUYYHQDjwX2dzfFjLNjGGwIPFztpAA7hMXlhqNcCa3COtTZw5U91PKYhFEYW4OHGx_adZBBSNFU1upC8MeyTcE"
         }
       },
       "signingText": "[\"nethernet-control-authority-request-v1\",1,\"nxs-control-es384-v1\",\"https://[2001:db8::1]:8443\",\"POST\",\"/control/authority?profile=1\",\"authority_ipv6_request_0001\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],1800000000000,1800000030000,1800000300000,\"machine_test_01\"]",
@@ -361,7 +376,7 @@
         "authentication": {
           "scheme": "nxs-control-es384-v1",
           "keyId": "provider_control_test_01",
-          "signature": "Cg2X8usyvYuD1icPt0SrutvkWiXuP5eHvpfAlSZlYAZ7tT7CJe3_24Ke53KsUuk9IhMhf65cY8JdONJXSlXBT-aKrvy0Flhbz5CWrtkgQtpiPt6Dx459wEYyujWU_Blo"
+          "signature": "k9Zh4mXeD6QB5Vgxhle3dneszKh01hjHebxTOO9rIcLoxJB3w8iClJeA1FUM8-5QB4GI4j2o170BaanF1WwLSA2qs6nZChb4J46NPcJ51wBxMf72_Dqw_tKRz__gqIp4"
         },
         "requestDigest": "K_a5UOhizzPO2CaGFjgtCPs_XgY_XRAti1jiTlgCx6k",
         "sourceId": "control:p17",
@@ -371,11 +386,16 @@
         "sourceExpiresAt": 1800000299000,
         "subjectExpiresAt": 1800000900000,
         "authorityExpiresAt": 1800000180000,
+        "state": {
+          "desiredRevision": 9007199254740991,
+          "desiredState": "closed",
+          "appliedBasisSha256": "UEYUJhrJm635GNcIE3ZGx8kT9vuSJFVo94USg6xWnI0"
+        },
         "permissions": [
           "control.status"
         ]
       },
-      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://[2001:db8::1]:8443\",\"authority_ipv6_request_0001\",\"K_a5UOhizzPO2CaGFjgtCPs_XgY_XRAti1jiTlgCx6k\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.status\"],1800000000000,1800000030000,\"provider_control_test_01\"]",
+      "signingText": "[\"nethernet-control-authority-response-v1\",1,\"nxs-control-es384-v1\",\"https://[2001:db8::1]:8443\",\"authority_ipv6_request_0001\",\"K_a5UOhizzPO2CaGFjgtCPs_XgY_XRAti1jiTlgCx6k\",\"game-server-1\",3,\"websocket\",7,\"session_control_0001\",\"connection_control_0001\",\"machine_test_01\",2,[\"request-response\"],\"control:p17\",42,1001,1799999999000,1800000299000,1800000900000,1800000180000,[\"control.status\"],9007199254740991,\"closed\",\"UEYUJhrJm635GNcIE3ZGx8kT9vuSJFVo94USg6xWnI0\",1800000000000,1800000030000,\"provider_control_test_01\"]",
       "requestName": "ipv6-request"
     }
   ]

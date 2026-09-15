@@ -216,7 +216,7 @@ class ControlClientCoordinatorTest {
             issuedAuthorityExpires = Math.min(request.authorityNotAfter(), Math.min(source.sourceExpiresAt(), grant.sessionExpiresAt()));
             var response = new ControlAuthorityCodec.Response(1, "authority-response", request.requestId(), ORIGIN, initial.subject().instanceId(), initial.subject().generation(),
                     writer, grant.capabilities(), time.now, Math.min(request.expiresAt(), time.now + 30000), ControlAuthorityCodec.requestDigest(request),
-                    source, grant.sessionExpiresAt(), issuedAuthorityExpires, List.of("control.status"),
+                    source, grant.sessionExpiresAt(), issuedAuthorityExpires, List.of("control.status"), new ControlStateCodec.Summary(1, "serving", null),
                     new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, providerKey.keyId(), ""));
             return ControlAuthorityCodec.encode(ControlAuthorityCodec.sign(response, provider.getPrivate()));
         }

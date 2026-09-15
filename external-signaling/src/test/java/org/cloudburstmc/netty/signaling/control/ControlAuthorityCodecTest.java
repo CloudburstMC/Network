@@ -45,7 +45,7 @@ class ControlAuthorityCodecTest {
     }
     static String changed(String wire, Map<String, ?> values) {
         var o = JsonParser.parseString(wire).getAsJsonObject(); var gson = new Gson();
-        values.forEach((name, value) -> o.add(name, gson.toJsonTree(value))); return o.toString();
+        values.forEach((name, value) -> o.add(name, value instanceof com.google.gson.JsonElement element ? element.deepCopy() : gson.toJsonTree(value))); return o.toString();
     }
     static String signedResponse(ControlAuthorityCodec.Response v, Map<String, ?> changes) throws Exception {
         return ControlAuthorityCodec.encode(ControlAuthorityCodec.sign(ControlAuthorityCodec.decodeResponse(changed(ControlAuthorityCodec.encode(v), changes)), privateKey("providerControl")));
@@ -124,7 +124,7 @@ class ControlAuthorityCodecTest {
         assertEquals(4, ControlAuthorityCodec.verifyResponse(newer, context(changedRequest, floor), k).response().generation());
         var future = new ControlAuthorityCodec.Floor(floor.audience(), floor.instanceId(), floor.generation(),
                 new ControlAuthorityCodec.Source(floor.source().sourceId(), 43, 1002, floor.source().sourceCheckedAt(), floor.source().sourceExpiresAt()),
-                floor.writer(), floor.capabilities(), floor.subjectExpiresAt(), floor.permissions());
+                floor.writer(), floor.capabilities(), floor.subjectExpiresAt(), floor.permissions(), floor.state());
         assertThrows(IllegalArgumentException.class, () -> current.requireFreshDelivery(now(), future));
     }
     @Test
@@ -142,6 +142,44 @@ class ControlAuthorityCodecTest {
         var reducedProof = ControlAuthorityCodec.verifyResponse(reduced, context(ar, null), k);
         var restored = signedResponse(assisted, Map.of("sourceRevision", 43, "sourceWatermark", 1002, "sourceCheckedAt", now(), "sourceExpiresAt", now() + 300000));
         assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.verifyResponse(restored, context(ar, reducedProof.floor()), k));
+    }
+    @Test
+    void stateIsSignedAndFlooredWhileNullBasisStillAllowsControlAuthority() throws Exception {
+        var r = request("ws-request"); var v = response("ws-response"); var k = key("providerControl");
+        var wire = ControlAuthorityCodec.encode(v);
+        var current = ControlAuthorityCodec.verifyResponse(wire, context(r, null), k);
+        assertNull(current.response().state().appliedBasisSha256());
+        assertEquals(v.state(), current.floor().state());
+        for (String state : List.of(
+                "{\"desiredRevision\":13,\"desiredState\":\"serving\",\"appliedBasisSha256\":null}",
+                "{\"desiredRevision\":12,\"desiredState\":\"closed\",\"appliedBasisSha256\":null}",
+                "{\"desiredRevision\":12,\"desiredState\":\"serving\",\"appliedBasisSha256\":\"" + "A".repeat(43) + "\"}")) {
+            var summary = JsonParser.parseString(state);
+            assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.verifyResponse(changed(wire, Map.of("state", summary)), context(r, null), k));
+            var sameRevision = signedResponse(v, Map.of("state", summary, "sourceCheckedAt", now(), "sourceExpiresAt", now() + 300000));
+            assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.verifyResponse(sameRevision, context(r, current.floor()), k));
+            var advanced = ControlAuthorityCodec.verifyResponse(signedResponse(v, Map.of("state", summary, "sourceRevision", 43, "sourceWatermark", 1002)), context(r, current.floor()), k);
+            assertEquals(ControlStateCodec.readSummary(summary.getAsJsonObject()), advanced.response().state());
+            assertEquals(v.authorityExpiresAt(), advanced.response().authorityExpiresAt());
+        }
+        var backwards = JsonParser.parseString("{\"desiredRevision\":11,\"desiredState\":\"serving\",\"appliedBasisSha256\":null}");
+        var regression = signedResponse(v, Map.of("state", backwards, "sourceRevision", 43, "sourceWatermark", 1002));
+        assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.verifyResponse(regression, context(r, current.floor()), k));
+    }
+    @Test
+    void nestedStateShapeAndCanonicalIntegersAreRequired() throws Exception {
+        var wire = ControlAuthorityCodec.encode(response("ws-response"));
+        for (String revision : List.of("12.0", "12e0", "1.5", "-1", "9223372036854775808", "9007199254740992")) {
+            assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.decodeResponse(wire.replace("\"desiredRevision\":12", "\"desiredRevision\":" + revision)));
+        }
+        assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.decodeResponse(wire.replace("\"desiredRevision\":12", "\"desiredRevision\":12,\"desiredRevision\":12")));
+        for (String state : List.of("null", "{}", "{\"desiredRevision\":12,\"desiredState\":\"serving\",\"appliedBasisSha256\":null,\"extra\":true}",
+                "{\"desiredRevision\":12,\"desiredState\":\"unknown\",\"appliedBasisSha256\":null}",
+                "{\"desiredRevision\":12,\"desiredState\":\"serving\",\"appliedBasisSha256\":\"" + "B".repeat(43) + "\"}")) {
+            assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.decodeResponse(changed(wire, Map.of("state", JsonParser.parseString(state)))));
+        }
+        var missing = JsonParser.parseString(wire).getAsJsonObject(); missing.remove("state");
+        assertThrows(IllegalArgumentException.class, () -> ControlAuthorityCodec.decodeResponse(missing.toString()));
     }
     @Test
     void strictBoundsAndImmutableCollections() throws Exception {
