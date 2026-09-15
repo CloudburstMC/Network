@@ -64,6 +64,7 @@ class ControlClientCoordinatorTest {
         final Queue<AuthorityExchange> authorityRequests = new ArrayDeque<>();
         final List<Synchronization> synchronizationExchanges = new ArrayList<>();
         Consumer<ControlFrameCodec.Frame> synchronizationFrames = ignored -> { };
+        final List<ControlFrameDelivery> frameDeliveries = new ArrayList<>();
         final AtomicInteger ids = new AtomicInteger();
         Supplier<String> identifierSupplier = () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet());
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
@@ -114,8 +115,10 @@ class ControlClientCoordinatorTest {
             synchronizationExchanges.add(exchange);
             var result = new CompletableFuture<Void>(); synchronizations.add(result); return result;
         }
-        @Override public void onSynchronizationFrame(ControlFrameCodec.Frame frame) { synchronizationFrames.accept(frame); }
-        @Override public void onVerifiedFrame(ControlFrameCodec.Frame frame) { applicationFrames++; }
+        @Override public void onSynchronizationFrame(ControlFrameDelivery delivery) {
+            frameDeliveries.add(delivery); synchronizationFrames.accept(delivery.frame());
+        }
+        @Override public void onVerifiedFrame(ControlFrameDelivery delivery) { delivery.requireCurrent(); frameDeliveries.add(delivery); applicationFrames++; }
 
         final class FakeLink implements Link {
             final ControlSessionCodec.Request upgrade; final Consumer<String> receiver;
@@ -238,6 +241,43 @@ class ControlClientCoordinatorTest {
                     new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, providerKey.keyId(), ""));
             link.receiver.accept(ControlFrameCodec.encode(ControlFrameCodec.sign(frame, ControlFrameCodec.KeyFamily.PROVIDER_CONTROL, provider.getPrivate())));
         }
+    }
+
+    @Test void queuedApplicationFrameCannotApplyAfterItsOriginalAuthorityChanges() throws Exception {
+        for (String change : List.of("deadline", "signing-key", "close", "socket-loss", "replacement", "resync", "refreshed-authority")) {
+            var h = new Harness(); h.ready();
+            h.incoming(h.links.get(0), h.writer, "connectivity.report", "{}".getBytes(StandardCharsets.UTF_8), 1);
+            assertEquals(1, h.frameDeliveries.size(), change);
+            var delivery = h.frameDeliveries.get(0);
+            assertEquals("connectivity.report", delivery.frame().type());
+            switch (change) {
+                case "deadline" -> h.time.now += 30_001;
+                case "signing-key" -> h.keyAvailable = false;
+                case "close" -> h.client.close();
+                case "socket-loss" -> h.links.get(0).closed.complete(null);
+                case "replacement" -> h.client.replaceTransport("https", List.of("request-response"));
+                case "resync" -> h.client.synchronize();
+                case "refreshed-authority" -> { h.client.synchronize(); h.synchronizedReady(); }
+            }
+            var applied = new AtomicInteger();
+            Runnable queued = () -> { delivery.requireCurrent(); applied.incrementAndGet(); };
+            assertThrows(IllegalStateException.class, queued::run, change);
+            assertThrows(IllegalStateException.class, delivery::frame, change);
+            assertEquals(0, applied.get(), change);
+            h.client.close();
+        }
+    }
+
+    @Test void queuedSynchronizationFrameBelongsOnlyToItsOriginalSynchronization() throws Exception {
+        var h = new Harness(); h.client.start(); h.respondStatus(); h.respondPrepare();
+        h.links.get(0).challenge(); h.respondActivation(); h.respondAuthority();
+        h.incoming(h.links.get(0), h.writer, "session.ready", "{}".getBytes(StandardCharsets.UTF_8), 1);
+        var delivery = h.frameDeliveries.get(0); delivery.requireCurrent();
+        h.synchronizedReady();
+        assertThrows(IllegalStateException.class, delivery::requireCurrent);
+        h.client.synchronize(); h.respondAuthority();
+        assertThrows(IllegalStateException.class, delivery::requireCurrent);
+        h.client.close();
     }
 
     @Test void readinessRequiresVerifiedActivationAndExplicitSynchronizationAndExpiresWithoutPolling() throws Exception {

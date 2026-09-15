@@ -45,8 +45,8 @@ public interface ControlClientIo {
      */
     CompletionStage<Void> synchronize(ControlWriterFence writer, ControlClientJournal.Grant fixedGrant,
                                       ControlAuthorityCodec.Verified authority, Synchronization exchange);
-    /** Only verified session.ready/session.resync/state.desired during active synchronization; never assisted work. */
-    void onSynchronizationFrame(ControlFrameCodec.Frame frame);
-    /** Receives verified active frames after activation; standby traffic never reaches this hook. */
-    void onVerifiedFrame(ControlFrameCodec.Frame frame);
+    /** Only session.ready/session.resync/state.desired during active synchronization; recheck the delivery when queued work runs. */
+    void onSynchronizationFrame(ControlFrameDelivery delivery);
+    /** Verified active frames, guarded through queued application; standby traffic never reaches this hook. */
+    void onVerifiedFrame(ControlFrameDelivery delivery);
 }

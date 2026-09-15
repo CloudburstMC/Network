@@ -545,8 +545,21 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (frame.type().equals("lifecycle.receipt")) acceptResult(ControlResultCodec.decode(new String(frame.payloadBytes(), StandardCharsets.UTF_8)),
                 resultGuard(writer, grant, attempt, frame.expiresAt(), frameKey, pendingSynchronization));
         else if (frame.type().equals("session.reconnect")) replaceTransport(desiredTransport, desiredCapabilities);
-        else if (state == State.SYNCHRONIZING && List.of("session.ready", "session.resync", "state.desired").contains(frame.type())) io.onSynchronizationFrame(frame);
-        else if (state == State.READY) io.onVerifiedFrame(frame);
+        else if (state == State.SYNCHRONIZING && List.of("session.ready", "session.resync", "state.desired").contains(frame.type()))
+            io.onSynchronizationFrame(frameDelivery(frame, frameKey));
+        else if (state == State.READY) io.onVerifiedFrame(frameDelivery(frame, frameKey));
+    }
+
+    private ControlFrameDelivery frameDelivery(ControlFrameCodec.Frame frame, ControlFrameCodec.VerificationKey frameKey) {
+        long generation = attempt, synchronization = synchronizationVersion;
+        var writer = snapshot.writer(); var grant = snapshot.grant(); var proof = authority; var phase = state;
+        return new ControlFrameDelivery(frame, () -> { synchronized (this) {
+            if (generation != attempt || state != phase || synchronization != synchronizationVersion
+                    || authority != proof || !hasAuthority() || !currentKey(frameKey)
+                    || !writer.equals(snapshot.writer()) || !grant.equals(snapshot.grant())
+                    || clock.nowMillis() >= frame.expiresAt())
+                throw new IllegalStateException("Frame delivery writer, authority, phase or deadline changed");
+        } });
     }
 
     private void flushQuarantinedFrame() {
