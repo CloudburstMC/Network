@@ -435,16 +435,16 @@ class ProviderClientTest {
                     && stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt() == 5);
             assertTrue(stub.heartbeats - before <= 2, "Burst must coalesce within heartbeat cadence");
             int beforeAck = stub.acknowledgements;
-            stub.desiredState = "future-state";
-            stub.desiredRevision = 2;
-            assertThrows(ExecutionException.class, () -> client.readiness().get(10, TimeUnit.SECONDS));
-            assertEquals(0, host.admissions, "NXS has no per-join provider state");
-            assertTrue(stub.appliedRevision < 2, "Unknown state cannot be acknowledged");
-            stub.desiredState = "draining";
-            client.readiness().get(10, TimeUnit.SECONDS);
-            assertTrue(host.drains > 0);
-            assertEquals(2, stub.appliedRevision);
-            assertTrue(stub.acknowledgements > beforeAck);
+            for (String desired : List.of("future-state", "draining", "closed")) {
+                stub.desiredState = desired;
+                stub.desiredRevision = 2;
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(0, host.drains, "Provider responses must not control the game listener");
+                assertEquals("serving", stub.lastHeartbeat.get("state").getAsString());
+            }
+            assertEquals(0, host.admissions, "Stateless NXS has no per-join provider work");
+            assertTrue(stub.appliedRevision < 2, "Host must not acknowledge an instruction it did not apply");
+            assertEquals(beforeAck, stub.acknowledgements);
             client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
         }
     }

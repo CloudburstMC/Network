@@ -22,7 +22,6 @@ class ProviderStateStoreTest {
             successor.write(state(2));
             assertThrows(IOException.class, () -> previous.write(state(1)));
             assertThrows(IOException.class, previous::read);
-            assertThrows(IOException.class, previous::readControlled);
             assertDoesNotThrow(previous::close);
             assertEquals(state(2), successor.read());
         }
