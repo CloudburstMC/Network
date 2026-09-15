@@ -14,14 +14,47 @@ Both envelopes have an 8 KiB UTF-8 ceiling. Exact fields, duplicate rejection,
 canonical unsigned integer tokens, canonical origin and base64url, sorted
 capabilities and sorted permissions are mandatory beyond the JSON schema.
 
-A request binds the exact trusted HTTPS POST target, provider, instance,
+A request binds the exact trusted authority POST target, provider, instance,
 generation, current physical writer, selected machine key/revision, negotiated
-capabilities and a fresh identifier with at least 128 random bits. HTTPS can
-carry a request for a WebSocket writer. Its authority request is independently
+capabilities and a fresh identifier with at least 128 random bits. The same
+logical POST target is signed for either carrier. Its authority request is independently
 authenticated from the selected public key in the current cached source; an
 expired *previous* authority proof does not prevent refresh. Responses use the
 separate trusted provider-control verification key family. Never discover trust
 from an incoming key ID or an embedded public key.
+
+The controlled client selects the current writer's carrier. HTTPS writers use
+the configured authority POST endpoint and verify exact response provenance.
+WebSocket writers send the raw `authority-request` text on their owning socket;
+the provider answers with raw `authority-response` text on that same socket.
+These closed `kind` envelopes are unsequenced. They have no frame wrapper,
+HTTP-response metadata, acknowledgement frame, lifecycle intent or new signature
+domain. The initial connection challenge still uses the existing bootstrap
+envelope; ordinary active messages still use sequenced `type` frames.
+There is no automatic WebSocket-to-HTTPS authority fallback.
+
+The source exchange precedes ordinary work on that socket, including native
+application synchronization. A different Worker's cached view cannot certify
+the owning socket's readiness. Source absence produces silence, not a signed
+negative grant or an inferred revocation. The original request's at-most-30-second
+delivery deadline ends the logical wait; bounded source-only backoff retains
+the same socket, writer and durable intent. Each physical socket starts at most
+two authority requests in any rolling 30 seconds. Resynchronization and selected
+machine-key changes do not reset that counter. A newly permitted attempt gets
+a new nonce and lifetime; retransmitting an old attempt never extends it.
+
+Authority text shares the physical transport's bounded send queue, byte budget
+and bounded receive assembly. One pending request retains at most one verified
+reply; an old nonce or old-link reply cannot displace it. A timed-out send keeps
+its actual I/O lane occupied until the underlying send settles. Logical timeout
+does not create another send or abandon application cleanup. The client installs
+a positive proof only after both successful send completion and receipt on the
+exact link, rechecking delivery time, current key catalog, writer, grant and
+latest durable floor at that point. The provider similarly needs a final owned
+source/signer/physical-socket fence at synchronous send, after any queue or crypto
+wait. These bounds do not extend candidate retention, fixed sessions or source
+authority, and a dead or exhausted physical transport can still require bounded
+reconciliation and replacement.
 
 The request digest is SHA-256 of its canonical signing bytes, including delivery
 times, path, capabilities and selected key. Freeze all request bytes/deadlines
@@ -91,7 +124,10 @@ preserves the socket; cache lag must not enter repeated primary status or
 session-CAS recovery. The source service must recheck its captured source and
 signing-key tuple after asynchronous work before releasing a proof.
 
-Validation includes independent Node signatures in both directions, matching
+Validation includes real JDK WebSocket exchanges on IPv4 and IPv6 loopback,
+unchanged signed bytes, shared receive-size rejection, deterministic 90-second
+source silence without writer replacement, actual-send occupancy, late and
+wrong-link replies, plus independent Node signatures in both directions, matching
 Java/TypeScript vectors, wrong route/key/family/request association, delivery
 versus installed lifetime, source/generation/permission rollback, request-cap
 versus raw-expiry separation, retiring keys, immutable ownership and late
