@@ -17,7 +17,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     public record Result(Context context, String keyId, String attemptId, String offerDigestHex, String clientFingerprintHex, long expiresAt,
                          DiagnosticHostPolicy.Endpoint target, boolean success, String reason,
                          InetSocketAddress selectedLocal, InetSocketAddress selectedRemote, UdpSendStats udp,
-                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, long completedAt) { }
+                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, String completionDigestHex, long completedAt) { }
     public record Stats(int active, int pending, int retainedAttempts, int liveNativePeers, long rejected, long droppedResults) { }
     private record Incoming(int channel, byte[] bytes) { }
     private static final class Session {
@@ -252,7 +252,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             Result result = new Result(session.admission.context(), session.key.keyId(), claims.attemptIdHex(), claims.offerDigestHex(), claims.clientFingerprintHex(), claims.expiresAt(), DiagnosticHostPolicy.Endpoint.from(claims), success,
                 failure != null ? "native_cleanup_failed" : session.complete && !success ? "completion_invalidated" : session.reason,
                 session.selectedLocal, session.selectedRemote, session.stats, exchange == null ? 0 : exchange.sentFrames(), exchange == null ? 0 : exchange.sentBytes(),
-                session.receivedFrames.get(), session.receivedBytes.get(), now);
+                session.receivedFrames.get(), session.receivedBytes.get(), success ? exchange.completionDigestHex() : null, now);
             if (!results.offer(result)) droppedResults++;
         }
         completeTermination();

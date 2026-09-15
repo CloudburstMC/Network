@@ -21,9 +21,12 @@ class DiagnosticExchangeTest {
     @Test void bothEndpointsRequireFourIndependentRoundTripsAndPeerCompletion() {
         Pair pair = new Pair();
         assertFalse(pair.host.complete()); assertFalse(pair.prober.complete());
+        assertNull(pair.host.completionDigestHex()); assertNull(pair.prober.completionDigestHex());
         Set<String> nonces = new HashSet<>(); for (Frame frame : pair.queue) nonces.add(HexFormat.of().formatHex(Arrays.copyOfRange(frame.bytes,24,56)));
         assertEquals(4, nonces.size()); pair.drain();
         assertTrue(pair.host.complete()); assertTrue(pair.prober.complete());
+        assertTrue(pair.host.completionDigestHex().matches("[0-9a-f]{64}"));
+        assertEquals(pair.host.completionDigestHex(), pair.prober.completionDigestHex());
         assertEquals(5, pair.host.sentFrames()); assertEquals(280, pair.host.sentBytes());
         assertEquals(6, pair.prober.sentFrames()); assertEquals(497, pair.prober.sentBytes());
     }
@@ -35,6 +38,7 @@ class DiagnosticExchangeTest {
             else pair.deliver(frame);
         }
         assertNotNull(held); assertFalse(pair.prober.complete()); assertFalse(pair.host.complete());
+        assertNull(pair.host.completionDigestHex()); assertNull(pair.prober.completionDigestHex());
         pair.deliver(held); pair.drain(); assertTrue(pair.host.complete()); assertTrue(pair.prober.complete());
     }
     @Test void twoLostUnreliableChallengesUseSameNonceAndBoundedRetries() {
