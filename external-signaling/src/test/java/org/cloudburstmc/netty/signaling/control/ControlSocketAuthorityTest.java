@@ -59,6 +59,32 @@ class ControlSocketAuthorityTest {
         h.synchronizedReady(); assertEquals(bootstrap, h.bootstrapCalls); assertEquals(0, h.httpAuthorityCalls); h.client.close();
     }
 
+    @Test void selectedMachineRotationRetainsPhysicalRateAndUsesOnlyTheNewSelectedKey() throws Exception {
+        var h = activated(false); h.synchronizedReady(); var physical = h.writer; var link = h.links.get(0);
+        h.client.rotateMachineKey(); var candidate = h.journal.value.pending().candidate();
+        var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
+        h.writer = new ControlWriterFence(physical.transport(), physical.sessionEpoch(), physical.sessionId(), physical.connectionId(),
+                candidate.keyId(), physical.machineKeyRevision() + 1);
+        h.incoming(link, physical, "lifecycle.receipt", ControlClientCoordinatorTest.resultWire(receipt).getBytes(StandardCharsets.UTF_8), 1);
+        h.respondStatus(); h.respondStatus();
+        var request = h.authorityRequests.element().request(); assertEquals(candidate.keyId(), request.authentication().keyId());
+        assertEquals(h.writer, request.writer()); h.synchronizedReady(); h.client.synchronize();
+        assertTrue(h.authorityRequests.isEmpty()); assertEquals(2, link.authorityWires.size());
+        assertEquals(1, h.links.size()); assertEquals(physical.sessionEpoch(), h.writer.sessionEpoch());
+        h.time.advance(30000); h.synchronizedReady(); assertEquals(3, link.authorityWires.size());
+        assertEquals(0, h.httpAuthorityCalls); h.client.close();
+    }
+
+    @Test void failedAuthorityHandoffRetainsSocketAndRetriesOnlyItsSourceLane() throws Exception {
+        var h = activated(true); var link = h.links.get(0); var old = h.authorityRequests.remove(); String stale = h.authorityWire(old);
+        link.authoritySend.completeExceptionally(new IllegalStateException("bounded queue rejected handoff"));
+        assertEquals(ControlClientCoordinator.State.AUTHORITY_EXPIRED, h.client.state());
+        assertNull(h.journal.value.authorityFloor()); assertEquals(0, link.closeCalls + link.abortCalls);
+        link.receiver.accept(stale); assertNull(h.journal.value.authorityFloor());
+        link.authoritySend = null; h.time.advance(h.time.nextDelay()); h.synchronizedReady();
+        assertEquals(3, h.bootstrapCalls); assertEquals(1, h.links.size()); assertEquals(0, h.httpAuthorityCalls); h.client.close();
+    }
+
     @Test void responseBeforeSendWaitsAndRechecksDeadlineCatalogAndOwnership() throws Exception {
         for (String change : List.of("none", "deadline", "key", "close", "writer")) {
             var h = activated(true); var link = h.links.get(0); h.respondAuthority();
