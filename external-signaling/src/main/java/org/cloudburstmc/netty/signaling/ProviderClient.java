@@ -42,7 +42,7 @@ public final class ProviderClient implements AutoCloseable {
 
     public record Configuration(URI provider, String profile, String label, String registrationMode,
                                 String authorizationScheme,
-                                String authorizationToken, String region, String pool, Map<String, String> tags) {
+                                String authorizationToken, String region, String pool, Map<String, String> tags, ProviderControlConfiguration control) {
         public Configuration {
             Objects.requireNonNull(provider);
             Objects.requireNonNull(profile);
@@ -53,6 +53,8 @@ public final class ProviderClient implements AutoCloseable {
             }
 
             ProviderCrypto.origin(provider);
+            if (control != null && !ProviderCrypto.origin(provider).equals(control.routes().audience()))
+                throw new IllegalArgumentException("Controlled route audience differs from provider");
             if (region != null && (!region.matches("[A-Za-z0-9_-]{1,32}") || pool == null || !pool.matches(
                     "[A-Za-z0-9_-]{1,64}"))) {
                 throw new IllegalArgumentException("Invalid placement");
@@ -92,6 +94,11 @@ public final class ProviderClient implements AutoCloseable {
                             || e.getValue().codePoints().anyMatch(c -> c < 32 || c == 127))) {
                 throw new IllegalArgumentException("Invalid provider placement tags");
             }
+        }
+
+        public Configuration(URI provider, String profile, String label, String registrationMode, String authorizationScheme,
+                String authorizationToken, String region, String pool, Map<String, String> tags) {
+            this(provider, profile, label, registrationMode, authorizationScheme, authorizationToken, region, pool, tags, null);
         }
 
         public Configuration(URI provider, String profile, String label) {
@@ -195,6 +202,7 @@ public final class ProviderClient implements AutoCloseable {
     private final AtomicBoolean closing = new AtomicBoolean();
     private final CompletableFuture<Void> stopped = new CompletableFuture<>();
     private ScheduledFuture<?> timer;
+    private ControlledProviderRuntime controlled;
 
     public ProviderClient(Configuration config, ProviderStateStore store, ProviderTransport transport,
                           Supplier<ServerStatus> statusSupplier, Supplier<Health> healthSupplier,
@@ -209,7 +217,15 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     public CompletableFuture<JsonObject> start() {
+        if (config.control() != null) return submit(() -> {
+            if (controlled != null) throw new IllegalStateException("Already started");
+            controlled = new ControlledProviderRuntime(config, store, transport, executor, this::currentStatus, healthSupplier, diagnostics);
+            controlled.extensions(heartbeatExtensions);
+            return controlled.start();
+        }).thenCompose(CompletionStage::toCompletableFuture);
         return submit(() -> {
+            if (ControlledProviderState.hasMarker(store.readControlled()) || java.nio.file.Files.exists(store.directory().resolve("control-session/provider-state.json")))
+                throw new IOException("Controlled host cannot fall back to the legacy lifecycle");
             if (started) {
                 throw new IllegalStateException("Already started");
             }
@@ -611,6 +627,7 @@ public final class ProviderClient implements AutoCloseable {
         if (!closing.get() && refreshQueued.compareAndSet(false, true)) {
             executor.execute(() -> {
                 refreshQueued.set(false);
+                if (!closed && config.control() != null) { if (controlled != null) controlled.request(); return; }
                 if (!closed && started) {
                     try {
                         if (statusChanged()) {
@@ -858,6 +875,7 @@ public final class ProviderClient implements AutoCloseable {
      * Refresh through the ordinary heartbeat and return its readiness observation.
      */
     public CompletableFuture<JsonObject> readiness() {
+        if (config.control() != null) return controlTask(ControlledProviderRuntime::refresh);
         return submit(() -> {
             heartbeat();
             return lastHeartbeat.deepCopy();
@@ -874,7 +892,8 @@ public final class ProviderClient implements AutoCloseable {
         JsonObject validated = ProtocolExtensions.copy(document);
         return submit(() -> {
             heartbeatExtensions = validated;
-            if (started) heartbeat();
+            if (config.control() != null) { if (controlled != null) controlled.extensions(validated); }
+            else if (started) heartbeat();
             return null;
         });
     }
@@ -889,6 +908,7 @@ public final class ProviderClient implements AutoCloseable {
      */
     public CompletableFuture<JsonObject> extensionRequest(String namespace, String operation, String method,
                                                           JsonObject body) {
+        if (config.control() != null) return CompletableFuture.failedFuture(new UnsupportedOperationException("Controlled extension operation is not configured"));
         return submit(() -> {
             if (!Set.of("GET", "POST").contains(method)) {
                 throw new IOException("Unsupported extension method");
@@ -914,6 +934,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     public CompletableFuture<Void> deregister() {
+        if (config.control() != null) return controlTask(ControlledProviderRuntime::deregister);
         return submit(() -> {
             signed("deregister", "POST", new JsonObject());
             transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
@@ -923,6 +944,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     public CompletableFuture<JsonObject> rotateTicketKey() {
+        if (config.control() != null) return controlTask(ControlledProviderRuntime::rotateTicketKey);
         return submit(() -> {
             installKeys();
             if (state.getAsJsonArray("ticketKeys").size() >= 8) {
@@ -936,6 +958,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     public CompletableFuture<JsonObject> rotateMachineKey() {
+        if (config.control() != null) return controlTask(ControlledProviderRuntime::rotateMachineKey);
         return submit(() -> {
             KeyPair replacement = ProviderCrypto.generate();
             JsonObject jwk = ProviderCrypto.publicJwk(replacement.getPublic());
@@ -964,6 +987,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     public CompletableFuture<Void> drain() {
+        if (config.control() != null) return controlTask(ControlledProviderRuntime::drain);
         return submit(() -> {
             drainAndReport();
             return null;
@@ -1135,8 +1159,27 @@ public final class ProviderClient implements AutoCloseable {
         return f;
     }
 
+    private interface ControlAction<T> { CompletionStage<T> apply(ControlledProviderRuntime runtime) throws Exception; }
+
+    private <T> CompletableFuture<T> controlTask(ControlAction<T> action) {
+        return submit(() -> { if (controlled == null) throw new IllegalStateException("Controlled client is not started"); return action.apply(controlled); })
+                .thenCompose(CompletionStage::toCompletableFuture);
+    }
+
     public CompletionStage<Void> stop() {
         if (!closing.compareAndSet(false, true)) {
+            return stopped;
+        }
+        if (config.control() != null) {
+            executor.execute(() -> {
+                CompletionStage<Void> closing = controlled == null ? transport.close() : controlled.stop();
+                closing.whenComplete((ignored, failure) -> {
+                    closed = true;
+                    try { store.close(); } catch (IOException error) { diagnostics.accept("provider_state_close_failed"); }
+                    executor.shutdown();
+                    if (failure == null) stopped.complete(null); else stopped.completeExceptionally(failure);
+                });
+            });
             return stopped;
         }
         executor.execute(() -> {

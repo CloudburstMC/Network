@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.signaling.provider;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.signaling.ProviderClient;
+import org.cloudburstmc.netty.signaling.ProviderControlConfiguration;
 import org.cloudburstmc.netty.signaling.ProviderCrypto;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.util.nethernet.SecretValue;
@@ -37,8 +38,13 @@ import java.util.regex.Pattern;
 public record ProviderRuntimeConfiguration(
     URI origin, Path stateDirectory, String authorizationToken, String region, String pool,
     Map<String, String> tags, String label, String bindAddress, int udpPort,
-    List<InetSocketAddress> advertisedEndpoints, int capacity
+    List<InetSocketAddress> advertisedEndpoints, int capacity, ProviderControlConfiguration control
 ) {
+    public ProviderRuntimeConfiguration(URI origin, Path stateDirectory, String authorizationToken, String region, String pool,
+            Map<String, String> tags, String label, String bindAddress, int udpPort, List<InetSocketAddress> advertisedEndpoints, int capacity) {
+        this(origin, stateDirectory, authorizationToken, region, pool, tags, label, bindAddress, udpPort, advertisedEndpoints, capacity, null);
+    }
+
     /**
      * @param settings   What the host has configured for the provider
      * @param directory  The host's data directory, which the state directory and any token file are
@@ -88,7 +94,7 @@ public record ProviderRuntimeConfiguration(
         }
 
         var runtime = new ProviderRuntimeConfiguration(origin, state, token, region, pool, Map.copyOf(tags), label,
-            bind, port, List.copyOf(endpoints), capacity);
+            bind, port, List.copyOf(endpoints), capacity, settings.control());
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
@@ -109,7 +115,10 @@ public record ProviderRuntimeConfiguration(
      *                           anything else is a registration tag
      */
     public record Settings(String endpoint, String token, List<String> advertiseAddresses,
-                           Map<String, String> data) {
+                           Map<String, String> data, ProviderControlConfiguration control) {
+        public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data) {
+            this(endpoint, token, advertiseAddresses, data, null);
+        }
     }
 
     public String profile() {
@@ -119,7 +128,7 @@ public record ProviderRuntimeConfiguration(
     public ProviderClient.Configuration clientConfiguration() {
         return new ProviderClient.Configuration(origin, profile(), label, ProviderClient.AUTOMATIC,
             authorizationToken == null ? ProviderClient.ANONYMOUS_PROOF_OF_WORK : ProviderClient.BEARER_TOKEN,
-            authorizationToken, region, pool, tags);
+            authorizationToken, region, pool, tags, control);
     }
 
     private static InetSocketAddress endpoint(String value) throws IOException {

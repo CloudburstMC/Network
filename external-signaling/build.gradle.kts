@@ -125,3 +125,18 @@ tasks.register("writeSignedDiagnosticBrowserLaunch") {
             "org.cloudburstmc.netty.signaling.admission.SignedDiagnosticBrowserHost").joinToString("\n", postfix = "\n"))
     }
 }
+
+// Separate actual ProviderClient/native smoke; private fixture config and localhost trust only.
+tasks.register("writeControlledProviderLocalSmokeLaunch") {
+    dependsOn(tasks.testClasses)
+    dependsOn(sourceSets.test.get().runtimeClasspath)
+    val launcher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
+    val output = layout.buildDirectory.file("controlled-provider-local-smoke-argv.txt")
+    outputs.file(output)
+    outputs.upToDateWhen { false }
+    doLast {
+        output.get().asFile.writeText(listOf(launcher.get().executablePath.asFile.absolutePath, "-cp",
+            sourceSets.test.get().runtimeClasspath.asPath,
+            "org.cloudburstmc.netty.signaling.ControlledProviderLocalSmokeClient").joinToString("\n", postfix = "\n"))
+    }
+}

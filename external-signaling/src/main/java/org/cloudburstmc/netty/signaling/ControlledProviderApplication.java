@@ -1,0 +1,293 @@
+package org.cloudburstmc.netty.signaling;
+
+import com.google.gson.*;
+import org.cloudburstmc.netty.signaling.control.*;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.*;
+
+/** Actual native application on one serialized executor. Every asynchronous continuation retains its original owner. */
+final class ControlledProviderApplication {
+    private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
+    private final ControlledProviderState storage;
+    private final ProviderTransport transport;
+    private final Executor executor;
+    private final ControlClientClock clock;
+    private final Supplier<ServerStatus> status;
+    private final Supplier<ProviderClient.Health> health;
+    private final String region;
+    private final AtomicLong version = new AtomicLong();
+    private final Supplier<String> ids = ControlClientCoordinator.secureIdentifiers();
+    private JsonObject data, extensions = new JsonObject(), lastResponse = new JsonObject(), liveProfile;
+    private ControlStateCodec.AppliedBasis liveBasis;
+    private String acceptedDigest;
+    private boolean installed, demand = true, closed, permanentlyDrained, nativeClosed;
+    private long nextHeartbeat, nextUpdate, snapshotClock;
+    private ServerStatus lastStatus;
+    private ProviderClient.Health lastHealth;
+
+    ControlledProviderApplication(ControlledProviderState storage, ProviderTransport transport, Executor executor,
+            ControlClientClock clock, Supplier<ServerStatus> status, Supplier<ProviderClient.Health> health, String region) {
+        this.storage = storage; this.transport = transport; this.executor = executor; this.clock = clock;
+        this.status = status; this.health = health; this.region = region; this.data = storage.application();
+    }
+    void invalidate() { version.incrementAndGet(); }
+    void request() { demand = true; }
+    boolean due() {
+        if (closed) return false;
+        if (demand || clock.nowMillis() >= nextHeartbeat) return true;
+        if (clock.nowMillis() < nextUpdate) return false;
+        var current = health.get();
+        return !Objects.equals(status.get(), lastStatus) || lastHealth == null
+                || current.healthy() != lastHealth.healthy() || current.acceptingPlayers() != lastHealth.acceptingPlayers()
+                || current.capacity() != lastHealth.capacity() || !Objects.equals(current.protocolVersion(), lastHealth.protocolVersion())
+                || !Objects.equals(current.build(), lastHealth.build()) || !Objects.equals(players(current), players(lastHealth));
+    }
+    private static Integer players(ProviderClient.Health health) { return health.playerCount() == null ? null : health.playerCount().connectedPlayers(); }
+    void extensions(JsonObject value) { extensions = value.deepCopy(); demand = true; }
+    JsonObject lastResponse() { return lastResponse.deepCopy(); }
+    void requestKey() throws IOException {
+        if (data.getAsJsonArray("keys").size() >= 8 || data.has("keyRequestId")) throw new IOException("Admission key request is already pending or epochs are full");
+        var next = data.deepCopy(); next.addProperty("keyRequestId", ids.get()); save(next); demand = true;
+    }
+    CompletionStage<ControlSynchronizationResult> synchronize(ControlClientIo.Synchronization exchange) {
+        long owner = version.get();
+        return CompletableFuture.completedFuture(null).thenComposeAsync(ignored -> {
+            var pass = new Pass(exchange, owner); pass.check();
+            if (liveBasis != null && acceptedDigest != null && acceptedDigest.equals(ControlStateCodec.appliedBasisDigest(liveBasis))
+                    && !due() && exchange.pendingHeartbeat().isEmpty()) {
+                return validateLive(pass).thenComposeAsync(valid -> {
+                    pass.check(); if (valid) return exchange.applied(liveBasis); demand = true; return initialize(pass);
+                }, executor);
+            }
+            return initialize(pass);
+        }, executor);
+    }
+    private CompletionStage<ControlSynchronizationResult> initialize(Pass pass) {
+        pass.check(); demand = false;
+        if (data.getAsJsonArray("keys").isEmpty() && !data.has("keyRequestId")) {
+            var next = data.deepCopy(); next.addProperty("keyRequestId", ids.get()); save(next);
+        }
+        CompletionStage<Void> start = installed || nativeClosed ? CompletableFuture.completedFuture(null) : install(pass, data.deepCopy(), false, null);
+        return start.thenComposeAsync(ignored -> round(pass, 0), executor);
+    }
+    private CompletionStage<ControlSynchronizationResult> round(Pass pass, int count) {
+        pass.check();
+        if (count >= 6) return CompletableFuture.failedFuture(new IOException("Controlled application exchange bound reached"));
+        var retained = pass.exchange.pendingHeartbeat();
+        CompletionStage<JsonObject> request = retained.isPresent()
+                ? CompletableFuture.completedFuture(ControlledProviderJson.parse(new String(retained.get(), StandardCharsets.UTF_8), 65536))
+                : heartbeat(pass);
+        return request.thenComposeAsync(body -> {
+            pass.check(); byte[] bytes = retained.orElseGet(() -> JSON.toJson(body).getBytes(StandardCharsets.UTF_8));
+            long started = clock.nowMillis();
+            return pass.exchange.heartbeat(bytes).thenComposeAsync(result -> {
+                pass.check();
+                if (!result.receipt().disposition().equals("committed")) throw new IllegalStateException("Heartbeat did not commit");
+                // Status reconciliation has no body. The old intent is settled; only a new actual heartbeat can deliver state.
+                if (!result.hasBody()) return round(pass, count + 1);
+                result.requireCurrent(); var response = ControlledProviderJson.parse(new String(result.bodyBytes().orElseThrow(), StandardCharsets.UTF_8), ControlResultCodec.MAX_BODY_BYTES);
+                return apply(pass, result, body, response, started).thenComposeAsync(ignored -> {
+                    pass.check();
+                    if (liveBasis != null && Objects.equals(acceptedDigest, ControlStateCodec.appliedBasisDigest(liveBasis)))
+                        return validateLive(pass).thenComposeAsync(valid -> {
+                            pass.check(); if (!valid) throw new IllegalStateException("Native application ceased to match its basis");
+                            return pass.exchange.applied(liveBasis);
+                        }, executor);
+                    return round(pass, count + 1);
+                }, executor);
+            }, executor);
+        }, executor);
+    }
+    private CompletionStage<JsonObject> heartbeat(Pass pass) {
+        pass.check();
+        boolean serving = !permanentlyDrained && "serving".equals(string(data, "reportedState"));
+        CompletionStage<JsonObject> profile = serving && !data.getAsJsonArray("keys").isEmpty()
+                ? transport.hostProfile() : CompletableFuture.completedFuture(null);
+        return profile.thenApplyAsync(actual -> {
+            pass.check(); var body = new JsonObject();
+            if (actual != null) {
+                actual = ControlledProviderJson.parse(actual.toString(), 16384);
+                if (!data.has("profile") || !actual.equals(data.getAsJsonObject("profile"))) body.add("hostProfile", actual);
+                else if (data.has("profileRevision")) body.addProperty("hostProfileRevision", string(data, "profileRevision"));
+            }
+            var installedIds = new JsonArray(); for (var key : data.getAsJsonArray("keys")) installedIds.add(key.getAsJsonObject().get("keyId"));
+            if (!installedIds.isEmpty()) body.add("installedKeyIds", installedIds);
+            if (data.has("keyRequestId")) body.addProperty("keyRequestId", string(data, "keyRequestId"));
+            var observation = health.get();
+            body.addProperty("healthy", observation.healthy());
+            body.addProperty("acceptingPlayers", observation.acceptingPlayers() && liveBasis != null && liveBasis.state().equals("serving") && !permanentlyDrained);
+            body.addProperty("capacity", observation.capacity()); body.addProperty("load", observation.load());
+            body.addProperty("protocolVersion", observation.protocolVersion());
+            if (observation.build() != null) body.addProperty("build", observation.build());
+            if (observation.playerCount() != null) body.add("playerCount", JSON.toJsonTree(observation.playerCount()));
+            if (region != null) body.addProperty("region", region);
+            if (!extensions.isEmpty()) body.add("extensions", extensions.deepCopy());
+            snapshotClock = Math.max(clock.nowMillis(), snapshotClock + 1); body.addProperty("clockUnixMillis", snapshotClock);
+            body.addProperty("checkInVersion", 1); body.addProperty("state", string(data, "reportedState"));
+            body.addProperty("appliedStateRevision", number(data, "appliedRevision"));
+            body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
+            var listing = status.get(); if (listing != null) body.add("serverStatus", JSON.toJsonTree(listing));
+            if (liveBasis != null && !body.has("hostProfile")) {
+                var ack = new JsonObject(); ack.addProperty("version", 1);
+                ack.add("basis", JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(liveBasis)));
+                ack.add("ticketPolicy", data.has("policy") ? JsonParser.parseString(string(data, "policy")) : JsonNull.INSTANCE);
+                body.add("applicationAck", ack);
+            }
+            lastHealth = observation; lastStatus = listing; return body;
+        }, executor);
+    }
+    private CompletionStage<Void> apply(Pass pass, ControlOperationResult result, JsonObject body, JsonObject response, long started) {
+        Runnable guard = () -> { pass.check(); result.requireCurrent(); }; guard.run();
+        ProtocolExtensions.validate(response);
+        var app = response.getAsJsonObject("application");
+        if (app == null || !app.keySet().equals(Set.of("version", "expectedBasis", "expectedTicketPolicy", "acceptedBasisSha256"))
+                || number(app, "version") != 1) throw ControlledProviderJson.invalid();
+        var basis = app.get("expectedBasis").isJsonNull() ? null : ControlStateCodec.decodeAppliedBasis(app.get("expectedBasis").toString());
+        var policy = app.get("expectedTicketPolicy").isJsonNull() ? null : ControlStateCodec.decodeTicketPolicy(app.get("expectedTicketPolicy").toString());
+        String accepted = app.get("acceptedBasisSha256").isJsonNull() ? null : string(app, "acceptedBasisSha256");
+        var desired = response.getAsJsonObject("desiredState"); long revision = number(desired, "revision"); String target = string(desired, "state");
+        if (revision < number(data, "appliedRevision") || !Set.of("serving", "draining", "closed").contains(target)
+                || basis != null && (basis.generation() != storage.initial.subject().generation() || basis.desiredRevision() != revision || !basis.state().equals(target))
+                || basis != null && basis.state().equals("serving") && (policy == null || !ControlStateCodec.ticketPolicyDigest(policy).equals(basis.ticketPolicySha256()))
+                || basis != null && !basis.state().equals("serving") && policy != null || basis == null && policy != null)
+            throw ControlledProviderJson.invalid();
+        var next = data.deepCopy(); boolean freshKey = response.has("ticketKey");
+        if (body.has("hostProfile")) {
+            String profileRevision = string(response, "hostProfileRevision");
+            next.add("profile", body.get("hostProfile").deepCopy()); next.addProperty("profileRevision", profileRevision);
+        }
+        if (freshKey) {
+            var key = response.getAsJsonObject("ticketKey"); var request = response.getAsJsonObject("keyRequest");
+            if (!body.has("keyRequestId") || request == null || !string(body, "keyRequestId").equals(string(request, "id"))
+                    || !string(key, "keyId").equals(string(request, "keyId"))) throw new IllegalStateException("Unbound admission key response");
+            if (!next.has("keyRequestId") || !string(next, "keyRequestId").equals(string(body, "keyRequestId"))) throw new IllegalStateException("Stale admission key response");
+            for (var old : next.getAsJsonArray("keys")) if (string(old.getAsJsonObject(), "keyId").equals(string(key, "keyId"))) throw new IllegalStateException("Admission key identity reused");
+            var installedKey = new JsonObject(); installedKey.addProperty("keyId", string(key, "keyId")); installedKey.addProperty("secret", string(key, "secret")); installedKey.addProperty("notBefore", 0);
+            next.getAsJsonArray("keys").add(installedKey); next.remove("keyRequestId"); next.remove("profile"); next.remove("basis");
+            acceptedDigest = null; liveBasis = null; liveProfile = null;
+        } else if (next.has("keyRequestId") && response.has("keyRequest")
+                && string(next, "keyRequestId").equals(string(response.getAsJsonObject("keyRequest"), "id"))) {
+            next.addProperty("keyRequestId", ids.get()); // Lost one-time material requires a new independent request.
+        }
+        schedule(response, started); lastResponse = response.deepCopy(); lastResponse.remove("ticketKey");
+        if (freshKey || basis == null) {
+            acceptedDigest = null; liveBasis = null;
+            return install(pass, next, false, guard);
+        }
+        next.addProperty("basis", ControlStateCodec.encodeAppliedBasis(basis));
+        next.addProperty("appliedRevision", basis.desiredRevision()); next.addProperty("reportedState", basis.state());
+        if (policy == null) next.remove("policy"); else next.addProperty("policy", ControlStateCodec.encodeTicketPolicy(policy));
+        if (!basis.state().equals("serving")) {
+            guard.run(); liveBasis = null; acceptedDigest = null;
+            if (!nativeClosed && !permanentlyDrained) begin(pass, guard);
+            return transport.applyState(basis.state()).thenAcceptAsync(applied -> {
+                guard.run(); if (applied != ProviderTransport.ApplyResult.APPLIED) throw new IllegalStateException("Nonserving state was not applied");
+                save(next); guard.run(); nativeClosed |= basis.state().equals("closed"); liveBasis = basis; liveProfile = null; acceptedDigest = accepted;
+            }, executor);
+        }
+        if (permanentlyDrained) throw new IllegalStateException("Permanently drained native instance cannot acknowledge serving");
+        next.add("keys", exactPolicyKeys(next.getAsJsonArray("keys"), policy));
+        if (!next.has("profileRevision") || !basis.hostProfileRevision().equals(string(next, "profileRevision"))) throw new IllegalStateException("Expected profile was not delivered");
+        if (basis.equals(liveBasis) && Objects.equals(next.get("policy"), data.get("policy"))) {
+            return validateLive(pass).thenComposeAsync(valid -> {
+                guard.run();
+                if (valid) { save(next); guard.run(); acceptedDigest = accepted; return CompletableFuture.completedFuture(null); }
+                return applyServing(pass, next, basis, accepted, guard);
+            }, executor);
+        }
+        return applyServing(pass, next, basis, accepted, guard);
+    }
+    private CompletionStage<Void> applyServing(Pass pass, JsonObject next, ControlStateCodec.AppliedBasis basis, String accepted, Runnable guard) {
+        return install(pass, next, true, guard).thenComposeAsync(ignored -> transport.hostProfile(), executor).thenComposeAsync(actual -> {
+            guard.run();
+            return transport.applyState("serving").thenAcceptAsync(serving -> {
+                guard.run();
+                if (serving != ProviderTransport.ApplyResult.APPLIED || actual == null || !actual.equals(next.getAsJsonObject("profile"))) {
+                    liveBasis = null; acceptedDigest = null; var changed = data.deepCopy(); changed.remove("profile"); changed.remove("basis"); save(changed); return;
+                }
+                liveBasis = basis; liveProfile = actual.deepCopy(); acceptedDigest = accepted;
+            }, executor);
+        }, executor);
+    }
+    private CompletionStage<Void> install(Pass pass, JsonObject next, boolean enable, Runnable deliveryGuard) {
+        Runnable guard = deliveryGuard == null ? pass::check : deliveryGuard;
+        guard.run(); liveBasis = null; acceptedDigest = null;
+        var update = begin(pass, guard); var keys = nativeKeys(next.getAsJsonArray("keys"));
+        return transport.installTicketKeys(update, keys).thenComposeAsync(ignored -> {
+            guard.run(); save(next); guard.run(); installed = true;
+            if (!enable) return CompletableFuture.completedFuture(null);
+            // Profile equality must be checked while staging remains disabled, before commit.
+            return transport.hostProfile().thenComposeAsync(actual -> {
+                guard.run(); if (actual == null || !actual.equals(next.getAsJsonObject("profile"))) return CompletableFuture.completedFuture(null);
+                return transport.commitAdmissionUpdate(update, guard).thenComposeAsync(applied -> {
+                    guard.run(); if (applied != ProviderTransport.ApplyResult.APPLIED) throw new IllegalStateException("Admission commit refused");
+                    return transport.applyState("serving").thenAcceptAsync(serving -> {
+                        guard.run(); if (serving != ProviderTransport.ApplyResult.APPLIED) throw new IllegalStateException("Native listener is not serving");
+                    }, executor);
+                }, executor);
+            }, executor);
+        }, executor);
+    }
+    private ProviderTransport.AdmissionUpdate begin(Pass pass, Runnable guard) {
+        guard.run(); long captured = System.nanoTime(); long remaining = pass.exchange.deadlineMillis() - clock.nowMillis();
+        if (remaining <= 0 || remaining > 300000) throw new IllegalStateException("Application deadline unavailable");
+        var update = transport.beginAdmissionUpdate(captured + TimeUnit.MILLISECONDS.toNanos(remaining)); guard.run(); return update;
+    }
+    private CompletionStage<Boolean> validateLive(Pass pass) {
+        pass.check(); var basis = liveBasis; if (basis == null) return CompletableFuture.completedFuture(false);
+        return transport.applyState(basis.state()).thenComposeAsync(applied -> {
+            pass.check(); if (applied != ProviderTransport.ApplyResult.APPLIED) return CompletableFuture.completedFuture(false);
+            if (!basis.state().equals("serving")) return CompletableFuture.completedFuture(true);
+            return transport.hostProfile().thenApplyAsync(profile -> { pass.check(); return profile != null && profile.equals(liveProfile); }, executor);
+        }, executor);
+    }
+    private void schedule(JsonObject response, long started) {
+        if (!response.has("checkIn")) { nextHeartbeat = started + 10000; nextUpdate = clock.nowMillis() + 1000; return; }
+        try {
+            var schedule = CheckInSchedule.parse(response); long received = Instant.parse(string(response, "receivedAt")).toEpochMilli();
+            nextHeartbeat = Math.min(started + schedule.afterMillis(), Math.max(received, clock.nowMillis())
+                    + Math.max(0, number(response.getAsJsonObject("checkIn"), "nextCheckInAt") - Math.max(received, clock.nowMillis())));
+            nextUpdate = clock.nowMillis() + schedule.minUpdateIntervalMillis();
+        } catch (IOException failure) { throw new CompletionException(failure); }
+    }
+    static JsonArray exactPolicyKeys(JsonArray available, ControlStateCodec.TicketPolicy policy) {
+        var byId = new HashMap<String, JsonObject>(); for (var item : available) byId.put(string(item.getAsJsonObject(), "keyId"), item.getAsJsonObject());
+        var ordered = new ArrayList<ControlStateCodec.TicketEpoch>(policy.epochs());
+        ordered.sort(Comparator.comparing(epoch -> epoch.keyId().equals(policy.activeKeyId())));
+        var result = new JsonArray();
+        for (var epoch : ordered) {
+            var material = byId.get(epoch.keyId()); if (material == null) throw new IllegalStateException("Required admission epoch material missing");
+            if (material.has("acceptUntil") && (epoch.acceptUntil() == null || epoch.acceptUntil() > number(material, "acceptUntil"))) throw new IllegalStateException("Admission epoch cutoff extended");
+            var item = material.deepCopy(); item.addProperty("notBefore", epoch.notBefore());
+            if (epoch.acceptUntil() == null) item.remove("acceptUntil"); else item.addProperty("acceptUntil", epoch.acceptUntil()); result.add(item);
+        }
+        return result;
+    }
+    static List<ProviderTransport.TicketKey> nativeKeys(JsonArray array) {
+        var keys = new ArrayList<ProviderTransport.TicketKey>();
+        for (var item : array) { var key = item.getAsJsonObject(); keys.add(new ProviderTransport.TicketKey(string(key, "keyId"), string(key, "secret"), number(key, "notBefore"), key.has("acceptUntil") ? number(key, "acceptUntil") : Long.MAX_VALUE)); }
+        return List.copyOf(keys);
+    }
+    CompletionStage<Void> drain() {
+        invalidate(); permanentlyDrained = true; liveBasis = null; acceptedDigest = null;
+        return transport.drain().thenRunAsync(() -> { var next = data.deepCopy(); next.addProperty("reportedState", "draining"); save(next); demand = true; }, executor);
+    }
+    void close() { closed = true; invalidate(); liveBasis = null; acceptedDigest = null; }
+    private void save(JsonObject next) {
+        try { storage.saveApplication(next); data = storage.application(); }
+        catch (IOException error) { closed = true; invalidate(); throw new CompletionException(error); }
+    }
+    private final class Pass {
+        final ControlClientIo.Synchronization exchange; final long owner;
+        Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; }
+        void check() { exchange.requireCurrent(); if (closed || version.get() != owner || clock.nowMillis() >= exchange.deadlineMillis()) throw new IllegalStateException("Application owner expired or changed"); }
+    }
+    private static String string(JsonObject value, String name) { return ControlledProviderJson.string(value, name); }
+    private static long number(JsonObject value, String name) { return ControlledProviderJson.number(value, name); }
+}

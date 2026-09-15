@@ -53,15 +53,16 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             ProviderEndpoint endpoint = ProviderEndpoint.resolve(udpBind, external, localDevelopment);
             var identity = ProviderHostIdentity.ensure(Path.of(directory));
 
-            return NativeProviderTransport.open(bootstrap, endpoint.bind(), () -> {
-                                try {
-                                    return ProviderEndpoint.resolve(udpBind, external, localDevelopment).advertised();
-                                } catch (java.io.IOException unavailable) {
-                                    throw new UncheckedIOException(unavailable);
-                                }
-                            },
-                            identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
-                    .thenApply(transport -> new Host(transport, transport.channel(), endpoint.warnings()));
+            String mode = options.get("controlMode");
+            if (mode != null && !mode.equals("nethernet-control-v1")) throw new IllegalArgumentException("Unknown provider control mode");
+            java.util.function.Supplier<List<InetSocketAddress>> candidates = () -> {
+                try { return ProviderEndpoint.resolve(udpBind, external, localDevelopment).advertised(); }
+                catch (java.io.IOException unavailable) { throw new UncheckedIOException(unavailable); }
+            };
+            var opened = mode == null
+                    ? NativeProviderTransport.open(bootstrap, endpoint.bind(), candidates, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                    : NativeProviderTransport.openControlled(bootstrap, endpoint.bind(), candidates, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults());
+            return opened.thenApply(transport -> new Host(transport, transport.channel(), endpoint.warnings()));
         } catch (Exception invalid) {
             return CompletableFuture.failedFuture(invalid);
         }

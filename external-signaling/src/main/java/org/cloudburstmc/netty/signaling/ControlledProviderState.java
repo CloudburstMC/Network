@@ -1,0 +1,148 @@
+package org.cloudburstmc.netty.signaling;
+
+import com.google.gson.*;
+import org.cloudburstmc.netty.signaling.control.*;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.*;
+
+/** Application storage under the existing root lock; the child journal alone owns machine credentials and sequence. */
+final class ControlledProviderState implements AutoCloseable {
+    static final String MODE = "nethernet-control-v1";
+    interface Save { void write(JsonObject value) throws IOException; }
+    private final Save save;
+    private JsonObject root;
+    final FileControlClientJournal journal;
+    final ControlClientJournal.Snapshot initial;
+
+    static boolean hasMarker(JsonObject root) { return root.has("controlMode"); }
+    static ControlledProviderState open(ProviderStateStore store, ProviderControlConfiguration config) throws IOException {
+        return open(store, config, store::write);
+    }
+    static ControlledProviderState open(ProviderStateStore store, ProviderControlConfiguration config, Save save) throws IOException {
+        var root = store.readControlled();
+        if (!root.has("registration") || !config.routes().audience().equals(ControlledProviderJson.string(root, "provider")))
+            throw new IOException("Controlled mode requires an existing reconciled registration");
+        var registration = root.getAsJsonObject("registration");
+        long generation = ControlledProviderJson.number(registration, "leaseGeneration");
+        var subject = new ControlClientJournal.Subject(config.routes().audience(), ControlledProviderJson.string(registration, "instanceId"), generation);
+        if (!subject.audience().equals(ControlledProviderJson.string(registration, "provider"))
+                || !"nxs-admission-v1".equals(ControlledProviderJson.string(registration, "profile"))) throw new IOException("Controlled registration binding mismatch");
+        var directory = store.directory().resolve("control-session");
+        if (hasMarker(root) && (!MODE.equals(ControlledProviderJson.string(root, "controlMode"))
+                || !Files.exists(directory.resolve("provider-state.json")))) throw new IOException("Controlled journal missing or unsupported");
+        var journal = new FileControlClientJournal(directory);
+        try {
+            var retained = journal.read().orElse(null);
+            if (hasMarker(root)) {
+                if (retained == null || !retained.subject().equals(subject) || root.has("privateKey") || root.has("sequence")
+                        || registration.has("keyId")) throw new IOException("Conflicting controlled identity storage");
+                validate(root.getAsJsonObject("controlApplication"), generation);
+                return new ControlledProviderState(save, root, journal, retained);
+            }
+            if (config.migrationSeed().generation() != generation || root.has("pendingPrivateKey") || root.has("pendingPublicKeyJwk"))
+                throw new IOException("Legacy state needs explicit reconciliation before controlled migration");
+            var jwk = root.getAsJsonObject("publicKeyJwk");
+            // Normalize only public fields; Credential verifies that this material matches the stored private key.
+            var publicJwk = new JsonObject();
+            for (String name : List.of("crv", "kty", "x", "y")) publicJwk.addProperty(name, ControlledProviderJson.string(jwk, name));
+            var key = new ControlClientJournal.Credential(ControlledProviderJson.string(registration, "keyId"), publicJwk.toString(),
+                    ControlledProviderJson.string(root, "privateKey"));
+            long sequence = ControlledProviderJson.number(root, "sequence");
+            var imported = new ControlClientJournal.Snapshot(subject, key, new ControlWriterFence("legacy-http", 0, "", "", key.keyId(), 1), sequence, null, null, null);
+            if (retained != null && !retained.equals(imported)) throw new IOException("Interrupted control migration is not a pristine matching import");
+            if (retained == null) journal.commit(imported);
+            var application = new JsonObject(); application.addProperty("version", 1); application.addProperty("generation", generation);
+            application.addProperty("appliedRevision", config.migrationSeed().appliedRevision());
+            application.addProperty("reportedState", config.migrationSeed().reportedState());
+            var keys = new JsonArray();
+            if (root.has("ticketKeys")) for (var value : root.getAsJsonArray("ticketKeys")) {
+                var previous = value.getAsJsonObject(); var item = new JsonObject();
+                item.addProperty("keyId", ControlledProviderJson.string(previous, "keyId"));
+                item.addProperty("secret", ControlledProviderJson.string(previous, "secret")); item.addProperty("notBefore", 0);
+                if (previous.has("notBefore") && ControlledProviderJson.number(previous, "notBefore") != 0) throw new IOException("Unsupported legacy epoch start");
+                if (previous.has("retireAfter") && !previous.get("retireAfter").getAsString().equals(Long.toString(Long.MAX_VALUE)))
+                    item.addProperty("acceptUntil", ControlledProviderJson.number(previous, "retireAfter"));
+                keys.add(item);
+            }
+            application.add("keys", keys);
+            if (root.has("keyRequestId")) application.addProperty("keyRequestId", ControlledProviderJson.string(root, "keyRequestId"));
+            validate(application, generation);
+            root = root.deepCopy(); root.addProperty("controlMode", MODE); root.add("controlApplication", application);
+            for (String name : List.of("privateKey", "publicKeyJwk", "pendingPrivateKey", "pendingPublicKeyJwk", "sequence", "ticketKeys", "keyRequestId")) root.remove(name);
+            root.getAsJsonObject("registration").remove("keyId"); root.getAsJsonObject("registration").remove("ticketKey");
+            save.write(root.deepCopy());
+            return new ControlledProviderState(save, root, journal, imported);
+        } catch (Throwable failure) {
+            journal.close(); if (failure instanceof IOException error) throw error;
+            throw new IOException("Controlled state could not be opened", failure);
+        }
+    }
+    private ControlledProviderState(Save save, JsonObject root, FileControlClientJournal journal, ControlClientJournal.Snapshot initial) {
+        this.save = save; this.root = root.deepCopy(); this.journal = journal; this.initial = initial;
+    }
+    JsonObject application() { return root.getAsJsonObject("controlApplication").deepCopy(); }
+    void saveApplication(JsonObject application) throws IOException {
+        application = ControlledProviderJson.parse(application.toString(), 32768); validate(application, initial.subject().generation());
+        var old = root.getAsJsonObject("controlApplication");
+        if (ControlledProviderJson.number(application, "appliedRevision") < ControlledProviderJson.number(old, "appliedRevision")) throw new IOException("Application revision rollback");
+        var next = root.deepCopy(); next.add("controlApplication", application); writeRoot(next);
+    }
+    void appendEvents(List<JsonObject> events) throws IOException {
+        if (events.size() > 100) throw new IOException("Native outcome batch exceeds limit");
+        if (events.isEmpty()) return;
+        var next = root.deepCopy(); var pending = next.has("pendingEvents") ? next.getAsJsonArray("pendingEvents") : new JsonArray();
+        if (pending.size() + events.size() > 1000) throw new IOException("Controlled outcome queue exceeds limit");
+        for (var event : events) {
+            var safe = new JsonObject();
+            for (String name : List.of("stage", "ticketId", "occurredAt", "reason")) if (event.has(name)) safe.addProperty(name, ControlledProviderJson.string(event, name));
+            if (!safe.has("stage") || !safe.has("ticketId") || !safe.has("occurredAt")) throw new IOException("Invalid native outcome");
+            pending.add(ControlledProviderJson.parse(safe.toString(), 1024));
+        }
+        next.add("pendingEvents", pending); writeRoot(next);
+    }
+    JsonObject outcomeBatch() {
+        var body = new JsonObject(); var batch = new JsonArray();
+        if (root.has("pendingEvents")) {
+            var pending = root.getAsJsonArray("pendingEvents");
+            for (int index = 0; index < Math.min(100, pending.size()); index++) batch.add(pending.get(index).deepCopy());
+        }
+        body.add("events", batch); return body;
+    }
+    void acknowledgeOutcomes(JsonObject body) throws IOException {
+        var expected = body.getAsJsonArray("events"); var next = root.deepCopy(); var pending = next.getAsJsonArray("pendingEvents");
+        if (pending == null || pending.size() < expected.size()) throw new IOException("Controlled outcome queue changed");
+        for (int index = 0; index < expected.size(); index++) if (!pending.get(index).equals(expected.get(index))) throw new IOException("Controlled outcome batch changed");
+        for (int index = 0; index < expected.size(); index++) pending.remove(0); writeRoot(next);
+    }
+    private void writeRoot(JsonObject next) throws IOException {
+        if (next.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 262144) throw new IOException("Controlled storage exceeds limit");
+        save.write(next.deepCopy()); root = next;
+    }
+    JsonObject registration(ControlClientJournal.Snapshot current) {
+        if (!initial.subject().equals(current.subject())) throw new IllegalStateException("Controlled subject changed");
+        var value = root.getAsJsonObject("registration").deepCopy(); value.addProperty("keyId", current.currentKey().keyId()); return value;
+    }
+    private static void validate(JsonObject application, long generation) {
+        if (application == null || ControlledProviderJson.number(application, "version") != 1
+                || ControlledProviderJson.number(application, "generation") != generation
+                || !Set.of("serving", "draining", "closed").contains(ControlledProviderJson.string(application, "reportedState"))) throw ControlledProviderJson.invalid();
+        ControlledProviderJson.number(application, "appliedRevision");
+        var keys = application.getAsJsonArray("keys"); if (keys == null || keys.size() > 8) throw ControlledProviderJson.invalid();
+        var names = new HashSet<String>();
+        for (var value : keys) {
+            var item = value.getAsJsonObject(); String id = ControlledProviderJson.string(item, "keyId"), secret = ControlledProviderJson.string(item, "secret");
+            if (!id.matches("[A-Z0-9]{4}") || !names.add(id) || secret.length() < 32 || secret.length() > 256 || secret.indexOf(0) >= 0
+                    || ControlledProviderJson.number(item, "notBefore") != 0) throw ControlledProviderJson.invalid();
+            if (item.has("acceptUntil")) ControlledProviderJson.number(item, "acceptUntil");
+        }
+        if (application.has("keyRequestId") && !ControlledProviderJson.string(application, "keyRequestId").matches("[A-Za-z0-9_-]{16,128}")) throw ControlledProviderJson.invalid();
+        if (application.has("basis")) {
+            var basis = ControlStateCodec.decodeAppliedBasis(ControlledProviderJson.string(application, "basis"));
+            if (basis.generation() != generation) throw ControlledProviderJson.invalid();
+        }
+        if (application.has("policy")) ControlStateCodec.decodeTicketPolicy(ControlledProviderJson.string(application, "policy"));
+    }
+    @Override public void close() throws IOException { journal.close(); }
+}
