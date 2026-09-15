@@ -11,6 +11,54 @@ import static org.junit.jupiter.api.Assertions.*;
 class AdmissionGateTest extends AdmissionFixture {
     final InetSocketAddress other = new InetSocketAddress("127.0.0.1", 23451);
 
+    @Test
+    void controlledGateIsClosedBeforeFirstReservationAndOnlyCurrentTokenEnables() {
+        var gate = new AdmissionGate(new AdmissionGate.Limits(2, 2, 1, 1000), validator(), false);
+        assertFalse(gate.isServing());
+        assertNull(gate.reserve(request(), now, 0));
+        assertEquals(0, gate.stats().claims());
+        var old = gate.stage();
+        var current = gate.stage();
+        assertFalse(gate.enable(old));
+        assertTrue(gate.enable(current));
+        assertFalse(gate.enable(current), "single-use token");
+        assertNotNull(gate.reserve(request(), now, 0));
+    }
+
+    @Test
+    void stagingCancelsUnreadyReservationsWithoutReleasingCapacityUntilTeardown() throws Exception {
+        var gate = new AdmissionGate(new AdmissionGate.Limits(2, 4, 2, 1000), validator());
+        var established = gate.reserve(request(), now, 0);
+        assertTrue(gate.ready(established));
+        var pending = gate.reserve(new AdmissionRequest(anotherToken(), remote, other), now, 0);
+        assertNotNull(pending);
+        var stage = gate.stage();
+        assertNotNull(gate.admission(established), "existing admitted identity survives");
+        assertNull(gate.admission(pending));
+        assertFalse(gate.ready(pending));
+        assertEquals(2, gate.stats().sessions(), "native work still owns its reservation until finish");
+        assertTrue(gate.enable(stage));
+        assertFalse(gate.ready(pending), "reenabling cannot revive old pending work");
+        assertTrue(gate.finish(pending));
+        assertEquals(1, gate.stats().sessions());
+        assertTrue(gate.finish(established));
+    }
+
+    @Test
+    void drainCloseAndOtherGateTokensCannotEnable() {
+        var gate = gate();
+        var another = gate();
+        assertFalse(gate.enable(another.stage()));
+        var staged = gate.stage();
+        gate.drain();
+        assertFalse(gate.enable(staged));
+        assertThrows(IllegalStateException.class, gate::stage);
+        var otherStage = another.stage();
+        another.close();
+        assertFalse(another.enable(otherStage));
+        assertThrows(IllegalStateException.class, another::stage);
+    }
+
     AdmissionGate gate() {
         return new AdmissionGate(new AdmissionGate.Limits(2, 2, 1, 1000), validator());
     }

@@ -27,13 +27,38 @@ import java.util.concurrent.CompletionStage;
 public interface ProviderTransport {
     enum ApplyResult {PENDING, APPLIED, REJECTED}
 
+    /** Opaque, single-use handle owned by one live transport instance. */
+    interface AdmissionUpdate { }
+
+    /** Controlled transports start with new player admission disabled, before binding. */
+    default boolean supportsAdmissionStaging() { return false; }
+
+    /** Disable new player admission synchronously; existing peers survive. */
+    default AdmissionUpdate beginAdmissionUpdate() {
+        throw new UnsupportedOperationException("Admission staging unavailable");
+    }
+
+    /** Install one owned key snapshot while this update remains disabled. */
+    default CompletionStage<Void> installTicketKeys(AdmissionUpdate update, List<TicketKey> keys) {
+        throw new UnsupportedOperationException("Admission staging unavailable");
+    }
+
+    /**
+     * Call only after durable application storage completes. The nonblocking guard must throw if current
+     * authority/application ownership is lost. It runs synchronously before the final native-instance fence;
+     * it must not wait for other threads. Failure consumes this update and leaves admission disabled.
+     */
+    default CompletionStage<ApplyResult> commitAdmissionUpdate(AdmissionUpdate update, Runnable requireCurrent) {
+        throw new UnsupportedOperationException("Admission staging unavailable");
+    }
+
     /**
      * Existing PublishHostProfileRequest, exported from actual bound native metadata.
      */
     CompletionStage<JsonObject> hostProfile();
 
     /**
-     * Atomic snapshot; completion means every supplied key is persisted and usable.
+     * Atomic native snapshot installation. Durable application storage remains the caller's responsibility.
      */
     CompletionStage<Void> installTicketKeys(List<TicketKey> keys);
 
