@@ -433,6 +433,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         gate.drain();
     }
 
+    public boolean isServing() {
+        return isActive() && gate.isServing();
+    }
+
     @Override
     protected void doClose() {
         open = false;
