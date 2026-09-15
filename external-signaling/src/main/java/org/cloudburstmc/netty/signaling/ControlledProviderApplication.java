@@ -30,6 +30,7 @@ final class ControlledProviderApplication {
     private Consumer<Throwable> fatal = ignored -> { };
     private Consumer<String> diagnosticNotice = ignored -> { };
     private final ControlledDiagnosticApplication diagnostics;
+    private final ControlledDiagnosticCompletions completions;
     private boolean installed, demand = true, permanentlyDrained, nativeClosed;
     private volatile boolean closed;
     private long nextHeartbeat, nextUpdate, snapshotClock;
@@ -58,6 +59,7 @@ final class ControlledProviderApplication {
         issuedOwnership = data.has("nativeOwnership");
         maintainedCandidates = data.has("candidatePublication");
         if (maintainedCandidates && !transport.supportsMaintainedCandidateLeases()) throw new IllegalArgumentException("Maintained candidate transport required");
+        completions = new ControlledDiagnosticCompletions(storage, transport, code -> diagnosticNotice.accept(code));
         diagnostics = new ControlledDiagnosticApplication(storage, transport, executor, clock, () -> data, this::save,
                 () -> nativeOwnerCurrent() ? liveNativeOwner : null, () -> demand = true, code -> diagnosticNotice.accept(code));
     }
@@ -76,6 +78,20 @@ final class ControlledProviderApplication {
             try { storage.acknowledgeOutcomes(intent, owned, receipt); }
             catch (IOException failure) { throw new CompletionException(failure); }
         }, executor);
+    }
+    boolean requiresDiagnosticAcknowledgement(ControlLifecycleCodec.Intent intent, byte[] original) {
+        return completions.requiresAcknowledgement(intent, original);
+    }
+    CompletionStage<Void> acknowledgeDiagnosticCompletions(ControlLifecycleCodec.Intent intent, byte[] original,
+            ControlLifecycleCodec.Receipt receipt, byte[] response) {
+        byte[] owned = original.clone(), delivered = response == null ? null : response.clone();
+        return CompletableFuture.runAsync(() -> {
+            try { completions.acknowledge(intent, owned, receipt, delivered); }
+            catch (IOException failure) { throw new CompletionException(failure); }
+        }, executor);
+    }
+    void maintainDiagnosticCompletions() {
+        if (!closed && completions.maintain(clock.nowMillis())) demand = true;
     }
     CompletionStage<Void> acknowledgeNativeOwner(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
         byte[] owned = originalBody.clone();
@@ -334,6 +350,7 @@ final class ControlledProviderApplication {
                 var prepared = diagnostics.prepare(); pass.diagnosticClaim = prepared.claim();
                 body.add("diagnosticAdmission", JsonParser.parseString(ControlDiagnosticHeartbeatCodec.encodeRequest(prepared.request())));
             }
+            completions.appendToHeartbeat(body);
             lastHealth = observation; lastStatus = listing; return body;
         }, executor);
     }

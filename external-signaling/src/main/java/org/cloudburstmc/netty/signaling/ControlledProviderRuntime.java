@@ -75,6 +75,7 @@ final class ControlledProviderRuntime {
     private void tick() {
         if (stopped.get()) return;
         application.maintainCandidates();
+        application.maintainDiagnosticCompletions();
         var state = coordinator.state();
         if (state == ControlClientCoordinator.State.DEREGISTERED || state == ControlClientCoordinator.State.UNRESOLVED || state == ControlClientCoordinator.State.CLOSED) {
             if (awaitingReady != null) { awaitingReady.completeExceptionally(new IllegalStateException("Controlled lifecycle requires reconciliation: " + state)); awaitingReady = null; }

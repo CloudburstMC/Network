@@ -380,6 +380,9 @@ public final class NativeProviderTransport implements ProviderTransport {
         try { installed.requireCurrent(); return Optional.of(installed.handle); }
         catch (IllegalStateException unavailable) { return Optional.empty(); }
     }
+    @Override public synchronized java.util.OptionalLong diagnosticDroppedResultCount() {
+        return diagnosticGate == null ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(diagnosticGate.stats().droppedResults());
+    }
     @Override public synchronized List<DiagnosticAdmission.Completion> pollDiagnosticResults(int maximum) {
         if (maximum < 0 || maximum > 32) throw new IllegalArgumentException("Diagnostic result poll bound");
         if (diagnosticGate == null) return List.of();

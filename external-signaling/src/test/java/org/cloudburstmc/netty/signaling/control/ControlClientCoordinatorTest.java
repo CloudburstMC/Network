@@ -74,6 +74,9 @@ class ControlClientCoordinatorTest {
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls, httpAuthorityCalls;
         boolean cancelNativeClaims; URI cancelRoute;
         java.util.function.BiPredicate<ControlLifecycleCodec.Intent, byte[]> nativeCancellationPolicy;
+        boolean durableDiagnostics;
+        final List<CompletableFuture<Void>> diagnosticAcks = new ArrayList<>();
+        final List<byte[]> diagnosticResponses = new ArrayList<>();
         boolean durableOwners; final List<CompletableFuture<Void>> ownerAcks = new ArrayList<>();
         boolean durableOutcomes; final List<CompletableFuture<Void>> outcomeAcks = new ArrayList<>();
         Runnable onOutcomeAck;
@@ -129,6 +132,14 @@ class ControlClientCoordinatorTest {
             assertEquals(receipt, journal.value.pending().receipt());
             assertEquals(intent, journal.value.pending().intent()); assertArrayEquals(body, journal.value.pending().bodyBytes());
             var work = new CompletableFuture<Void>(); ownerAcks.add(work); return work;
+        }
+        @Override public boolean requiresDiagnosticCompletionAcknowledgement(ControlLifecycleCodec.Intent intent, byte[] body) { return durableDiagnostics && intent.operation().equals("heartbeat"); }
+        @Override public CompletionStage<Void> acknowledgeCommittedDiagnosticCompletions(ControlLifecycleCodec.Intent intent, byte[] body,
+                ControlLifecycleCodec.Receipt receipt, byte[] response) {
+            assertEquals(receipt, journal.value.pending().receipt());
+            assertEquals(intent, journal.value.pending().intent()); assertArrayEquals(body, journal.value.pending().bodyBytes());
+            diagnosticResponses.add(response == null ? null : response.clone());
+            var work = new CompletableFuture<Void>(); diagnosticAcks.add(work); return work;
         }
         @Override public boolean requiresOutcomeAcknowledgement() { return durableOutcomes; }
         @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt) {

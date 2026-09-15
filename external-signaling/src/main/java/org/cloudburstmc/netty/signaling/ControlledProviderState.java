@@ -86,6 +86,7 @@ final class ControlledProviderState implements AutoCloseable {
         }
     }
     private ControlledProviderState(Save save, JsonObject root, FileControlClientJournal journal, ControlClientJournal.Snapshot initial) {
+        ControlledDiagnosticCompletionQueue.validate(root, initial.subject());
         this.save = save; this.root = root.deepCopy(); this.journal = journal; this.initial = initial;
     }
     private static JsonObject ownerMode(Save save, JsonObject root, ProviderControlConfiguration config) throws IOException {
@@ -148,11 +149,29 @@ final class ControlledProviderState implements AutoCloseable {
         if (marker.equals(application.get("nativeOwnerReceipt"))) return;
         application.add("nativeOwnerReceipt", marker); saveApplication(application);
     }
+    JsonObject diagnosticCompletionState() { return ControlledDiagnosticCompletionQueue.queue(root); }
+    int diagnosticCompletionCapacity() {
+        int count = diagnosticCompletionState().getAsJsonArray("pending").size();
+        int bytes = root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        return Math.max(0, Math.min(4, Math.min(32 - count, (262144 - 32768 - bytes) / 4097)));
+    }
+    ControlDiagnosticCompletionCodec.Batch diagnosticCompletionBatch() { return ControlledDiagnosticCompletionQueue.batch(root); }
+    void appendDiagnosticCompletions(List<ControlDiagnosticCompletionCodec.Completion> completions, long invalid, long dropped) throws IOException {
+        if (!application().has("diagnosticAdmission")) throw new IOException("Diagnostic reporting not opted in");
+        var next = ControlledDiagnosticCompletionQueue.append(root, initial.subject(), completions, invalid, dropped);
+        if (!next.equals(root)) writeRoot(next);
+    }
+    void acknowledgeDiagnosticCompletions(ControlLifecycleCodec.Intent intent, byte[] original, ControlLifecycleCodec.Receipt receipt,
+                                          ControlDiagnosticCompletionReceiptCodec.Batch receipts) throws IOException {
+        if (!application().has("diagnosticAdmission")) throw new IOException("Diagnostic reporting not opted in");
+        var next = ControlledDiagnosticCompletionQueue.settle(root, initial.subject(), intent, original, receipt, receipts);
+        if (!next.equals(root)) writeRoot(next);
+    }
     int eventCapacity() {
         int count = root.has("pendingEvents") ? root.getAsJsonArray("pendingEvents").size() : 0;
         int bytes = root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         // Each sanitized event is at most 1024 bytes plus its comma. Reserve metadata growth/ACK marker space.
-        int reserve = root.getAsJsonObject("controlApplication").has("diagnosticAdmission") ? 32768 : 4096;
+        int reserve = root.getAsJsonObject("controlApplication").has("diagnosticAdmission") ? 176128 : 4096;
         return Math.max(0, Math.min(256, Math.min(1000 - count, (262144 - reserve - bytes) / 1025)));
     }
     void appendEvents(List<JsonObject> events) throws IOException {
