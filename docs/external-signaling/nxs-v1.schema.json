@@ -619,7 +619,9 @@
         "acceptingPlayers": {
           "type": "boolean",
           "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
-        }
+        },
+        "candidateLeases": false,
+        "nativeOwnerClaim": false
       },
       "allOf": [
         {
@@ -1064,6 +1066,12 @@
         "acceptingPlayers": {
           "type": "boolean",
           "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
+        },
+        "candidateLeases": {
+          "$ref": "#/$defs/controlCandidateLeases"
+        },
+        "nativeOwnerClaim": {
+          "$ref": "#/$defs/controlNativeOwnerClaim"
         }
       },
       "allOf": [
@@ -1138,9 +1146,348 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "nativeOwnerClaim"
+            ]
+          },
+          "then": {
+            "required": [
+              "hostProfile"
+            ],
+            "not": {
+              "required": [
+                "candidateLeases"
+              ]
+            },
+            "properties": {
+              "hostProfile": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/controlledHostProfile"
+                  },
+                  {
+                    "properties": {
+                      "candidates": {
+                        "items": {
+                          "properties": {
+                            "type": {
+                              "const": "host"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "candidateLeases"
+            ]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": [
+                  "hostProfile"
+                ],
+                "properties": {
+                  "hostProfile": {
+                    "$ref": "#/$defs/controlledHostProfile"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "hostProfileRevision"
+                ],
+                "not": {
+                  "required": [
+                    "hostProfile"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "hostProfile"
+            ],
+            "properties": {
+              "hostProfile": {
+                "required": [
+                  "version",
+                  "candidates"
+                ],
+                "properties": {
+                  "version": {
+                    "const": 2
+                  },
+                  "candidates": {
+                    "contains": {
+                      "required": [
+                        "type"
+                      ],
+                      "properties": {
+                        "type": {
+                          "const": "srflx"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "candidateLeases"
+            ]
+          }
         }
       ],
       "description": "Heartbeat body carried by the authenticated controlled lifecycle. Complete versioned profiles and revision references are mutually exclusive. A stored empty profile also requires acceptingPlayers:false on later reference-only or omitted-profile reports."
+    },
+    "controlCandidateDigest": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "controlCandidateObservation": {
+      "type": "object",
+      "required": [
+        "family",
+        "addressHex",
+        "port",
+        "monitorEpoch",
+        "mappingRevision",
+        "observationSequence",
+        "observedAt",
+        "expiresAt"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            "ipv4",
+            "ipv6"
+          ]
+        },
+        "addressHex": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "monitorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "mappingRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "observationSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "observedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "description": "Fixed original native-success observation; runtime additionally requires 0 < expiresAt-observedAt <=270000 and original receive/commit time bounds. Numeric shape is not public-scope or ownership approval.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "ipv4"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "addressHex": {
+                "pattern": "^[0-9a-f]{8}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "addressHex": {
+                "pattern": "^(?!00000000000000000000ffff)[0-9a-f]{32}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlCandidateLeases": {
+      "type": "object",
+      "required": [
+        "version",
+        "profileSha256",
+        "nativeOwnerEpoch",
+        "nativeIncarnation",
+        "observations"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "profileSha256": {
+          "$ref": "#/$defs/controlCandidateDigest"
+        },
+        "nativeOwnerEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "nativeIncarnation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "observations": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/controlCandidateObservation"
+          },
+          "uniqueItems": true,
+          "allOf": [
+            {
+              "if": {
+                "minItems": 2
+              },
+              "then": {
+                "prefixItems": [
+                  {
+                    "properties": {
+                      "family": {
+                        "const": "ipv4"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "family": {
+                        "const": "ipv6"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Complete current-profile reflexive association bound to issued native ownership. Every public srflx candidate must have exactly one matching observation. Omission from the controlled heartbeat means unchanged; no lease grants reachability or diagnostic installation authority."
+    },
+    "controlCandidateLeaseReceipt": {
+      "type": "object",
+      "required": [
+        "version",
+        "hostProfileRevision",
+        "profileSha256",
+        "acceptedSha256",
+        "expiresAt"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "hostProfileRevision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "profileSha256": {
+          "$ref": "#/$defs/controlCandidateDigest"
+        },
+        "acceptedSha256": {
+          "$ref": "#/$defs/controlCandidateDigest"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "description": "Historical immutable acceptance. Expiry is the minimum original observation expiry, zero for no observations; never restamped on retry."
+    },
+    "controlNativeOwnerClaim": {
+      "type": "object",
+      "required": [
+        "version",
+        "expectedEpoch",
+        "claimId"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "expectedEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740990
+        },
+        "claimId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Only in a full controlled v2 empty/host-only heartbeat, with no candidateLeases. Current expected epoch and original lifecycle intent guard issued epoch expectedEpoch+1."
+    },
+    "controlNativeOwner": {
+      "type": "object",
+      "required": [
+        "version",
+        "epoch",
+        "nativeIncarnation",
+        "claimId"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "nativeIncarnation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "claimId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Provider-issued composite native owner. Parsing or an old receipt does not prove current ownership or native readiness."
     }
   },
   "x-context-order": [
