@@ -69,12 +69,36 @@ public interface ControlClientJournal extends AutoCloseable {
         }
     }
 
+    /** A retained signed response supplies rollback floors only; it cannot restore live authority after restart. */
+    record AuthorityFloor(String originalResponse) {
+        public AuthorityFloor { ControlAuthorityCodec.decodeResponse(originalResponse); }
+        public ControlAuthorityCodec.Floor value() {
+            var response = ControlAuthorityCodec.decodeResponse(originalResponse);
+            return new ControlAuthorityCodec.Floor(response.audience(), response.instanceId(), response.generation(), response.source(),
+                    response.writer(), response.capabilities(), response.subjectExpiresAt(), response.permissions());
+        }
+        public void requireAtLeast(AuthorityFloor previous) {
+            if (previous != null) ControlAuthorityCodec.checkFloor(ControlAuthorityCodec.decodeResponse(originalResponse), previous.value());
+        }
+        @Override public String toString() { return "AuthorityFloor[source=" + value().source().sourceId() + ", revision=" + value().source().sourceRevision() + "]"; }
+    }
+
     record Snapshot(Subject subject, Credential currentKey, ControlWriterFence writer, long lastSequence, Pending pending,
-                    Bootstrap pendingBootstrap, Grant grant) {
+                    Bootstrap pendingBootstrap, Grant grant, AuthorityFloor authorityFloor) {
+        /** Initial/pre-authority snapshots only; a durable journal rejects removing an already retained floor. */
+        public Snapshot(Subject subject, Credential currentKey, ControlWriterFence writer, long lastSequence, Pending pending,
+                        Bootstrap pendingBootstrap, Grant grant) {
+            this(subject, currentKey, writer, lastSequence, pending, pendingBootstrap, grant, null);
+        }
         public Snapshot {
             ControlJson.safe(lastSequence, false);
             if (!writer.keyId().equals(currentKey.keyId())) throw ControlJson.invalid("journal selected key");
             if (grant != null) ControlProof.capabilities(writer.transport(), grant.capabilities());
+            if (authorityFloor != null) {
+                var floor = authorityFloor.value();
+                if (!floor.audience().equals(subject.audience()) || !floor.instanceId().equals(subject.instanceId())
+                        || floor.generation() > subject.generation()) throw ControlJson.invalid("journal authority floor scope");
+            }
             if (pending != null) {
                 var intent = pending.intent();
                 if (!intent.audience().equals(subject.audience()) || !intent.instanceId().equals(subject.instanceId())

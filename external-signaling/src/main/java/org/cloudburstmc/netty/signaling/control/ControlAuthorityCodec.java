@@ -202,7 +202,7 @@ public final class ControlAuthorityCodec {
         if (context.floor() != null) checkFloor(v, context.floor());
         return new Verified(v, wire);
     }
-    private static void checkFloor(Response v, Floor floor) {
+    static void checkFloor(Response v, Floor floor) {
         source(floor.source()); floor.writer().encode(); ControlProof.capabilities(floor.writer().transport(), floor.capabilities());
         ControlJson.safe(floor.subjectExpiresAt(), false); permissions(floor.permissions(), floor.writer(), floor.capabilities());
         ControlJson.audience(floor.audience()); ControlJson.identifier(floor.instanceId()); ControlJson.safe(floor.generation(), true);
