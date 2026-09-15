@@ -25,6 +25,8 @@ public interface ControlClientIo {
     }
     /** Restricted initial-state exchange; the coordinator remains the sole durable intent/sequence owner. */
     interface Synchronization {
+        /** Original fixed application deadline on the shared ControlClientClock; reading it grants no authority. */
+        long deadlineMillis();
         /** Exact retained heartbeat bytes, if recovery must finish one before issuing a fresh heartbeat. */
         Optional<byte[]> pendingHeartbeat();
         /** One-off HTTPS under the selected writer; it does not replace the transport or bypass the journal. */

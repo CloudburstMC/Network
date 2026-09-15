@@ -19,6 +19,15 @@ class ControlStateSynchronizationTest {
         return ControlStateCodec.decodeAcknowledgement(new String(frame.payloadBytes(), StandardCharsets.UTF_8));
     }
 
+    @Test void queuedApplicationReadsTheOriginalFixedDeadlineRatherThanANewBudget() throws Exception {
+        var h = activated("https"); var exchange = h.synchronizationExchanges.get(0);
+        long deadline = h.time.now + 30_000;
+        assertEquals(deadline, exchange.deadlineMillis()); h.time.advance(12_000);
+        assertEquals(deadline, exchange.deadlineMillis()); exchange.requireCurrent();
+        h.time.advance(18_000); assertEquals(deadline, exchange.deadlineMillis());
+        assertThrows(IllegalStateException.class, exchange::requireCurrent); h.client.close();
+    }
+
     @Test void nullApplicationCompletionCannotManufactureReadiness() throws Exception {
         for (String transport : List.of("https", "websocket")) {
             var h = activated(transport); h.nullSynchronizationResult = true;
