@@ -4,10 +4,12 @@ import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.signaling.ProviderCrypto;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.KeyPair;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -75,12 +77,14 @@ class ControlClientCoordinatorTest {
             providerKey = new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.PROVIDER_CONTROL, "provider_control_test_01", provider.getPublic(), 0, 100_000_000);
             newClient();
         }
-        void newClient() throws Exception {
+        void newClient() throws Exception { newClient(journal); }
+        void newClient(ControlClientJournal store) throws Exception {
             var config = new ControlClientCoordinator.Config(ORIGIN, URI.create(ORIGIN + "/control/prepare"), URI.create(ORIGIN + "/control/activate"),
                     URI.create(ORIGIN + "/control/status"), URI.create("wss://provider.example/control/upgrade"), URI.create(ORIGIN + "/control/authority"),
-                    Map.of("heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate")),
+                    Map.of("heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate"),
+                            "deregister", URI.create(ORIGIN + "/signal/deregister")),
                     "websocket", CAPS, 21_600_000, 30_000, 200, 30_000);
-            client = new ControlClientCoordinator(journal, initial, config, this, time, time, () -> 0.5,
+            client = new ControlClientCoordinator(store, initial, config, this, time, time, () -> 0.5,
                     () -> identifierSupplier.get(), key -> keyAvailable && key.equals(providerKey.keyId()) ? providerKey : additionalKeys.get(key));
         }
         @Override public CompletionStage<HttpReply> bootstrap(URI endpoint, ControlSessionCodec.Request request) {
@@ -290,6 +294,114 @@ class ControlClientCoordinatorTest {
         assertEquals(pending.candidate().keyId(), h.requests.peek().request.authentication().keyId());
         h.respondStatus(); assertEquals(pending.candidate(), h.journal.value.pending().candidate()); assertNotEquals(pending.candidate(), h.journal.value.currentKey());
         h.respondStatus(); assertNull(h.journal.value.pending()); assertEquals(pending.candidate(), h.journal.value.currentKey()); assertEquals(2, h.journal.value.writer().machineKeyRevision());
+    }
+
+    @Test void genericCandidateUnavailabilityTriesTheOldKeyAndRetriesOnlyAfterPositiveStatus() throws Exception {
+        var h = new Harness(); h.ready(); var oldKey = h.journal.value.currentKey();
+        var result = h.client.rotateMachineKey().toCompletableFuture(); var original = h.journal.value.pending();
+        h.client.reconcilePending(); var candidate = h.next("status");
+        assertEquals(original.candidate().keyId(), candidate.request.authentication().keyId());
+        candidate.reply.complete(new ControlClientIo.HttpReply(candidate.endpoint, "POST", candidate.endpoint, 503, "{}"));
+        assertEquals(1, h.requests.size()); assertEquals(oldKey.keyId(), h.requests.peek().request.authentication().keyId());
+        assertEquals(oldKey, h.journal.value.currentKey()); assertEquals(original, h.journal.value.pending());
+        h.respondStatus(); h.respondStatus(); h.synchronizedReady();
+        assertFalse(result.isDone()); assertEquals(oldKey, h.journal.value.currentKey()); assertEquals(original, h.journal.value.pending());
+        assertEquals(1, h.links.size()); assertEquals(2, h.links.get(0).sent.size());
+        var retried = ControlLifecycleCodec.decodeWsRequest(new String(ControlFrameCodec.decode(h.links.get(0).sent.get(1)).payloadBytes(), StandardCharsets.UTF_8));
+        assertEquals(original.intent(), retried.intent()); assertArrayEquals(original.bodyBytes(), retried.bodyBytes());
+    }
+
+    @Test void bothCandidateAndOldKeyUnavailableBackOffWithoutGuessingACommitOrLoopingBetweenKeys() throws Exception {
+        var h = new Harness(); h.ready(); h.client.rotateMachineKey(); var original = h.journal.value.pending();
+        var oldKey = h.journal.value.currentKey(); h.client.reconcilePending(); int started = h.bootstrapCalls;
+        for (String expected : List.of(original.candidate().keyId(), oldKey.keyId())) {
+            var query = h.next("status"); assertEquals(expected, query.request.authentication().keyId());
+            query.reply.complete(new ControlClientIo.HttpReply(query.endpoint, "POST", query.endpoint, 503, "{}"));
+        }
+        assertEquals(started + 1, h.bootstrapCalls); assertTrue(h.requests.isEmpty());
+        assertEquals(ControlClientCoordinator.State.BACKOFF, h.client.state()); assertFalse(h.client.ready());
+        assertEquals(original, h.journal.value.pending()); assertEquals(oldKey, h.journal.value.currentKey());
+        h.time.advance(h.time.nextDelay());
+        assertEquals(1, h.requests.size()); assertEquals(original.candidate().keyId(), h.requests.peek().request.authentication().keyId());
+    }
+
+    @Test void candidateTimeoutMakesOneIndependentOldKeyAttemptAndIgnoresItsLateReply() throws Exception {
+        var h = new Harness(); h.ready(); h.client.rotateMachineKey(); var original = h.journal.value.pending();
+        h.client.reconcilePending(); var late = h.next("status"); int before = h.bootstrapCalls;
+        h.time.advance(30000);
+        assertEquals(before + 1, h.bootstrapCalls); assertEquals(1, h.requests.size());
+        assertEquals(h.journal.value.currentKey().keyId(), h.requests.peek().request.authentication().keyId());
+        late.reply.complete(new ControlClientIo.HttpReply(late.endpoint, "POST", late.endpoint, 503, "{}"));
+        assertEquals(before + 1, h.bootstrapCalls); assertEquals(original, h.journal.value.pending());
+        h.respondStatus(); h.respondStatus(); assertFalse(h.client.ready()); assertEquals(original, h.journal.value.pending());
+    }
+
+    @Test void candidateTransportFailureDoesNotMakeAnUnverifiedOldKeyResponseAuthoritative() throws Exception {
+        var h = new Harness(); h.ready(); h.client.rotateMachineKey(); var original = h.journal.value.pending();
+        h.client.reconcilePending(); h.next("status").reply.completeExceptionally(new IOException("unavailable"));
+        var old = h.next("status");
+        old.reply.complete(new ControlClientIo.HttpReply(old.endpoint, "POST", old.endpoint, 200, "{}"));
+        assertEquals(ControlClientCoordinator.State.BACKOFF, h.client.state()); assertFalse(h.client.ready());
+        assertEquals(original, h.journal.value.pending()); assertTrue(h.requests.isEmpty());
+    }
+
+    @Test void committedDeregisterReceiptStopsBeforeCallbacksAndRetainsItsTerminalIntent() throws Exception {
+        var h = new Harness(); h.ready(); var link = h.links.get(0);
+        var result = h.client.submit("deregister", "{}".getBytes(StandardCharsets.UTF_8), false).toCompletableFuture();
+        var receipt = h.receipt("committed"); int calls = h.bootstrapCalls, authorities = h.authorityCalls;
+        var callback = result.thenRun(() -> assertThrows(IllegalStateException.class, () -> h.client.replaceTransport("https", List.of("request-response"))));
+        h.incoming(link, h.writer, "lifecycle.receipt", resultWire(receipt).getBytes(StandardCharsets.UTF_8), 1);
+        callback.join(); assertEquals(receipt, result.join().receipt()); assertFalse(result.join().hasBody());
+        assertEquals(ControlClientCoordinator.State.DEREGISTERED, h.client.state()); assertFalse(h.client.ready());
+        assertEquals(receipt, h.journal.value.pending().receipt()); assertEquals("deregister", h.journal.value.pending().intent().operation());
+        assertEquals(1, link.closeCalls); assertThrows(IllegalStateException.class, h.client::reconcilePending);
+        h.time.advance(30_000_000);
+        assertEquals(calls, h.bootstrapCalls); assertEquals(authorities, h.authorityCalls); assertTrue(h.requests.isEmpty());
+    }
+
+    @Test void lostDeregisterAcknowledgementReconcilesTerminallyWithoutPreparingADisabledWriter() throws Exception {
+        var h = new Harness(); h.ready(); h.client.submit("deregister", "{}".getBytes(StandardCharsets.UTF_8), false);
+        var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt); h.writerEnabled = false;
+        h.client.close(); h.newClient(); int calls = h.bootstrapCalls, authorities = h.authorityCalls;
+        h.client.start(); h.respondStatus(); h.respondStatus();
+        assertEquals(ControlClientCoordinator.State.DEREGISTERED, h.client.state()); assertEquals(receipt, h.journal.value.pending().receipt());
+        assertEquals(calls + 2, h.bootstrapCalls); assertEquals(authorities, h.authorityCalls); assertTrue(h.requests.isEmpty());
+        h.time.advance(30_000_000); assertEquals(calls + 2, h.bootstrapCalls);
+    }
+
+    @Test void terminalDeregisterReceiptSurvivesFileJournalRestartWithoutAnyNetworkEffect(@TempDir Path directory) throws Exception {
+        var h = new Harness(); h.ready();
+        h.client.submit("deregister", "{}".getBytes(StandardCharsets.UTF_8), true);
+        var receipt = h.receipt("committed"); var operation = h.operations.get(0);
+        operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, resultWire(receipt)));
+        var terminal = h.journal.value; assertEquals(receipt, terminal.pending().receipt()); h.client.close();
+        try (var persisted = new FileControlClientJournal(directory)) { persisted.commit(terminal); }
+        int calls = h.bootstrapCalls, authorities = h.authorityCalls, sends = h.operations.size(), links = h.links.size();
+        try (var reopened = new FileControlClientJournal(directory)) {
+            h.newClient(reopened); h.client.start();
+            assertEquals(ControlClientCoordinator.State.DEREGISTERED, h.client.state()); assertEquals(terminal, h.client.snapshot());
+            assertEquals(receipt, reopened.read().orElseThrow().pending().receipt());
+            h.time.advance(30_000_000);
+            assertEquals(calls, h.bootstrapCalls); assertEquals(authorities, h.authorityCalls);
+            assertEquals(sends, h.operations.size()); assertEquals(links, h.links.size()); assertTrue(h.requests.isEmpty());
+            h.client.close();
+        }
+    }
+
+    @Test void uncommittedDeregisterReceiptDoesNotCreateTerminalState() throws Exception {
+        var h = new Harness(); h.ready(); var result = h.client.submit("deregister", "{}".getBytes(StandardCharsets.UTF_8), false).toCompletableFuture();
+        var unknown = h.receipt("unknown");
+        h.incoming(h.links.get(0), h.writer, "lifecycle.receipt", resultWire(unknown).getBytes(StandardCharsets.UTF_8), 1);
+        assertEquals(unknown, h.journal.value.pending().receipt()); assertFalse(result.isDone()); assertTrue(h.client.ready());
+        assertThrows(IllegalStateException.class, () -> h.client.submit("heartbeat", new byte[0], false));
+    }
+
+    @Test void terminalReceiptJournalFailureNeverAcknowledgesSuccessfulLocalDeregistration() throws Exception {
+        var h = new Harness(); h.ready(); var result = h.client.submit("deregister", "{}".getBytes(StandardCharsets.UTF_8), false).toCompletableFuture();
+        var receipt = h.receipt("committed"); h.journal.fail = true;
+        h.incoming(h.links.get(0), h.writer, "lifecycle.receipt", resultWire(receipt).getBytes(StandardCharsets.UTF_8), 1);
+        assertEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state()); assertTrue(result.isCompletedExceptionally());
+        assertNull(h.journal.value.pending().receipt()); assertTrue(h.requests.isEmpty());
     }
 
     @Test void activationLostAckRestoresOriginalGrantAndReplacesLostPhysicalConnection() throws Exception {

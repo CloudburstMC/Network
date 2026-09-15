@@ -25,7 +25,7 @@ import java.util.function.Supplier;
  */
 public final class ControlClientCoordinator implements AutoCloseable {
     public enum State { STOPPED, RECONCILING, PREPARING, STANDBY, ACTIVATING, SYNCHRONIZING, READY,
-        AUTHORITY_EXPIRED, BACKOFF, UNRESOLVED, CLOSED }
+        AUTHORITY_EXPIRED, BACKOFF, UNRESOLVED, DEREGISTERED, CLOSED }
     public record Config(String audience, URI prepare, URI activate, URI status, URI upgrade, URI authority,
                          Map<String, URI> operations, String transport, List<String> capabilities,
                          long sessionDurationMillis, long proofMillis, long baseBackoffMillis, long maxBackoffMillis) {
@@ -204,6 +204,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     public synchronized void reconcilePending() { requireRunning(); try { recover(); } catch (RuntimeException failure) { fail(); } }
 
     private void recover() {
+        if (hasTerminalReceipt()) { stopDeregistered(); return; }
         attempt++; operationInFlight = false; resetAuthorityWork(); state = State.RECONCILING;
         cancel(retry); retry = null;
         var pending = snapshot.pending();
@@ -216,13 +217,14 @@ public final class ControlClientCoordinator implements AutoCloseable {
         var request = request("status", config.status(), payload, id(), credential, clock.nowMillis() + config.proofMillis());
         watch(() -> io.bootstrap(config.status(), request), request.expiresAt(), reply -> {
             checkedReply(reply, config.status(), "POST", ControlSessionCodec.MAX_ENVELOPE_BYTES);
-            if (reply.status() == 401 && canTryOldKey) { currentStatus(snapshot.currentKey(), false); return; }
             JsonObject result = response(reply, request);
             var writer = ControlWriterFence.read(ControlJson.object(result, "writer"));
             if (!writer.keyId().equals(credential.keyId())) throw ControlJson.invalid("strong current selected key");
             if (snapshot.pending() != null) receiptStatus(credential, writer, result, request.sentAt());
             else acceptCurrent(credential, writer, result, request.sentAt());
-        });
+        }, canTryOldKey ? () -> currentStatus(snapshot.currentKey(), false) : this::fail);
+        // Unavailability says nothing about which key is selected. At most one independent
+        // old-key query follows a candidate failure; only a verified positive status is usable.
     }
 
     private void receiptStatus(ControlClientJournal.Credential credential, ControlWriterFence writer, JsonObject current, long currentRequestIssuedAt) {
@@ -236,6 +238,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     : ControlLifecycleCodec.decodeReceipt(result.get("receipt").toString());
             if (receipt != null) ControlLifecycleCodec.verifyReceipt(receipt, pending.intent());
             if (receipt != null && receipt.disposition().equals("committed")) {
+                if (pending.intent().operation().equals("deregister")) {
+                    persistPendingReceipt(receipt); stopDeregistered(); return;
+                }
                 if (pending.candidate() != null && !credential.keyId().equals(pending.candidate().keyId())) throw ControlJson.invalid("rotation current key reconciliation");
                 persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(), null, snapshot.pendingBootstrap(), grant(current), snapshot.authorityFloor()));
                 long continuationAttempt = attempt; State continuationState = state;
@@ -333,7 +338,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private synchronized void receive(Candidate connection, String wire) {
-        if (state == State.CLOSED || state == State.UNRESOLVED || connection == discardedGapConnection) return;
+        if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED || connection == discardedGapConnection) return;
         try {
             if (connection == active) { activeFrame(wire); return; }
             if (connection != candidate || state != State.STANDBY || connection.challenge != null) return;
@@ -388,7 +393,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private void beginAuthorityRefresh() {
-        if (state == State.CLOSED || state == State.UNRESOLVED || pendingAuthority != null || synchronizationInFlight) return;
+        if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED || pendingAuthority != null || synchronizationInFlight) return;
         // Deadline expiry fences consumers; it does not make unabortable underlying work disappear.
         if (authorityIo != null || synchronizationIo != null) { authorityUnavailable(); return; }
         cancel(authorityRetry); authorityRetry = null;
@@ -461,7 +466,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         } catch (RuntimeException invalid) { return false; }
     }
     private void authorityUnavailable() {
-        if (state == State.CLOSED || state == State.UNRESOLVED) return;
+        if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return;
         if (pendingAuthority != null) cancel(pendingAuthority.timeout);
         pendingAuthority = null; authority = null; authorityKey = null; synchronizationInFlight = false; synchronizationVersion++;
         synchronizationExchange = null; pendingSynchronization = null;
@@ -654,6 +659,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
         var receipt = result.receipt();
         ControlLifecycleCodec.verifyReceipt(receipt, pending.intent()); operationInFlight = false;
         if (!receipt.disposition().equals("committed")) { persistPendingReceipt(receipt); return; }
+        if (pending.intent().operation().equals("deregister")) {
+            persistPendingReceipt(receipt); stopDeregistered(); return;
+        }
         if (pending.candidate() != null) { persistPendingReceipt(receipt); recover(); return; }
         long generation = attempt;
         persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
@@ -707,22 +715,54 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
 
     private <T> void watch(Supplier<CompletionStage<T>> operation, long deadline, Consumer<T> success) {
-        long generation = attempt; if (deadline <= clock.nowMillis()) { fail(); return; }
+        watch(operation, deadline, success, this::fail);
+    }
+
+    private <T> void watch(Supplier<CompletionStage<T>> operation, long deadline, Consumer<T> success, Runnable unavailable) {
+        long generation = attempt;
+        Runnable failed = () -> {
+            if (generation != attempt || state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return;
+            try { unavailable.run(); } catch (RuntimeException failure) { fail(); }
+        };
+        if (deadline <= clock.nowMillis()) { failed.run(); return; }
         final boolean[] done = {false};
-        var timeout = scheduler.schedule(() -> { synchronized (this) { if (!done[0] && generation == attempt && state != State.CLOSED) { done[0] = true; fail(); } }}, deadline - clock.nowMillis());
+        var timeout = scheduler.schedule(() -> { synchronized (this) {
+            if (!done[0] && generation == attempt && state != State.CLOSED) { done[0] = true; failed.run(); }
+        }}, deadline - clock.nowMillis());
         CompletionStage<T> future;
         try { future = Objects.requireNonNull(operation.get(), "Missing control I/O"); }
-        catch (RuntimeException failure) { done[0] = true; timeout.cancel(); fail(); return; }
+        catch (RuntimeException failure) { done[0] = true; timeout.cancel(); failed.run(); return; }
         future.whenComplete((value, failure) -> { synchronized (this) {
             if (done[0]) return; done[0] = true; timeout.cancel();
-            if (generation != attempt || state == State.CLOSED) return;
-            if (failure != null || clock.nowMillis() >= deadline) { fail(); return; }
-            try { success.accept(value); } catch (RuntimeException invalid) { fail(); }
+            if (generation != attempt || state == State.CLOSED || state == State.DEREGISTERED) return;
+            if (failure != null || clock.nowMillis() >= deadline) { failed.run(); return; }
+            try { success.accept(value); } catch (RuntimeException invalid) { failed.run(); }
         }});
     }
 
+    private boolean hasTerminalReceipt() {
+        var pending = snapshot.pending();
+        return pending != null && pending.intent().operation().equals("deregister")
+                && pending.receipt() != null && pending.receipt().disposition().equals("committed");
+    }
+
+    /** The retained committed intent is a terminal journal marker, never a grant or a retry barrier. */
+    private void stopDeregistered() {
+        if (!hasTerminalReceipt()) throw new IllegalStateException("Missing committed deregistration");
+        var receipt = snapshot.pending().receipt();
+        state = State.DEREGISTERED; attempt++; operationInFlight = false; resetAuthorityWork(); authority = null;
+        cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
+        Candidate previous = active, standby = candidate; active = null; candidate = null;
+        // Fence all callbacks before closing either connection; cleanup failure cannot erase commit knowledge.
+        try { if (previous != null && previous.link != null) previous.link.close(); }
+        finally {
+            try { if (standby != null && standby != previous && standby.link != null) standby.link.abort(); }
+            finally { completeResult(ControlOperationResult.reconciled(receipt)); }
+        }
+    }
+
     private void halt() {
-        if (state == State.CLOSED) return;
+        if (state == State.CLOSED || state == State.DEREGISTERED) return;
         state = State.UNRESOLVED; attempt++; operationInFlight = false; resetAuthorityWork(); authority = null;
         cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
         Candidate oldCandidate = candidate, oldActive = active; candidate = null; active = null;
@@ -732,7 +772,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (result != null) result.completeExceptionally(new IllegalStateException("Control client halted; durable intent retained for reconciliation"));
     }
     private void fail() {
-        if (state == State.CLOSED || state == State.UNRESOLVED) return;
+        if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return;
         attempt++; operationInFlight = false; resetAuthorityWork(); authority = null; state = State.BACKOFF;
         Candidate oldCandidate = candidate, oldActive = active; candidate = null; active = null;
         if (oldCandidate != null && oldCandidate.link != null) oldCandidate.link.abort();
@@ -810,7 +850,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
     private static ControlFrameCodec.Authentication authentication(ControlClientJournal.Credential credential) { return new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, credential.keyId(), ""); }
     private String id() { String id = identifiers.get(); ControlJson.opaque(id); ControlJson.identifier(id); return id; }
-    private void requireRunning() { if (state == State.STOPPED || state == State.CLOSED || state == State.UNRESOLVED) throw new IllegalStateException("Control client is not running"); }
+    private void requireRunning() { if (state == State.STOPPED || state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) throw new IllegalStateException("Control client is not running"); }
     private static String target(URI endpoint) { return endpoint.getRawPath() + (endpoint.getRawQuery() == null ? "" : "?" + endpoint.getRawQuery()); }
     private static void endpoint(String audience, URI endpoint, boolean websocket) {
         String origin = (websocket ? ("wss".equals(endpoint.getScheme()) ? "https" : "http") : endpoint.getScheme()) + "://" + endpoint.getRawAuthority();
