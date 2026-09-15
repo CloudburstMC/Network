@@ -127,7 +127,8 @@ class JdkWebSocketTransportTest {
                             fixture.instanceId(), fixture.generation(), fixture.writer(), fixture.capabilities(), now, now + 30000,
                             "POST", "/control/authority", now + 300000, fixture.authentication()), machine.getPrivate());
                     String requestWire = ControlAuthorityCodec.encode(request);
-                    await(link.sendText(requestWire)); String actual = server.texts.poll(3, TimeUnit.SECONDS);
+                    var handoffs = new AtomicInteger();
+                    await(link.sendText(requestWire, handoffs::incrementAndGet)); assertEquals(1, handoffs.get()); String actual = server.texts.poll(3, TimeUnit.SECONDS);
                     assertEquals(requestWire, actual);
                     var machineKey = new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.MACHINE,
                             request.authentication().keyId(), machine.getPublic(), now - 1000, now + 600000);
@@ -375,6 +376,90 @@ class JdkWebSocketTransportTest {
         socket.finishSend();
         await(third);
         assertTrue(socket.pending.isEmpty());
+    }
+
+    @Test
+    void queuedDiagnosticAckCannotOutliveItsInstallationOrOriginalDeadline() throws Exception {
+        for (String invalidation : List.of("withdrawal", "deadline")) {
+            FakeSocket socket = new FakeSocket();
+            var transport = fake(socket, limits(), this.receiverExecutor, text -> CompletableFuture.completedFuture(null));
+            var now = new java.util.concurrent.atomic.AtomicLong(1000);
+            var installed = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var binding = new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission.Binding(
+                    new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.Context("https://provider.example", "host", "01".repeat(16), 1),
+                    "authority:1", 1, "hpr:1", "A".repeat(43), 1, "A".repeat(43), "ab".repeat(32));
+            var installation = new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission.Installation(binding, () -> {
+                if (!installed.get() || now.get() >= 2000) throw new IllegalStateException("installation unavailable");
+            });
+            var first = transport.sendText("earlier frame awaiting actual send completion");
+            var ack = transport.sendText("diagnostic ACK for original binding", installation::requireCurrent);
+            var later = transport.sendText("later sequence");
+            assertEquals(1, socket.sent.size()); assertFalse(ack.toCompletableFuture().isDone());
+            if (invalidation.equals("withdrawal")) installed.set(false); else now.set(2000);
+            socket.finishSend(); await(first);
+            assertEquals(1, socket.sent.size(), invalidation + " must reject at actual dequeue");
+            assertEquals("installation unavailable", failure(ack).getMessage());
+            assertNotNull(failure(later)); assertNotNull(failure(transport.closed())); assertTrue(socket.aborted);
+            assertTrue(socket.pending.isEmpty()); assertTrue(scheduler.getQueue().isEmpty());
+            // Restoring a fixture token cannot revive the failed physical sequence owner.
+            installed.set(true); now.set(1000);
+            assertNotNull(failure(transport.sendText("late ACK", installation::requireCurrent)));
+            assertEquals(1, socket.sent.size());
+            var replacementSocket = new FakeSocket();
+            var replacement = fake(replacementSocket, limits(), receiverExecutor, text -> CompletableFuture.completedFuture(null));
+            var fresh = replacement.sendText("fresh writer", installation::requireCurrent);
+            replacementSocket.finishSend(); await(fresh); replacement.abort();
+        }
+    }
+
+    @Test
+    void queuedGuardsRunOnlyAtHandoffAndHealthySendsStillDrainBeforeClose() throws Exception {
+        FakeSocket socket = new FakeSocket();
+        var transport = fake(socket, limits(), receiverExecutor, text -> CompletableFuture.completedFuture(null));
+        var checks = new AtomicInteger();
+        var first = transport.sendText("first", checks::incrementAndGet);
+        var second = transport.sendText("second", checks::incrementAndGet);
+        assertEquals(1, checks.get());
+        var closed = transport.closeGracefully();
+        socket.finishSend(); await(first); assertEquals(2, checks.get());
+        socket.finishSend(); await(second);
+        assertEquals(List.of("first", "second"), socket.sent); assertTrue(socket.outputClosed);
+        socket.listener.onClose(socket, WebSocket.NORMAL_CLOSURE, ""); await(closed);
+        assertFalse(socket.aborted); assertTrue(scheduler.getQueue().isEmpty());
+    }
+
+    @Test
+    void initialGuardFailureAndReentrantAbortNeverReachSocket() throws Exception {
+        for (boolean reentrant : List.of(false, true)) {
+            FakeSocket socket = new FakeSocket();
+            var transport = fake(socket, limits(), receiverExecutor, text -> CompletableFuture.completedFuture(null));
+            var sending = transport.sendText("guarded", () -> {
+                if (reentrant) transport.abort(); else throw new IllegalStateException("guard failed");
+            });
+            assertNotNull(failure(sending)); assertNotNull(failure(transport.closed()));
+            assertTrue(socket.sent.isEmpty()); assertTrue(socket.aborted); assertTrue(scheduler.getQueue().isEmpty());
+        }
+    }
+
+    @Test
+    void applicationMonitorDoesNotInvertTransportLockDuringQueuedGuard() throws Exception {
+        var socket = new FakeSocket();
+        var transport = fake(socket, limits(), receiverExecutor, text -> CompletableFuture.completedFuture(null));
+        var ownerMonitor = new Object(); var entered = new CountDownLatch(1);
+        transport.sendText("first");
+        var second = transport.sendText("guarded", () -> {
+            entered.countDown(); synchronized (ownerMonitor) { /* Coordinator ownership check. */ }
+        });
+        CompletableFuture<Void> abort;
+        synchronized (ownerMonitor) {
+            receiverExecutor.submit(socket::finishSend);
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            abort = CompletableFuture.runAsync(transport::abort);
+            abort.get(1, TimeUnit.SECONDS); // A guard under the transport lock would deadlock here.
+        }
+        receiverExecutor.submit(() -> {}).get(1, TimeUnit.SECONDS);
+        assertNotNull(failure(second)); assertEquals(List.of("first"), socket.sent);
+        assertTrue(socket.aborted); assertTrue(scheduler.getQueue().isEmpty());
     }
 
     @Test

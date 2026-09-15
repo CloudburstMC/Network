@@ -52,8 +52,14 @@ profile bytes and a nonblocking ownership guard, retained through asynchronous p
 native staging, durable storage and readiness confirmation. The synchronization carrier retains
 that guard through its own journal save and signing, checks it immediately before actual
 HTTPS/WebSocket sends, and guards response delivery and signed readiness confirmation. A
-failed guard preserves any durable original intent for strong reconciliation. Legacy adapters cannot return
-versioned profiles through the default capture method without providing that guard.
+failed guard preserves any durable original intent for strong reconciliation. Controlled WebSocket
+links must implement `sendText(wire, requireCurrent)`: lifecycle, readiness and authority messages
+retain their original guard through the bounded transport queue and check it immediately before
+the actual JDK send. A failed queued guard aborts that physical link and fails its remaining queue;
+it does not skip a frame or change the retained intent. Guards run outside the transport lock and
+transport ownership is checked again after any reentrant callback. Generic unguarded links cannot
+silently substitute for this handoff. Legacy adapters cannot return versioned profiles through the
+default capture method without providing that guard.
 
 `SRFLX` is representable for later discovery work but is rejected by both v2 open and
 replacement publication until a bounded candidate lease protocol exists. This API does not
