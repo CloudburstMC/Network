@@ -136,13 +136,13 @@ public final class ControlClientCoordinator implements AutoCloseable {
             requireCurrent(); Objects.requireNonNull(originalBody);
             if (appliedCalled) throw new IllegalStateException("Application confirmation already started");
             var pending = snapshot.pending();
-            if (pending == null) return submit("heartbeat", originalBody.clone(), null, true, id(), this);
+            if (pending == null) return submit("heartbeat", originalBody.clone(), null, false, id(), this);
             if (!pending.intent().operation().equals("heartbeat") || pending.candidate() != null || !Arrays.equals(originalBody, pending.bodyBytes()))
                 throw new IllegalStateException("Cannot replace a retained lifecycle intent during synchronization");
             if (pending.receipt() != null && !pending.receipt().disposition().equals("unknown"))
                 throw new IllegalStateException("Unresolved heartbeat receipt requires explicit reconciliation");
             if (pendingResult == null) pendingResult = new CompletableFuture<>();
-            var result = pendingResult; pendingSynchronization = this; forceHttp = true; deliverPending();
+            var result = pendingResult; pendingSynchronization = this; forceHttp = false; deliverPending();
             return result.minimalCompletionStage();
         } }
         @Override public CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis basis) { synchronized (ControlClientCoordinator.this) {
@@ -828,10 +828,13 @@ public final class ControlClientCoordinator implements AutoCloseable {
         operationInFlight = true;
         try {
             var writer = snapshot.writer(); long now = clock.nowMillis();
-            boolean useHttp = forceHttp || writer.transport().equals("https") || state != State.READY || pending.bodyBytes().length > ControlLifecycleCodec.MAX_WS_BODY_BYTES;
+            boolean useHttp = forceHttp || writer.transport().equals("https") || state != State.READY && !initialHeartbeat
+                    || pending.bodyBytes().length > ControlLifecycleCodec.MAX_WS_BODY_BYTES;
+            long operationExpiresAt = Math.min(now + config.proofMillis(), grant.sessionExpiresAt());
+            if (initialHeartbeat) operationExpiresAt = Math.min(operationExpiresAt, pendingSynchronization.deadline);
             if (useHttp) {
                 URI endpoint = config.operations().get(pending.intent().operation());
-                var proof = new ControlHttpCodec.Request(1, config.audience(), "POST", target(endpoint), now, Math.min(now + config.proofMillis(), grant.sessionExpiresAt()), pending.intent(),
+                var proof = new ControlHttpCodec.Request(1, config.audience(), "POST", target(endpoint), now, operationExpiresAt, pending.intent(),
                         writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), writer.transport(), grant.capabilities(), authentication(snapshot.currentKey()));
                 proof = ControlHttpCodec.sign(proof, snapshot.currentKey().keyPair().getPrivate());
                 final var signedProof = proof;
@@ -845,7 +848,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 byte[] payload = ControlLifecycleCodec.encodeWsRequest(pending.intent(), pending.bodyBytes()).getBytes(StandardCharsets.UTF_8);
                 var frame = new ControlFrameCodec.Frame(1, "lifecycle.request", id(), ++outgoingSequence, ControlFrameCodec.Direction.HOST_TO_PROVIDER,
                         config.audience(), snapshot.subject().instanceId(), snapshot.subject().generation(), writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), grant.capabilities(),
-                        now, Math.min(now + config.proofMillis(), authority.response().authorityExpiresAt()), ProviderCrypto.base64(payload), ControlFrameCodec.payloadDigest(payload), authentication(snapshot.currentKey()));
+                        now, Math.min(operationExpiresAt, authority.response().authorityExpiresAt()), ProviderCrypto.base64(payload), ControlFrameCodec.payloadDigest(payload), authentication(snapshot.currentKey()));
                 var signed = ControlFrameCodec.sign(frame, ControlFrameCodec.KeyFamily.MACHINE, snapshot.currentKey().keyPair().getPrivate());
                 // Local send completion is not a durable receipt. Keep the intent and the one-flight barrier.
                 watch(() -> active.link.sendText(ControlFrameCodec.encode(signed)), frame.expiresAt(), ignored -> { });
