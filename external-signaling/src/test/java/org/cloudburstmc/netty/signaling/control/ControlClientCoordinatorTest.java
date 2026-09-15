@@ -18,6 +18,9 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ControlClientCoordinatorTest {
+    static String resultWire(ControlLifecycleCodec.Receipt receipt) {
+        return ControlResultCodec.encode(ControlResultCodec.create(receipt, "{}".getBytes(StandardCharsets.UTF_8)));
+    }
     static final String ORIGIN = "https://provider.example";
     static final List<String> CAPS = List.of("addressed", "request-response");
     static final class Time implements ControlClientClock, ControlClientIo.Scheduler {
@@ -56,11 +59,14 @@ class ControlClientCoordinatorTest {
         final Queue<Exchange> requests = new ArrayDeque<>(); final List<Operation> operations = new ArrayList<>();
         final List<FakeLink> links = new ArrayList<>(); final List<CompletableFuture<Void>> synchronizations = new ArrayList<>();
         final Queue<AuthorityExchange> authorityRequests = new ArrayDeque<>();
+        final List<Synchronization> synchronizationExchanges = new ArrayList<>();
+        Consumer<ControlFrameCodec.Frame> synchronizationFrames = ignored -> { };
         final AtomicInteger ids = new AtomicInteger();
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls;
         long sourceRevision, issuedAuthorityExpires;
         final Map<String, ControlLifecycleCodec.Receipt> receipts = new HashMap<>();
+        final Map<String, ControlFrameCodec.VerificationKey> additionalKeys = new HashMap<>();
         Harness() throws Exception { this(new Journal(), new Time(), FileControlClientJournalTest.initial()); }
         Harness(Journal journal, Time time, ControlClientJournal.Snapshot initial) throws Exception {
             this.journal = journal; this.time = time; this.initial = initial; writer = initial.writer();
@@ -73,7 +79,7 @@ class ControlClientCoordinatorTest {
                     Map.of("heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate")),
                     "websocket", CAPS, 21_600_000, 30_000, 200, 30_000);
             client = new ControlClientCoordinator(journal, initial, config, this, time, time, () -> 0.5,
-                    () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet()), key -> keyAvailable && key.equals(providerKey.keyId()) ? providerKey : null);
+                    () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet()), key -> keyAvailable && key.equals(providerKey.keyId()) ? providerKey : additionalKeys.get(key));
         }
         @Override public CompletionStage<HttpReply> bootstrap(URI endpoint, ControlSessionCodec.Request request) {
             bootstrapCalls++;
@@ -94,14 +100,15 @@ class ControlClientCoordinatorTest {
         @Override public CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request) {
             authorityCalls++; var reply = new CompletableFuture<HttpReply>(); authorityRequests.add(new AuthorityExchange(endpoint, request, reply)); return reply;
         }
-        @Override public CompletionStage<Void> synchronize(ControlWriterFence wanted, ControlClientJournal.Grant fixed, ControlAuthorityCodec.Verified authority) {
+        @Override public CompletionStage<Void> synchronize(ControlWriterFence wanted, ControlClientJournal.Grant fixed, ControlAuthorityCodec.Verified authority, Synchronization exchange) {
             assertEquals(writer, wanted); assertEquals(grant, fixed);
             assertNotNull(journal.value.authorityFloor());
             assertEquals(authority.floor(), journal.value.authorityFloor().value());
             if (absentSynchronization) return null;
+            synchronizationExchanges.add(exchange);
             var result = new CompletableFuture<Void>(); synchronizations.add(result); return result;
         }
-        @Override public void onSynchronizationFrame(ControlFrameCodec.Frame frame) { }
+        @Override public void onSynchronizationFrame(ControlFrameCodec.Frame frame) { synchronizationFrames.accept(frame); }
         @Override public void onVerifiedFrame(ControlFrameCodec.Frame frame) { applicationFrames++; }
 
         final class FakeLink implements Link {
@@ -245,20 +252,20 @@ class ControlClientCoordinatorTest {
         var h = new Harness(); h.ready(); byte[] body = " {\"heartbeat\": \"café\"}\n".getBytes(StandardCharsets.UTF_8);
         byte[] original = body.clone(); var pending = h.client.submit("heartbeat", body, false).toCompletableFuture(); Arrays.fill(body, (byte) 'x');
         assertArrayEquals(original, h.journal.value.pending().bodyBytes()); assertFalse(pending.isDone()); assertEquals(1, h.links.get(0).sent.size());
-        h.incoming(h.links.get(0), h.writer, "lifecycle.receipt", ControlLifecycleCodec.encodeReceipt(h.receipt("unknown")).getBytes(StandardCharsets.UTF_8), 1);
+        h.incoming(h.links.get(0), h.writer, "lifecycle.receipt", resultWire(h.receipt("unknown")).getBytes(StandardCharsets.UTF_8), 1);
         assertNotNull(h.journal.value.pending()); assertFalse(pending.isDone());
         assertThrows(IllegalStateException.class, () -> h.client.submit("heartbeat", new byte[0], false));
         var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
         h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
-        assertEquals(receipt, pending.join()); assertNull(h.journal.value.pending());
+        assertEquals(receipt, pending.join().receipt()); assertNull(h.journal.value.pending());
     }
 
     @Test void oneOffHttpsPreservesWebSocketWriterAndPersistentFallbackActivatesNewEpoch() throws Exception {
         var h = new Harness(); h.ready(); var before = h.writer; byte[] body = (" ".repeat(45057)).getBytes(StandardCharsets.UTF_8);
         var future = h.client.submit("heartbeat", body, false).toCompletableFuture(); assertEquals(1, h.operations.size()); assertTrue(h.links.get(0).sent.isEmpty());
         var request = h.operations.get(0); assertEquals(before.connectionId(), request.request.connectionId()); assertEquals("websocket", request.request.writerTransport());
-        var receipt = h.receipt("committed"); request.reply.complete(new ControlClientIo.HttpReply(request.endpoint, "POST", request.endpoint, 200, ControlLifecycleCodec.encodeReceipt(receipt)));
-        assertEquals(receipt, future.join()); assertEquals(before, h.client.snapshot().writer());
+        var receipt = h.receipt("committed"); request.reply.complete(new ControlClientIo.HttpReply(request.endpoint, "POST", request.endpoint, 200, resultWire(receipt)));
+        assertEquals(receipt, future.join().receipt()); assertEquals(before, h.client.snapshot().writer());
         h.client.replaceTransport("https", List.of("request-response")); assertFalse(h.client.ready()); h.respondPrepare(); h.respondActivation(); h.synchronizedReady();
         assertEquals(before.sessionEpoch() + 1, h.writer.sessionEpoch()); assertEquals("https", h.writer.transport()); assertEquals(1, h.links.get(0).closeCalls);
     }
@@ -313,8 +320,8 @@ class ControlClientCoordinatorTest {
         var completed = h.client.rotateMachineKey().toCompletableFuture(); var pending = h.journal.value.pending();
         var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
         h.writer = new ControlWriterFence(physical.transport(), physical.sessionEpoch(), physical.sessionId(), physical.connectionId(), pending.candidate().keyId(), physical.machineKeyRevision() + 1);
-        h.incoming(link, physical, "lifecycle.receipt", ControlLifecycleCodec.encodeReceipt(receipt).getBytes(StandardCharsets.UTF_8), 1);
-        assertFalse(h.client.ready()); h.respondStatus(); h.respondStatus(); h.synchronizedReady(); assertEquals(receipt, completed.join());
+        h.incoming(link, physical, "lifecycle.receipt", resultWire(receipt).getBytes(StandardCharsets.UTF_8), 1);
+        assertFalse(h.client.ready()); h.respondStatus(); h.respondStatus(); h.synchronizedReady(); assertEquals(receipt, completed.join().receipt());
         assertEquals(physical.sessionEpoch(), h.client.snapshot().writer().sessionEpoch()); assertEquals(1, h.links.size()); assertEquals(0, link.closeCalls + link.abortCalls);
         h.client.submit("heartbeat", new byte[0], false); var next = ControlFrameCodec.decode(link.sent.get(1));
         assertEquals(2, next.sequence()); assertEquals(pending.candidate().keyId(), next.authentication().keyId());
@@ -346,7 +353,7 @@ class ControlClientCoordinatorTest {
         assertEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state()); assertTrue(h.requests.isEmpty());
         var redirected = new Harness(); redirected.ready(); var future = redirected.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
         var operation = redirected.operations.get(0); operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", URI.create("https://other.example/receipt"), 200,
-                ControlLifecycleCodec.encodeReceipt(redirected.receipt("committed"))));
+                resultWire(redirected.receipt("committed"))));
         assertNotNull(redirected.journal.value.pending()); assertFalse(future.isDone()); assertFalse(redirected.client.ready());
     }
 
@@ -361,7 +368,7 @@ class ControlClientCoordinatorTest {
             h.journal.fail = true; // A real file journal rejects writes after close.
         });
         h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
-        assertEquals(receipt, result.join());
+        assertEquals(receipt, result.join().receipt());
         assertEquals(ControlClientCoordinator.State.CLOSED, h.client.state());
         assertEquals(writesAtClose[0], h.journal.writes.size());
         assertTrue(h.requests.isEmpty());
@@ -373,7 +380,7 @@ class ControlClientCoordinatorTest {
         var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
         result.thenRun(() -> h.client.replaceTransport("https", List.of("request-response")));
         h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
-        assertEquals(receipt, result.join());
+        assertEquals(receipt, result.join().receipt());
         assertEquals(1, h.requests.size());
         h.respondPrepare(); h.respondActivation(); h.synchronizedReady();
         assertEquals("https", h.writer.transport());
@@ -383,14 +390,14 @@ class ControlClientCoordinatorTest {
         var h = new Harness(); h.ready();
         var first = h.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
         var receipt = h.receipt("committed"); h.receipts.put(receipt.intentDigest(), receipt);
-        List<CompletableFuture<ControlLifecycleCodec.Receipt>> next = new ArrayList<>();
+        List<CompletableFuture<ControlOperationResult>> next = new ArrayList<>();
         first.thenRun(() -> next.add(h.client.submit("heartbeat", new byte[]{42}, true).toCompletableFuture()));
         h.client.reconcilePending(); h.respondStatus(); h.respondStatus(); h.synchronizedReady();
         assertEquals(1, next.size()); assertFalse(next.get(0).isDone());
         assertEquals(2, h.journal.value.pending().intent().sequence());
         var operation = h.operations.get(1); var secondReceipt = h.receipt("committed");
-        operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, ControlLifecycleCodec.encodeReceipt(secondReceipt)));
-        assertEquals(secondReceipt, next.get(0).join());
+        operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, resultWire(secondReceipt)));
+        assertEquals(secondReceipt, next.get(0).join().receipt());
     }
 
     @Test void reconcilingAnUnactivatedPrepareClosesEachSupersededStandbyLink() throws Exception {
@@ -413,7 +420,7 @@ class ControlClientCoordinatorTest {
         var result = h.client.submit("heartbeat", new byte[0], true).toCompletableFuture();
         var operation = h.operations.get(0); var receipt = h.receipt("committed");
         h.journal.fail = true;
-        operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, ControlLifecycleCodec.encodeReceipt(receipt)));
+        operation.reply.complete(new ControlClientIo.HttpReply(operation.endpoint, "POST", operation.endpoint, 200, resultWire(receipt)));
         assertEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state());
         assertNotNull(h.journal.value.pending());
         assertTrue(result.isCompletedExceptionally());
