@@ -1,0 +1,350 @@
+{
+  "version": 1,
+  "warning": "Local conformance vectors only. Public test keys MUST NOT authenticate remote operations.",
+  "providerKey": {
+    "keyId": "provider_control_test_01",
+    "publicKeyJwk": {
+      "kty": "EC",
+      "x": "CCE9cTNsTfi8A8AmKF2RzC1yU7kvdH65Khzq4S9YX6yU4GOUAXwXgSqUIdgQp_hu",
+      "y": "m73Q4WCCkHJCVC9ZLTkP5zME2WywIJw7jhyFqw4vWUm_AgE29wFgUs6a6v2yoMji",
+      "crv": "P-384"
+    }
+  },
+  "vectors": [
+    {
+      "name": "heartbeat-initial",
+      "intent": {
+        "version": 1,
+        "audience": "https://provider.example",
+        "operation": "heartbeat",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sequence": 12,
+        "idempotencyKey": "lifecycle_intent_0000",
+        "payloadSha256": "kO9_v1Y6aN2HtDH6eRfpLtjy1gfqJ1pgNUNFo7nz7AI"
+      },
+      "intentDigest": "3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA",
+      "bodyUtf8": "{ \"desiredState\": {\"revision\":1,\"state\":\"serving\"}, \"readiness\":{\"routable\":false}, \"message\":\"雪 😀\", \"escaped\":\"\\ud800\", \"clockSkewMillis\":-12, \"load\":1.25e-2 }\n",
+      "result": {
+        "version": 1,
+        "receipt": {
+          "version": 1,
+          "intentDigest": "3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA",
+          "operation": "heartbeat",
+          "instanceId": "instance_test_01",
+          "generation": 3,
+          "sequence": 12,
+          "idempotencyKey": "lifecycle_intent_0000",
+          "disposition": "committed",
+          "committedAt": 1789400001000,
+          "commitRevision": 41,
+          "code": null
+        },
+        "body": "eyAiZGVzaXJlZFN0YXRlIjogeyJyZXZpc2lvbiI6MSwic3RhdGUiOiJzZXJ2aW5nIn0sICJyZWFkaW5lc3MiOnsicm91dGFibGUiOmZhbHNlfSwgIm1lc3NhZ2UiOiLpm6og8J-YgCIsICJlc2NhcGVkIjoiXHVkODAwIiwgImNsb2NrU2tld01pbGxpcyI6LTEyLCAibG9hZCI6MS4yNWUtMiB9Cg"
+      },
+      "wire": "{\"version\":1,\"receipt\":{\"version\":1,\"intentDigest\":\"3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA\",\"operation\":\"heartbeat\",\"instanceId\":\"instance_test_01\",\"generation\":3,\"sequence\":12,\"idempotencyKey\":\"lifecycle_intent_0000\",\"disposition\":\"committed\",\"committedAt\":1789400001000,\"commitRevision\":41,\"code\":null},\"body\":\"eyAiZGVzaXJlZFN0YXRlIjogeyJyZXZpc2lvbiI6MSwic3RhdGUiOiJzZXJ2aW5nIn0sICJyZWFkaW5lc3MiOnsicm91dGFibGUiOmZhbHNlfSwgIm1lc3NhZ2UiOiLpm6og8J-YgCIsICJlc2NhcGVkIjoiXHVkODAwIiwgImNsb2NrU2tld01pbGxpcyI6LTEyLCAibG9hZCI6MS4yNWUtMiB9Cg\"}",
+      "payloadSha256": "bQXqU0OB_ib_bDlRJ84Ng9uN0EY9z4QahYQ1Qxfe7N8",
+      "frame": {
+        "version": 1,
+        "type": "lifecycle.receipt",
+        "id": "result_vector_00000000",
+        "sequence": 1,
+        "direction": "provider-to-host",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJ2ZXJzaW9uIjoxLCJyZWNlaXB0Ijp7InZlcnNpb24iOjEsImludGVudERpZ2VzdCI6IjNtMmRoMnZIQnFBNS1VOUQ2bm9na3hnRF9jYkpaVHh4aHRhZFR5d3N0QUEiLCJvcGVyYXRpb24iOiJoZWFydGJlYXQiLCJpbnN0YW5jZUlkIjoiaW5zdGFuY2VfdGVzdF8wMSIsImdlbmVyYXRpb24iOjMsInNlcXVlbmNlIjoxMiwiaWRlbXBvdGVuY3lLZXkiOiJsaWZlY3ljbGVfaW50ZW50XzAwMDAiLCJkaXNwb3NpdGlvbiI6ImNvbW1pdHRlZCIsImNvbW1pdHRlZEF0IjoxNzg5NDAwMDAxMDAwLCJjb21taXRSZXZpc2lvbiI6NDEsImNvZGUiOm51bGx9LCJib2R5IjoiZXlBaVpHVnphWEpsWkZOMFlYUmxJam9nZXlKeVpYWnBjMmx2YmlJNk1Td2ljM1JoZEdVaU9pSnpaWEoyYVc1bkluMHNJQ0p5WldGa2FXNWxjM01pT25zaWNtOTFkR0ZpYkdVaU9tWmhiSE5sZlN3Z0ltMWxjM05oWjJVaU9pTHBtNm9nOEotWWdDSXNJQ0psYzJOaGNHVmtJam9pWEhWa09EQXdJaXdnSW1Oc2IyTnJVMnRsZDAxcGJHeHBjeUk2TFRFeUxDQWliRzloWkNJNk1TNHlOV1V0TWlCOUNnIn0",
+        "payloadSha256": "bQXqU0OB_ib_bDlRJ84Ng9uN0EY9z4QahYQ1Qxfe7N8",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "provider_control_test_01",
+          "signature": "QtrAh5V-ZZ_20hoL7wccWAcGWuQGmNMMmTxCiHLNhQlSCjZ0CH_blB2HZJ2r2Lt16IZa0kEo0mNYDR9MylqN411HR1T5htic7DD3mAD5zMHxvJFYu0uI0ZPL9mNyInjc"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"provider-to-host\",\"https://provider.example\",\"lifecycle.receipt\",\"result_vector_00000000\",1,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"request-response\"],1789400000000,1789400015000,\"provider_control_test_01\",\"bQXqU0OB_ib_bDlRJ84Ng9uN0EY9z4QahYQ1Qxfe7N8\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    },
+    {
+      "name": "heartbeat-retry-observation",
+      "intent": {
+        "version": 1,
+        "audience": "https://provider.example",
+        "operation": "heartbeat",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sequence": 12,
+        "idempotencyKey": "lifecycle_intent_0000",
+        "payloadSha256": "kO9_v1Y6aN2HtDH6eRfpLtjy1gfqJ1pgNUNFo7nz7AI"
+      },
+      "intentDigest": "3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA",
+      "bodyUtf8": "{\"readiness\":{\"routable\":true},\"desiredState\":{\"revision\":2,\"state\":\"draining\"}}",
+      "result": {
+        "version": 1,
+        "receipt": {
+          "version": 1,
+          "intentDigest": "3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA",
+          "operation": "heartbeat",
+          "instanceId": "instance_test_01",
+          "generation": 3,
+          "sequence": 12,
+          "idempotencyKey": "lifecycle_intent_0000",
+          "disposition": "committed",
+          "committedAt": 1789400001000,
+          "commitRevision": 41,
+          "code": null
+        },
+        "body": "eyJyZWFkaW5lc3MiOnsicm91dGFibGUiOnRydWV9LCJkZXNpcmVkU3RhdGUiOnsicmV2aXNpb24iOjIsInN0YXRlIjoiZHJhaW5pbmcifX0"
+      },
+      "wire": "{\"version\":1,\"receipt\":{\"version\":1,\"intentDigest\":\"3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA\",\"operation\":\"heartbeat\",\"instanceId\":\"instance_test_01\",\"generation\":3,\"sequence\":12,\"idempotencyKey\":\"lifecycle_intent_0000\",\"disposition\":\"committed\",\"committedAt\":1789400001000,\"commitRevision\":41,\"code\":null},\"body\":\"eyJyZWFkaW5lc3MiOnsicm91dGFibGUiOnRydWV9LCJkZXNpcmVkU3RhdGUiOnsicmV2aXNpb24iOjIsInN0YXRlIjoiZHJhaW5pbmcifX0\"}",
+      "payloadSha256": "ixispmO-6FuqLYopzhMv1JNd4b57kdKoBqBpy3TqpNc",
+      "frame": {
+        "version": 1,
+        "type": "lifecycle.receipt",
+        "id": "result_vector_00000001",
+        "sequence": 2,
+        "direction": "provider-to-host",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJ2ZXJzaW9uIjoxLCJyZWNlaXB0Ijp7InZlcnNpb24iOjEsImludGVudERpZ2VzdCI6IjNtMmRoMnZIQnFBNS1VOUQ2bm9na3hnRF9jYkpaVHh4aHRhZFR5d3N0QUEiLCJvcGVyYXRpb24iOiJoZWFydGJlYXQiLCJpbnN0YW5jZUlkIjoiaW5zdGFuY2VfdGVzdF8wMSIsImdlbmVyYXRpb24iOjMsInNlcXVlbmNlIjoxMiwiaWRlbXBvdGVuY3lLZXkiOiJsaWZlY3ljbGVfaW50ZW50XzAwMDAiLCJkaXNwb3NpdGlvbiI6ImNvbW1pdHRlZCIsImNvbW1pdHRlZEF0IjoxNzg5NDAwMDAxMDAwLCJjb21taXRSZXZpc2lvbiI6NDEsImNvZGUiOm51bGx9LCJib2R5IjoiZXlKeVpXRmthVzVsYzNNaU9uc2ljbTkxZEdGaWJHVWlPblJ5ZFdWOUxDSmtaWE5wY21Wa1UzUmhkR1VpT25zaWNtVjJhWE5wYjI0aU9qSXNJbk4wWVhSbElqb2laSEpoYVc1cGJtY2lmWDAifQ",
+        "payloadSha256": "ixispmO-6FuqLYopzhMv1JNd4b57kdKoBqBpy3TqpNc",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "provider_control_test_01",
+          "signature": "elfr58fh3OUw7wzfDLLvVk19SSlNm8WfPe5HZRiBrTMjIteumG1Y3ufjMfP1MjFST3rIANlz62SXPsC-BRdVawX5TNHgtfvRsuiW2O3OpvRHq7J-kNsSXZtSXKqct75e"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"provider-to-host\",\"https://provider.example\",\"lifecycle.receipt\",\"result_vector_00000001\",2,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"request-response\"],1789400000000,1789400015000,\"provider_control_test_01\",\"ixispmO-6FuqLYopzhMv1JNd4b57kdKoBqBpy3TqpNc\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    },
+    {
+      "name": "rotation-public-result",
+      "intent": {
+        "version": 1,
+        "audience": "https://provider.example",
+        "operation": "rotate",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sequence": 13,
+        "idempotencyKey": "lifecycle_intent_0001",
+        "payloadSha256": "ctpIELOogC3qT2XGlMcS4nj_4MpEzqZwfzSN3ixiFlo"
+      },
+      "intentDigest": "yjsliVDaZMXmj4ZMacGv7R6Emfc3rHrwEeLxSvcjrLI",
+      "bodyUtf8": "{\"keyId\":\"candidate_test_only\",\"accepted\":true}",
+      "result": {
+        "version": 1,
+        "receipt": {
+          "version": 1,
+          "intentDigest": "yjsliVDaZMXmj4ZMacGv7R6Emfc3rHrwEeLxSvcjrLI",
+          "operation": "rotate",
+          "instanceId": "instance_test_01",
+          "generation": 3,
+          "sequence": 13,
+          "idempotencyKey": "lifecycle_intent_0001",
+          "disposition": "committed",
+          "committedAt": 1789400001000,
+          "commitRevision": 42,
+          "code": null
+        },
+        "body": "eyJrZXlJZCI6ImNhbmRpZGF0ZV90ZXN0X29ubHkiLCJhY2NlcHRlZCI6dHJ1ZX0"
+      },
+      "wire": "{\"version\":1,\"receipt\":{\"version\":1,\"intentDigest\":\"yjsliVDaZMXmj4ZMacGv7R6Emfc3rHrwEeLxSvcjrLI\",\"operation\":\"rotate\",\"instanceId\":\"instance_test_01\",\"generation\":3,\"sequence\":13,\"idempotencyKey\":\"lifecycle_intent_0001\",\"disposition\":\"committed\",\"committedAt\":1789400001000,\"commitRevision\":42,\"code\":null},\"body\":\"eyJrZXlJZCI6ImNhbmRpZGF0ZV90ZXN0X29ubHkiLCJhY2NlcHRlZCI6dHJ1ZX0\"}",
+      "payloadSha256": "MikPSF8HA4eJV9Ni0l0AYRpveC7oLaHOjlBcNPvzFrA",
+      "frame": {
+        "version": 1,
+        "type": "lifecycle.receipt",
+        "id": "result_vector_00000002",
+        "sequence": 3,
+        "direction": "provider-to-host",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJ2ZXJzaW9uIjoxLCJyZWNlaXB0Ijp7InZlcnNpb24iOjEsImludGVudERpZ2VzdCI6Inlqc2xpVkRhWk1YbWo0Wk1hY0d2N1I2RW1mYzNySHJ3RWVMeFN2Y2pyTEkiLCJvcGVyYXRpb24iOiJyb3RhdGUiLCJpbnN0YW5jZUlkIjoiaW5zdGFuY2VfdGVzdF8wMSIsImdlbmVyYXRpb24iOjMsInNlcXVlbmNlIjoxMywiaWRlbXBvdGVuY3lLZXkiOiJsaWZlY3ljbGVfaW50ZW50XzAwMDEiLCJkaXNwb3NpdGlvbiI6ImNvbW1pdHRlZCIsImNvbW1pdHRlZEF0IjoxNzg5NDAwMDAxMDAwLCJjb21taXRSZXZpc2lvbiI6NDIsImNvZGUiOm51bGx9LCJib2R5IjoiZXlKclpYbEpaQ0k2SW1OaGJtUnBaR0YwWlY5MFpYTjBYMjl1YkhraUxDSmhZMk5sY0hSbFpDSTZkSEoxWlgwIn0",
+        "payloadSha256": "MikPSF8HA4eJV9Ni0l0AYRpveC7oLaHOjlBcNPvzFrA",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "provider_control_test_01",
+          "signature": "hVAut3ppSEkSirsJDNsKYPLrwfP4FGNMjGbRCqRyzZkvJ2oP1fZzoOjYTpOO5NPuhIUHQToyOhqoYUnELtpdoOu2wE34fw9JvRRqGHfEk2EbfDIIvplWxiY1ttTILZQI"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"provider-to-host\",\"https://provider.example\",\"lifecycle.receipt\",\"result_vector_00000002\",3,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"request-response\"],1789400000000,1789400015000,\"provider_control_test_01\",\"MikPSF8HA4eJV9Ni0l0AYRpveC7oLaHOjlBcNPvzFrA\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    },
+    {
+      "name": "deregister-result",
+      "intent": {
+        "version": 1,
+        "audience": "https://provider.example",
+        "operation": "deregister",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sequence": 14,
+        "idempotencyKey": "lifecycle_intent_0002",
+        "payloadSha256": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+      },
+      "intentDigest": "VaXuW0K2AwZyKL7GwJLAjUU1H2W9VP9lIsL8Vg3l9KI",
+      "bodyUtf8": "{}",
+      "result": {
+        "version": 1,
+        "receipt": {
+          "version": 1,
+          "intentDigest": "VaXuW0K2AwZyKL7GwJLAjUU1H2W9VP9lIsL8Vg3l9KI",
+          "operation": "deregister",
+          "instanceId": "instance_test_01",
+          "generation": 3,
+          "sequence": 14,
+          "idempotencyKey": "lifecycle_intent_0002",
+          "disposition": "committed",
+          "committedAt": 1789400001000,
+          "commitRevision": 43,
+          "code": null
+        },
+        "body": "e30"
+      },
+      "wire": "{\"version\":1,\"receipt\":{\"version\":1,\"intentDigest\":\"VaXuW0K2AwZyKL7GwJLAjUU1H2W9VP9lIsL8Vg3l9KI\",\"operation\":\"deregister\",\"instanceId\":\"instance_test_01\",\"generation\":3,\"sequence\":14,\"idempotencyKey\":\"lifecycle_intent_0002\",\"disposition\":\"committed\",\"committedAt\":1789400001000,\"commitRevision\":43,\"code\":null},\"body\":\"e30\"}",
+      "payloadSha256": "nzBV3qBorEFqlKkhyqotphuq50jiiVVpd8R08SBO_y0",
+      "frame": {
+        "version": 1,
+        "type": "lifecycle.receipt",
+        "id": "result_vector_00000003",
+        "sequence": 4,
+        "direction": "provider-to-host",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJ2ZXJzaW9uIjoxLCJyZWNlaXB0Ijp7InZlcnNpb24iOjEsImludGVudERpZ2VzdCI6IlZhWHVXMEsyQXdaeUtMN0d3SkxBalVVMUgyVzlWUDlsSXNMOFZnM2w5S0kiLCJvcGVyYXRpb24iOiJkZXJlZ2lzdGVyIiwiaW5zdGFuY2VJZCI6Imluc3RhbmNlX3Rlc3RfMDEiLCJnZW5lcmF0aW9uIjozLCJzZXF1ZW5jZSI6MTQsImlkZW1wb3RlbmN5S2V5IjoibGlmZWN5Y2xlX2ludGVudF8wMDAyIiwiZGlzcG9zaXRpb24iOiJjb21taXR0ZWQiLCJjb21taXR0ZWRBdCI6MTc4OTQwMDAwMTAwMCwiY29tbWl0UmV2aXNpb24iOjQzLCJjb2RlIjpudWxsfSwiYm9keSI6ImUzMCJ9",
+        "payloadSha256": "nzBV3qBorEFqlKkhyqotphuq50jiiVVpd8R08SBO_y0",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "provider_control_test_01",
+          "signature": "dW4KWwK2cNzt-HPQLLjtLcnwBs7VaR0Oxx-e-GXgkTW4pR7KfjdxZ3JV4u4HILInEw40MWV-KAyzpY7jfBNl0kejSyp06iriL1hNs2JZ1r45f1MAc893l71Y7QPGIHJT"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"provider-to-host\",\"https://provider.example\",\"lifecycle.receipt\",\"result_vector_00000003\",4,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"request-response\"],1789400000000,1789400015000,\"provider_control_test_01\",\"nzBV3qBorEFqlKkhyqotphuq50jiiVVpd8R08SBO_y0\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    },
+    {
+      "name": "rejected-result",
+      "intent": {
+        "version": 1,
+        "audience": "https://provider.example",
+        "operation": "heartbeat",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sequence": 12,
+        "idempotencyKey": "lifecycle_intent_0000",
+        "payloadSha256": "kO9_v1Y6aN2HtDH6eRfpLtjy1gfqJ1pgNUNFo7nz7AI"
+      },
+      "intentDigest": "3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA",
+      "bodyUtf8": "{}",
+      "result": {
+        "version": 1,
+        "receipt": {
+          "version": 1,
+          "intentDigest": "3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA",
+          "operation": "heartbeat",
+          "instanceId": "instance_test_01",
+          "generation": 3,
+          "sequence": 12,
+          "idempotencyKey": "lifecycle_intent_0000",
+          "disposition": "rejected",
+          "committedAt": null,
+          "commitRevision": null,
+          "code": "state_not_applied"
+        },
+        "body": "e30"
+      },
+      "wire": "{\"version\":1,\"receipt\":{\"version\":1,\"intentDigest\":\"3m2dh2vHBqA5-U9D6nogkxgD_cbJZTxxhtadTywstAA\",\"operation\":\"heartbeat\",\"instanceId\":\"instance_test_01\",\"generation\":3,\"sequence\":12,\"idempotencyKey\":\"lifecycle_intent_0000\",\"disposition\":\"rejected\",\"committedAt\":null,\"commitRevision\":null,\"code\":\"state_not_applied\"},\"body\":\"e30\"}",
+      "payloadSha256": "tfuMoWOGueL42Vs2V6naEcf8GTRz9FsyjvJ3XSzDjAY",
+      "frame": {
+        "version": 1,
+        "type": "lifecycle.receipt",
+        "id": "result_vector_00000004",
+        "sequence": 5,
+        "direction": "provider-to-host",
+        "audience": "https://provider.example",
+        "instanceId": "instance_test_01",
+        "generation": 3,
+        "sessionId": "session_vector_0001",
+        "sessionEpoch": 7,
+        "connectionId": "connection_vector_0001",
+        "capabilities": [
+          "request-response"
+        ],
+        "sentAt": 1789400000000,
+        "expiresAt": 1789400015000,
+        "payload": "eyJ2ZXJzaW9uIjoxLCJyZWNlaXB0Ijp7InZlcnNpb24iOjEsImludGVudERpZ2VzdCI6IjNtMmRoMnZIQnFBNS1VOUQ2bm9na3hnRF9jYkpaVHh4aHRhZFR5d3N0QUEiLCJvcGVyYXRpb24iOiJoZWFydGJlYXQiLCJpbnN0YW5jZUlkIjoiaW5zdGFuY2VfdGVzdF8wMSIsImdlbmVyYXRpb24iOjMsInNlcXVlbmNlIjoxMiwiaWRlbXBvdGVuY3lLZXkiOiJsaWZlY3ljbGVfaW50ZW50XzAwMDAiLCJkaXNwb3NpdGlvbiI6InJlamVjdGVkIiwiY29tbWl0dGVkQXQiOm51bGwsImNvbW1pdFJldmlzaW9uIjpudWxsLCJjb2RlIjoic3RhdGVfbm90X2FwcGxpZWQifSwiYm9keSI6ImUzMCJ9",
+        "payloadSha256": "tfuMoWOGueL42Vs2V6naEcf8GTRz9FsyjvJ3XSzDjAY",
+        "authentication": {
+          "scheme": "nxs-control-es384-v1",
+          "keyId": "provider_control_test_01",
+          "signature": "xUoWJoNs3Ad-W7YhiBysreEX2iAZx592uYRkvKjygEvzhhiajxmaOzWjncqgYMWB3DvxCYcPxzDBDpzaP-B_hLWYisQ7dR4dxW9gUtnZWAPIW8ZarsbkQ0ID5Sbp7BpD"
+        }
+      },
+      "signingText": "[\"nethernet-control-frame-v1\",1,\"nxs-control-es384-v1\",\"provider-to-host\",\"https://provider.example\",\"lifecycle.receipt\",\"result_vector_00000004\",5,\"instance_test_01\",3,\"session_vector_0001\",7,\"connection_vector_0001\",[\"request-response\"],1789400000000,1789400015000,\"provider_control_test_01\",\"tfuMoWOGueL42Vs2V6naEcf8GTRz9FsyjvJ3XSzDjAY\"]",
+      "context": {
+        "now": 1789400000000,
+        "authorityExpiresAt": 1789400300000,
+        "clockSkewMillis": 1000,
+        "keyValidFrom": 1789399700000,
+        "keyValidUntil": 1789400600000
+      }
+    }
+  ]
+}

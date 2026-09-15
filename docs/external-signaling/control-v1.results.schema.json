@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.nethernet.dev/control-v1.results.schema.json",
+  "title": "Optional control operation result envelope v1",
+  "$comment": "Both carriers cap the encoded envelope at 65536 UTF-8 bytes. The canonical base64url body decodes to at most 45056 bytes of a JSON object, depth 16, without duplicate keys. Codecs enforce these byte and decoded-content constraints. Authenticate the carrier before use; the envelope never renews authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "receipt",
+    "body"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "receipt": {
+      "$ref": "#/$defs/receipt"
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60075,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "contentEncoding": "base64url",
+      "contentMediaType": "application/json"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "receipt": {
+            "properties": {
+              "disposition": {
+                "enum": [
+                  "rejected",
+                  "expired",
+                  "unknown"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": {
+            "const": "e30"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "uint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positive": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "opaque": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "operation": {
+      "enum": [
+        "heartbeat",
+        "outcomes",
+        "rotate",
+        "retire",
+        "deregister"
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "intentDigest",
+        "operation",
+        "instanceId",
+        "generation",
+        "sequence",
+        "idempotencyKey",
+        "disposition",
+        "committedAt",
+        "commitRevision",
+        "code"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "generation": {
+          "$ref": "#/$defs/positive"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positive"
+        },
+        "idempotencyKey": {
+          "$ref": "#/$defs/opaque"
+        },
+        "disposition": {
+          "enum": [
+            "committed",
+            "rejected",
+            "expired",
+            "unknown"
+          ]
+        },
+        "committedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "disposition": {
+            "const": "committed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "committedAt": {
+            "$ref": "#/$defs/uint"
+          },
+          "commitRevision": {
+            "$ref": "#/$defs/uint"
+          },
+          "code": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "committedAt": {
+            "type": "null"
+          },
+          "commitRevision": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  }
+}
