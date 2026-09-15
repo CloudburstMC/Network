@@ -8,6 +8,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -112,6 +113,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         boolean opened, activating;
         ControlWriterFence writer;
         Object stateSend;
+        final ArrayDeque<Long> authorityStarts = new ArrayDeque<>();
     }
     private static final class PendingAuthority {
         final ControlAuthorityCodec.Request request;
@@ -119,7 +121,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
         final ControlClientJournal.Grant grant;
         final long attempt;
         ControlClientIo.Scheduler.Task timeout;
-        CompletionStage<ControlClientIo.HttpReply> operation;
+        CompletionStage<?> operation;
+        Candidate connection;
+        boolean sent;
+        ControlAuthorityCodec.Verified response;
+        ControlFrameCodec.VerificationKey responseKey;
         PendingAuthority(ControlAuthorityCodec.Request request, ControlClientJournal.Credential credential,
                          ControlClientJournal.Grant grant, long attempt) {
             this.request = request; this.credential = credential; this.grant = grant; this.attempt = attempt;
@@ -481,7 +487,14 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private synchronized void receive(Candidate connection, String wire) {
         if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED || connection == discardedGapConnection) return;
         try {
-            if (connection == active) { activeFrame(wire); return; }
+            if (connection == active) {
+                var message = ControlJson.parse(wire, ControlFrameCodec.MAX_FRAME_BYTES);
+                if (message.has("kind")) {
+                    if (!"authority-response".equals(ControlJson.string(message, "kind"))) throw ControlJson.invalid("control socket message kind");
+                    receiveSocketAuthority(connection, wire); return;
+                }
+                activeFrame(wire); return;
+            }
             if (connection != candidate || state != State.STANDBY || connection.challenge != null) return;
             connection.challenge = verify(wire, connection.upgrade);
             if (connection.opened) activate(connection);
@@ -573,6 +586,19 @@ public final class ControlClientCoordinator implements AutoCloseable {
         cancel(authorityRetry); authorityRetry = null;
         var grant = snapshot.grant(); long now = clock.nowMillis();
         if (grant == null || now >= grant.sessionExpiresAt()) { state = State.AUTHORITY_EXPIRED; return; }
+        Candidate connection = snapshot.writer().transport().equals("websocket") ? active : null;
+        if (snapshot.writer().transport().equals("websocket")) {
+            if (connection == null || !ownsActiveWriter()) { authorityUnavailable(); return; }
+            while (!connection.authorityStarts.isEmpty() && now - connection.authorityStarts.getFirst() >= 30_000) connection.authorityStarts.removeFirst();
+            if (connection.authorityStarts.size() >= 2) {
+                long delay = connection.authorityStarts.getFirst() + 30_000 - now, generation = attempt;
+                authorityUnavailable(); cancel(authorityRetry);
+                authorityRetry = scheduler.schedule(() -> { synchronized (this) {
+                    if (generation == attempt && state == State.AUTHORITY_EXPIRED && active == connection) beginAuthorityRefresh();
+                }}, delay);
+                return;
+            }
+        }
         state = State.SYNCHRONIZING;
         try {
             var subject = snapshot.subject(); var credential = snapshot.currentKey();
@@ -580,49 +606,92 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     subject.instanceId(), subject.generation(), snapshot.writer(), grant.capabilities(), now,
                     Math.min(now + config.proofMillis(), grant.sessionExpiresAt()), "POST", target(config.authority()),
                     Math.min(now + ControlAuthorityCodec.MAX_SOURCE_AGE_MILLIS, grant.sessionExpiresAt()), authentication(credential)), credential.keyPair().getPrivate());
-            var pending = new PendingAuthority(request, credential, grant, attempt); pendingAuthority = pending;
-            pending.timeout = scheduler.schedule(() -> { synchronized (this) { if (pendingAuthority == pending) authorityUnavailable(); }}, request.expiresAt() - now);
-            authorityIo = pending;
-            CompletionStage<ControlClientIo.HttpReply> operation = Objects.requireNonNull(io.authority(config.authority(), request), "Missing authority I/O");
-            pending.operation = operation;
-            operation.whenComplete((reply, failure) -> { synchronized (this) {
-                if (authorityIo == pending) authorityIo = null;
-                if (!currentPending(pending)) return;
-                try {
-                    if (failure != null) { authorityUnavailable(); return; }
-                    checkedReply(reply, config.authority(), "POST", ControlAuthorityCodec.MAX_ENVELOPE_BYTES);
-                    if (reply.status() != 200) { authorityUnavailable(); return; }
-                    var raw = ControlAuthorityCodec.decodeResponse(reply.body()); var key = keys.resolve(raw.authentication().keyId());
-                    var proof = ControlAuthorityCodec.verifyResponse(reply.body(), new ControlAuthorityCodec.ResponseContext(request,
-                            clock.nowMillis(), grant.sessionExpiresAt(), 30000, authorityFloor()), key);
-                    proof.requireFreshDelivery(clock.nowMillis(), authorityFloor());
-                    if (!proof.response().permissions().contains("control.status") || !currentPending(pending) || !currentKey(key)) { authorityUnavailable(); return; }
-                    var nextFloor = new ControlClientJournal.AuthorityFloor(proof.originalWire());
-                    nextFloor.requireAtLeast(snapshot.authorityFloor());
-                    persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(),
-                            snapshot.pending(), snapshot.pendingBootstrap(), snapshot.grant(), nextFloor));
-                    // Disk writes and completion callbacks may reenter the client. The nonce remains pending until this fence.
+            var pending = new PendingAuthority(request, credential, grant, attempt); pending.connection = connection; pendingAuthority = pending;
+            pending.timeout = scheduler.schedule(() -> { synchronized (this) { if (pendingAuthority == pending) authorityUnavailable(); }}, Math.max(0, request.expiresAt() - clock.nowMillis()));
+            if (connection != null) {
+                // The source exchange is unsequenced and shares the link's bounded physical send queue.
+                // It never uses an HTTP request or releases an unsettled send on logical timeout.
+                String wire = ControlAuthorityCodec.encode(request);
+                if (!currentPending(pending) || clock.nowMillis() >= request.expiresAt()) { authorityUnavailable(); return; }
+                connection.authorityStarts.addLast(clock.nowMillis()); authorityIo = pending;
+                CompletionStage<Void> sending = Objects.requireNonNull(connection.link.sendText(wire), "Missing socket authority send");
+                pending.operation = sending;
+                sending.whenComplete((ignored, failure) -> { synchronized (this) {
+                    if (authorityIo == pending) authorityIo = null;
                     if (!currentPending(pending)) return;
-                    if (!currentKey(key)) { authorityUnavailable(); return; }
-                    proof.requireFreshDelivery(clock.nowMillis(), authorityFloor());
-                    cancel(pending.timeout); pendingAuthority = null; authority = proof; authorityKey = key;
-                    if (pendingApplicationFrame != null && pendingApplicationFrame.proof() != proof) {
-                        // An already consumed application frame lost its original scope. Recover ordered delivery.
-                        replaceAfterFrameGap(); return;
-                    }
-                    synchronizeAfterOutcomes(proof);
-                } catch (RuntimeException invalid) { if (currentPending(pending)) authorityUnavailable(); }
-            }});
+                    if (failure != null) { authorityUnavailable(); return; }
+                    pending.sent = true; installAuthority(pending);
+                }});
+            } else {
+                authorityIo = pending;
+                CompletionStage<ControlClientIo.HttpReply> operation = Objects.requireNonNull(io.authority(config.authority(), request), "Missing authority I/O");
+                pending.operation = operation;
+                operation.whenComplete((reply, failure) -> { synchronized (this) {
+                    if (authorityIo == pending) authorityIo = null;
+                    if (!currentPending(pending)) return;
+                    try {
+                        if (failure != null) { authorityUnavailable(); return; }
+                        checkedReply(reply, config.authority(), "POST", ControlAuthorityCodec.MAX_ENVELOPE_BYTES);
+                        if (reply.status() != 200) { authorityUnavailable(); return; }
+                        pending.sent = true; verifyAuthorityResponse(pending, reply.body()); installAuthority(pending);
+                    } catch (RuntimeException invalid) { if (currentPending(pending)) authorityUnavailable(); }
+                }});
+            }
         } catch (GeneralSecurityException | RuntimeException failure) {
             if (authorityIo != null && authorityIo.operation == null) authorityIo = null;
             authorityUnavailable();
         }
     }
 
+    private void receiveSocketAuthority(Candidate connection, String wire) {
+        // Parse the closed bounded kind even for stale replies, but never spend signature work on an old nonce.
+        var raw = ControlAuthorityCodec.decodeResponse(wire);
+        var pending = pendingAuthority;
+        if (pending == null || pending.connection != connection || !currentPending(pending)
+                || !raw.requestId().equals(pending.request.requestId())) return;
+        if (pending.response != null) {
+            if (!pending.response.originalWire().equals(wire)) authorityUnavailable();
+            return;
+        }
+        try { verifyAuthorityResponse(pending, wire); installAuthority(pending); }
+        catch (RuntimeException invalid) { if (currentPending(pending)) authorityUnavailable(); }
+    }
+    private void verifyAuthorityResponse(PendingAuthority pending, String wire) {
+        var raw = ControlAuthorityCodec.decodeResponse(wire); var key = keys.resolve(raw.authentication().keyId());
+        var proof = ControlAuthorityCodec.verifyResponse(wire, new ControlAuthorityCodec.ResponseContext(pending.request,
+                clock.nowMillis(), pending.grant.sessionExpiresAt(), 30000, authorityFloor()), key);
+        proof.requireFreshDelivery(clock.nowMillis(), authorityFloor());
+        if (!proof.response().permissions().contains("control.status") || !currentPending(pending) || !currentKey(key))
+            throw ControlJson.invalid("authority response binding");
+        pending.response = proof; pending.responseKey = key;
+    }
+    private void installAuthority(PendingAuthority pending) {
+        if (!pending.sent || pending.response == null || !currentPending(pending)) return;
+        try {
+            var proof = pending.response; var key = pending.responseKey;
+            proof.requireFreshDelivery(clock.nowMillis(), authorityFloor());
+            if (!currentKey(key)) { authorityUnavailable(); return; }
+            var nextFloor = new ControlClientJournal.AuthorityFloor(proof.originalWire());
+            nextFloor.requireAtLeast(snapshot.authorityFloor());
+            persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(),
+                    snapshot.pending(), snapshot.pendingBootstrap(), snapshot.grant(), nextFloor));
+            // A response preceding send completion waits here; disk/callback work can also change its owner.
+            if (!currentPending(pending)) return;
+            if (!currentKey(key)) { authorityUnavailable(); return; }
+            proof.requireFreshDelivery(clock.nowMillis(), authorityFloor());
+            cancel(pending.timeout); pendingAuthority = null; authority = proof; authorityKey = key;
+            if (pendingApplicationFrame != null && pendingApplicationFrame.proof() != proof) {
+                replaceAfterFrameGap(); return;
+            }
+            synchronizeAfterOutcomes(proof);
+        } catch (RuntimeException invalid) { if (currentPending(pending)) authorityUnavailable(); }
+    }
+
     private boolean currentPending(PendingAuthority pending) {
         return pendingAuthority == pending && pending.attempt == attempt && state != State.CLOSED && state != State.UNRESOLVED
                 && pending.request.writer().equals(snapshot.writer()) && pending.credential.equals(snapshot.currentKey())
-                && pending.grant.equals(snapshot.grant()) && ownsActiveWriter();
+                && pending.grant.equals(snapshot.grant()) && ownsActiveWriter()
+                && (pending.connection == null || pending.connection == active);
     }
     private boolean ownsActiveWriter() {
         return snapshot.writer().transport().equals("https") || active != null && active != discardedGapConnection && active.link != null && active.writer != null

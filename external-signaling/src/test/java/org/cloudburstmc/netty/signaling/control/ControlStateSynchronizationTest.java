@@ -108,12 +108,12 @@ class ControlStateSynchronizationTest {
         link.appliedSend = new CompletableFuture<>(); h.synchronizations.get(0).complete(null);
         h.time.advance(30_000);
         for (int i = 0; i < 3; i++) {
-            h.time.advance(h.time.nextDelay()); h.respondAuthority();
+            h.awaitAuthorityRequest(); h.respondAuthority();
             h.synchronizations.get(h.synchronizations.size() - 1).complete(null);
             assertEquals(1, link.appliedFrames.size()); assertFalse(h.client.ready());
         }
         link.appliedSend.complete(null); h.autoReady = true;
-        h.time.advance(h.time.nextDelay()); h.synchronizedReady();
+        h.awaitAuthorityRequest(); h.synchronizedReady();
         assertEquals(2, link.appliedFrames.size()); assertEquals(3, h.bootstrapCalls); h.client.close();
     }
 

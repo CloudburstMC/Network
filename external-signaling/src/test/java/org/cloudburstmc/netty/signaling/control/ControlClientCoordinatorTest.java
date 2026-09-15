@@ -69,7 +69,7 @@ class ControlClientCoordinatorTest {
         final AtomicInteger ids = new AtomicInteger();
         Supplier<String> identifierSupplier = () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet());
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
-        boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls;
+        boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls, httpAuthorityCalls;
         boolean cancelNativeClaims; URI cancelRoute;
         boolean durableOutcomes; final List<CompletableFuture<Void>> outcomeAcks = new ArrayList<>();
         Runnable onOutcomeAck;
@@ -133,7 +133,7 @@ class ControlClientCoordinatorTest {
             var link = new FakeLink(proof, received); links.add(link); return link;
         }
         @Override public CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request) {
-            authorityCalls++; var reply = new CompletableFuture<HttpReply>(); authorityRequests.add(new AuthorityExchange(endpoint, request, reply)); return reply;
+            authorityCalls++; httpAuthorityCalls++; var reply = new CompletableFuture<HttpReply>(); authorityRequests.add(new AuthorityExchange(endpoint, request, reply)); return reply;
         }
         @Override public CompletionStage<ControlSynchronizationResult> synchronize(ControlWriterFence wanted, ControlClientJournal.Grant fixed, ControlAuthorityCodec.Verified authority, Synchronization exchange) {
             assertEquals(writer, wanted); assertEquals(grant, fixed);
@@ -162,13 +162,23 @@ class ControlClientCoordinatorTest {
             final CompletableFuture<Void> opened = CompletableFuture.completedFuture(null), closed = new CompletableFuture<>();
             final List<String> sent = new ArrayList<>(); int closeCalls, abortCalls;
             final List<String> appliedFrames = new ArrayList<>();
+            final List<String> authorityWires = new ArrayList<>();
             int readinessFrames;
             long nextProviderSequence = 1;
-            CompletableFuture<Void> appliedSend, lifecycleSend;
+            CompletableFuture<Void> appliedSend, lifecycleSend, authoritySend;
             FakeLink(ControlSessionCodec.Request request, Consumer<String> receiver) { this.upgrade = request; this.receiver = receiver; }
             @Override public CompletionStage<Void> opened() { return opened; }
             @Override public CompletionStage<?> closed() { return closed; }
             @Override public CompletionStage<Void> sendText(String wire) {
+                if (ControlJson.parse(wire, ControlFrameCodec.MAX_FRAME_BYTES).has("kind")) {
+                    var request = ControlAuthorityCodec.decodeRequest(wire); authorityWires.add(wire); authorityCalls++;
+                    var reply = new CompletableFuture<HttpReply>();
+                    authorityRequests.add(new AuthorityExchange(URI.create(ORIGIN + "/control/authority"), request, reply));
+                    // This is a provider fixture convenience, not a production HTTP DTO: only raw
+                    // successful proof bytes cross the exact fake socket's receive callback.
+                    reply.whenComplete((value, failure) -> { if (failure == null && value.status() == 200) receiver.accept(value.body()); });
+                    return authoritySend == null ? CompletableFuture.completedFuture(null) : authoritySend;
+                }
                 var frame = ControlFrameCodec.decode(wire);
                 if (frame.type().equals("state.applied")) {
                     appliedFrames.add(wire);
@@ -273,6 +283,11 @@ class ControlClientCoordinatorTest {
                     source, grant.sessionExpiresAt(), issuedAuthorityExpires, List.of("control.status"), sourceState,
                     new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, providerKey.keyId(), ""));
             return ControlAuthorityCodec.encode(ControlAuthorityCodec.sign(response, provider.getPrivate()));
+        }
+        void awaitAuthorityRequest() {
+            // Only tests asking for eventual progress use this; rate and occupied-send tests inspect timers directly.
+            for (int i = 0; authorityRequests.isEmpty() && i < 8; i++) time.advance(time.nextDelay());
+            assertFalse(authorityRequests.isEmpty(), "No bounded authority retry made progress");
         }
         void respondAuthority() throws Exception {
             var exchange = authorityRequests.remove();

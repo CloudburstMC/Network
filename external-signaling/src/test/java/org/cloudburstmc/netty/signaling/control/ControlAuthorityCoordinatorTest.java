@@ -11,12 +11,18 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ControlAuthorityCoordinatorTest {
     private static ControlClientCoordinatorTest.Harness activated() throws Exception {
-        var h = new ControlClientCoordinatorTest.Harness();
-        h.client.start(); h.respondStatus(); h.respondPrepare(); h.links.get(0).challenge(); h.respondActivation(); return h;
+        return activated("websocket");
+    }
+    private static ControlClientCoordinatorTest.Harness activated(String transport) throws Exception {
+        var h = new ControlClientCoordinatorTest.Harness(transport);
+        h.client.start(); h.respondStatus(); h.respondPrepare();
+        if (transport.equals("websocket")) h.links.get(0).challenge();
+        h.respondActivation(); return h;
     }
     private static void unavailable(ControlClientCoordinatorTest.Harness h) {
         var exchange = h.authorityRequests.remove();
         exchange.reply().complete(new ControlClientIo.HttpReply(exchange.endpoint(), "POST", exchange.endpoint(), 503, "unavailable"));
+        if (h.writer.transport().equals("websocket")) h.time.advance(Math.max(0, exchange.request().expiresAt() - h.time.now)); // Socket source misses are silent.
     }
     private static String frame(ControlClientCoordinatorTest.Harness h, long sentAt, long expiresAt, boolean validSignature) throws Exception {
         return frame(h, sentAt, expiresAt, validSignature, 1, "connectivity.report");
@@ -61,7 +67,7 @@ class ControlAuthorityCoordinatorTest {
     }
 
     @Test void exactHttpsProvenanceAndPendingNonceFenceRedirectedOrLateResponses() throws Exception {
-        var h = activated(); var first = h.authorityRequests.remove(); String wire = h.authorityWire(first);
+        var h = activated("https"); var first = h.authorityRequests.remove(); String wire = h.authorityWire(first);
         first.reply().complete(new ControlClientIo.HttpReply(first.endpoint(), "POST", URI.create("https://other.example/control/authority"), 200, wire));
         assertNull(h.journal.value.authorityFloor()); assertTrue(h.synchronizations.isEmpty());
         h.time.advance(150); var late = h.authorityRequests.remove(); String lateWire = h.authorityWire(late);
@@ -70,7 +76,7 @@ class ControlAuthorityCoordinatorTest {
         late.reply().complete(new ControlClientIo.HttpReply(late.endpoint(), "POST", late.endpoint(), 200, lateWire));
         assertNull(h.journal.value.authorityFloor());
         h.time.advance(h.time.nextDelay());
-        h.synchronizedReady(); assertEquals(3, h.bootstrapCalls); assertEquals(0, h.links.get(0).abortCalls);
+        h.synchronizedReady(); assertEquals(3, h.bootstrapCalls); assertTrue(h.links.isEmpty());
     }
 
     @Test void consumedDeliveryDeadlineDoesNotPrematurelyEndStateApplication() throws Exception {
@@ -127,7 +133,6 @@ class ControlAuthorityCoordinatorTest {
         h.client.replaceTransport("https", java.util.List.of("request-response")); h.respondPrepare(); h.respondActivation();
         old.reply().complete(new ControlClientIo.HttpReply(old.endpoint(), "POST", old.endpoint(), 200, wire));
         assertNull(h.journal.value.authorityFloor()); assertTrue(h.synchronizations.isEmpty());
-        h.time.advance(h.time.nextDelay());
         h.synchronizedReady(); assertEquals("https", h.client.snapshot().authorityFloor().value().writer().transport());
         assertEquals(2, h.client.snapshot().writer().sessionEpoch());
     }
@@ -253,14 +258,14 @@ class ControlAuthorityCoordinatorTest {
     }
 
     @Test void repeatedStateApplicationFailureKeepsBackoffUntilFullReadiness() throws Exception {
-        var h = activated(); int bootstrap = h.bootstrapCalls; long previousDelay = 0;
+        var h = activated("https"); int bootstrap = h.bootstrapCalls; long previousDelay = 0;
         for (int i = 0; i < 4; i++) {
             h.respondAuthority();
             h.synchronizations.get(h.synchronizations.size() - 1).completeExceptionally(new IllegalStateException("state unavailable"));
             long delay = h.time.nextDelay(); assertEquals(150L << i, delay); assertTrue(delay > previousDelay); previousDelay = delay;
             h.time.advance(delay);
         }
-        assertEquals(bootstrap, h.bootstrapCalls); assertEquals(0, h.links.get(0).abortCalls);
+        assertEquals(bootstrap, h.bootstrapCalls); assertTrue(h.links.isEmpty());
         h.synchronizedReady(); h.client.synchronize(); unavailable(h); assertEquals(150, h.time.nextDelay());
     }
 

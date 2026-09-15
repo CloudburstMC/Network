@@ -45,7 +45,7 @@ public interface ControlClientIo {
         void requireCurrent();
     }
     CompletionStage<HttpReply> bootstrap(URI endpoint, ControlSessionCodec.Request request);
-    /** Raw bounded response. The coordinator checks exact HTTPS provenance and provider-control proof. */
+    /** HTTPS writers only. WebSocket writers exchange the same signed proofs through their current Link, without an HTTP fallback. */
     CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request);
     /** Returns a raw result envelope bounded by ControlResultCodec.MAX_ENVELOPE_BYTES, never a bare receipt. */
     CompletionStage<HttpReply> operation(URI endpoint, ControlHttpCodec.Request request, byte[] originalBody);

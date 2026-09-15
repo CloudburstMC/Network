@@ -284,6 +284,16 @@ Non-secret report receipts must not be labeled committed unless actually committ
 
 ## Delegated authority and revocation semantics
 
+The optional [authority renewal exchange](control-v1.authority.md) uses existing
+closed `authority-request` / `authority-response` kind envelopes as raw text on
+the owning WebSocket, before ordinary protected frames. These messages have an
+8 KiB ceiling and consume no direction sequence. HTTPS writers use the configured
+authority POST route. The signed logical POST target remains identical on both
+carriers; socket replies are associated with their physical link, not fabricated
+HTTP provenance. Source-only timeout retains the current physical writer with
+bounded backoff and at most two starts per rolling 30 seconds. A positive proof
+does not establish readiness, reset sequences or extend any original deadline.
+
 An authenticated active socket is not unlimited authority. The provider may use
 cached, versioned authorization with a declared maximum age. Each protected
 operation must satisfy its established connection binding, required signature,

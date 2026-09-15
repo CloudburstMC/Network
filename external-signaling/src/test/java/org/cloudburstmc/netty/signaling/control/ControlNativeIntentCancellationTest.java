@@ -113,7 +113,7 @@ class ControlNativeIntentCancellationTest {
         h.client.synchronize(); h.respondAuthority();
         h.synchronizations.get(h.synchronizations.size()-1).completeExceptionally(new ControlClientIo.ReconciliationRequired("native instance replaced"));
         var request = h.next("cancel-intent"); var receipt = h.receipt("cancelled"); reply(h, request, receipt);
-        h.respondAuthority(); var lane = h.synchronizationExchanges.get(h.synchronizationExchanges.size()-1); lane.heartbeat("{}".getBytes(StandardCharsets.UTF_8));
+        h.awaitAuthorityRequest(); h.respondAuthority(); var lane = h.synchronizationExchanges.get(h.synchronizationExchanges.size()-1); lane.heartbeat("{}".getBytes(StandardCharsets.UTF_8));
         var pending = h.journal.value.pending();
         assertEquals(2, h.operations.size() + h.links.get(0).sent.size());
         old.reply().complete(new ControlClientIo.HttpReply(old.endpoint(), "POST", old.endpoint(), 200, ControlClientCoordinatorTest.resultWire(receipt)));
