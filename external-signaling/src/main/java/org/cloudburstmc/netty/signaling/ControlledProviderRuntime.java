@@ -36,6 +36,8 @@ final class ControlledProviderRuntime {
     ControlledProviderRuntime(ProviderClient.Configuration config, ProviderStateStore store, ProviderTransport transport,
             Executor executor, Supplier<ServerStatus> status, Supplier<ProviderClient.Health> health, Consumer<String> diagnostics) throws IOException {
         if (!transport.supportsAdmissionStaging()) throw new IOException("Controlled startup requires a listener created with admission staging");
+        if (config.control().nativeOwnership() == ProviderControlConfiguration.NativeOwnership.ISSUED && !transport.supportsNativeIdentityCapture())
+            throw new IOException("Issued ownership requires an explicit controlled v2 native identity capture");
         this.applicationExecutor = command -> {
             if (queued.incrementAndGet() > 64) { queued.decrementAndGet(); throw new RejectedExecutionException("Controlled application queue full"); }
             try { executor.execute(() -> { try { command.run(); } finally { queued.decrementAndGet(); } }); }

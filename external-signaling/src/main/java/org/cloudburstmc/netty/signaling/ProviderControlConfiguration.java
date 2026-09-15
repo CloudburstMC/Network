@@ -14,7 +14,13 @@ import java.util.Set;
  * migration cannot restore the legacy lifecycle.
  */
 public record ProviderControlConfiguration(ControlClientCoordinator.Config routes,
-        List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed) {
+        List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed, NativeOwnership nativeOwnership) {
+    /** Issued ownership alone does not enable candidate leases or STUN publication. */
+    public enum NativeOwnership { DISABLED, ISSUED }
+    public ProviderControlConfiguration(ControlClientCoordinator.Config routes,
+            List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed) {
+        this(routes, providerKeys, migrationSeed, NativeOwnership.DISABLED);
+    }
     /** Reporting floor only. The new native instance must still apply actual state before acknowledging it. */
     public record ReportingSeed(long generation, long appliedRevision, String reportedState) {
         public ReportingSeed {
@@ -26,7 +32,7 @@ public record ProviderControlConfiguration(ControlClientCoordinator.Config route
         }
     }
     public ProviderControlConfiguration {
-        Objects.requireNonNull(routes); Objects.requireNonNull(migrationSeed);
+        Objects.requireNonNull(routes); Objects.requireNonNull(migrationSeed); Objects.requireNonNull(nativeOwnership);
         providerKeys = List.copyOf(providerKeys);
         if (providerKeys.isEmpty() || providerKeys.size() > 8
                 || !routes.operations().keySet().containsAll(Set.of("heartbeat", "outcomes", "rotate", "retire", "deregister"))) {

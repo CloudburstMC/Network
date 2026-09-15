@@ -74,6 +74,7 @@ class ControlClientCoordinatorTest {
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls, httpAuthorityCalls;
         boolean cancelNativeClaims; URI cancelRoute;
         java.util.function.BiPredicate<ControlLifecycleCodec.Intent, byte[]> nativeCancellationPolicy;
+        boolean durableOwners; final List<CompletableFuture<Void>> ownerAcks = new ArrayList<>();
         boolean durableOutcomes; final List<CompletableFuture<Void>> outcomeAcks = new ArrayList<>();
         Runnable onOutcomeAck;
         java.util.function.Function<Synchronization, CompletionStage<ControlSynchronizationResult>> actualSynchronization;
@@ -123,6 +124,12 @@ class ControlClientCoordinatorTest {
             var reply = new CompletableFuture<HttpReply>(); operations.add(new Operation(endpoint, request, body.clone(), reply)); return reply;
         }
         @Override public boolean requiresNativeIntentCancellation(ControlLifecycleCodec.Intent intent, byte[] body) { return nativeCancellationPolicy != null ? nativeCancellationPolicy.test(intent, body) : cancelNativeClaims && intent.operation().equals("heartbeat"); }
+        @Override public boolean requiresNativeOwnerAcknowledgement(ControlLifecycleCodec.Intent intent, byte[] body) { return durableOwners && intent.operation().equals("heartbeat"); }
+        @Override public CompletionStage<Void> acknowledgeCommittedNativeOwner(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt) {
+            assertEquals(receipt, journal.value.pending().receipt());
+            assertEquals(intent, journal.value.pending().intent()); assertArrayEquals(body, journal.value.pending().bodyBytes());
+            var work = new CompletableFuture<Void>(); ownerAcks.add(work); return work;
+        }
         @Override public boolean requiresOutcomeAcknowledgement() { return durableOutcomes; }
         @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt) {
             assertEquals("committed", journal.value.pending().receipt().disposition());

@@ -28,6 +28,12 @@ final class JdkProviderControlIo implements ControlClientIo, AutoCloseable {
         return ControlledProviderApplication.requiresNativeCancellation(intent, originalBody);
     }
     @Override public boolean requiresOutcomeAcknowledgement() { return true; }
+    @Override public boolean requiresNativeOwnerAcknowledgement(ControlLifecycleCodec.Intent intent, byte[] originalBody) {
+        return ControlledNativeOwner.requiresAcknowledgement(intent, originalBody);
+    }
+    @Override public CompletionStage<Void> acknowledgeCommittedNativeOwner(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
+        return application.acknowledgeNativeOwner(intent, originalBody, receipt);
+    }
     @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
         return application.acknowledgeOutcomes(intent, originalBody, receipt);
     }
