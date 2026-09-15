@@ -120,7 +120,10 @@ final class ControlledProviderApplication {
                 result.requireCurrent(); var response = ControlledProviderJson.parse(new String(result.bodyBytes().orElseThrow(), StandardCharsets.UTF_8), ControlResultCodec.MAX_BODY_BYTES);
                 return apply(pass, result, body, response, started).thenComposeAsync(ignored -> {
                     pass.check();
-                    if (liveBasis != null && Objects.equals(acceptedDigest, ControlStateCodec.appliedBasisDigest(liveBasis)))
+                    // Provider acceptance can survive a cancelled pass whose native application was disabled.
+                    // This committed heartbeat must acknowledge the application now installed before READY.
+                    if (liveBasis != null && Objects.equals(acceptedDigest, ControlStateCodec.appliedBasisDigest(liveBasis))
+                            && Objects.equals(body.get("applicationAck"), applicationAcknowledgement()))
                         return validateLive(pass).thenComposeAsync(valid -> {
                             pass.check(); if (!valid) throw new IllegalStateException("Native application ceased to match its basis");
                             return pass.exchange.applied(liveBasis);
@@ -185,14 +188,15 @@ final class ControlledProviderApplication {
             body.addProperty("appliedStateRevision", number(data, "appliedRevision"));
             body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
             var listing = status.get(); if (listing != null) body.add("serverStatus", JSON.toJsonTree(listing));
-            if (liveBasis != null && !body.has("hostProfile")) {
-                var ack = new JsonObject(); ack.addProperty("version", 1);
-                ack.add("basis", JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(liveBasis)));
-                ack.add("ticketPolicy", data.has("policy") ? JsonParser.parseString(string(data, "policy")) : JsonNull.INSTANCE);
-                body.add("applicationAck", ack);
-            }
+            if (liveBasis != null && !body.has("hostProfile")) body.add("applicationAck", applicationAcknowledgement());
             lastHealth = observation; lastStatus = listing; return body;
         }, executor);
+    }
+    private JsonObject applicationAcknowledgement() {
+        var ack = new JsonObject(); ack.addProperty("version", 1);
+        ack.add("basis", JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(liveBasis)));
+        ack.add("ticketPolicy", data.has("policy") ? JsonParser.parseString(string(data, "policy")) : JsonNull.INSTANCE);
+        return ack;
     }
     private CompletionStage<Void> apply(Pass pass, ControlOperationResult result, JsonObject body, JsonObject response, long started) {
         Runnable guard = () -> { pass.check(); result.requireCurrent(); }; guard.run();
