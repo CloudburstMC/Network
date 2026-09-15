@@ -658,6 +658,8 @@ class NativeAdmissionIntegrationTest {
                                     id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
             assertTrue(transport.hostProfile().toCompletableFuture().isCompletedExceptionally());
+            assertEquals(ProviderTransport.ApplyResult.APPLIED,
+                    transport.applyState("serving").toCompletableFuture().get());
             transport.installTicketKeys(
                     List.of(new ProviderTransport.TicketKey("K001",
                             TestSignalingProvider.SECRET))).toCompletableFuture().get();
@@ -682,7 +684,11 @@ class NativeAdmissionIntegrationTest {
                     transport.hostProfile().toCompletableFuture().get().get("credentialKeyId").getAsString());
             transport.drain().toCompletableFuture().get();
             assertTrue(transport.hostProfile().toCompletableFuture().isCompletedExceptionally());
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    transport.applyState("serving").toCompletableFuture().get());
             transport.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    transport.applyState("serving").toCompletableFuture().get());
             transport =
                     NativeProviderTransport.open(bootstrap, new InetSocketAddress("127.0.0.1", 49196), id.certificate(),
                                     id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
@@ -694,6 +700,11 @@ class NativeAdmissionIntegrationTest {
                     .get("incarnation").getAsString();
             assertNotEquals(incarnation, restarted);
             assertNotEquals(NativeProviderTransport.audience(incarnation), NativeProviderTransport.audience(restarted));
+            assertEquals(ProviderTransport.ApplyResult.APPLIED,
+                    transport.applyState("serving").toCompletableFuture().get());
+            transport.channel().drainAdmissions();
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    transport.applyState("serving").toCompletableFuture().get());
             assertEquals(0, transport.channel().nativeStats()[2]);
             NativeDiagnostics.assertCreations(creations, 0);
         } finally {

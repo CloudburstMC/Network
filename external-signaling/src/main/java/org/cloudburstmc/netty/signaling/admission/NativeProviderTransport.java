@@ -216,13 +216,15 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     @Override
-    public CompletionStage<ApplyResult> applyState(String state) {
+    public synchronized CompletionStage<ApplyResult> applyState(String state) {
         if (state == null) {
             return CompletableFuture.completedFuture(ApplyResult.REJECTED);
         }
 
         return switch (state) {
-            case "serving" -> CompletableFuture.completedFuture(ApplyResult.APPLIED);
+            // Drain is permanent for this native endpoint; only a fresh listener can serve again.
+            case "serving" -> CompletableFuture.completedFuture(!closed && !draining && channel.isServing()
+                    ? ApplyResult.APPLIED : ApplyResult.REJECTED);
             case "draining" -> drain().thenApply(ignored -> ApplyResult.APPLIED);
             case "closed" -> close().thenApply(ignored -> ApplyResult.APPLIED);
             default -> CompletableFuture.completedFuture(ApplyResult.REJECTED);

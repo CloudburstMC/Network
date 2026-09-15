@@ -219,6 +219,11 @@ public final class AdmissionGate {
         draining = true;
     }
 
+    /** Admission policy state only; capacity and installed credentials are checked separately. */
+    public synchronized boolean isServing() {
+        return !closed && !draining;
+    }
+
     public synchronized List<Reservation> close() {
         closed = true;
 
