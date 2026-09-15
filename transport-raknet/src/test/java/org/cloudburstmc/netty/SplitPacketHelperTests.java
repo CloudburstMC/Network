@@ -44,7 +44,7 @@ public class SplitPacketHelperTests {
 
     @Test
     public void reassembledSizeTracksRetainedBytes() {
-        SplitPacketHelper helper = new SplitPacketHelper(3);
+        SplitPacketHelper helper = new SplitPacketHelper(0, 3);
         Assertions.assertEquals(0, helper.getReassembledSize());
 
         EncapsulatedPacket p0 = part(3, 0, 100);
@@ -77,7 +77,7 @@ public class SplitPacketHelperTests {
 
     @Test
     public void expiresAfterTimeout() {
-        SplitPacketHelper helper = new SplitPacketHelper(2);
+        SplitPacketHelper helper = new SplitPacketHelper(0, 2);
         Assertions.assertFalse(helper.expired());
         helper.release();
     }
