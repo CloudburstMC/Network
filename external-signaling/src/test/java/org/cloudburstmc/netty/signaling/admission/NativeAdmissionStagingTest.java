@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("native")
 class NativeAdmissionStagingTest {
     @TempDir Path directory;
+    private static long deadline() { return System.nanoTime() + TimeUnit.SECONDS.toNanos(30); }
     private static final List<ProviderTransport.TicketKey> KEYS = List.of(
             new ProviderTransport.TicketKey("K001", TestSignalingProvider.SECRET));
 
@@ -112,7 +113,7 @@ class NativeAdmissionStagingTest {
     void bothFamiliesStayClosedThroughInstallationAndFailedSaveUntilExplicitCommit() throws Exception {
         try (var host = new Host()) {
             for (String ip : List.of("127.0.0.1", "::1")) {
-                var update = host.transport.beginAdmissionUpdate();
+                var update = host.transport.beginAdmissionUpdate(deadline());
                 host.transport.installTicketKeys(update, KEYS).toCompletableFuture().get();
                 assertEquals(ProviderTransport.ApplyResult.REJECTED, host.transport.applyState("serving").toCompletableFuture().get());
                 try (var packet = new FirstPacket(host, ip)) {
@@ -122,7 +123,8 @@ class NativeAdmissionStagingTest {
                     assertEquals(ProviderTransport.ApplyResult.REJECTED,
                             host.transport.commitAdmissionUpdate(update, () -> {}).toCompletableFuture().get());
                     packet.blocked(host);
-                    var fresh = host.transport.beginAdmissionUpdate();
+                    var fresh = host.transport.beginAdmissionUpdate(deadline());
+                    host.transport.installTicketKeys(fresh, KEYS).toCompletableFuture().get();
                     assertEquals(ProviderTransport.ApplyResult.APPLIED,
                             host.transport.commitAdmissionUpdate(fresh, () -> {}).toCompletableFuture().get());
                     packet.accepted();
@@ -135,44 +137,62 @@ class NativeAdmissionStagingTest {
     }
 
     @Test @Timeout(20)
+    void eachTransitionMustOwnAnInstalledSnapshotEvenWhenEarlierKeysRemain() throws Exception {
+        try (var host = new Host()) {
+            var installed = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(installed, KEYS).toCompletableFuture().get();
+            assertEquals(ProviderTransport.ApplyResult.APPLIED,
+                    host.transport.commitAdmissionUpdate(installed, () -> {}).toCompletableFuture().get());
+            var missing = host.transport.beginAdmissionUpdate(deadline());
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    host.transport.commitAdmissionUpdate(missing, () -> {}).toCompletableFuture().get());
+            assertFalse(host.transport.channel().isServing());
+        }
+    }
+
+    @Test @Timeout(20)
     void replacementLegacyInstallAndNonservingCannotBeUndoneByOldTokens() throws Exception {
         try (var host = new Host()) {
-            var old = host.transport.beginAdmissionUpdate();
+            var old = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(old, KEYS).toCompletableFuture().get();
-            var newer = host.transport.beginAdmissionUpdate();
+            var newer = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(newer, KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED,
                     host.transport.commitAdmissionUpdate(old, () -> fail("stale guard must not run")).toCompletableFuture().get());
             assertEquals(ProviderTransport.ApplyResult.APPLIED,
                     host.transport.commitAdmissionUpdate(newer, () -> {}).toCompletableFuture().get());
-            var interrupted = host.transport.beginAdmissionUpdate();
+            var interrupted = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(interrupted, KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED, host.transport.commitAdmissionUpdate(interrupted,
                     () -> host.transport.applyState("draining")).toCompletableFuture().get());
             assertFalse(host.transport.channel().isServing());
-            var resumed = host.transport.beginAdmissionUpdate();
+            var resumed = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(resumed, KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.APPLIED,
                     host.transport.commitAdmissionUpdate(resumed, () -> {}).toCompletableFuture().get(), "desired drain is reversible");
-            var legacyRace = host.transport.beginAdmissionUpdate();
+            var legacyRace = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED,
                     host.transport.commitAdmissionUpdate(legacyRace, () -> {}).toCompletableFuture().get());
             try (var packet = new FirstPacket(host, "127.0.0.1")) { packet.blocked(host); }
-            var drained = host.transport.beginAdmissionUpdate();
+            var drained = host.transport.beginAdmissionUpdate(deadline());
             host.transport.drain().toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED,
                     host.transport.commitAdmissionUpdate(drained, () -> {}).toCompletableFuture().get());
-            assertThrows(IllegalStateException.class, host.transport::beginAdmissionUpdate);
+            assertThrows(IllegalStateException.class, () -> host.transport.beginAdmissionUpdate(deadline()));
         }
     }
 
     @Test @Timeout(20)
     void guardRaceCannotModifyFrozenSnapshotOrEnableClosedNativeInstance() throws Exception {
         try (var host = new Host()) {
-            var update = host.transport.beginAdmissionUpdate();
+            var update = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(update, KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED, host.transport.commitAdmissionUpdate(update, () -> {
                 assertTrue(host.transport.installTicketKeys(update, KEYS).toCompletableFuture().isCompletedExceptionally());
             }).toCompletableFuture().get());
-            var closing = host.transport.beginAdmissionUpdate();
+            var closing = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(closing, KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED,
                     host.transport.commitAdmissionUpdate(closing, () -> host.transport.close()).toCompletableFuture().get());
             assertFalse(host.transport.channel().isServing());
@@ -182,20 +202,20 @@ class NativeAdmissionStagingTest {
     @Test @Timeout(20)
     void foreignInvalidAndExpiredKeyUpdatesCannotEnableAdmission() throws Exception {
         try (var host = new Host(); var other = new Host()) {
-            var foreign = other.transport.beginAdmissionUpdate();
-            var current = host.transport.beginAdmissionUpdate();
+            var foreign = other.transport.beginAdmissionUpdate(deadline());
+            var current = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(current, KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED,
                     host.transport.commitAdmissionUpdate(foreign, () -> fail("foreign guard")).toCompletableFuture().get());
             assertEquals(ProviderTransport.ApplyResult.APPLIED,
                     host.transport.commitAdmissionUpdate(current, () -> {}).toCompletableFuture().get());
-            var expired = host.transport.beginAdmissionUpdate();
+            var expired = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(expired, List.of(new ProviderTransport.TicketKey("K001",
                     TestSignalingProvider.SECRET, 0, 1))).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.REJECTED,
                     host.transport.commitAdmissionUpdate(expired, () -> {}).toCompletableFuture().get());
             assertFalse(host.transport.channel().isServing());
-            var invalid = host.transport.beginAdmissionUpdate();
+            var invalid = host.transport.beginAdmissionUpdate(deadline());
             assertThrows(ExecutionException.class, () -> host.transport.installTicketKeys(invalid,
                     List.of(new ProviderTransport.TicketKey("K001", "short"))).toCompletableFuture().get());
             assertEquals(ProviderTransport.ApplyResult.REJECTED,
@@ -204,9 +224,35 @@ class NativeAdmissionStagingTest {
     }
 
     @Test @Timeout(20)
+    void deadlineExpiringAfterGuardDuringMonitorContentionCannotEnable() throws Exception {
+        try (var host = new Host()) {
+            var token = host.transport.beginAdmissionUpdate(System.nanoTime() + TimeUnit.SECONDS.toNanos(1));
+            host.transport.installTicketKeys(token, KEYS).toCompletableFuture().get();
+            var entered = new CountDownLatch(1);
+            var guarded = new CountDownLatch(1);
+            var executor = Executors.newSingleThreadExecutor();
+            try {
+                var result = executor.submit(() -> host.transport.commitAdmissionUpdate(token, () -> {
+                    entered.countDown();
+                    try { assertTrue(guarded.await(2, TimeUnit.SECONDS)); }
+                    catch (InterruptedException failure) { throw new IllegalStateException(failure); }
+                }).toCompletableFuture().get());
+                assertTrue(entered.await(2, TimeUnit.SECONDS));
+                synchronized (host.transport) {
+                    guarded.countDown();
+                    Thread.sleep(1100); // Actual monitor contention exceeds the fixed monotonic deadline.
+                }
+                assertEquals(ProviderTransport.ApplyResult.REJECTED, result.get(2, TimeUnit.SECONDS));
+                assertFalse(host.transport.channel().isServing());
+                try (var packet = new FirstPacket(host, "127.0.0.1")) { packet.blocked(host); }
+            } finally { guarded.countDown(); executor.shutdownNow(); }
+        }
+    }
+
+    @Test @Timeout(20)
     void concurrentGuardWaitReleasesMonitorAndCannotReopenReplacement() throws Exception {
         try (var host = new Host()) {
-            var old = host.transport.beginAdmissionUpdate();
+            var old = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(old, KEYS).toCompletableFuture().get();
             var entered = new CountDownLatch(1);
             var release = new CountDownLatch(1);
@@ -218,7 +264,8 @@ class NativeAdmissionStagingTest {
                     catch (InterruptedException e) { throw new IllegalStateException(e); }
                 }).toCompletableFuture().get());
                 assertTrue(entered.await(2, TimeUnit.SECONDS));
-                var replacement = host.transport.beginAdmissionUpdate();
+                var replacement = host.transport.beginAdmissionUpdate(deadline());
+                host.transport.installTicketKeys(replacement, KEYS).toCompletableFuture().get();
                 release.countDown();
                 assertEquals(ProviderTransport.ApplyResult.REJECTED, completion.get(3, TimeUnit.SECONDS));
                 assertFalse(host.transport.channel().isServing());
@@ -231,12 +278,13 @@ class NativeAdmissionStagingTest {
     @Test @Timeout(30)
     void establishedPeersExchangeDataWhileNewAdmissionIsStagedForBothFamilies() throws Exception {
         try (var host = new Host()) {
-            var update = host.transport.beginAdmissionUpdate();
+            var update = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(update, KEYS).toCompletableFuture().get();
             assertEquals(ProviderTransport.ApplyResult.APPLIED,
                     host.transport.commitAdmissionUpdate(update, () -> {}).toCompletableFuture().get());
             for (String ip : List.of("127.0.0.1", "::1")) {
-                var resume = host.transport.beginAdmissionUpdate();
+                var resume = host.transport.beginAdmissionUpdate(deadline());
+                host.transport.installTicketKeys(resume, KEYS).toCompletableFuture().get();
                 host.transport.commitAdmissionUpdate(resume, () -> {}).toCompletableFuture().get();
                 try (var player = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
                         .withBindAddress(InetAddress.getByName(ip)), Runnable::run)) {
@@ -252,7 +300,7 @@ class NativeAdmissionStagingTest {
                             System.currentTimeMillis() + 30_000, host.audience(), false);
                     player.setRemoteDescription(answer.sdp().replace("127.0.0.1", ip), SessionDescriptionType.ANSWER);
                     NativeAdmissionIntegrationTest.await(() -> reliable.isOpen() && unreliable.isOpen());
-                    host.transport.beginAdmissionUpdate();
+                    host.transport.beginAdmissionUpdate(deadline());
                     assertFalse(host.transport.channel().isServing());
                     reliable.sendMessage(ByteBuffer.allocateDirect(2).put((byte) 0).put((byte) 42).flip());
                     NativeAdmissionIntegrationTest.await(() -> echoes.get() == 1);

@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import java.net.InetSocketAddress;
 import java.util.*;
+import java.util.function.LongSupplier;
 
 /**
  * Bounded admission reservations and records of used tokens. Packet processing stays native.
@@ -80,6 +81,7 @@ public final class AdmissionGate {
     private static final long WARNING_INTERVAL_NANOS = 5_000_000_000L;
     private final Limits limits;
     private final AdmissionValidator validator;
+    private final LongSupplier monotonicNanos;
     private final Map<String, Reservation> claims = new HashMap<>();
     private final Map<InetSocketAddress, Reservation> tuples = new HashMap<>();
     private int pending;
@@ -88,7 +90,10 @@ public final class AdmissionGate {
     private Staging staging;
 
     /** Identity-only capability; no caller can recreate an earlier transition. */
-    static final class Staging { private Staging() { } }
+    static final class Staging {
+        private final long deadlineNanos;
+        private Staging(long deadlineNanos) { this.deadlineNanos = deadlineNanos; }
+    }
     private long invalid, replayRejected, capacityRejected, accepted;
     private long pendingLimitRejected, lastPendingWarningNanos;
     private int pendingAtRejection;
@@ -99,8 +104,13 @@ public final class AdmissionGate {
     }
 
     AdmissionGate(Limits limits, AdmissionValidator validator, boolean initiallyEnabled) {
+        this(limits, validator, initiallyEnabled, System::nanoTime);
+    }
+
+    AdmissionGate(Limits limits, AdmissionValidator validator, boolean initiallyEnabled, LongSupplier monotonicNanos) {
         this.limits = Objects.requireNonNull(limits);
         this.validator = Objects.requireNonNull(validator);
+        this.monotonicNanos = Objects.requireNonNull(monotonicNanos);
         this.enabled = initiallyEnabled;
     }
 
@@ -234,10 +244,12 @@ public final class AdmissionGate {
         staging = null;
     }
 
-    synchronized Staging stage() {
+    synchronized Staging stage(long deadlineNanos) {
         disable();
         if (closed || draining) throw new IllegalStateException("Admission endpoint unavailable");
-        return staging = new Staging();
+        long remaining = deadlineNanos - monotonicNanos.getAsLong();
+        if (remaining <= 0 || remaining > 300_000_000_000L) throw new IllegalArgumentException("Admission deadline");
+        return staging = new Staging(deadlineNanos);
     }
 
     synchronized void disable() {
@@ -250,7 +262,8 @@ public final class AdmissionGate {
     }
 
     synchronized boolean current(Staging expected) {
-        return expected != null && expected == staging && !closed && !draining && !enabled;
+        return expected != null && expected == staging && !closed && !draining && !enabled
+                && expected.deadlineNanos - monotonicNanos.getAsLong() > 0;
     }
 
     synchronized boolean enable(Staging expected) {

@@ -4,10 +4,22 @@
 
 The caller serializes application updates and owns their durable record and live control authority. The transport supplies this narrow sequence:
 
-1. `beginAdmissionUpdate()` synchronously disables new player admissions and creates an opaque, single-use token for this live native instance. Previously admitted peers stay alive. Every new begin invalidates the preceding token.
-2. If keys change, await `installTicketKeys(token, ownedKeys)` once. It installs an atomic snapshot while admission remains disabled. One token cannot install a second snapshot; a failed or competing installation invalidates that token. A token may retain the existing snapshot for a state-only transition.
+1. `beginAdmissionUpdate(deadlineNanos)` synchronously disables new player admissions and creates an opaque, single-use token for this live native instance. Previously admitted peers stay alive. Every new begin invalidates the preceding token. The caller supplies a fixed absolute `System.nanoTime()` deadline no more than 300 seconds ahead; entry and gate creation both reject an expired bound.
+2. Always await `installTicketKeys(token, ownedKeys)` once. It installs an atomic snapshot while admission remains disabled. One token cannot install a second snapshot; a failed or competing installation invalidates that token. Even a state-only transition must explicitly reinstall its owned snapshot; the presence of keys from an earlier transition is insufficient.
 3. Finish the caller's durable application write. A saved basis is an input to reapplication after restart, never proof that this native instance is ready. The caller must not invoke commit following a failed save.
-4. Call `commitAdmissionUpdate(token, requireCurrent)`. The synchronous, nonblocking guard checks the original authority deadline, writer/key, desired revision, applied policy/profile and durable application ownership. It must throw if any condition is stale. It runs outside transport/native locks; immediately afterward, without asynchronous work, the transport rechecks the same live instance/token, fixed installed-key eligibility, permanent drain and close state before enabling. A guard exception invalidates its still-current token. The guard must not block or transfer completion to another thread.
+4. Call `commitAdmissionUpdate(token, requireCurrent)`. The synchronous, nonblocking guard checks the original authority deadline, writer/key, desired revision, applied policy/profile and durable application ownership. It must throw if any condition is stale. It runs outside transport/native locks; immediately afterward, without asynchronous work, the transport rechecks the same live instance/token, installed-key eligibility, permanent drain and close state before enabling. The fixed monotonic deadline is checked again after acquiring the admission gate lock, so monitor contention after the authority guard cannot extend the deadline. A guard exception invalidates its still-current token. The guard must not block or transfer completion to another thread.
+
+Capture the monotonic origin **before** reading the remaining source authority/synchronization lifetime. Add that bounded remaining duration to the captured origin, and pass the resulting absolute value unchanged. For example, with the caller's own current control clock and fixed proof deadline:
+
+```java
+long startedNanos = System.nanoTime();
+long remainingMillis = Math.min(300_000, fixedAuthorityExpiresAt - controlClock.nowMillis());
+if (remainingMillis <= 0) throw new IllegalStateException("Authority expired");
+long deadlineNanos = startedNanos + TimeUnit.MILLISECONDS.toNanos(remainingMillis);
+var update = transport.beginAdmissionUpdate(deadlineNanos);
+```
+
+A pause during or after reading the remaining lifetime makes this bound earlier, never later. The monotonic deadline limits this transition's enable operation; it does not replace current-identity checks or establish an admission policy after that operation.
 
 The token does not authenticate a caller, carry a grant, renew an authority deadline, prove persistence, or imply control `READY`. Those remain caller obligations. Snapshot installation is frozen when commit starts, so a concurrent install cannot change the content under an earlier durable write. A guard may synchronously reenter and replace/drain/close the transport; the original token then cannot enable it. A stale token cannot invalidate a newer one.
 
@@ -17,7 +29,7 @@ Staging rejects new player reservations before ticket validation and native peer
 
 ## Evidence
 
-`AdmissionGateTest` covers initial disable, token identity/single use, pending cancellation without early capacity release, admitted-peer preservation, permanent drain and close. `NativeAdmissionStagingTest` uses actual IPv4 and IPv6 sockets and valid player first-STUN packets with matching integrity. It asserts zero new native construction while staged, matching first-response transaction IDs after explicit commit, failed-save/guard behavior, stale/foreign tokens, key invalidation, concurrent replacement, expired keys and data-channel continuity for existing peers. These are local native transport tests, not Minecraft account login or gameplay proof.
+`AdmissionGateTest` covers initial disable, token identity/single use, pending cancellation without early capacity release, admitted-peer preservation, permanent drain and close. `NativeAdmissionStagingTest` uses actual IPv4 and IPv6 sockets and valid player first-STUN packets with matching integrity. It asserts zero new native construction while staged, matching first-response transaction IDs after explicit commit, failed-save/guard behavior, stale/foreign tokens, key invalidation, concurrent replacement, missing snapshots, expired keys, actual monitor contention crossing the deadline and data-channel continuity for existing peers. These are local native transport tests, not Minecraft account login or gameplay proof.
 
 Run with the pinned JNI build containing native construction diagnostics:
 
