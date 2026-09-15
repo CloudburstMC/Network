@@ -15,16 +15,28 @@ public final class ControlledApplicationCoordinatorFixture implements AutoClosea
     private final Queue<Runnable> tasks = new ArrayDeque<>();
     private final ControlledProviderApplicationTest.Native nativeTransport;
     private final ControlledProviderApplication application;
+    private final ControlledProviderCandidateApplicationTest.Owned candidates;
     public boolean failRootSave;
-    public ControlledApplicationCoordinatorFixture(Path directory, ControlClientClock clock) throws Exception {
+    public ControlledApplicationCoordinatorFixture(Path directory, ControlClientClock clock) throws Exception { this(directory, clock, false); }
+    public ControlledApplicationCoordinatorFixture(Path directory, ControlClientClock clock, boolean version2) throws Exception {
         root = new ProviderStateStore(directory);
         ControlledProviderStateTest.seed(root, "https://provider.example");
+        if (version2) {
+            var value = root.read(); var key = new JsonObject(); key.addProperty("keyId", "A001");
+            key.addProperty("secret", ControlledProviderApplicationTest.SECRET); value.getAsJsonArray("ticketKeys").add(key); root.write(value);
+        }
         storage = ControlledProviderState.open(root, ControlledProviderStateTest.config("https://provider.example"), value -> {
             if (failRootSave) throw new IOException("Injected root acknowledgement save failure"); root.write(value);
         });
         nativeTransport = new ControlledProviderApplicationTest.Native(tasks::add, storage);
-        application = new ControlledProviderApplication(storage, nativeTransport, tasks::add, clock, () -> null,
+        candidates = version2 ? new ControlledProviderCandidateApplicationTest.Owned(nativeTransport) : null;
+        application = new ControlledProviderApplication(storage, candidates == null ? nativeTransport : candidates, tasks::add, clock, () -> null,
                 () -> new ProviderClient.Health(true, true, 10, 0, "fixture", "fixture"), null);
+    }
+    public void replaceCandidates(boolean change) {
+        if (candidates == null) throw new IllegalStateException("Versioned fixture required");
+        if (change) candidates.replace(ControlledProviderCandidateApplicationTest.B);
+        candidates.replace(ControlledProviderCandidateApplicationTest.A);
     }
     public static boolean requiresNativeCancellation(ControlLifecycleCodec.Intent intent, byte[] body) {
         return ControlledProviderApplication.requiresNativeCancellation(intent, body);
