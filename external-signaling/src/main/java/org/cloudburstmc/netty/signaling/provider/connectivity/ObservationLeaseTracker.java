@@ -265,7 +265,9 @@ public final class ObservationLeaseTracker implements AutoCloseable {
                 long deviation = Math.subtractExact(rawWall, affineWall);
                 if (deviation < -CandidateLeaseCodec.CLOCK_SKEW_MILLIS || deviation > CandidateLeaseCodec.CLOCK_SKEW_MILLIS)
                     throw new IllegalStateException("Wall clock deviated from lease anchor");
-                next = new ClockReading(after, Math.max(rawWall, affineWall), true);
+                // An allowed raw-wall rollback must never revive authority already expired by an
+                // earlier reading. Retain this high-water in the same CAS as monotonic ordering.
+                next = new ClockReading(after, Math.max(previous.wallMillis(), Math.max(rawWall, affineWall)), true);
             } catch (RuntimeException failure) {
                 // If a concurrent reader won, resample against that state before judging reversal.
                 next = new ClockReading(previous.monotonicNanos(), previous.wallMillis(), false);

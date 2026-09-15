@@ -202,6 +202,51 @@ class ObservationLeaseTrackerTest {
         assertTrue(tracker.clockValid());
     }
 
+    @Test void permittedWallRollbackCannotReviveAnExpiredCaptureOrRepeatedSuccess() {
+        Clock clock = new Clock(); var tracker = clock.tracker(); var original = sample(clock, 1, START);
+        var capture = tracker.capture(snapshot(original));
+        clock.advance(259999); capture.requireCurrent(); // Ten seconds before its original expiry.
+        clock.wall += 20000;
+        assertThrows(IllegalStateException.class, capture::requireCurrent);
+        assertTrue(tracker.clockValid()); // The raw adjustment is inside the allowed skew budget.
+        clock.wall -= 20000;
+        assertThrows(IllegalStateException.class, capture::requireCurrent);
+        assertTrue(tracker.capture(snapshot(original)).observations().isEmpty());
+        var newer = tracker.capture(snapshot(sample(clock, 2, clock.nano)));
+        assertEquals(2, newer.observations().get(0).observationSequence()); newer.requireCurrent();
+        assertThrows(IllegalStateException.class, capture::requireCurrent);
+        assertTrue(tracker.clockValid());
+    }
+
+    @Test void concurrentOlderClockSampleCannotLowerAnAlreadyExpiredWallBound() throws Exception {
+        Clock clock = new Clock();
+        var sampled = new java.util.concurrent.CountDownLatch(1); var resume = new java.util.concurrent.CountDownLatch(1);
+        var pause = new java.util.concurrent.atomic.AtomicBoolean(false);
+        var tracker = new ObservationLeaseTracker(INCARNATION, () -> {
+            long wall = clock.wall;
+            if (Thread.currentThread().getName().equals("lease-guard") && pause.compareAndSet(true, false)) {
+                sampled.countDown();
+                try { if (!resume.await(2, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("guard timeout"); }
+                catch (InterruptedException failure) { throw new AssertionError(failure); }
+            }
+            return wall;
+        }, () -> clock.nano);
+        var capture = tracker.capture(snapshot(sample(clock, 1, START)));
+        clock.advance(259999);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(r, "lease-guard"));
+        try {
+            pause.set(true); var pending = executor.submit(capture::requireCurrent);
+            assertTrue(sampled.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            clock.wall += 20000;
+            assertThrows(IllegalStateException.class, capture::requireCurrent);
+            clock.wall -= 20000; resume.countDown();
+            var failure = assertThrows(java.util.concurrent.ExecutionException.class, () -> pending.get(2, java.util.concurrent.TimeUnit.SECONDS));
+            assertInstanceOf(IllegalStateException.class, failure.getCause());
+            assertThrows(IllegalStateException.class, capture::requireCurrent);
+            assertTrue(tracker.clockValid());
+        } finally { resume.countDown(); executor.shutdownNow(); tracker.close(); }
+    }
+
     @Test void eitherDirectionOfLargeWallDiscontinuityLatchesAndDoesNotRecoverByItself() {
         for (long jump : List.of(-30001L, 30001L)) {
             Clock clock = new Clock(); var tracker = clock.tracker(); var capture = tracker.capture(snapshot(sample(clock, 1, START)));
