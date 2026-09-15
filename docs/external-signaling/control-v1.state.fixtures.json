@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "policies": [
+    {
+      "name": "unretired",
+      "policy": {
+        "version": 1,
+        "activeKeyId": "A001",
+        "epochs": [
+          {
+            "keyId": "A001",
+            "notBefore": 0,
+            "acceptUntil": null
+          }
+        ]
+      },
+      "digest": "i1yJG6EAi_OBRbOeX409X7WIaj023Sn7HCZZeCbU7bg"
+    },
+    {
+      "name": "overlap",
+      "policy": {
+        "version": 1,
+        "activeKeyId": "B002",
+        "epochs": [
+          {
+            "keyId": "A001",
+            "notBefore": 1789440000000,
+            "acceptUntil": 1789447200000
+          },
+          {
+            "keyId": "B002",
+            "notBefore": 1789446600000,
+            "acceptUntil": null
+          }
+        ]
+      },
+      "digest": "EJt63GoLz9hVEUTZ1KrJ7MHKcQ50oofGGStEuWYrLJs"
+    }
+  ],
+  "bases": [
+    {
+      "name": "serving",
+      "basis": {
+        "version": 1,
+        "generation": 7,
+        "desiredRevision": 5,
+        "state": "serving",
+        "admission": "enabled",
+        "hostProfileRevision": "hpr_fixture_00001",
+        "ticketPolicySha256": "EJt63GoLz9hVEUTZ1KrJ7MHKcQ50oofGGStEuWYrLJs"
+      },
+      "digest": "_3jRiS8saJVeCx4QJP1DmWu2bqgHSrJnuQo2HzusHyk"
+    },
+    {
+      "name": "draining",
+      "basis": {
+        "version": 1,
+        "generation": 7,
+        "desiredRevision": 6,
+        "state": "draining",
+        "admission": "disabled",
+        "hostProfileRevision": null,
+        "ticketPolicySha256": null
+      },
+      "digest": "3nil96Dbqt_IB2M-T5RaP1FfNOfpI9a33XGLILTyCb0"
+    },
+    {
+      "name": "closed",
+      "basis": {
+        "version": 1,
+        "generation": 9007199254740991,
+        "desiredRevision": 9007199254740991,
+        "state": "closed",
+        "admission": "disabled",
+        "hostProfileRevision": null,
+        "ticketPolicySha256": null
+      },
+      "digest": "FBiXxtX_PzXlzW0h-NHRGLcna_lGmoLXwpSdkzLKGL0"
+    }
+  ],
+  "acknowledgements": [
+    {
+      "version": 1,
+      "syncId": "sync_0123456789abcdefghijklmnop",
+      "desiredRevision": 5,
+      "desiredState": "serving",
+      "appliedBasisSha256": "_3jRiS8saJVeCx4QJP1DmWu2bqgHSrJnuQo2HzusHyk"
+    },
+    {
+      "version": 1,
+      "syncId": "sync_0123456789abcdefghijklmnop",
+      "desiredRevision": 6,
+      "desiredState": "draining",
+      "appliedBasisSha256": "3nil96Dbqt_IB2M-T5RaP1FfNOfpI9a33XGLILTyCb0"
+    },
+    {
+      "version": 1,
+      "syncId": "sync_0123456789abcdefghijklmnop",
+      "desiredRevision": 9007199254740991,
+      "desiredState": "closed",
+      "appliedBasisSha256": "FBiXxtX_PzXlzW0h-NHRGLcna_lGmoLXwpSdkzLKGL0"
+    }
+  ]
+}
