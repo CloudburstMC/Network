@@ -71,6 +71,7 @@ class ControlClientCoordinatorTest {
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls, httpAuthorityCalls;
         boolean cancelNativeClaims; URI cancelRoute;
+        java.util.function.BiPredicate<ControlLifecycleCodec.Intent, byte[]> nativeCancellationPolicy;
         boolean durableOutcomes; final List<CompletableFuture<Void>> outcomeAcks = new ArrayList<>();
         Runnable onOutcomeAck;
         java.util.function.Function<Synchronization, CompletionStage<ControlSynchronizationResult>> actualSynchronization;
@@ -119,7 +120,7 @@ class ControlClientCoordinatorTest {
             assertArrayEquals(journal.value.pending().bodyBytes(), body);
             var reply = new CompletableFuture<HttpReply>(); operations.add(new Operation(endpoint, request, body.clone(), reply)); return reply;
         }
-        @Override public boolean requiresNativeIntentCancellation(ControlLifecycleCodec.Intent intent, byte[] body) { return cancelNativeClaims && intent.operation().equals("heartbeat"); }
+        @Override public boolean requiresNativeIntentCancellation(ControlLifecycleCodec.Intent intent, byte[] body) { return nativeCancellationPolicy != null ? nativeCancellationPolicy.test(intent, body) : cancelNativeClaims && intent.operation().equals("heartbeat"); }
         @Override public boolean requiresOutcomeAcknowledgement() { return durableOutcomes; }
         @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt) {
             assertEquals("committed", journal.value.pending().receipt().disposition());

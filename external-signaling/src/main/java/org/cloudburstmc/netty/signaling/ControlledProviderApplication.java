@@ -42,7 +42,7 @@ final class ControlledProviderApplication {
         if (!intent.operation().equals("heartbeat")) return false;
         ControlLifecycleCodec.verifyBody(intent, originalBody);
         var body = ControlledProviderJson.parse(new String(originalBody, StandardCharsets.UTF_8), ControlLifecycleCodec.MAX_HTTP_BODY_BYTES);
-        return body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean();
+        return body.has("hostProfile") || body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean();
     }
     CompletionStage<Void> acknowledgeOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
         byte[] owned = originalBody.clone();
@@ -134,7 +134,22 @@ final class ControlledProviderApplication {
         }, executor);
     }
     private CompletionStage<JsonObject> retainedHeartbeat(Pass pass, byte[] original) {
+        pass.check();
         var body = ControlledProviderJson.parse(new String(original, StandardCharsets.UTF_8), 65536);
+        if (!body.has("hostProfile")) return retainedApplicationClaim(pass, body);
+        // A non-accepting publication still binds the old native incarnation and endpoint set.
+        // Only an exact current native profile permits an application-lane retry of its original bytes.
+        return CompletableFuture.completedFuture(null).thenComposeAsync(ignored -> {
+            pass.check(); return transport.hostProfile();
+        }, executor).handleAsync((actual, failure) -> {
+            pass.check();
+            if (failure != null || actual == null || !actual.equals(body.get("hostProfile")))
+                throw new ControlClientIo.ReconciliationRequired("Retained heartbeat host profile is no longer owned");
+            return body;
+        }, executor).thenComposeAsync(owned -> retainedApplicationClaim(pass, owned), executor);
+    }
+    private CompletionStage<JsonObject> retainedApplicationClaim(Pass pass, JsonObject body) {
+        pass.check();
         // Status reconciliation runs before this lane. Unknown immutable claims from another
         // native instance cannot be retransmitted; a provider terminal cancellation is required.
         if (body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean()) {
