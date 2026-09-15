@@ -160,6 +160,21 @@ class ControlledDiagnosticApplicationTest {
             assertEquals(h.document.binding(), ack.binding()); assertEquals(playerInstalls, h.nativeHost.delegate.installs);
         }
     }
+    @Test void malformedOptionalDiagnosticSliceDoesNotDrainHealthyPlayerApplication(@TempDir Path path) throws Exception {
+        for (String malformed : List.of("null", "[]", "{\"version\":2,\"expected\":null,\"accepted\":null}",
+                "{\"version\":1,\"expected\":{\"secret\":\"unusable-private-material\"},\"accepted\":null}")) {
+            try (var h = new Harness(path.resolve(Integer.toString(malformed.hashCode())))) {
+                h.ready(); var original = h.nativeHost.diagnostic;
+                h.alter = response -> response.add("diagnosticAdmission", JsonParser.parseString(malformed));
+                var exchange = h.sync();
+                assertNotNull(exchange.parent.delegate.applied); assertTrue(h.nativeHost.delegate.enabled);
+                assertSame(original, h.nativeHost.diagnostic);
+                assertFalse(h.app.lastResponse().has("diagnosticAdmission"));
+                assertFalse(h.app.lastResponse().toString().contains("unusable-private-material"));
+                assertTrue(h.notices.contains("diagnostic_installation_unavailable"));
+            }
+        }
+    }
     @Test void nativeRejectionDoesNotBlockPlayerReadinessOrSaveClaim(@TempDir Path path) throws Exception {
         try (var h = new Harness(path)) {
             h.nativeHost.reject = true; var exchange = h.sync();
