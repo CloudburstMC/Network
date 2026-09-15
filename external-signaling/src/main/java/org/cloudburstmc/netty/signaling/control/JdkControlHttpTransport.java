@@ -22,7 +22,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Bounded JDK17 bootstrap/authority I/O. It does not verify proofs, retry, synchronize or select writers.
+ * Bounded JDK17 bootstrap/authority/lifecycle I/O. It does not verify proofs, retry, synchronize or select writers.
  * Returned stages are read-only views; canceling a derived future leaves the request's fixed timeout intact.
  * Use close to cancel this transport. JDK cancellation may release physical resources asynchronously.
  */
@@ -58,8 +58,24 @@ public final class JdkControlHttpTransport implements AutoCloseable {
                 ControlAuthorityCodec.encode(request), ControlAuthorityCodec.MAX_ENVELOPE_BYTES);
     }
 
+    /** Original signed proof in its canonical header; original operation bytes stay in the HTTP body. */
+    public CompletionStage<ControlClientIo.HttpReply> operation(URI endpoint, ControlHttpCodec.Request request, byte[] originalBody) {
+        Objects.requireNonNull(originalBody);
+        if (originalBody.length > ControlLifecycleCodec.MAX_HTTP_BODY_BYTES) throw ControlJson.invalid("control HTTP body size");
+        byte[] body = originalBody.clone();
+        ControlLifecycleCodec.verifyBody(request.intent(), body);
+        String proof = org.cloudburstmc.netty.signaling.ProviderCrypto.base64(ControlHttpCodec.encode(request).getBytes(StandardCharsets.UTF_8));
+        return post(endpoint, request.audience(), request.method(), request.encodedPathAndQuery(), request.expiresAt(),
+                body, proof, ControlResultCodec.MAX_ENVELOPE_BYTES);
+    }
+
     private CompletionStage<ControlClientIo.HttpReply> post(URI endpoint, String audience, String method, String target,
                                                            long expiresAt, String wire, int maxResponseBytes) {
+        return post(endpoint, audience, method, target, expiresAt, wire.getBytes(StandardCharsets.UTF_8), null, maxResponseBytes);
+    }
+
+    private CompletionStage<ControlClientIo.HttpReply> post(URI endpoint, String audience, String method, String target,
+                                                           long expiresAt, byte[] body, String proof, int maxResponseBytes) {
         Objects.requireNonNull(endpoint);
         String origin = endpoint.getScheme() + "://" + endpoint.getRawAuthority();
         String actualTarget = endpoint.getRawPath() + (endpoint.getRawQuery() == null ? "" : "?" + endpoint.getRawQuery());
@@ -70,9 +86,11 @@ public final class JdkControlHttpTransport implements AutoCloseable {
         long now = clock.nowMillis();
         if (now >= expiresAt) return CompletableFuture.failedFuture(new HttpTimeoutException("Control proof expired before send"));
         long duration = Math.min(timeoutMillis, expiresAt - now), deadline = now + duration;
-        HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofMillis(duration))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint).timeout(Duration.ofMillis(duration))
                 .header("Content-Type", "application/json; charset=utf-8").header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofByteArray(wire.getBytes(StandardCharsets.UTF_8))).build();
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        if (proof != null) builder.header(ControlHttpCodec.PROOF_HEADER, proof);
+        HttpRequest request = builder.build();
         Exchange exchange = new Exchange(request, deadline, maxResponseBytes);
         synchronized (active) {
             if (closed || active.size() >= maximum) return CompletableFuture.failedFuture(new IOException("Control HTTP capacity unavailable"));

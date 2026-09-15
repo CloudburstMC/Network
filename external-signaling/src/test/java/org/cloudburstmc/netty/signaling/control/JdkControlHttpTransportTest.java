@@ -67,6 +67,50 @@ class JdkControlHttpTransportTest {
     }
     static <T> T await(CompletionStage<T> stage) throws Exception { return stage.toCompletableFuture().get(5, TimeUnit.SECONDS); }
 
+    static ControlHttpCodec.Request operationProof(URI endpoint, byte[] body) throws Exception {
+        long now = System.currentTimeMillis();
+        String audience = endpoint.getScheme() + "://" + endpoint.getRawAuthority();
+        var intent = ControlLifecycleCodec.intent(audience, "heartbeat", "host_http_operation", 1, 1, "intent_http_operation", body);
+        return ControlHttpCodec.sign(new ControlHttpCodec.Request(1, audience, "POST", endpoint.getRawPath(), now, now + 30_000,
+                intent, "session_http_operation", 1, "connection_http_operation", "https", List.of("request-response"),
+                new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, "machine_http_operation", "")), ControlSessionCodecTest.privateKey("machine"));
+    }
+
+    @Test void sendsOriginalLifecycleBodyAndCanonicalProofHeaderForBothFamilies() throws Exception {
+        for (String family : List.of("127.0.0.1", "::1")) {
+            AtomicReference<byte[]> received = new AtomicReference<>(); AtomicReference<String> header = new AtomicReference<>();
+            URI endpoint = listen(family, exchange -> {
+                received.set(exchange.getRequestBody().readAllBytes()); header.set(exchange.getRequestHeaders().getFirst(ControlHttpCodec.PROOF_HEADER));
+                reply(exchange, 202, "{\"receipt\":\"bounded-raw-result\"}".getBytes(StandardCharsets.UTF_8));
+            });
+            byte[] original = " {\"build\":\"α\"}\n".getBytes(StandardCharsets.UTF_8), retained = original.clone();
+            var request = operationProof(endpoint, original);
+            var pending = transport(HttpClient.newHttpClient(), 3000, 2).operation(endpoint, request, original);
+            java.util.Arrays.fill(original, (byte) 'x');
+            var reply = await(pending);
+            assertEquals(202, reply.status()); assertEquals(endpoint, reply.responseUri()); assertArrayEquals(retained, received.get());
+            assertEquals(org.cloudburstmc.netty.signaling.ProviderCrypto.base64(ControlHttpCodec.encode(request).getBytes(StandardCharsets.UTF_8)), header.get());
+            assertEquals(request, ControlHttpCodec.decode(new String(java.util.Base64.getUrlDecoder().decode(header.get()), StandardCharsets.UTF_8)));
+        }
+    }
+
+    @Test void refusesLifecycleBodyMismatchAndOversizeBeforeNetworkEffects() throws Exception {
+        AtomicInteger hits = new AtomicInteger(); URI endpoint = listen("127.0.0.1", exchange -> { hits.incrementAndGet(); exchange.close(); });
+        var request = operationProof(endpoint, "{}".getBytes(StandardCharsets.UTF_8));
+        var transport = transport(HttpClient.newHttpClient(), 1000, 1);
+        assertThrows(IllegalArgumentException.class, () -> transport.operation(endpoint, request, " {}".getBytes(StandardCharsets.UTF_8)));
+        assertThrows(IllegalArgumentException.class, () -> transport.operation(endpoint, request, new byte[ControlLifecycleCodec.MAX_HTTP_BODY_BYTES + 1]));
+        assertThrows(IllegalArgumentException.class, () -> transport.operation(endpoint.resolve("/other"), request, "{}".getBytes(StandardCharsets.UTF_8)));
+        assertEquals(0, hits.get());
+    }
+
+    @Test void capsLifecycleResultResponsesAtTheSharedResultEnvelopeLimit() throws Exception {
+        URI endpoint = listen("127.0.0.1", exchange -> reply(exchange, 200, new byte[ControlResultCodec.MAX_ENVELOPE_BYTES + 1]));
+        byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+        assertThrows(java.util.concurrent.ExecutionException.class,
+                () -> await(transport(HttpClient.newHttpClient(), 3000, 1).operation(endpoint, operationProof(endpoint, body), body)));
+    }
+
     @Test void sendsExactSignedBytesAndReportsActualUriForBothFamilies() throws Exception {
         for (String family : List.of("127.0.0.1", "::1")) {
             AtomicReference<byte[]> received = new AtomicReference<>(); AtomicReference<String> target = new AtomicReference<>();
@@ -322,8 +366,11 @@ class JdkControlHttpTransportTest {
             SSLContext clientTls = SSLContext.getInstance("TLS"); clientTls.init(null, tmf.getTrustManagers(), null);
             var client = transport(HttpClient.newBuilder().sslContext(clientTls).build(), 3000, 1);
             assertEquals(200, await(client.bootstrap(endpoint, request)).status());
+            byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+            assertEquals(200, await(client.operation(endpoint, operationProof(endpoint, body), body)).status());
             URI wrongName = URI.create(endpoint.toString().replace("localhost", "127.0.0.1"));
             assertThrows(java.util.concurrent.ExecutionException.class, () -> await(client.bootstrap(wrongName, proof(wrongName))));
+            assertThrows(java.util.concurrent.ExecutionException.class, () -> await(client.operation(wrongName, operationProof(wrongName, body), body)));
         } finally { certificate.delete(); }
     }
 }
