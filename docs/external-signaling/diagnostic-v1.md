@@ -1,6 +1,6 @@
 # Draft NXS diagnostic admission v1
 
-This is an opt-in codec specification, derived from the existing NXS1 compact admission design. It does not change NXS1 player bytes, Minecraft CPK verification, discovery or public routes. The new implementation has no native listener, workload authentication, game pipeline or regional executor. Provider-signed diagnostic answer creation and verification is a required next integration gate.
+This is an opt-in codec specification, derived from the existing NXS1 compact admission design. It does not change NXS1 player bytes, Minecraft CPK verification, discovery or public routes. The new implementation has no native listener, workload authentication, game pipeline or regional executor. Standalone provider-signed answer creation/verification is specified in `diagnostic-answer-v1.md`; live wiring before transport remains a required integration gate.
 
 Network owns the neutral Java primitives under `signaling/diagnostic`. The matching TypeScript primitives are available only through `@warden/protocol/diagnostic-v1`; neither default package index advertises them. The original NXS1 implementation and provenance remain intact. Initial source baselines: Network `e10d6e3d4e926ed4c090979798a8c07adc41cc3f`; Warden `76636efea70c30ce98acd0b5d72530dbee1c3811`. Native Minecraft-profile/Chromium fixtures are supporting interoperability evidence, not signed diagnostic admission or gameplay evidence.
 
