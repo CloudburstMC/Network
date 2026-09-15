@@ -20,7 +20,7 @@ public final class ControlAuthorityCodec {
     public record Source(String sourceId, long sourceRevision, long sourceWatermark, long sourceCheckedAt, long sourceExpiresAt) { }
     public record Response(int version, String kind, String requestId, String audience, String instanceId, long generation,
             ControlWriterFence writer, List<String> capabilities, long sentAt, long expiresAt, String requestDigest,
-            Source source, long subjectExpiresAt, long authorityExpiresAt, List<String> permissions,
+            Source source, long subjectExpiresAt, long authorityExpiresAt, List<String> permissions, ControlStateCodec.Summary state,
             ControlFrameCodec.Authentication authentication) {
         public Response { capabilities = List.copyOf(capabilities); permissions = List.copyOf(permissions); }
     }
@@ -29,7 +29,7 @@ public final class ControlAuthorityCodec {
         public RequestContext { capabilities = List.copyOf(capabilities); }
     }
     /** Persist within the trusted provider/instance scope across reconnect and selected-key changes. */
-    public record Floor(String audience, String instanceId, long generation, Source source, ControlWriterFence writer, List<String> capabilities, long subjectExpiresAt, List<String> permissions) {
+    public record Floor(String audience, String instanceId, long generation, Source source, ControlWriterFence writer, List<String> capabilities, long subjectExpiresAt, List<String> permissions, ControlStateCodec.Summary state) {
         public Floor { capabilities = List.copyOf(capabilities); permissions = List.copyOf(permissions); }
     }
     public record ResponseContext(Request originalRequest, long now, long sessionExpiresAt, long clockSkewMillis, Floor floor) { }
@@ -39,7 +39,7 @@ public final class ControlAuthorityCodec {
         private Verified(Response response, String originalWire) { this.response = response; this.originalWire = originalWire; }
         public Response response() { return response; }
         public String originalWire() { return originalWire; }
-        public Floor floor() { return new Floor(response.audience(), response.instanceId(), response.generation(), response.source(), response.writer(), response.capabilities(), response.subjectExpiresAt(), response.permissions()); }
+        public Floor floor() { return new Floor(response.audience(), response.instanceId(), response.generation(), response.source(), response.writer(), response.capabilities(), response.subjectExpiresAt(), response.permissions(), response.state()); }
         /** Before installing: also atomically consume the pending nonce and recheck the current writer/key catalog. */
         public void requireFreshDelivery(long now, Floor currentFloor) {
             requireUnexpired(now);
@@ -68,14 +68,14 @@ public final class ControlAuthorityCodec {
         JsonObject o = ControlJson.parse(wire, MAX_ENVELOPE_BYTES);
         ControlJson.fields(o, "version", "kind", "requestId", "audience", "instanceId", "generation", "writer", "capabilities",
                 "sentAt", "expiresAt", "requestDigest", "sourceId", "sourceRevision", "sourceWatermark", "sourceCheckedAt",
-                "sourceExpiresAt", "subjectExpiresAt", "authorityExpiresAt", "permissions", "authentication");
+                "sourceExpiresAt", "subjectExpiresAt", "authorityExpiresAt", "permissions", "state", "authentication");
         Response value = new Response((int) ControlJson.number(o, "version"), ControlJson.string(o, "kind"), ControlJson.string(o, "requestId"),
                 ControlJson.string(o, "audience"), ControlJson.string(o, "instanceId"), ControlJson.number(o, "generation"),
                 ControlWriterFence.read(ControlJson.object(o, "writer")), strings(o, "capabilities"), ControlJson.number(o, "sentAt"),
                 ControlJson.number(o, "expiresAt"), ControlJson.string(o, "requestDigest"), new Source(ControlJson.string(o, "sourceId"),
                 ControlJson.number(o, "sourceRevision"), ControlJson.number(o, "sourceWatermark"), ControlJson.number(o, "sourceCheckedAt"),
                 ControlJson.number(o, "sourceExpiresAt")), ControlJson.number(o, "subjectExpiresAt"), ControlJson.number(o, "authorityExpiresAt"),
-                strings(o, "permissions"), ControlProof.authentication(o));
+                strings(o, "permissions"), ControlStateCodec.readSummary(ControlJson.object(o, "state")), ControlProof.authentication(o));
         if (ControlJson.number(o, "version") != 1) throw ControlJson.invalid("authority version");
         validate(value, true); return value;
     }
@@ -99,7 +99,7 @@ public final class ControlAuthorityCodec {
         return ControlProof.array("nethernet-control-authority-response-v1", 1, ControlFrameCodec.SCHEME, v.audience(), v.requestId(),
                 v.requestDigest(), v.instanceId(), v.generation(), w.transport(), w.sessionEpoch(), w.sessionId(), w.connectionId(), w.keyId(),
                 w.machineKeyRevision(), v.capabilities(), s.sourceId(), s.sourceRevision(), s.sourceWatermark(), s.sourceCheckedAt(),
-                s.sourceExpiresAt(), v.subjectExpiresAt(), v.authorityExpiresAt(), v.permissions(), v.sentAt(), v.expiresAt(), v.authentication().keyId());
+                s.sourceExpiresAt(), v.subjectExpiresAt(), v.authorityExpiresAt(), v.permissions(), v.state().desiredRevision(), v.state().desiredState(), v.state().appliedBasisSha256(), v.sentAt(), v.expiresAt(), v.authentication().keyId());
     }
     public static String requestDigest(Request value) { return ControlFrameCodec.payloadDigest(signingBytes(value)); }
     public static Request sign(Request v, PrivateKey key) throws GeneralSecurityException {
@@ -109,7 +109,7 @@ public final class ControlAuthorityCodec {
     }
     public static Response sign(Response v, PrivateKey key) throws GeneralSecurityException {
         return new Response(v.version(), v.kind(), v.requestId(), v.audience(), v.instanceId(), v.generation(), v.writer(), v.capabilities(),
-                v.sentAt(), v.expiresAt(), v.requestDigest(), v.source(), v.subjectExpiresAt(), v.authorityExpiresAt(), v.permissions(),
+                v.sentAt(), v.expiresAt(), v.requestDigest(), v.source(), v.subjectExpiresAt(), v.authorityExpiresAt(), v.permissions(), v.state(),
                 new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, v.authentication().keyId(), ControlProof.sign(signingBytes(v), key)));
     }
     public static String encode(Request value) {
@@ -127,7 +127,12 @@ public final class ControlAuthorityCodec {
         o.addProperty("sourceId", s.sourceId()); o.addProperty("sourceRevision", s.sourceRevision()); o.addProperty("sourceWatermark", s.sourceWatermark());
         o.addProperty("sourceCheckedAt", s.sourceCheckedAt()); o.addProperty("sourceExpiresAt", s.sourceExpiresAt());
         o.addProperty("subjectExpiresAt", value.subjectExpiresAt()); o.addProperty("authorityExpiresAt", value.authorityExpiresAt());
-        o.add("permissions", ControlProof.capabilitiesObject(value.permissions())); return bounded(o);
+        o.add("permissions", ControlProof.capabilitiesObject(value.permissions())); o.add("state", stateObject(value.state())); return bounded(o);
+    }
+    private static JsonObject stateObject(ControlStateCodec.Summary state) {
+        JsonObject object = new JsonObject(); object.addProperty("desiredRevision", state.desiredRevision());
+        object.addProperty("desiredState", state.desiredState()); object.addProperty("appliedBasisSha256", state.appliedBasisSha256());
+        return object;
     }
     private static JsonObject base(int version, String kind, String requestId, String audience, String instanceId, long generation,
             ControlWriterFence writer, List<String> capabilities, long sentAt, long expiresAt, ControlFrameCodec.Authentication auth) {
@@ -175,7 +180,7 @@ public final class ControlAuthorityCodec {
     private static void validate(Response value, boolean signature) {
         common(value.version(), value.requestId(), value.audience(), value.instanceId(), value.generation(), value.writer(), value.capabilities(),
                 value.sentAt(), value.expiresAt(), value.authentication(), signature);
-        ControlJson.digest(value.requestDigest()); source(value.source()); permissions(value.permissions(), value.writer(), value.capabilities());
+        ControlJson.digest(value.requestDigest()); source(value.source()); java.util.Objects.requireNonNull(value.state(), "authority state"); permissions(value.permissions(), value.writer(), value.capabilities());
         ControlJson.safe(value.subjectExpiresAt(), false); ControlJson.safe(value.authorityExpiresAt(), false);
         if (!value.kind().equals("authority-response") || value.authorityExpiresAt() > value.source().sourceExpiresAt()
                 || value.authorityExpiresAt() > value.subjectExpiresAt() || value.authorityExpiresAt() < value.expiresAt()
@@ -204,15 +209,17 @@ public final class ControlAuthorityCodec {
     }
     static void checkFloor(Response v, Floor floor) {
         source(floor.source()); floor.writer().encode(); ControlProof.capabilities(floor.writer().transport(), floor.capabilities());
+        java.util.Objects.requireNonNull(floor.state(), "authority floor state");
         ControlJson.safe(floor.subjectExpiresAt(), false); permissions(floor.permissions(), floor.writer(), floor.capabilities());
         ControlJson.audience(floor.audience()); ControlJson.identifier(floor.instanceId()); ControlJson.safe(floor.generation(), true);
         Source s = v.source(), f = floor.source();
         if (!v.audience().equals(floor.audience()) || !v.instanceId().equals(floor.instanceId()) || v.generation() < floor.generation()
                 || !s.sourceId().equals(f.sourceId()) || s.sourceRevision() < f.sourceRevision() || s.sourceWatermark() < f.sourceWatermark()
                 || s.sourceCheckedAt() < f.sourceCheckedAt()) throw ControlJson.invalid("authority source rollback");
+        if (v.generation() == floor.generation() && v.state().desiredRevision() < floor.state().desiredRevision()) throw ControlJson.invalid("authority state rollback");
         if (s.sourceRevision() == f.sourceRevision()) {
             if (v.generation() != floor.generation() || !v.writer().equals(floor.writer()) || v.subjectExpiresAt() != floor.subjectExpiresAt() || !v.capabilities().equals(floor.capabilities())
-                    || !v.permissions().equals(floor.permissions())) throw ControlJson.invalid("authority policy rollback");
+                    || !v.permissions().equals(floor.permissions()) || !v.state().equals(floor.state())) throw ControlJson.invalid("authority policy rollback");
             if (s.sourceCheckedAt() == f.sourceCheckedAt() && s.sourceExpiresAt() > f.sourceExpiresAt()) throw ControlJson.invalid("authority deadline rollback");
         }
     }

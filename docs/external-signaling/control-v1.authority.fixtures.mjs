@@ -10,7 +10,7 @@ const text = v => JSON.stringify(v.kind === 'authority-request'
     v.requestId, v.instanceId, v.generation, ...writer(v.writer), v.capabilities, v.sentAt, v.expiresAt, v.authorityNotAfter, v.authentication.keyId]
   : ['nethernet-control-authority-response-v1', 1, scheme, v.audience, v.requestId, v.requestDigest, v.instanceId, v.generation,
     ...writer(v.writer), v.capabilities, v.sourceId, v.sourceRevision, v.sourceWatermark, v.sourceCheckedAt, v.sourceExpiresAt,
-    v.subjectExpiresAt, v.authorityExpiresAt, v.permissions, v.sentAt, v.expiresAt, v.authentication.keyId]);
+    v.subjectExpiresAt, v.authorityExpiresAt, v.permissions, v.state.desiredRevision, v.state.desiredState, v.state.appliedBasisSha256, v.sentAt, v.expiresAt, v.authentication.keyId]);
 const digest = value => createHash('sha256').update(value).digest('base64url');
 let fixture;
 if (process.argv.includes('--write')) {
@@ -40,6 +40,9 @@ if (process.argv.includes('--write')) {
     add(`${mode}-response`, {...common, kind: 'authority-response', requestDigest: request.requestDigest,
       sourceId: 'control:p17', sourceRevision: 42, sourceWatermark: 1001, sourceCheckedAt: now - 1000, sourceExpiresAt: now + 299000,
       subjectExpiresAt: now + 900000, authorityExpiresAt: now + 180000,
+      state: {desiredRevision: mode === "ipv6" ? 9007199254740991 : 12,
+        desiredState: mode === "https" ? "draining" : mode === "ipv6" ? "closed" : "serving",
+        appliedBasisSha256: mode === "ws" ? null : digest(`state_${mode}`)},
       permissions: mode === 'assisted' ? ['control.assisted', 'control.status'] : ['control.status'],
       authentication: {scheme, keyId: keys.providerControl.keyId, signature: ''}}, 'providerControl', request.name);
   }

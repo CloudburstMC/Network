@@ -49,12 +49,24 @@ Pin `sourceId` on the first trusted positive proof for the provider/instance.
 Retain that source floor across reconnect and key changes. Resetting a source
 ID needs an explicit trusted migration or reenrollment. Revisions, watermarks,
 source time and generation cannot regress. At unchanged content revision,
-generation, writer/key binding, capabilities, permissions and subject expiry
-must stay identical. A freshly checked timestamp may extend raw checkpoint
+generation, writer/key binding, capabilities, permissions, state summary and subject expiry
+must stay identical. Within one generation, desiredRevision cannot regress even
+when the source content revision advances. A freshly checked timestamp may extend raw checkpoint
 freshness at that revision. At unchanged revision and source time, a known
 shorter raw source deadline cannot be extended. The requested/effective grant
 deadline is excluded from this floor, so a short request does not permanently
 pin a longer valid source window. Scope the floor to its provider and instance.
+
+Every response includes the closed `state` object from its immutable source:
+`{desiredRevision, desiredState, appliedBasisSha256}`. Desired revision is a safe
+nonnegative integer; state is serving, draining or closed; the digest is canonical
+SHA-256 base64url or null. Canonical response signing bytes append these three
+values, in that order, after permissions and before sentAt. A null digest is a
+valid control authority view with no accepted current application basis. A
+non-null digest is application synchronization evidence only when the caller has
+actually applied and persisted the matching basis on its current native instance.
+Neither case establishes readiness, admission permission or external reachability
+by itself. State changes do not renew or reset any source/session deadline.
 
 After cryptographic verification completes, recheck the delivery deadline and
 latest retained floor with `requireFreshControlAuthorityDelivery` (Java:

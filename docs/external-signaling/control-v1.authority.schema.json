@@ -198,7 +198,8 @@
         "sourceExpiresAt",
         "subjectExpiresAt",
         "authorityExpiresAt",
-        "permissions"
+        "permissions",
+        "state"
       ],
       "properties": {
         "version": {
@@ -270,6 +271,40 @@
               "control.status"
             ]
           }
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "desiredRevision",
+        "desiredState",
+        "appliedBasisSha256"
+      ],
+      "properties": {
+        "desiredRevision": {
+          "$ref": "#/$defs/uint"
+        },
+        "desiredState": {
+          "enum": [
+            "serving",
+            "draining",
+            "closed"
+          ]
+        },
+        "appliedBasisSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }
