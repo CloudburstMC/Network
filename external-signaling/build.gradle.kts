@@ -94,3 +94,19 @@ tasks.processTestResources {
         into("nxs")
     }
 }
+
+// Test-only argv file for the isolated Java <-> workerd TLS/bootstrap smoke harness.
+tasks.register("writeControlLocalSmokeLaunch") {
+    dependsOn(tasks.testClasses)
+    dependsOn(sourceSets.test.get().runtimeClasspath)
+    val launcher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
+    val output = layout.buildDirectory.file("control-local-smoke-argv.txt")
+    outputs.file(output)
+    // The absolute classpath/toolchain may change between otherwise identical worktrees.
+    outputs.upToDateWhen { false }
+    doLast {
+        output.get().asFile.writeText(listOf(launcher.get().executablePath.asFile.absolutePath, "-cp",
+            sourceSets.test.get().runtimeClasspath.asPath,
+            "org.cloudburstmc.netty.signaling.control.ControlLocalSmokeClient").joinToString("\n", postfix = "\n"))
+    }
+}
