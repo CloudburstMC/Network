@@ -200,7 +200,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         return result.minimalCompletionStage();
     }
 
-    /** Explicit retry/reconciliation trigger. Unknown, rejected and expired receipts keep the intent barrier. */
+    /** Explicit retry/reconciliation trigger. Unknown/null receipts retain the original intent; only provider terminal receipts release it. */
     public synchronized void reconcilePending() { requireRunning(); try { recover(); } catch (RuntimeException failure) { fail(); } }
 
     private void recover() {
@@ -237,11 +237,15 @@ public final class ControlClientCoordinator implements AutoCloseable {
             ControlLifecycleCodec.Receipt receipt = result.get("receipt").isJsonNull() ? null
                     : ControlLifecycleCodec.decodeReceipt(result.get("receipt").toString());
             if (receipt != null) ControlLifecycleCodec.verifyReceipt(receipt, pending.intent());
-            if (receipt != null && receipt.disposition().equals("committed")) {
-                if (pending.intent().operation().equals("deregister")) {
+            if (receipt != null && (receipt.disposition().equals("committed") || terminalNoCommit(receipt))) {
+                boolean committed = receipt.disposition().equals("committed");
+                if (committed && pending.intent().operation().equals("deregister")) {
                     persistPendingReceipt(receipt); stopDeregistered(); return;
                 }
-                if (pending.candidate() != null && !credential.keyId().equals(pending.candidate().keyId())) throw ControlJson.invalid("rotation current key reconciliation");
+                if (committed && pending.candidate() != null && !credential.keyId().equals(pending.candidate().keyId())) throw ControlJson.invalid("rotation current key reconciliation");
+                // A no-commit receipt never proves candidate selection. Require a
+                // positive strong status under the original selected credential.
+                if (!committed && !credential.equals(snapshot.currentKey())) { halt(); return; }
                 persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(), null, snapshot.pendingBootstrap(), grant(current), snapshot.authorityFloor()));
                 long continuationAttempt = attempt; State continuationState = state;
                 completeResult(ControlOperationResult.reconciled(receipt));
@@ -671,6 +675,14 @@ public final class ControlClientCoordinator implements AutoCloseable {
         var pending = snapshot.pending(); if (pending == null) return;
         var receipt = result.receipt();
         ControlLifecycleCodec.verifyReceipt(receipt, pending.intent()); operationInFlight = false;
+        if (terminalNoCommit(receipt)) {
+            // Durable removal retains the sequence floor and original credential.
+            // Never expose a response body or promote a rotation candidate here.
+            persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
+            pendingSynchronization = null;
+            completeResult(ControlOperationResult.reconciled(receipt));
+            return; // Completion can synchronously close, replace, or submit.
+        }
         if (!receipt.disposition().equals("committed")) { persistPendingReceipt(receipt); return; }
         if (pending.intent().operation().equals("deregister")) {
             persistPendingReceipt(receipt); stopDeregistered(); return;
@@ -687,6 +699,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
             return;
         }
         completeResult(ControlOperationResult.delivered(result, bodyGuard));
+    }
+
+    /** Only a verified provider terminal decision; carrier clocks never call this. */
+    private static boolean terminalNoCommit(ControlLifecycleCodec.Receipt receipt) {
+        return receipt.disposition().equals("rejected") || receipt.disposition().equals("expired");
     }
 
     private void persistPendingReceipt(ControlLifecycleCodec.Receipt receipt) {
