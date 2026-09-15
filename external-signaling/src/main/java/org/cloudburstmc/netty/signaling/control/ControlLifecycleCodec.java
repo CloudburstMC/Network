@@ -156,7 +156,8 @@ public final class ControlLifecycleCodec {
 
     private static void validate(Receipt receipt) {
         if (receipt.version() != 1 || !OPERATIONS.contains(receipt.operation())
-                || !Set.of("committed", "rejected", "expired", "unknown").contains(receipt.disposition())) throw ControlJson.invalid("receipt version or disposition");
+                || !Set.of("committed", "rejected", "cancelled", "expired", "unknown").contains(receipt.disposition())) throw ControlJson.invalid("receipt version or disposition");
+        if (receipt.disposition().equals("cancelled") && (!receipt.operation().equals("heartbeat") || !"native-application-replaced".equals(receipt.code()))) throw ControlJson.invalid("cancelled receipt");
         ControlJson.digest(receipt.intentDigest());
         ControlJson.identifier(receipt.instanceId());
         ControlJson.safe(receipt.generation(), true);
