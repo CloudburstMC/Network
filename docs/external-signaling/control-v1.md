@@ -20,7 +20,7 @@ There are no separate public prepare, activate, session-status, authority-renewa
 
 ## WebSocket carrier
 
-The provider advertises a same-authority WebSocket endpoint. The initial carrier implementation uses `GET /v1/nxs/control`, subprotocol `nethernet-external-signaling-v1`, and the existing NXS request signature over that exact GET target with an empty body. Production uses WSS and normal TLS verification; credentials cannot follow a redirect to another authority.
+The provider advertises a same-authority WebSocket endpoint through the noncritical `org.nethernet.websocket` extension (`version: 1`, data containing `url` and `subprotocol`). The Java client defaults to `HTTP`; `AUTO` opts into an advertised endpoint. The initial carrier implementation uses `GET /v1/nxs/control`, subprotocol `nethernet-external-signaling-v1`, and the existing NXS request signature over that exact GET target with an empty body. Production uses WSS and normal TLS verification; credentials cannot follow a redirect to another authority.
 
 After authentication, ordinary operations use this bounded text envelope:
 

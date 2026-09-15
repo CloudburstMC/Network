@@ -7,7 +7,7 @@ import io.netty.channel.DefaultEventLoopGroup;
 import org.cloudburstmc.netty.signaling.ProviderCrypto;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
 import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
-import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -48,13 +48,10 @@ class NativeProviderHostFactoryNativeTest {
                     var snapshot = nativeHost.captureHostProfile().toCompletableFuture().get(5, TimeUnit.SECONDS);
                     var profile = CandidateLeaseCodec.readProfile(snapshot.profile()); long now = System.currentTimeMillis();
                     var context = new DiagnosticAdmissionCodec.Context("https://provider.example", "factory_host", profile.nativeIncarnation(), 1);
-                    var binding = new DiagnosticAdmission.Binding(context, "authority:1", 1, "profile:1", CandidateLeaseCodec.profileDigest(profile), 1, "A".repeat(43),
-                            profile.dtlsFingerprint().substring(8).replace(":", "").toLowerCase(java.util.Locale.ROOT));
-                    var policy = new DiagnosticAdmission.Policy(binding, List.of(new DiagnosticAdmissionCodec.Key("D001", "public-test-only-diagnostic-epoch-secret", now, now + 60000)), List.of(), now, now + 60000);
-                    var installed = nativeHost.installDiagnosticPolicy(policy, snapshot::requireCurrent).toCompletableFuture().get(5, TimeUnit.SECONDS);
-                    installed.requireCurrent(); assertSame(installed, nativeHost.captureDiagnosticInstallation().orElseThrow());
+                    var policy = new DiagnosticHostPolicy(context, List.of(new DiagnosticAdmissionCodec.Key("D001", "public-test-only-diagnostic-epoch-secret", now, now + 60000)), java.util.Set.of(), now + 60000);
+                    nativeHost.configureDiagnostics(policy).toCompletableFuture().get(5, TimeUnit.SECONDS);
                     assertFalse(nativeHost.channel().isServing()); assertEquals(0, nativeHost.channel().nativeStats()[2]);
-                    assertTrue(nativeHost.withdrawDiagnosticPolicy(installed).toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    nativeHost.disableDiagnostics().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 } finally { host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
                 try (var reclaimed = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(ip), port))) { assertEquals(port, reclaimed.getLocalPort()); }
             }

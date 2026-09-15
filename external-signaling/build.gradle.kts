@@ -66,7 +66,7 @@ tasks.register<JavaExec>("providerBench") {
     listOf(
         "providerOrigin", "providerState", "providerMode", "providerToken", "providerRegistrationMode",
         "providerRegion", "providerPool", "providerTags", "providerHoldSeconds", "providerStopFile",
-        "providerExtensionsFile"
+        "providerExtensionsFile", "providerControlTransport"
     ).forEach { name ->
         providers.gradleProperty(name).orNull?.let {
             systemProperty(name, it)

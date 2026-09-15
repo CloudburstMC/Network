@@ -21,8 +21,9 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Bounded draft-control JSON parsing; never use this for an opaque operation's original body. */
+/** Bounded candidate JSON parsing; never use this for an opaque operation's original body. */
 final class ControlJson {
+    static final long MAX_SAFE_INTEGER = 9007199254740991L;
     private ControlJson() { }
 
     static JsonObject parse(String wire, int maximum) {
@@ -119,7 +120,7 @@ final class ControlJson {
     }
 
     static void safe(long number, boolean positive) {
-        if (number < (positive ? 1 : 0) || number > ControlFrameCodec.MAX_SAFE_INTEGER) throw invalid("safe integer");
+        if (number < (positive ? 1 : 0) || number > MAX_SAFE_INTEGER) throw invalid("safe integer");
     }
 
     static void identifier(String value) {

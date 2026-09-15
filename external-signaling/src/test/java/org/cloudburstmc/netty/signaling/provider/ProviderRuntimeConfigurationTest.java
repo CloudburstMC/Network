@@ -51,6 +51,10 @@ class ProviderRuntimeConfigurationTest {
         assertEquals(dir.resolve("provider-state"), result.stateDirectory());
         assertEquals("automatic", result.clientConfiguration().registrationMode());
         assertEquals("anonymous-proof-of-work", result.clientConfiguration().authorizationScheme());
+        assertEquals(org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, result.clientConfiguration().controlTransport());
+        var automatic = runtime(dir, new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.AUTO));
+        assertEquals(org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.AUTO, automatic.clientConfiguration().controlTransport());
     }
 
     @Test

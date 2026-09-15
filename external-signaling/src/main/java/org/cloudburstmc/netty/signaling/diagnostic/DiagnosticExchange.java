@@ -7,86 +7,53 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
-/** Bounded transport-neutral exchange. Caller must establish diagnostic authentication before start(). */
+/** One optional reliable PING/PONG after signed AUTH; no completion or receipt exchange. */
 public final class DiagnosticExchange {
-    public static final int FRAME_BYTES = 56, CHALLENGE = 2, REPLY = 3, COMPLETION = 4;
+    public static final int FRAME_BYTES = 56, PING = 2, PONG = 3;
     @FunctionalInterface public interface Sender { void send(int channel, byte[] ownedFrame); }
     private final String attempt;
     private final boolean host;
     private final Sender sender;
-    private final byte[][] local = new byte[2][32], remote = new byte[2][];
-    private final boolean[] replied = new boolean[2];
-    private final int[] challengesReceived = new int[2], repliesReceived = new int[2];
-    private int sentFrames, sentBytes, receivedFrames, receivedBytes, retries;
-    private long lastRetryNanos;
-    private boolean started, completionSent, completionReceived, failed;
-    private byte[] pendingCompletion;
+    private final byte[] nonce = new byte[32];
+    private int sentFrames, sentBytes, receivedFrames, receivedBytes;
+    private boolean started, received, failed;
 
+    /** Host callers must have verified AUTH. Prober callers must have sent AUTH on this ordered channel. */
     public DiagnosticExchange(String attemptIdHex, boolean host, Sender sender) {
-        unhex(attemptIdHex, 16); this.attempt = attemptIdHex; this.host = host; this.sender = java.util.Objects.requireNonNull(sender);
-        SecureRandom random = new SecureRandom(); random.nextBytes(local[0]); random.nextBytes(local[1]);
-        // AUTH has already been sent/verified before this exchange. It belongs to the same budget.
-        if (host) { receivedFrames = 1; receivedBytes = 217; } else { sentFrames = 1; sentBytes = 217; }
+        unhex(attemptIdHex,16); this.attempt=attemptIdHex; this.host=host; this.sender=java.util.Objects.requireNonNull(sender);
+        if (host) { receivedFrames=1; receivedBytes=217; }
+        else { new SecureRandom().nextBytes(nonce); sentFrames=1; sentBytes=217; }
     }
-    public synchronized void start(long nowNanos) {
-        if (started || failed) throw invalid(); started = true; lastRetryNanos = nowNanos;
-        send(CHALLENGE, 0, local[0]); send(CHALLENGE, 1, local[1]);
+    public synchronized void start() {
+        if (started || failed) throw invalid(); started=true;
+        if (!host) send(PING,nonce);
     }
     public synchronized void receive(int channel, byte[] input) {
-        if (!started || failed || input.length != FRAME_BYTES || channel < 0 || channel > 1) fail();
-        if (++receivedFrames > MAX_FRAMES || (receivedBytes += input.length) > MAX_APPLICATION_SEND_BYTES) fail();
-        byte[] frame = input.clone();
-        if (!Arrays.equals(Arrays.copyOf(frame, 6), new byte[]{0,78,88,68,80,1}) || frame[7] != channel ||
-                !Arrays.equals(Arrays.copyOfRange(frame, 8, 24), unhex(attempt, 16))) fail();
-        int kind = frame[6]; byte[] nonce = Arrays.copyOfRange(frame, 24, 56);
-        if (kind == CHALLENGE) {
-            if (++challengesReceived[channel] > (channel == 0 ? 1 : 1 + MAX_UNRELIABLE_RETRIES)) fail();
-            if (remote[channel] == null) remote[channel] = nonce;
-            else if (!MessageDigest.isEqual(remote[channel], nonce)) fail();
-            send(REPLY, channel, nonce);
-        } else if (kind == REPLY) {
-            if (++repliesReceived[channel] > (channel == 0 ? 1 : 1 + MAX_UNRELIABLE_RETRIES) || !MessageDigest.isEqual(local[channel], nonce)) fail();
-            replied[channel] = true;
-        } else if (kind == COMPLETION) {
-            // Reliable completion can overtake the independent unreliable channel.
-            if (channel != 0 || pendingCompletion != null) fail();
-            pendingCompletion = nonce;
-        } else fail();
-        if (roundTripsDone() && !completionSent) {
-            completionSent = true; send(COMPLETION, 0, completionHash());
-        }
-        if (roundTripsDone() && pendingCompletion != null) {
-            if (!MessageDigest.isEqual(completionHash(), pendingCompletion)) fail();
-            completionReceived = true;
-        }
+        if (!started || failed || received || input == null || input.length != FRAME_BYTES || channel != 0) fail();
+        receivedFrames++; receivedBytes+=input.length;
+        byte[] frame=input.clone();
+        if (!Arrays.equals(Arrays.copyOf(frame,6),new byte[]{0,78,88,68,80,1}) || frame[7] != 0 ||
+                !Arrays.equals(Arrays.copyOfRange(frame,8,24),unhex(attempt,16)) || frame[6] != (host ? PING : PONG)) fail();
+        byte[] value=Arrays.copyOfRange(frame,24,56);
+        if (!host && !MessageDigest.isEqual(nonce,value)) fail();
+        received=true;
+        if (host) send(PONG,value);
     }
-    /** At most two application retries, preserving the original nonce. Caller owns the fixed attempt deadline. */
-    public synchronized void tick(long nowNanos) {
-        if (started && !failed && !replied[1] && retries < MAX_UNRELIABLE_RETRIES && nowNanos - lastRetryNanos >= 250_000_000L) {
-            retries++; lastRetryNanos = nowNanos; send(CHALLENGE, 1, local[1]);
-        }
-    }
-    public synchronized boolean complete() { return !failed && completionSent && completionReceived && roundTripsDone(); }
-    /** Public correlation digest only after all four round trips and the peer completion have verified. */
-    public synchronized String completionDigestHex() { return complete() ? java.util.HexFormat.of().formatHex(completionHash()) : null; }
+    /** Only the prober can verify that its original random PING was echoed. */
+    public synchronized boolean complete() { return !host && !failed && received; }
     public synchronized int sentFrames() { return sentFrames; }
     public synchronized int sentBytes() { return sentBytes; }
     public synchronized int receivedFrames() { return receivedFrames; }
     public synchronized int receivedBytes() { return receivedBytes; }
-    private boolean roundTripsDone() { return replied[0] && replied[1] && remote[0] != null && remote[1] != null; }
-    private byte[] completionHash() {
-        byte[][] prober = host ? remote : local, server = host ? local : remote;
-        return digest(concat(domain("completion"), unhex(attempt,16), prober[0], prober[1], server[0], server[1]));
+    private void send(int kind,byte[] value) {
+        sentFrames++; sentBytes+=FRAME_BYTES;
+        try { sender.send(0,encode(attempt,kind,0,value)); }
+        catch (RuntimeException failure) { failed=true; throw failure; }
     }
-    private void send(int kind, int channel, byte[] value) {
-        if (failed || ++sentFrames > MAX_FRAMES || (sentBytes += FRAME_BYTES) > MAX_APPLICATION_SEND_BYTES) fail();
-        try { sender.send(channel, encode(attempt, kind, channel, value)); }
-        catch (RuntimeException failure) { failed = true; throw failure; }
+    public static byte[] encode(String attemptIdHex,int kind,int channel,byte[] value) {
+        if (value.length != 32 || (kind != PING && kind != PONG) || channel != 0) throw invalid();
+        return ByteBuffer.allocate(FRAME_BYTES).put(new byte[]{0,78,88,68,80,1,(byte)kind,0})
+            .put(unhex(attemptIdHex,16)).put(value).array();
     }
-    public static byte[] encode(String attemptIdHex, int kind, int channel, byte[] value) {
-        if (value.length != 32 || kind < CHALLENGE || kind > COMPLETION || channel < 0 || channel > 1 || kind == COMPLETION && channel != 0) throw invalid();
-        return ByteBuffer.allocate(FRAME_BYTES).put(new byte[]{0,78,88,68,80,1,(byte)kind,(byte)channel})
-                .put(unhex(attemptIdHex,16)).put(value).array();
-    }
-    private void fail() { failed = true; throw invalid(); }
+    private void fail() { failed=true; throw invalid(); }
 }

@@ -17,8 +17,8 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     public record Result(Context context, String keyId, String attemptId, String offerDigestHex, String clientFingerprintHex, long expiresAt,
                          DiagnosticHostPolicy.Endpoint target, boolean success, String reason,
                          InetSocketAddress selectedLocal, InetSocketAddress selectedRemote, UdpSendStats udp,
-                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, String completionDigestHex, long completedAt,
-                         DiagnosticAdmission.Binding installation, boolean cleanupComplete) { }
+                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, boolean authenticated, long completedAt,
+                         boolean cleanupComplete) { }
     public record Stats(int active, int pending, int retainedAttempts, int liveNativePeers, long rejected, long droppedResults) { }
     private record Incoming(int channel, byte[] bytes) { }
     private static final class Session {
@@ -26,7 +26,6 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         final Key key;
         final InetSocketAddress remote;
         final long deadlineNanos, handshakeDeadlineNanos, nativeDeadline;
-        final DiagnosticAdmission.Binding installation;
         final ArrayBlockingQueue<DataChannel> channels = new ArrayBlockingQueue<>(2);
         final ArrayBlockingQueue<Incoming> messages = new ArrayBlockingQueue<>(MAX_FRAMES);
         final AtomicBoolean failed = new AtomicBoolean(), protocolFailed = new AtomicBoolean(), connected = new AtomicBoolean();
@@ -43,11 +42,9 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         long completeNanos;
         UdpSendStats stats;
         InetSocketAddress selectedLocal, selectedRemote;
-        Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos, long nativeDeadline,
-                DiagnosticAdmission.Binding installation) {
+        Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos, long nativeDeadline) {
             this.admission = admission; this.key = key; this.remote = remote; this.deadlineNanos = deadlineNanos;
             this.handshakeDeadlineNanos = handshakeDeadlineNanos; this.nativeDeadline = nativeDeadline;
-            this.installation = installation;
         }
     }
     private final NativeHostIdentity identity;
@@ -70,7 +67,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         this.listenerAddress = listenerAddress;
         if (observe() >= policy.expiresAt()) throw invalid();
     }
-    /** Installed canonical authority only. Does not renew any admitted attempt or its native deadline. */
+    /** Trusted local configuration only. Does not renew any admitted attempt or its native deadline. */
     public synchronized void replacePolicy(DiagnosticHostPolicy replacement) {
         Objects.requireNonNull(replacement);
         if (closed || !replacement.context().hostId().equals(policy.context().hostId()) ||
@@ -94,7 +91,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         Objects.requireNonNull(retained);
         var deadlines = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
         policy.endpointExpiries().forEach((endpoint, expiry) -> { if (retained.contains(endpoint)) deadlines.put(endpoint, expiry); });
-        policy = new DiagnosticHostPolicy(policy.context(), policy.keys(), deadlines.keySet(), policy.expiresAt(), deadlines, policy.installation());
+        policy = new DiagnosticHostPolicy(policy.context(), policy.keys(), deadlines.keySet(), policy.expiresAt(), deadlines);
         for (Session session : new ArrayList<>(sessions.values())) if (!authorized(session, observe())) stop(session, "authority_changed");
     }
     public CompletionStage<Void> termination() { return termination.minimalCompletionStage(); }
@@ -120,7 +117,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             long remaining = claims.expiresAt() - now;
             if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS || nativeStart > Long.MAX_VALUE - remaining) throw invalid();
             Session session = new Session(admission, key, remote, nanos + remaining * 1_000_000L,
-                nanos + Math.min(remaining, MAX_HANDSHAKE_MILLIS) * 1_000_000L, nativeStart + remaining, policy.installation());
+                nanos + Math.min(remaining, MAX_HANDSHAKE_MILLIS) * 1_000_000L, nativeStart + remaining);
             sessions.put(claims.attemptIdHex(), session); used.put(claims.attemptIdHex(), claims.expiresAt());
             request.completion().whenComplete((peer, failure) -> settled(session, failure));
             return IceUdpMuxListener.Acceptance.builder(remoteDescription(admission, remote), admission.credentials().icePwd())
@@ -153,14 +150,10 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         Claims claims = session.admission.claims();
         // Admission capped this permit by its original policy and endpoint deadlines. A later
         // same-endpoint renewal governs new admissions without shortening this captured permit.
-        // Explicit owner/key/endpoint withdrawal still retires it immediately.
+        // Explicit context/key/endpoint withdrawal still retires it immediately.
         return !closed && closeFailure == null && !clockFailed && session.admission.context().equals(policy.context()) && now < claims.expiresAt() && lastNanos - session.deadlineNanos < 0 &&
             keyEquals(session.key, policy.key(session.key.keyId())) && now >= session.key.notBefore() && now < session.key.retireAt() &&
-            sameOwner(session.installation, policy.installation()) && policy.endpoints().contains(DiagnosticHostPolicy.Endpoint.from(claims));
-    }
-    private static boolean sameOwner(DiagnosticAdmission.Binding first, DiagnosticAdmission.Binding second) {
-        return first == null ? second == null : second != null && first.nativeOwnerEpoch() == second.nativeOwnerEpoch()
-            && first.authorityIncarnation().equals(second.authorityIncarnation());
+            policy.endpoints().contains(DiagnosticHostPolicy.Endpoint.from(claims));
     }
     private static boolean keyEquals(Key first, Key second) { return second != null && first.equals(second); }
     /** Called by the existing host maintenance loop; never schedules unbounded per-packet work. */
@@ -170,7 +163,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             if (session.closing || session.wantsClose) continue;
             if (!authorized(session, now)) { stop(session, "expired_or_withdrawn"); continue; }
             if (session.protocolFailed.get()) { stop(session, "invalid_diagnostic_protocol"); continue; }
-            if (session.failed.get() && !session.complete) { stop(session, "transport_failed"); continue; }
+            if (session.failed.get()) { stop(session, session.complete ? "authenticated" : "transport_failed"); continue; }
             if (session.principal == null && lastNanos - session.handshakeDeadlineNanos >= 0) { stop(session, "handshake_timeout"); continue; }
             try {
                 DataChannel channel;
@@ -180,7 +173,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                     if (session.exchange == null) {
                         if (incoming.channel != 0 || session.auth != null || incoming.bytes.length != 217) throw invalid();
                         session.auth = incoming.bytes;
-                        break; // Install authentication before consuming any already queued challenge.
+                        break; // Verify AUTH before consuming any queued ping.
                     } else session.exchange.receive(incoming.channel, incoming.bytes);
                 }
                 if (session.exchange == null && session.auth != null && bothChannels(session) && session.connected.get()) {
@@ -192,18 +185,14 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                         if (!authorized(session, observe()) || session.closing || bytes.length > MAX_FRAME_BYTES) throw invalid();
                         session.channel[index].sendMessage(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip());
                     });
-                    session.exchange.start(lastNanos);
-                    session.phase = "exchange";
+                    session.exchange.start();
+                    session.phase = "selected_path"; capture(session);
+                    session.complete = true; session.completeNanos = lastNanos;
+                    session.phase = "ping";
                 }
-                if (session.exchange != null) {
-                    session.exchange.tick(lastNanos);
-                    if (session.exchange.complete() && !session.complete) {
-                        session.phase = "selected_path";
-                        capture(session); session.complete = true; session.completeNanos = lastNanos;
-                        session.phase = "exchange";
-                    }
-                    if (session.complete && lastNanos - session.completeNanos >= 250_000_000L) stop(session, "complete");
-                }
+                // No completion handshake: observe authenticated transport, echo optional pings, then clean up.
+                // A short optional-ping window avoids retaining an idle diagnostic peer.
+                if (session.complete && lastNanos - session.completeNanos >= 1_000_000_000L) stop(session, "authenticated");
             } catch (RuntimeException invalid) { stop(session, "invalid_" + session.phase); }
         }
     }
@@ -248,7 +237,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     private void stop(Session session, String reason) {
         if (session.closing) return;
         session.wantsClose = true; session.reason = reason;
-        if (!reason.equals("complete")) session.complete = false;
+        if (!reason.equals("authenticated")) session.complete = false;
         session.admission.close(); if (session.auth != null) { Arrays.fill(session.auth, (byte)0); session.auth = null; }
         if (!session.settled) return; // The listener owns any in-progress prepare until completion settles.
         session.closing = true;
@@ -273,10 +262,9 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             DiagnosticExchange exchange = session.exchange;
             Claims claims = session.admission.claims();
             Result result = new Result(session.admission.context(), session.key.keyId(), claims.attemptIdHex(), claims.offerDigestHex(), claims.clientFingerprintHex(), claims.expiresAt(), DiagnosticHostPolicy.Endpoint.from(claims), success,
-                failure != null ? "native_cleanup_failed" : session.complete && !success ? "completion_invalidated" : session.reason,
+                failure != null ? "native_cleanup_failed" : session.complete && !success ? "observation_invalidated" : session.reason,
                 session.selectedLocal, session.selectedRemote, session.stats, exchange == null ? 0 : exchange.sentFrames(), exchange == null ? 0 : exchange.sentBytes(),
-                session.receivedFrames.get(), session.receivedBytes.get(), success ? exchange.completionDigestHex() : null, now,
-                session.installation, failure == null);
+                session.receivedFrames.get(), session.receivedBytes.get(), session.principal != null, now, failure == null);
             if (!results.offer(result)) droppedResults++;
         }
         completeTermination();
