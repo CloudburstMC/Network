@@ -20,7 +20,7 @@ import java.util.concurrent.*;
 /** Private localhost fixture using the actual ProviderClient and native controlled listener. Never a gameplay test. */
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
-    private final boolean runtimeCheck;
+    private final boolean runtimeCheck, rotationCheck;
     private final long deadline;
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
@@ -29,7 +29,8 @@ public final class ControlledProviderLocalSmokeClient {
     private final class Host {
         final String id, mode; final Path directory; final NativeProviderTransport nativeTransport; final ProviderClient client;
         final CompletableFuture<JsonObject> started; String writerSeen, basisSeen; boolean ready;
-        CompletableFuture<JsonObject> runtimeReadiness; boolean runtimeReady; long allReadyAtNanos;
+        CompletableFuture<Long> runtimeReadiness; boolean runtimeReady; long allReadyAtNanos, initialSessionEpoch, nextRuntimeReadinessAtNanos;
+        int runtimeRefreshAttempts;
         Host(JsonObject value) throws Exception {
             id = string(value, "hostId"); mode = string(value, "transport");
             if (!id.matches("[A-Za-z0-9_-]{1,128}") || !Set.of("https", "websocket").contains(mode)) throw new IllegalArgumentException("Invalid fixture host");
@@ -90,15 +91,43 @@ public final class ControlledProviderLocalSmokeClient {
             }
             if (!ready && started.isDone()) {
                 started.get(1, TimeUnit.SECONDS);
-                emit("ready", id, mode, readyFields("startup")); ready = true;
+                var event = readyFields("startup"); initialSessionEpoch = number(event, "sessionEpoch");
+                emit("ready", id, mode, event); ready = true;
             }
             if (!runtimeReady && runtimeReadiness != null && runtimeReadiness.isDone()) {
                 // Observe the actual returned result without stalling journal/native observation while it is pending.
-                runtimeReadiness.getNow(null);
+                long completedEpoch = runtimeReadiness.getNow(null);
+                boolean requiresRotation = rotationCheck && mode.equals("websocket");
+                if (requiresRotation && (completedEpoch <= initialSessionEpoch || sessionEpoch() != completedEpoch)) {
+                    repeatRuntimeReadiness(); return;
+                }
                 var event = readyFields("runtime readiness");
+                // An old READY completion must not become evidence for a writer installed after that completion.
+                if (requiresRotation && number(event, "sessionEpoch") != completedEpoch) {
+                    repeatRuntimeReadiness(); return;
+                }
                 event.addProperty("elapsedSinceInitialReadyMillis", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - allReadyAtNanos));
+                if (rotationCheck) event.addProperty("runtimeRefreshAttempts", runtimeRefreshAttempts);
                 emit("runtime_ready", id, mode, event); runtimeReady = true;
             }
+        }
+        void startRuntimeReadiness() {
+            runtimeRefreshAttempts++;
+            // Capture the writer at the actual READY completion, before a later replacement can alter the journal.
+            runtimeReadiness = client.readiness().thenApply(ignored -> {
+                try { return sessionEpoch(); }
+                catch (Exception failure) { throw new CompletionException(failure); }
+            });
+        }
+        void repeatRuntimeReadiness() {
+            if (runtimeRefreshAttempts >= 12) throw new IllegalStateException("Socket did not rotate within the bounded successful readiness refreshes");
+            runtimeReadiness = null;
+            nextRuntimeReadinessAtNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        }
+        long sessionEpoch() throws Exception {
+            var journal = ControlledProviderJson.parse(Files.readString(directory.resolve("control-session/provider-state.json")), 196608);
+            if (!journal.has("grant")) throw new IllegalStateException("Completed readiness has no durable writer grant");
+            return number(journal.getAsJsonObject("writer"), "sessionEpoch");
         }
         JsonObject readyFields(String phase) throws Exception {
             var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144); var applied = root.getAsJsonObject("controlApplication");
@@ -108,7 +137,7 @@ public final class ControlledProviderLocalSmokeClient {
             boolean profileMatches = basis.state().equals("serving") && actual.equals(applied.getAsJsonObject("profile"));
             if (!serving || !profileMatches) throw new IllegalStateException("Actual native application did not match completed ProviderClient " + phase);
             var event = new JsonObject(); event.addProperty("nativeServing", true); event.addProperty("nativeProfileMatches", true); event.addProperty("gameplay", false);
-            event.addProperty("basisSha256", ControlStateCodec.appliedBasisDigest(basis)); return event;
+            event.addProperty("basisSha256", ControlStateCodec.appliedBasisDigest(basis)); event.addProperty("sessionEpoch", sessionEpoch()); return event;
         }
         void stop() throws Exception {
             client.stop().toCompletableFuture().get(12, TimeUnit.SECONDS);
@@ -127,7 +156,11 @@ public final class ControlledProviderLocalSmokeClient {
         var requestedRuntimeCheck = config.get("runtimeCheck");
         if (requestedRuntimeCheck != null && (!requestedRuntimeCheck.isJsonPrimitive() || !requestedRuntimeCheck.getAsJsonPrimitive().isBoolean()))
             throw new IllegalArgumentException("runtimeCheck must be a boolean");
-        runtimeCheck = requestedRuntimeCheck != null && requestedRuntimeCheck.getAsBoolean();
+        var requestedRotationCheck = config.get("rotationCheck");
+        if (requestedRotationCheck != null && (!requestedRotationCheck.isJsonPrimitive() || !requestedRotationCheck.getAsJsonPrimitive().isBoolean()))
+            throw new IllegalArgumentException("rotationCheck must be a boolean");
+        rotationCheck = requestedRotationCheck != null && requestedRotationCheck.getAsBoolean();
+        runtimeCheck = rotationCheck || requestedRuntimeCheck != null && requestedRuntimeCheck.getAsBoolean();
         if (!string(config, "origin").matches("https://127\\.0\\.0\\.1:[1-9][0-9]{0,4}")) throw new IllegalArgumentException("Explicit local HTTPS fixture required");
         var trust = KeyStore.getInstance("PKCS12"); trust.load(null, null);
         try (var certificate = Files.newInputStream(Path.of(string(config, "caCertificate")))) { trust.setCertificateEntry("fixture", CertificateFactory.getInstance("X.509").generateCertificate(certificate)); }
@@ -152,8 +185,15 @@ public final class ControlledProviderLocalSmokeClient {
                     // ProviderClient queues each refresh on its own application executor and returns immediately.
                     for (var host : hosts) {
                         host.allReadyAtNanos = allReadyAt;
-                        host.runtimeReadiness = host.client.readiness();
+                        host.startRuntimeReadiness();
                     }
+                }
+            }
+            if (rotationCheck && runtimeCheckStarted) {
+                long now = System.nanoTime();
+                for (var host : hosts) {
+                    if (host.mode.equals("websocket") && !host.runtimeReady && host.runtimeReadiness == null && now >= host.nextRuntimeReadinessAtNanos)
+                        host.startRuntimeReadiness();
                 }
             }
             if (stop.isDone()) { if (!"stop".equals(stop.get())) throw new IllegalStateException("Expected explicit local stop command"); return; }
