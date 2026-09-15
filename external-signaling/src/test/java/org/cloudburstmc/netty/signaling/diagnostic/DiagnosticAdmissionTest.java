@@ -38,6 +38,20 @@ class DiagnosticAdmissionTest {
         assertThrows(IllegalArgumentException.class,()->new DiagnosticAdmission.Policy(binding(),List.of(),List.of(),1000,301001));
         assertThrows(IllegalArgumentException.class,()->new DiagnosticAdmission.Endpoint(four.target(),"relay",2000));
     }
+    @Test void acceptsTheSharedControlIdentifierAlphabetForAuthorityAndProfile() {
+        var b = binding();
+        for (String identifier : List.of("a", "authority:one", "hpr.v2-1", "a".repeat(128))) {
+            var value = new DiagnosticAdmission.Binding(b.context(), identifier, 1, identifier,
+                b.hostProfileSha256(), 1, b.installationSha256(), b.hostFingerprintHex());
+            assertEquals(identifier, value.authorityIncarnation());
+            assertEquals(identifier, value.hostProfileRevision());
+        }
+        for (String identifier : List.of("", "_invalid", "has space", "a".repeat(129))) {
+            assertThrows(IllegalArgumentException.class, () -> new DiagnosticAdmission.Binding(b.context(), identifier, 1,
+                b.hostProfileRevision(), b.hostProfileSha256(), 1, b.installationSha256(), b.hostFingerprintHex()));
+        }
+    }
+
     @Test void bindingRejectsAmbiguousDigestAndInstallationOutputRedactsSecrets() {
         var b=binding();
         assertThrows(IllegalArgumentException.class,()->new DiagnosticAdmission.Binding(b.context(),b.authorityIncarnation(),1,b.hostProfileRevision(),

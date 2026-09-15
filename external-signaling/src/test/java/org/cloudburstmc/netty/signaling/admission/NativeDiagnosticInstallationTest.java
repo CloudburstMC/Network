@@ -108,6 +108,33 @@ class NativeDiagnosticInstallationTest {
         }
     }
 
+    @Test @Timeout(25) void shorterSameEndpointRenewalPreservesTheOriginalAdmittedDeadline() throws Exception {
+        try (Host host = new Host("127.0.0.1")) {
+            long expiry = (System.currentTimeMillis() + 15_000) / 1000 * 1000;
+            var original = host.policy(1, 1, expiry + 1000);
+            host.install(original);
+            try (Client client = host.client(expiry)) {
+                host.connect(client, original);
+                await(() -> client.channels[0].isOpen() && client.channels[1].isOpen());
+                long shortenedExpiry = System.currentTimeMillis() + 1500;
+                var updated = host.policy(1, 2, shortenedExpiry);
+                var renewed = new DiagnosticAdmission.Policy(updated.binding(), updated.keys(), updated.endpoints(),
+                    updated.notBefore(), shortenedExpiry);
+                var current = host.install(renewed);
+                while (System.currentTimeMillis() <= shortenedExpiry + 100) Thread.sleep(10);
+                // New admission/ACK authority ended, but the original permit still owns its fixed window.
+                assertThrows(IllegalStateException.class, current::requireCurrent);
+                client.start(false);
+                var results = new ArrayList<DiagnosticAdmission.Completion>();
+                await(() -> { client.tick(); results.addAll(host.transport.pollDiagnosticResults(1)); return !results.isEmpty(); });
+                assertTrue(results.get(0).success(), results.toString());
+                assertTrue(results.get(0).cleanupComplete());
+                assertEquals(original.binding(), results.get(0).installation());
+                assertEquals(expiry, results.get(0).expiresAt());
+            }
+        }
+    }
+
     @Test @Timeout(35) void queuedAndPostInstallGuardsWithdrawOnlyTheirOwnPolicy() throws Exception {
         try(Host host=new Host("127.0.0.1")) {
             long expiry=System.currentTimeMillis()+25_000;
