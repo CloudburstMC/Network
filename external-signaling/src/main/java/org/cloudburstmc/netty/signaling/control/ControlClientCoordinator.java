@@ -7,9 +7,11 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
@@ -68,7 +70,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private boolean quarantinedGap;
     private long outgoingSequence, incomingSequence = 1;
     private boolean operationInFlight, synchronizationInFlight;
-    private CompletableFuture<ControlLifecycleCodec.Receipt> pendingResult;
+    private CompletableFuture<ControlOperationResult> pendingResult;
+    private SynchronizationExchange synchronizationExchange, pendingSynchronization;
     private boolean forceHttp;
 
     private static final class Candidate {
@@ -89,6 +92,41 @@ public final class ControlClientCoordinator implements AutoCloseable {
                          ControlClientJournal.Grant grant, long attempt) {
             this.request = request; this.credential = credential; this.grant = grant; this.attempt = attempt;
         }
+    }
+
+    private final class SynchronizationExchange implements ControlClientIo.Synchronization {
+        private final long generation = attempt, version = synchronizationVersion;
+        private final ControlWriterFence writer = snapshot.writer();
+        private final ControlClientJournal.Grant grant = snapshot.grant();
+        private final ControlAuthorityCodec.Verified proof;
+        private final long deadline;
+        SynchronizationExchange(ControlAuthorityCodec.Verified proof, long deadline) { this.proof = proof; this.deadline = deadline; }
+        private boolean current() {
+            return synchronizationExchange == this && generation == attempt && version == synchronizationVersion
+                    && state == State.SYNCHRONIZING && synchronizationInFlight && clock.nowMillis() < deadline
+                    && writer.equals(snapshot.writer()) && grant.equals(snapshot.grant()) && authority == proof && hasAuthority();
+        }
+        @Override public void requireCurrent() { synchronized (ControlClientCoordinator.this) {
+            if (!current()) throw new IllegalStateException("Synchronization writer or authority changed");
+        } }
+        @Override public Optional<byte[]> pendingHeartbeat() { synchronized (ControlClientCoordinator.this) {
+            requireCurrent(); var pending = snapshot.pending();
+            if (pending == null) return Optional.empty();
+            if (!pending.intent().operation().equals("heartbeat") || pending.candidate() != null) throw new IllegalStateException("Another lifecycle intent requires reconciliation");
+            return Optional.of(pending.bodyBytes());
+        } }
+        @Override public CompletionStage<ControlOperationResult> heartbeat(byte[] originalBody) { synchronized (ControlClientCoordinator.this) {
+            requireCurrent(); Objects.requireNonNull(originalBody);
+            var pending = snapshot.pending();
+            if (pending == null) return submit("heartbeat", originalBody.clone(), null, true, id(), this);
+            if (!pending.intent().operation().equals("heartbeat") || pending.candidate() != null || !Arrays.equals(originalBody, pending.bodyBytes()))
+                throw new IllegalStateException("Cannot replace a retained lifecycle intent during synchronization");
+            if (pending.receipt() != null && !pending.receipt().disposition().equals("unknown"))
+                throw new IllegalStateException("Unresolved heartbeat receipt requires explicit reconciliation");
+            if (pendingResult == null) pendingResult = new CompletableFuture<>();
+            var result = pendingResult; pendingSynchronization = this; forceHttp = true; deliverPending();
+            return result.minimalCompletionStage();
+        } }
     }
 
     public ControlClientCoordinator(ControlClientJournal journal, ControlClientJournal.Snapshot initial, Config config,
@@ -125,15 +163,17 @@ public final class ControlClientCoordinator implements AutoCloseable {
         attempt++; operationInFlight = false; resetAuthorityWork(); beginPrepare();
     }
 
-    /** Body and stable intent are committed before any network effect. The returned receipt contains no mutable observation. */
-    public synchronized CompletionStage<ControlLifecycleCodec.Receipt> submit(String operation, byte[] originalBody, boolean oneOffHttps) {
+    /** Body and stable intent are committed before network effects. Apply returned body on a serialized application executor. */
+    public synchronized CompletionStage<ControlOperationResult> submit(String operation, byte[] originalBody, boolean oneOffHttps) {
         requireRunning();
+        if (synchronizationExchange != null) throw new IllegalStateException("Synchronization owns the lifecycle lane");
         if (operation.equals("rotate")) throw new IllegalArgumentException("Use rotateMachineKey to persist candidate possession first");
-        return submit(operation, originalBody.clone(), null, oneOffHttps, id());
+        return submit(operation, originalBody.clone(), null, oneOffHttps, id(), null);
     }
 
-    public synchronized CompletionStage<ControlLifecycleCodec.Receipt> rotateMachineKey() {
+    public synchronized CompletionStage<ControlOperationResult> rotateMachineKey() {
         requireRunning();
+        if (synchronizationExchange != null) throw new IllegalStateException("Synchronization owns the lifecycle lane");
         if (snapshot.pending() != null) throw new IllegalStateException("Unresolved lifecycle intent");
         try {
             String intentId = id();
@@ -141,12 +181,12 @@ public final class ControlClientCoordinator implements AutoCloseable {
             var subject = snapshot.subject();
             var context = new ControlRotationCodec.Context(subject.audience(), subject.instanceId(), subject.generation(), snapshot.currentKey().keyId(), intentId);
             var body = ControlRotationCodec.create(candidateKey.keyId(), candidateKey.keyPair(), context);
-            return submit("rotate", ControlRotationCodec.encode(body).getBytes(StandardCharsets.UTF_8), candidateKey, false, intentId);
+            return submit("rotate", ControlRotationCodec.encode(body).getBytes(StandardCharsets.UTF_8), candidateKey, false, intentId, null);
         } catch (GeneralSecurityException failure) { throw new IllegalStateException("Cannot prepare rotation", failure); }
     }
 
-    private CompletionStage<ControlLifecycleCodec.Receipt> submit(String operation, byte[] body, ControlClientJournal.Credential candidateKey,
-                                                                  boolean https, String intentId) {
+    private CompletionStage<ControlOperationResult> submit(String operation, byte[] body, ControlClientJournal.Credential candidateKey,
+                                                          boolean https, String intentId, SynchronizationExchange synchronization) {
         if (snapshot.pending() != null) throw new IllegalStateException("Unresolved lifecycle intent");
         if (!config.operations().containsKey(operation)) throw new IllegalArgumentException("No configured operation route");
         var subject = snapshot.subject();
@@ -154,9 +194,10 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 snapshot.lastSequence() + 1, intentId, ControlFrameCodec.payloadDigest(body));
         var pending = new ControlClientJournal.Pending(intent, ProviderCrypto.base64(body), candidateKey, null);
         persist(new ControlClientJournal.Snapshot(subject, snapshot.currentKey(), snapshot.writer(), intent.sequence(), pending, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
-        CompletableFuture<ControlLifecycleCodec.Receipt> result = new CompletableFuture<>(); pendingResult = result; forceHttp = https;
+        CompletableFuture<ControlOperationResult> result = new CompletableFuture<>(); pendingResult = result; forceHttp = https;
+        pendingSynchronization = synchronization;
         deliverPending();
-        return result;
+        return result.minimalCompletionStage();
     }
 
     /** Explicit retry/reconciliation trigger. Unknown, rejected and expired receipts keep the intent barrier. */
@@ -198,7 +239,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 if (pending.candidate() != null && !credential.keyId().equals(pending.candidate().keyId())) throw ControlJson.invalid("rotation current key reconciliation");
                 persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(), null, snapshot.pendingBootstrap(), grant(current), snapshot.authorityFloor()));
                 long continuationAttempt = attempt; State continuationState = state;
-                completeReceipt(receipt);
+                completeResult(ControlOperationResult.reconciled(receipt));
                 // CompletableFuture completion may synchronously close, replace or resynchronize this client.
                 // A newly queued intent alone keeps this reconciliation valid and is delivered after sync.
                 if (attempt != continuationAttempt || state != continuationState) return;
@@ -423,6 +464,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (state == State.CLOSED || state == State.UNRESOLVED) return;
         if (pendingAuthority != null) cancel(pendingAuthority.timeout);
         pendingAuthority = null; authority = null; authorityKey = null; synchronizationInFlight = false; synchronizationVersion++;
+        synchronizationExchange = null; pendingSynchronization = null;
         cancel(synchronizationTimeout); synchronizationTimeout = null; state = State.AUTHORITY_EXPIRED;
         cancel(authorityRetry);
         var grant = snapshot.grant(); if (grant == null || clock.nowMillis() >= grant.sessionExpiresAt()) return;
@@ -437,18 +479,22 @@ public final class ControlClientCoordinator implements AutoCloseable {
         synchronizationInFlight = true; state = State.SYNCHRONIZING;
         long generation = attempt, synchronization = ++synchronizationVersion;
         long deadline = Math.min(clock.nowMillis() + config.proofMillis(), proof.response().authorityExpiresAt());
+        var exchange = new SynchronizationExchange(proof, deadline); synchronizationExchange = exchange;
         synchronizationTimeout = scheduler.schedule(() -> { synchronized (this) {
             if (generation == attempt && synchronization == synchronizationVersion && synchronizationInFlight) authorityUnavailable();
         }}, Math.max(0, deadline - clock.nowMillis()));
         Object operationIdentity = new Object(); synchronizationIo = operationIdentity;
         try {
-            var operation = Objects.requireNonNull(io.synchronize(snapshot.writer(), snapshot.grant(), proof), "Missing synchronization I/O");
+            var operation = Objects.requireNonNull(io.synchronize(snapshot.writer(), snapshot.grant(), proof, exchange), "Missing synchronization I/O");
             operation.whenComplete((ignored, failure) -> { synchronized (this) {
                 if (synchronizationIo == operationIdentity) synchronizationIo = null;
                 if (generation != attempt || synchronization != synchronizationVersion || state == State.CLOSED || state == State.UNRESOLVED) return;
                 cancel(synchronizationTimeout); synchronizationTimeout = null; synchronizationInFlight = false;
                 // Delivery has already been consumed. Only the installed inner authority/current trust applies here.
-                if (failure != null || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()) { authorityUnavailable(); return; }
+                if (failure != null || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()
+                        || synchronizationExchange != exchange || !exchange.writer.equals(snapshot.writer()) || !exchange.grant.equals(snapshot.grant())
+                        || snapshot.pending() != null && pendingSynchronization == exchange) { authorityUnavailable(); return; }
+                synchronizationExchange = null; pendingSynchronization = null;
                 state = State.READY; failures = 0; authorityFailures = 0; cancel(authorityTimer);
                 authorityTimer = scheduler.schedule(() -> { synchronized (this) { if (generation == attempt) expireAuthority(); }}, proof.response().authorityExpiresAt() - clock.nowMillis());
                 flushQuarantinedFrame();
@@ -464,7 +510,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (pendingAuthority != null) cancel(pendingAuthority.timeout);
         pendingAuthority = null; cancel(authorityRetry); authorityRetry = null;
         cancel(synchronizationTimeout); synchronizationTimeout = null;
-        synchronizationInFlight = false; synchronizationVersion++; quarantinedFrame = null; quarantinedGap = false;
+        synchronizationInFlight = false; synchronizationVersion++; synchronizationExchange = null; pendingSynchronization = null;
+        quarantinedFrame = null; quarantinedGap = false;
     }
 
     private void activeFrame(String wire) {
@@ -484,12 +531,14 @@ public final class ControlClientCoordinator implements AutoCloseable {
         var writer = snapshot.writer(); var grant = snapshot.grant();
         var context = new ControlFrameCodec.Context(ControlFrameCodec.Direction.PROVIDER_TO_HOST, config.audience(), snapshot.subject().instanceId(), snapshot.subject().generation(),
                 writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), grant.capabilities(), incomingSequence, clock.nowMillis(), authority.response().authorityExpiresAt(), 30000);
-        var frame = ControlFrameCodec.verify(wire, context, keys.resolve(raw.authentication().keyId()));
-        if (clock.nowMillis() >= frame.expiresAt() || !hasAuthority()) throw ControlJson.invalid("dispatch authority");
+        var frameKey = keys.resolve(raw.authentication().keyId());
+        var frame = ControlFrameCodec.verify(wire, context, frameKey);
+        if (clock.nowMillis() >= frame.expiresAt() || !currentKey(frameKey) || !hasAuthority()) throw ControlJson.invalid("dispatch authority");
         if ((frame.type().startsWith("assisted.") || frame.type().startsWith("diagnostic."))
                 && !authority.response().permissions().contains("control.assisted")) throw ControlJson.invalid("assisted session authority");
         incomingSequence++;
-        if (frame.type().equals("lifecycle.receipt")) acceptReceipt(ControlLifecycleCodec.decodeReceipt(new String(frame.payloadBytes(), StandardCharsets.UTF_8)));
+        if (frame.type().equals("lifecycle.receipt")) acceptResult(ControlResultCodec.decode(new String(frame.payloadBytes(), StandardCharsets.UTF_8)),
+                resultGuard(writer, grant, attempt, frame.expiresAt(), frameKey, pendingSynchronization));
         else if (frame.type().equals("session.reconnect")) replaceTransport(desiredTransport, desiredCapabilities);
         else if (state == State.SYNCHRONIZING && List.of("session.ready", "session.resync", "state.desired").contains(frame.type())) io.onSynchronizationFrame(frame);
         else if (state == State.READY) io.onVerifiedFrame(frame);
@@ -551,7 +600,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private void deliverPending() {
         expireAuthority();
         var pending = snapshot.pending(); var grant = snapshot.grant();
-        if (pending == null || operationInFlight || grant == null || state != State.READY && state != State.AUTHORITY_EXPIRED
+        boolean initialHeartbeat = pendingSynchronization != null && pendingSynchronization.current()
+                && pending != null && pending.intent().operation().equals("heartbeat");
+        if (pending == null || operationInFlight || grant == null || state != State.READY && state != State.AUTHORITY_EXPIRED && !initialHeartbeat
                 || pending.receipt() != null && !pending.receipt().disposition().equals("unknown") || clock.nowMillis() >= grant.sessionExpiresAt()) return;
         if (state == State.AUTHORITY_EXPIRED && !forceHttp && !snapshot.writer().transport().equals("https")) {
             if (pendingAuthority == null && !synchronizationInFlight && authorityRetry == null) beginAuthorityRefresh();
@@ -567,10 +618,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
                         writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), writer.transport(), grant.capabilities(), authentication(snapshot.currentKey()));
                 proof = ControlHttpCodec.sign(proof, snapshot.currentKey().keyPair().getPrivate());
                 final var signedProof = proof;
+                var bodyGuard = resultGuard(writer, grant, attempt, signedProof.expiresAt(), null, pendingSynchronization);
                 watch(() -> io.operation(endpoint, signedProof, pending.bodyBytes()), signedProof.expiresAt(), reply -> {
-                    checkedReply(reply, endpoint, "POST", 4096);
+                    checkedReply(reply, endpoint, "POST", ControlResultCodec.MAX_ENVELOPE_BYTES);
                     if (reply.status() != 200) throw ControlJson.invalid("operational HTTPS response");
-                    acceptReceipt(ControlLifecycleCodec.decodeReceipt(reply.body()));
+                    acceptResult(ControlResultCodec.decode(reply.body()), bodyGuard);
                 });
             } else {
                 byte[] payload = ControlLifecycleCodec.encodeWsRequest(pending.intent(), pending.bodyBytes()).getBytes(StandardCharsets.UTF_8);
@@ -586,13 +638,34 @@ public final class ControlClientCoordinator implements AutoCloseable {
         } catch (GeneralSecurityException | RuntimeException failure) { fail(); }
     }
 
-    private void acceptReceipt(ControlLifecycleCodec.Receipt receipt) {
+    private Runnable resultGuard(ControlWriterFence writer, ControlClientJournal.Grant grant, long generation,
+                                 long deadline, ControlFrameCodec.VerificationKey frameKey, SynchronizationExchange synchronization) {
+        return () -> { synchronized (this) {
+            if (generation != attempt || state == State.CLOSED || state == State.UNRESOLVED || !writer.equals(snapshot.writer())
+                    || !grant.equals(snapshot.grant()) || !writer.keyId().equals(snapshot.currentKey().keyId())
+                    || clock.nowMillis() >= deadline || clock.nowMillis() >= grant.sessionExpiresAt() || !ownsActiveWriter()
+                    || frameKey != null && (!currentKey(frameKey) || !hasAuthority()) || synchronization != null && !synchronization.current())
+                throw new IllegalStateException("Operation result writer, authority or deadline changed");
+        } };
+    }
+
+    private void acceptResult(ControlResultCodec.Result result, Runnable bodyGuard) {
         var pending = snapshot.pending(); if (pending == null) return;
+        var receipt = result.receipt();
         ControlLifecycleCodec.verifyReceipt(receipt, pending.intent()); operationInFlight = false;
         if (!receipt.disposition().equals("committed")) { persistPendingReceipt(receipt); return; }
         if (pending.candidate() != null) { persistPendingReceipt(receipt); recover(); return; }
+        long generation = attempt;
         persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
-        completeReceipt(receipt);
+        pendingSynchronization = null;
+        try { bodyGuard.run(); }
+        catch (IllegalStateException changed) {
+            // Commit knowledge survives, but expired/superseded delivery cannot install application state or secrets.
+            completeResult(ControlOperationResult.reconciled(receipt));
+            if (generation == attempt && (state == State.READY || state == State.SYNCHRONIZING)) authorityUnavailable();
+            return;
+        }
+        completeResult(ControlOperationResult.delivered(result, bodyGuard));
     }
 
     private void persistPendingReceipt(ControlLifecycleCodec.Receipt receipt) {
@@ -600,9 +673,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
         persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(),
                 new ControlClientJournal.Pending(pending.intent(), pending.originalBody(), pending.candidate(), receipt), snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
     }
-    private void completeReceipt(ControlLifecycleCodec.Receipt receipt) {
+    private void completeResult(ControlOperationResult value) {
         var result = pendingResult; pendingResult = null;
-        if (result != null) result.complete(receipt);
+        if (result != null) result.complete(value);
     }
 
     private ControlSessionCodec.VerifiedResponse verifiedReply(ControlClientIo.HttpReply reply, ControlSessionCodec.Request request) {
