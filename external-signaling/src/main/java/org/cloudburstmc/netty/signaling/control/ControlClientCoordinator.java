@@ -143,7 +143,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     /** Production identifiers contain 192 CSPRNG bits; deterministic suppliers are reserved for tests. */
     public static Supplier<String> secureIdentifiers() {
         var random = new java.security.SecureRandom();
-        return () -> { byte[] bytes = new byte[24]; random.nextBytes(bytes); return ProviderCrypto.base64(bytes); };
+        return () -> { byte[] bytes = new byte[24]; random.nextBytes(bytes); return "c" + ProviderCrypto.base64(bytes); };
     }
 
     public synchronized State state() { expireAuthority(); return state; }
@@ -809,7 +809,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         return ControlSessionPayloadCodec.decodeResponse(kind, response.payloadBytes());
     }
     private static ControlFrameCodec.Authentication authentication(ControlClientJournal.Credential credential) { return new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, credential.keyId(), ""); }
-    private String id() { String id = identifiers.get(); ControlJson.opaque(id); return id; }
+    private String id() { String id = identifiers.get(); ControlJson.opaque(id); ControlJson.identifier(id); return id; }
     private void requireRunning() { if (state == State.STOPPED || state == State.CLOSED || state == State.UNRESOLVED) throw new IllegalStateException("Control client is not running"); }
     private static String target(URI endpoint) { return endpoint.getRawPath() + (endpoint.getRawQuery() == null ? "" : "?" + endpoint.getRawQuery()); }
     private static void endpoint(String audience, URI endpoint, boolean websocket) {

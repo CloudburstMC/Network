@@ -2,10 +2,10 @@
   "$schema":"https://json-schema.org/draft/2020-12/schema",
   "$id":"https://nethernet.org/external-signaling/control-v1.rotation.schema.json",
   "title":"Draft opted-in control machine rotation body",
-  "$comment":"Not enabled by existing core rotate. Additionally enforce strict JSON duplicate/integer token rules, canonical base64url, 4096-byte body, valid P-384 point and candidate possession proof in exact trusted context. newKeyId must contain at least128 CSPRNG bits and be atomically persisted before send; provider rejects global conflicts/reuse.",
+  "$comment":"Not enabled by existing core rotate. Additionally enforce strict JSON duplicate/integer token rules, canonical base64url, 4096-byte body, valid P-384 point and candidate possession proof in exact trusted context. newKeyId must start alphanumeric, contain 16–128 base64url characters and at least 128 CSPRNG bits and be atomically persisted before send; provider rejects global conflicts/reuse.",
   "type":"object","additionalProperties":false,"required":["version","newKeyId","publicKeyJwk","proof"],
   "properties":{
-    "version":{"const":1},"newKeyId":{"type":"string","pattern":"^[A-Za-z0-9_-]{16,128}$"},
+    "version":{"const":1},"newKeyId":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$"},
     "publicKeyJwk":{"type":"object","additionalProperties":false,"required":["crv","kty","x","y"],"properties":{
       "crv":{"const":"P-384"},"kty":{"const":"EC"},
       "x":{"type":"string","pattern":"^[A-Za-z0-9_-]{64}$"},"y":{"type":"string","pattern":"^[A-Za-z0-9_-]{64}$"}
