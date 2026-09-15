@@ -20,6 +20,7 @@ import java.util.concurrent.*;
 /** Private localhost fixture using the actual ProviderClient and native controlled listener. Never a gameplay test. */
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
+    private final boolean runtimeCheck;
     private final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
@@ -28,6 +29,7 @@ public final class ControlledProviderLocalSmokeClient {
     private final class Host {
         final String id, mode; final Path directory; final NativeProviderTransport nativeTransport; final ProviderClient client;
         final CompletableFuture<JsonObject> started; String writerSeen, basisSeen; boolean ready;
+        CompletableFuture<JsonObject> runtimeReadiness; boolean runtimeReady;
         Host(JsonObject value) throws Exception {
             id = string(value, "hostId"); mode = string(value, "transport");
             if (!id.matches("[A-Za-z0-9_-]{1,128}") || !Set.of("https", "websocket").contains(mode)) throw new IllegalArgumentException("Invalid fixture host");
@@ -88,15 +90,23 @@ public final class ControlledProviderLocalSmokeClient {
             }
             if (!ready && started.isDone()) {
                 started.get(1, TimeUnit.SECONDS);
-                var root = ControlledProviderJson.parse(Files.readString(application), 262144); var applied = root.getAsJsonObject("controlApplication");
-                var basis = ControlStateCodec.decodeAppliedBasis(string(applied, "basis"));
-                boolean serving = nativeTransport.channel().isServing();
-                var actual = nativeTransport.hostProfile().toCompletableFuture().get(3, TimeUnit.SECONDS);
-                boolean profileMatches = basis.state().equals("serving") && actual.equals(applied.getAsJsonObject("profile"));
-                if (!serving || !profileMatches) throw new IllegalStateException("Actual native application did not match completed ProviderClient startup");
-                var event = new JsonObject(); event.addProperty("nativeServing", true); event.addProperty("nativeProfileMatches", true); event.addProperty("gameplay", false);
-                event.addProperty("basisSha256", ControlStateCodec.appliedBasisDigest(basis)); emit("ready", id, mode, event); ready = true;
+                emit("ready", id, mode, readyFields("startup")); ready = true;
             }
+            if (!runtimeReady && runtimeReadiness != null && runtimeReadiness.isDone()) {
+                // Observe the actual returned result without stalling journal/native observation while it is pending.
+                runtimeReadiness.getNow(null);
+                emit("runtime_ready", id, mode, readyFields("runtime readiness")); runtimeReady = true;
+            }
+        }
+        JsonObject readyFields(String phase) throws Exception {
+            var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144); var applied = root.getAsJsonObject("controlApplication");
+            var basis = ControlStateCodec.decodeAppliedBasis(string(applied, "basis"));
+            boolean serving = nativeTransport.channel().isServing();
+            var actual = nativeTransport.hostProfile().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            boolean profileMatches = basis.state().equals("serving") && actual.equals(applied.getAsJsonObject("profile"));
+            if (!serving || !profileMatches) throw new IllegalStateException("Actual native application did not match completed ProviderClient " + phase);
+            var event = new JsonObject(); event.addProperty("nativeServing", true); event.addProperty("nativeProfileMatches", true); event.addProperty("gameplay", false);
+            event.addProperty("basisSha256", ControlStateCodec.appliedBasisDigest(basis)); return event;
         }
         void stop() throws Exception {
             client.stop().toCompletableFuture().get(12, TimeUnit.SECONDS);
@@ -109,6 +119,10 @@ public final class ControlledProviderLocalSmokeClient {
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) > 65536
                 || !Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE).containsAll(Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS))) throw new IllegalArgumentException("Private fixture config required");
         config = ControlledProviderJson.parse(Files.readString(path), 65536);
+        var requestedRuntimeCheck = config.get("runtimeCheck");
+        if (requestedRuntimeCheck != null && (!requestedRuntimeCheck.isJsonPrimitive() || !requestedRuntimeCheck.getAsJsonPrimitive().isBoolean()))
+            throw new IllegalArgumentException("runtimeCheck must be a boolean");
+        runtimeCheck = requestedRuntimeCheck != null && requestedRuntimeCheck.getAsBoolean();
         if (!string(config, "origin").matches("https://127\\.0\\.0\\.1:[1-9][0-9]{0,4}")) throw new IllegalArgumentException("Explicit local HTTPS fixture required");
         var trust = KeyStore.getInstance("PKCS12"); trust.load(null, null);
         try (var certificate = Files.newInputStream(Path.of(string(config, "caCertificate")))) { trust.setCertificateEntry("fixture", CertificateFactory.getInstance("X.509").generateCertificate(certificate)); }
@@ -122,8 +136,18 @@ public final class ControlledProviderLocalSmokeClient {
         var values = config.getAsJsonArray("hosts"); if (values.isEmpty() || values.size() > 2) throw new IllegalArgumentException("One or two controlled fixture hosts required");
         for (var value : values) hosts.add(new Host(value.getAsJsonObject()));
         var stop = reader.submit(() -> new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)).readLine());
+        Long allReadyAt = null; boolean runtimeCheckStarted = false;
         while (System.nanoTime() < deadline) {
             for (var host : hosts) host.observe();
+            if (runtimeCheck && !runtimeCheckStarted && hosts.stream().allMatch(host -> host.ready)) {
+                long now = System.nanoTime();
+                if (allReadyAt == null) allReadyAt = now;
+                if (now - allReadyAt >= TimeUnit.SECONDS.toNanos(35)) {
+                    runtimeCheckStarted = true;
+                    // ProviderClient queues each refresh on its own application executor and returns immediately.
+                    for (var host : hosts) host.runtimeReadiness = host.client.readiness();
+                }
+            }
             if (stop.isDone()) { if (!"stop".equals(stop.get())) throw new IllegalStateException("Expected explicit local stop command"); return; }
             TimeUnit.MILLISECONDS.sleep(100);
         }
