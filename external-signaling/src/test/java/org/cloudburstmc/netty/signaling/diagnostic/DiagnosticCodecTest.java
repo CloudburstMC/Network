@@ -117,7 +117,7 @@ class DiagnosticCodecTest {
     }
     @Test void slowIssuerCannotMintPastItsFixedDeadline() {
         AtomicLong reads = new AtomicLong();
-        Clock lateWall = new Clock(() -> reads.incrementAndGet() >= 3 ? claims.expiresAt() : now, () -> 1000);
+        Clock lateWall = new Clock(() -> reads.incrementAndGet() >= 2 ? claims.expiresAt() : now, () -> 1000);
         assertThrows(IllegalArgumentException.class, () -> issueWithNonce(context, key, claims, value("remoteUfrag"), utf8(value("offer")), assertion(vector), parent, lateWall, unhex(value("nonceHex"), 12)));
         AtomicLong ticks = new AtomicLong();
         Clock lateMono = new Clock(() -> now, () -> ticks.incrementAndGet() >= 2 ? 30_000_001_000L : 1000);
@@ -125,5 +125,29 @@ class DiagnosticCodecTest {
     }
 
     @Test void noncanonicalSecretUnicodeIsRejected() { assertThrows(IllegalArgumentException.class, () -> new Key("D001", "a".repeat(32) + (char) 0xd800, key.notBefore(), key.retireAt())); }
+
+    @Test void allSharedOriginsUseTheHttps256Subset() throws Exception {
+        Path path = Path.of("../docs/external-signaling/control-v1.origins.fixtures.json"); if (!Files.exists(path)) path = Path.of("docs/external-signaling/control-v1.origins.fixtures.json");
+        JsonArray rows = JsonParser.parseString(Files.readString(path)).getAsJsonObject().getAsJsonArray("vectors"); assertEquals(274, rows.size());
+        for (var row : rows) {
+            JsonObject v = row.getAsJsonObject(); String origin = v.get("origin").getAsString();
+            if (v.get("accepted").getAsBoolean() && origin.startsWith("https://") && origin.length() <= 256) assertDoesNotThrow(() -> new Context(origin, context.hostId(), context.incarnation(), 7), origin);
+            else assertThrows(IllegalArgumentException.class, () -> new Context(origin, context.hostId(), context.incarnation(), 7), origin);
+        }
+        for (String origin : new String[]{"https://provider.example:99999", "https://[2001:0db8:0000:0000:0000:0000:0000:0001]"}) assertThrows(IllegalArgumentException.class, () -> new Context(origin, context.hostId(), context.incarnation(), 7));
+    }
+    @Test void closedOfferProfileRejectsLiteAndInvalidMediaPorts() {
+        for (String offer : new String[]{value("offer") + "a=ice-lite\r\n", value("offer").replace("m=application 9 ", "m=application 0 "), value("offer").replace("m=application 9 ", "m=application 65536 ")}) {
+            byte[] bytes = utf8(offer); Claims c = new Claims(claims.expiresAt(), claims.clientFingerprintHex(), claims.clientIcePwd(), claims.attemptIdHex(), hex(digest(bytes)), 9, 4, claims.targetAddressHex(), 19132, 1);
+            assertThrows(IllegalArgumentException.class, () -> DiagnosticAssertionCodec.validateOffer(bytes, c, value("remoteUfrag")));
+        }
+        assertThrows(IllegalArgumentException.class, () -> DiagnosticAssertionCodec.validateOffer(new byte[16385], claims, value("remoteUfrag")));
+        assertThrows(IllegalArgumentException.class, () -> issueWithNonce(context, key, claims, value("remoteUfrag"), new byte[16385], assertion(vector), parent, clock, unhex(value("nonceHex"), 12)));
+        assertThrows(IllegalArgumentException.class, () -> issueWithNonce(context, key, claims, value("remoteUfrag"), utf8(value("offer")), assertion(vector), parent, clock, new byte[13]));
+    }
+    @Test void backwardIssuerClockFailsClosed() {
+        AtomicLong ticks = new AtomicLong(); Clock backwards = new Clock(() -> now, () -> ticks.incrementAndGet() == 1 ? 1000 : 999);
+        assertThrows(IllegalArgumentException.class, () -> issueWithNonce(context, key, claims, value("remoteUfrag"), utf8(value("offer")), assertion(vector), parent, backwards, unhex(value("nonceHex"), 12)));
+    }
 
 }

@@ -5,7 +5,7 @@ import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import java.net.URI;
+import org.cloudburstmc.netty.signaling.control.ControlOrigin;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -27,15 +27,13 @@ public final class DiagnosticAdmissionCodec {
     static final long SAFE = 9007199254740991L;
     public record Context(String providerOrigin, String hostId, String incarnation, long generation) {
         public Context {
-            URI uri = URI.create(providerOrigin);
-            if (!"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null || !uri.getRawPath().isEmpty()
-                    || providerOrigin.length() > 256 || !providerOrigin.equals("https://" + uri.getHost().toLowerCase(java.util.Locale.ROOT) + (uri.getPort() == -1 ? "" : ":" + uri.getPort())) || uri.getPort() == 443
+            if (providerOrigin == null || providerOrigin.length() > 256 || !providerOrigin.startsWith("https://") || !ControlOrigin.isCanonical(providerOrigin)
                     || !hostId.matches("[A-Za-z0-9_-]{1,128}")) throw invalid();
             unhex(incarnation, 16); integer(generation, 1, SAFE);
         }
     }
     public record Key(String keyId, String secret, long notBefore, long retireAt) {
-        public Key { if (!keyId.matches("[A-Z0-9]{4}") || utf8(secret).length < 32 || utf8(secret).length > 256 || !StandardCharsets.UTF_8.newEncoder().canEncode(secret)) throw invalid(); integer(notBefore, 0, SAFE); integer(retireAt, notBefore + 1, SAFE); }
+        public Key { if (!keyId.matches("[A-Z0-9]{4}") || secret.length() > 256 || utf8(secret).length < 32 || utf8(secret).length > 256 || !StandardCharsets.UTF_8.newEncoder().canEncode(secret)) throw invalid(); integer(notBefore, 0, SAFE); integer(retireAt, notBefore + 1, SAFE); }
         @Override public String toString() { return "DiagnosticKey[id=" + keyId + "]"; }
     }
     public record Claims(long expiresAt, String clientFingerprintHex, String clientIcePwd, String attemptIdHex,
@@ -63,9 +61,10 @@ public final class DiagnosticAdmissionCodec {
     /** Public deterministic fixtures only. Production callers must use issue(). */
     public static Credentials issueWithNonce(Context context, Key key, Claims claims, String remoteUfrag, byte[] inputOffer,
                                              DiagnosticAssertionCodec.Assertion assertion, long parentExpiresAt, Clock clock, byte[] inputNonce) {
+        if (inputOffer.length == 0 || inputOffer.length > 16384 || inputNonce.length != 12) throw invalid();
         byte[] offer = inputOffer.clone(), nonce = inputNonce.clone(); ufrag(remoteUfrag);
         long startWall = clock.wallMillis.getAsLong(), startNanos = clock.nanoTime.getAsLong();
-        if (nonce.length != 12) throw invalid(); deadline(key, claims, clock.wallMillis.getAsLong(), parentExpiresAt);
+        deadline(key, claims, startWall, parentExpiresAt);
         DiagnosticAssertionCodec.validateOffer(offer, claims, remoteUfrag);
         if (!DiagnosticAssertionCodec.verify(context, claims, remoteUfrag, assertion)) throw invalid();
         byte[] ctx = digest(contextBytes(context)), secret = utf8(key.secret), plain = encode(claims, identity(secret, ctx, assertion.publicPoint()));
@@ -74,7 +73,8 @@ public final class DiagnosticAdmissionCodec {
             String local = header + base64(concat(nonce, crypt(Cipher.ENCRYPT_MODE, secret, ctx, nonce, aad(header, ctx, remoteUfrag), plain)));
             if (local.length() > 256) throw invalid(); Credentials result = new Credentials(local, icePassword(secret, ctx, local));
             deadline(key, claims, clock.wallMillis.getAsLong(), parentExpiresAt);
-            if (clock.nanoTime.getAsLong() - startNanos >= (claims.expiresAt - startWall) * 1_000_000L) throw invalid(); return result;
+            long elapsedNanos = clock.nanoTime.getAsLong() - startNanos;
+            if (elapsedNanos < 0 || elapsedNanos >= (claims.expiresAt - startWall) * 1_000_000L) throw invalid(); return result;
         } finally { Arrays.fill(plain, (byte) 0); Arrays.fill(secret, (byte) 0); }
     }
     public static VerifiedDiagnosticAdmission open(Context context, Key key, String localUfrag, String remoteUfrag, long parentExpiresAt, Clock clock) {
