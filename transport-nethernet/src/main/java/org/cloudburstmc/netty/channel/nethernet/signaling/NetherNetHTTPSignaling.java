@@ -871,8 +871,10 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the only local addresses that may be announced as ICE candidates. Empty, the
-         * default, announces every address ICE gathers.
+         * Sets the addresses announced as ICE candidates; empty, the default, announces everything
+         * ICE gathers. Listed addresses this host holds narrow its host candidates to those; one it
+         * does not hold is announced as the public side of a NAT forwarding the media port here.
+         * A signaling proxy's address does not belong here unless it also forwards the media port.
          *
          * @param advertisedAddresses Addresses reachable by connecting peers
          * @return This builder

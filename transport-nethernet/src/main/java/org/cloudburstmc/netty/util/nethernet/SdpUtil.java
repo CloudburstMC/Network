@@ -8,6 +8,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -166,13 +168,21 @@ public final class SdpUtil {
     }
 
     /**
-     * Drops every ICE candidate whose address is not in {@code allowed}.
+     * Announces only the addresses in {@code allowed}, each in the form it calls for.
      * <p>
      * ICE gathers a candidate on every interface it can see, which on a host network includes
      * container and overlay addresses that are unreachable from outside. Each one costs the remote
      * peer a round of connectivity checks before it gives up, so a host that knows which of its
-     * addresses are reachable can announce only those. If nothing would be left the description is
-     * returned untouched, since no candidates at all can never connect.
+     * addresses are reachable can announce only those.
+     * <p>
+     * An allowed address this host did not gather is the public side of a NAT that forwards the
+     * media port here, and is announced as a server reflexive candidate on the port of a host
+     * candidate of the same family. That works because libjuice matches inbound traffic by its
+     * source and never by the address it was sent to. Nothing here can tell a forward from a
+     * mistake, so the list only ever narrows the host candidates, and only to addresses this host
+     * holds: one naming none of them leaves every candidate in place, and a wrong address costs the
+     * peer a failed check rather than the connection. Reflexive and relayed candidates always stay,
+     * since they are what the outside sees rather than an interface.
      *
      * @param sdp     The description to filter
      * @param allowed The addresses that may be announced, empty to announce everything
@@ -182,35 +192,118 @@ public final class SdpUtil {
         if (allowed.isEmpty()) {
             return sdp;
         }
-        Set<String> normalised = new HashSet<>(allowed.size());
+        String[] lines = sdp.split("\r\n|\n");
+        Set<String> gathered = new HashSet<>();
+        List<String[]> hosts = new ArrayList<>();
+        for (String line : lines) {
+            if (!line.startsWith(CANDIDATE_PREFIX)) {
+                continue;
+            }
+            String address = candidateAddress(line);
+            if (address != null) {
+                gathered.add(normaliseAddress(address));
+            }
+            String[] parts = line.split(" ");
+            if (isHostCandidate(line) && "udp".equalsIgnoreCase(parts[2])) {
+                hosts.add(parts);
+            }
+        }
+
+        Set<String> held = new HashSet<>();
+        List<String> foreign = new ArrayList<>();
         for (String address : allowed) {
-            normalised.add(normaliseAddress(address));
+            String normalised = normaliseAddress(address);
+            if (gathered.contains(normalised)) {
+                held.add(normalised);
+            } else {
+                foreign.add(normalised);
+            }
+        }
+        Collections.sort(foreign);
+        // A held host is the more honest base for a translation, so it goes first for its family
+        hosts.sort(Comparator.comparing((String[] host) -> !held.contains(normaliseAddress(host[4]))));
+        List<String> translated = translatedCandidates(hosts, foreign);
+        if (held.isEmpty() && translated.isEmpty()) {
+            log.warn("None of the gathered ICE candidates match the advertised addresses {}, "
+                    + "announcing all of them instead", allowed);
+            return sdp;
         }
 
         StringBuilder out = new StringBuilder(sdp.length());
-        boolean kept = false;
-        boolean dropped = false;
-        for (String line : sdp.split("\r\n|\n")) {
+        boolean seenCandidates = false;
+        for (String line : lines) {
             // A trailing empty line makes libwebrtc reject the whole description
             if (line.isEmpty()) {
                 continue;
             }
             if (line.startsWith(CANDIDATE_PREFIX)) {
-                String address = candidateAddress(line);
-                if (address == null || !normalised.contains(normaliseAddress(address))) {
-                    dropped = true;
-                    continue;
+                seenCandidates = true;
+                if (!held.isEmpty() && !isReflexiveOrRelayed(line)) {
+                    String address = candidateAddress(line);
+                    if (address == null || !held.contains(normaliseAddress(address))) {
+                        continue;
+                    }
                 }
-                kept = true;
+            } else if (seenCandidates && !translated.isEmpty()) {
+                // Translations join the end of the candidate block, ahead of end-of-candidates
+                appendAll(out, translated);
+                translated = List.of();
             }
             out.append(line).append("\r\n");
         }
-
-        if (!kept && dropped) {
-            log.warn("None of the gathered ICE candidates match the advertised addresses {}, "
-                    + "announcing all of them instead", allowed);
-            return sdp;
-        }
+        appendAll(out, translated);
         return out.toString();
+    }
+
+    /** RFC 8445 section 5.1.2.1 with the server reflexive type preference, below any host. */
+    private static final long TRANSLATED_PRIORITY = (100L << 24) | (65535L << 8) | 255;
+
+    /**
+     * A server reflexive candidate for every foreign address, based on the first host candidate
+     * of the same family. One per address and port, since every interface shares the socket and
+     * would otherwise give the same line.
+     */
+    private static List<String> translatedCandidates(List<String[]> hosts, List<String> foreign) {
+        List<String> candidates = new ArrayList<>();
+        Set<String> emitted = new HashSet<>();
+        int foundation = 80000000;
+        for (String address : foreign) {
+            byte[] raw = NetUtil.createByteArrayFromIpAddressString(address);
+            if (raw == null) {
+                log.warn("Advertised address {} is not an IP literal, so it cannot be announced", address);
+                continue;
+            }
+            for (String[] host : hosts) {
+                byte[] local = NetUtil.createByteArrayFromIpAddressString(host[4]);
+                if (local == null || local.length != raw.length || !emitted.add(address + " " + host[5])) {
+                    continue;
+                }
+                log.debug("Announcing {} as a translation of this host on port {}", address, host[5]);
+                candidates.add(CANDIDATE_PREFIX + foundation++ + " 1 " + host[2] + " " + TRANSLATED_PRIORITY + " "
+                        + address + " " + host[5] + " typ srflx raddr " + host[4] + " rport " + host[5]);
+            }
+        }
+        return candidates;
+    }
+
+    private static String candidateType(String candidate) {
+        String[] parts = candidate.split(" ");
+        return parts.length >= 8 && "typ".equals(parts[6]) ? parts[7] : null;
+    }
+
+    private static boolean isHostCandidate(String candidate) {
+        return "host".equals(candidateType(candidate));
+    }
+
+    /** Whether a STUN or TURN server produced the candidate, describing the outside rather than an interface. */
+    private static boolean isReflexiveOrRelayed(String candidate) {
+        String type = candidateType(candidate);
+        return "srflx".equals(type) || "prflx".equals(type) || "relay".equals(type);
+    }
+
+    private static void appendAll(StringBuilder out, List<String> lines) {
+        for (String line : lines) {
+            out.append(line).append("\r\n");
+        }
     }
 }
