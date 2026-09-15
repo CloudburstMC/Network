@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.signaling;
 
 import com.google.gson.JsonObject;
+import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
 
 import java.util.List;
 import java.util.Objects;
@@ -93,6 +94,33 @@ public interface ProviderTransport {
 
     /** Bounded nonblocking capture; unsupported adapters cannot opt into issued native ownership. */
     default NativeIdentitySnapshot captureNativeIdentity() { throw new UnsupportedOperationException("Native identity capture unavailable"); }
+
+    /** One immutable observation publication, independent of later successes on the same mapping. */
+    final class CandidateLeaseSnapshot {
+        private final String materialRevision;
+        private final List<CandidateLeaseCodec.Observation> observations;
+        private final Runnable current;
+        public CandidateLeaseSnapshot(String materialRevision, List<CandidateLeaseCodec.Observation> observations, Runnable current) {
+            this.materialRevision = Objects.requireNonNull(materialRevision);
+            this.observations = List.copyOf(observations); this.current = Objects.requireNonNull(current);
+        }
+        public String materialRevision() { return materialRevision; }
+        public List<CandidateLeaseCodec.Observation> observations() { return observations; }
+        public void requireCurrent() { current.run(); }
+        public CandidateLeaseCodec.Leases bind(CandidateLeaseCodec.Profile profile, CandidateLeaseCodec.NativeOwner owner) {
+            requireCurrent(); var leases = CandidateLeaseCodec.bind(profile, owner, observations); requireCurrent(); return leases;
+        }
+    }
+
+    default boolean supportsMaintainedCandidateLeases() { return false; }
+
+    /** Serialized bounded native sampling; guards on returned captures perform no native reads or I/O. */
+    default CandidateLeaseSnapshot maintainCandidateLeases(boolean reflexivePublicationAllowed) {
+        throw new UnsupportedOperationException("Maintained candidate leases unavailable");
+    }
+
+    /** Explicit recovery boundary after a fresh successful control synchronization. */
+    default void candidateControlSynchronized() { }
 
     /**
      * Capture endpoint ownership across asynchronous publication, persistence and application.

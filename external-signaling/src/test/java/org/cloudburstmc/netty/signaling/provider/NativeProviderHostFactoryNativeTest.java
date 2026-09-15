@@ -22,6 +22,39 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Tag("native")
 class NativeProviderHostFactoryNativeTest {
+    @Test void maintainedConfiguredHostsNeverCreateMonitorsOrPublishMissingFamilies(@TempDir Path directory) throws Exception {
+        var group = new DefaultEventLoopGroup(1);
+        try {
+            for (String ip : List.of("127.0.0.1", "::1")) {
+                int port;
+                try (var reservation = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(ip), 0))) { port = reservation.getLocalPort(); }
+                String advertised = ip.equals("::1") ? "2606:4700:4700::1111" : "8.8.8.8";
+                var options = new HashMap<String, String>();
+                options.put("stateDirectory", directory.resolve(ip.equals("::1") ? "v6" : "v4").toString());
+                options.put("controlMode", "nethernet-control-v1"); options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
+                options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
+                options.put("advertisedEndpoints", "[{\"address\":\"" + advertised + "\",\"port\":43000}]");
+                options.put("stunServers", "unused configured-only input must not be parsed or resolved");
+                var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
+                    @Override protected void initChannel(Channel channel) { channel.close(); }
+                });
+                var host = new NativeProviderHostFactory().open(bootstrap, new InetSocketAddress(InetAddress.getByName(ip), port), options).toCompletableFuture().get(10, TimeUnit.SECONDS);
+                try {
+                    var nativeHost = (org.cloudburstmc.netty.signaling.admission.NativeProviderTransport) host.transport();
+                    assertTrue(nativeHost.supportsMaintainedCandidateLeases()); assertFalse(nativeHost.channel().isServing());
+                    nativeHost.installTicketKeys(List.of(new ProviderTransport.TicketKey("A001", ProviderCrypto.base64(new byte[32])))).toCompletableFuture().get();
+                    var before = nativeHost.captureHostProfile().toCompletableFuture().get();
+                    for (boolean owned : List.of(false, true, false, true)) {
+                        assertTrue(nativeHost.maintainCandidateLeases(owned).observations().isEmpty()); before.requireCurrent();
+                        assertEquals(0, nativeHost.channel().nativeStats()[2], "Configured forwarding suppresses monitor allocation");
+                        var candidates = nativeHost.hostProfile().toCompletableFuture().get().getAsJsonArray("candidates"); assertEquals(1, candidates.size());
+                        assertEquals(InetAddress.getByName(advertised).getHostAddress(), candidates.get(0).getAsJsonObject().get("address").getAsString());
+                        assertEquals(43000, candidates.get(0).getAsJsonObject().get("port").getAsInt());
+                    }
+                } finally { host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+            }
+        } finally { group.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly(); }
+    }
     @Test void actualListenerPublishesOnlyConfiguredEndpointOnBothFamiliesAndControlModes(@TempDir Path directory) throws Exception {
         var group = new DefaultEventLoopGroup(2);
         try {

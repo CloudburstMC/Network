@@ -20,7 +20,7 @@ class ControlledNativeOwnerApplicationTest {
         var base = ControlledProviderStateTest.config(ORIGIN);
         return new ProviderControlConfiguration(base.routes(), base.providerKeys(), base.migrationSeed(), ProviderControlConfiguration.NativeOwnership.ISSUED);
     }
-    static final class Native implements ProviderTransport {
+    static class Native implements ProviderTransport {
         final ControlledProviderApplicationTest.Native delegate;
         final String incarnation; long material; boolean retired, empty;
         Native(ControlledProviderState state, int identity, boolean empty) {

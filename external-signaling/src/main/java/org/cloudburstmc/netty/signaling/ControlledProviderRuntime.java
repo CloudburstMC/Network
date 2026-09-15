@@ -38,6 +38,8 @@ final class ControlledProviderRuntime {
         if (!transport.supportsAdmissionStaging()) throw new IOException("Controlled startup requires a listener created with admission staging");
         if (config.control().nativeOwnership() == ProviderControlConfiguration.NativeOwnership.ISSUED && !transport.supportsNativeIdentityCapture())
             throw new IOException("Issued ownership requires an explicit controlled v2 native identity capture");
+        if ((config.control().candidatePublication() == ProviderControlConfiguration.CandidatePublication.MAINTAINED) != transport.supportsMaintainedCandidateLeases())
+            throw new IOException("Maintained candidate publication requires matching explicit application and transport configuration");
         this.applicationExecutor = command -> {
             if (queued.incrementAndGet() > 64) { queued.decrementAndGet(); throw new RejectedExecutionException("Controlled application queue full"); }
             try { executor.execute(() -> { try { command.run(); } finally { queued.decrementAndGet(); } }); }
@@ -69,6 +71,7 @@ final class ControlledProviderRuntime {
     }
     private void tick() {
         if (stopped.get()) return;
+        application.maintainCandidates();
         var state = coordinator.state();
         if (state == ControlClientCoordinator.State.DEREGISTERED || state == ControlClientCoordinator.State.UNRESOLVED || state == ControlClientCoordinator.State.CLOSED) {
             if (awaitingReady != null) { awaitingReady.completeExceptionally(new IllegalStateException("Controlled lifecycle requires reconciliation: " + state)); awaitingReady = null; }

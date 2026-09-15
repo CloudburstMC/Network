@@ -20,12 +20,16 @@ import com.google.gson.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
+import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
+import org.cloudburstmc.netty.signaling.provider.connectivity.MaintainedCandidatePublisher;
+import org.cloudburstmc.netty.signaling.provider.connectivity.ObservationLeaseTracker;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
@@ -48,6 +52,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     private final boolean version2;
     private NativeCandidateSnapshot candidateSnapshot;
     private volatile long candidateGeneration = 1;
+    private MaintainedCandidatePublisher candidatePublisher;
     private List<Epoch> epochs = List.of();
     private Update update;
     private volatile boolean draining;
@@ -121,6 +126,27 @@ public final class NativeProviderTransport implements ProviderTransport {
         return open(bootstrap, bind, null, certificate, privateKey, limits, true, candidates);
     }
 
+    /** Explicit maintained publication, on the already bound gameplay mux. No STUN server discovery occurs here. */
+    public static CompletionStage<NativeProviderTransport> openControlledMaintained(ServerBootstrap bootstrap,
+            EndpointSelection selection, Map<EndpointSelection.Family, InetSocketAddress> numericStunServers,
+            Path certificate, Path privateKey, AdmissionGate.Limits limits) {
+        Objects.requireNonNull(selection);
+        var servers = Map.copyOf(numericStunServers);
+        var direct = NativeCandidateSnapshot.hosts(selection.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
+        return openControlledVersion2(bootstrap, selection.bind(), direct, certificate, privateKey, limits).thenCompose(transport -> {
+            var controller = selection.configured()
+                    ? CompletableFuture.<org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController>completedFuture(null)
+                    : transport.channel.enableConnectivity(selection, servers, Duration.ofMinutes(5));
+            return controller.thenApply(value -> {
+                synchronized (transport) {
+                    transport.captureNativeIdentity().requireCurrent();
+                    transport.candidatePublisher = new MaintainedCandidatePublisher(selection, value, new ObservationLeaseTracker(transport.incarnation));
+                }
+                return transport;
+            }).whenComplete((value, failure) -> { if (failure != null) transport.close(); });
+        });
+    }
+
     private static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
             Supplier<List<InetSocketAddress>> advertised, Path certificate, Path privateKey,
             AdmissionGate.Limits limits, boolean controlled) {
@@ -168,14 +194,37 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     /** Replace semantic endpoint material without rotating native identity, keys or established peers. */
     public synchronized boolean replaceCandidates(NativeCandidateSnapshot next) {
-        if (!version2 || closed || draining || !channel.isActive()) throw new IllegalStateException("Controlled v2 listener unavailable");
+        if (candidatePublisher != null) throw new IllegalStateException("Maintained publisher owns endpoint replacement");
         requirePublishableCandidates(next);
+        return replaceCandidateMaterial(next);
+    }
+
+    private boolean replaceCandidateMaterial(NativeCandidateSnapshot next) {
+        if (!version2 || closed || draining || !channel.isActive()) throw new IllegalStateException("Controlled v2 listener unavailable");
         if (candidateSnapshot.equals(next)) return false;
         long nextGeneration = Math.incrementExact(candidateGeneration);
         candidateSnapshot = next;
         candidateGeneration = nextGeneration;
         if (update != null) invalidateUpdate();
         return true;
+    }
+
+    @Override public boolean supportsMaintainedCandidateLeases() { return candidatePublisher != null; }
+
+    @Override public synchronized CandidateLeaseSnapshot maintainCandidateLeases(boolean reflexivePublicationAllowed) {
+        if (candidatePublisher == null) throw new UnsupportedOperationException("Maintained candidate publication was not enabled");
+        var identity = captureNativeIdentity();
+        var publication = candidatePublisher.refresh(reflexivePublicationAllowed);
+        replaceCandidateMaterial(publication.candidates());
+        var captured = publication.leases(); long generation = candidateGeneration;
+        return new CandidateLeaseSnapshot(captured.materialRevision(), captured.observations(), () -> {
+            identity.requireCurrent(); captured.requireCurrent();
+            if (candidateGeneration != generation) throw new IllegalStateException("Maintained endpoint material changed");
+        });
+    }
+
+    @Override public synchronized void candidateControlSynchronized() {
+        if (candidatePublisher != null) candidatePublisher.controlSynchronized();
     }
 
     private static void requirePublishableCandidates(NativeCandidateSnapshot value) {
@@ -425,6 +474,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     public synchronized CompletionStage<Void> drain() {
         if (controlled) invalidateUpdate();
         draining = true;
+        if (candidatePublisher != null) candidatePublisher.close();
         channel.drainAdmissions();
         return CompletableFuture.completedFuture(null);
     }
@@ -438,7 +488,8 @@ public final class NativeProviderTransport implements ProviderTransport {
             retireTask.cancel(false);
             validator.clear();
             epochs = List.of();
-            channel.close();
+            try { if (candidatePublisher != null) candidatePublisher.close(); }
+            finally { channel.close(); }
         }
 
         return channel.termination();
