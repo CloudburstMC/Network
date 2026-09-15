@@ -110,3 +110,18 @@ tasks.register("writeControlLocalSmokeLaunch") {
             "org.cloudburstmc.netty.signaling.control.ControlLocalSmokeClient").joinToString("\n", postfix = "\n"))
     }
 }
+
+// Test-only launch description; the same-machine Chromium harness explicitly supplies unpublished native overrides.
+tasks.register("writeSignedDiagnosticBrowserLaunch") {
+    dependsOn(tasks.testClasses)
+    dependsOn(sourceSets.test.get().runtimeClasspath)
+    val launcher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
+    val output = layout.buildDirectory.file("signed-diagnostic-browser-argv.txt")
+    outputs.file(output)
+    outputs.upToDateWhen { false }
+    doLast {
+        output.get().asFile.writeText(listOf(launcher.get().executablePath.asFile.absolutePath, "-cp",
+            sourceSets.test.get().runtimeClasspath.asPath,
+            "org.cloudburstmc.netty.signaling.admission.SignedDiagnosticBrowserHost").joinToString("\n", postfix = "\n"))
+    }
+}
