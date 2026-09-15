@@ -5,6 +5,9 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.signaling.admission.*;
 import org.cloudburstmc.netty.signaling.control.*;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -20,7 +23,7 @@ import java.util.concurrent.*;
 /** Private localhost fixture using the actual ProviderClient and native controlled listener. Never a gameplay test. */
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
-    private final boolean runtimeCheck, rotationCheck, candidateCheck, ownerCheck, diagnosticCheck;
+    private final boolean runtimeCheck, rotationCheck, candidateCheck, ownerCheck, diagnosticCheck, externalDiagnosticCheck;
     private final long deadline;
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
@@ -33,6 +36,10 @@ public final class ControlledProviderLocalSmokeClient {
         CompletableFuture<JsonObject> candidateReadiness; int candidateStage; boolean ownerRemapped; int playerChildren; boolean diagnosticComplete;
         CompletableFuture<Long> runtimeReadiness; boolean runtimeReady; long allReadyAtNanos, initialSessionEpoch, nextRuntimeReadinessAtNanos;
         int runtimeRefreshAttempts;
+        ExternalDiagnostic externalDiagnostic;
+        private record ExternalDiagnostic(ControlDiagnosticInstallationCodec.Installation document,
+                                          DiagnosticAdmission.Policy policy, DiagnosticAdmission.Installation capture,
+                                          InetSocketAddress listener) { }
         Host(JsonObject value) throws Exception {
             id = string(value, "hostId"); mode = string(value, "transport");
             if (!id.matches("[A-Za-z0-9_-]{1,128}") || !Set.of("https", "websocket").contains(mode)) throw new IllegalArgumentException("Invalid fixture host");
@@ -195,8 +202,77 @@ public final class ControlledProviderLocalSmokeClient {
             }
             return event;
         }
+        void externalDiagnosticReady() throws Exception {
+            if (!externalDiagnosticCheck || !ready || externalDiagnostic != null || diagnosticComplete)
+                throw new IllegalStateException("Unexpected external diagnostic readiness command");
+            client.readiness().get(remainingMillis(15_000), TimeUnit.MILLISECONDS);
+            var event = readyFields("external diagnostic readiness");
+            var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144);
+            var application = root.getAsJsonObject("controlApplication");
+            var document = ControlDiagnosticInstallationCodec.decodeInstallation(application.get("diagnosticInstallation").toString());
+            ControlDiagnosticInstallationCodec.verifyInstallation(document);
+            var policy = ControlledDiagnosticApplication.nativePolicy(document);
+            var capture = nativeTransport.captureDiagnosticInstallation().orElseThrow();
+            if (!capture.binding().equals(policy.binding())) throw new IllegalStateException("Persisted diagnostic installation differs from native capture");
+            var listener = (InetSocketAddress) nativeTransport.channel().localAddress();
+            var captured = new ExternalDiagnostic(document, policy, capture, listener);
+            requireExternalDiagnosticCurrent(captured);
+            requireNoPlayerActivity();
+            if (nativeTransport.channel().liveNativePeers() != 0 || !nativeTransport.pollDiagnosticResults(2).isEmpty())
+                throw new IllegalStateException("External diagnostic started with prior native activity");
+            event.add("installation", acknowledgement(document));
+            event.addProperty("policyNotBefore", document.notBefore()); event.addProperty("policyExpiresAt", document.expiresAt());
+            event.addProperty("keyId", document.activeKeyId()); event.addProperty("hostFingerprintHex", document.binding().hostFingerprintHex());
+            event.add("listener", diagnosticTuple(listener));
+            var endpoints = new JsonArray();
+            for (var endpoint : document.endpoints()) {
+                var value = diagnosticTarget(new DiagnosticHostPolicy.Endpoint(endpoint.family(), endpoint.addressHex(), endpoint.port(), endpoint.candidateRevision()));
+                value.addProperty("candidateType", endpoint.candidateType()); value.addProperty("expiresAt", endpoint.expiresAt()); endpoints.add(value);
+            }
+            if (endpoints.isEmpty()) throw new IllegalStateException("External diagnostic has no installed endpoint");
+            event.add("endpoints", endpoints); event.addProperty("playerChildren", playerChildren);
+            event.addProperty("creationAttempts", nativeTransport.channel().creationAttempts()); event.addProperty("liveNativePeers", 0);
+            requireExternalDiagnosticCurrent(captured); remainingMillis(1);
+            externalDiagnostic = captured; emit("diagnostic_ready", id, mode, event);
+        }
+        void externalDiagnosticResult() throws Exception {
+            if (!externalDiagnosticCheck || externalDiagnostic == null || diagnosticComplete)
+                throw new IllegalStateException("Unexpected external diagnostic result command");
+            var captured = externalDiagnostic;
+            final long pollDeadline = Math.min(deadline, System.nanoTime() + TimeUnit.SECONDS.toNanos(20));
+            DiagnosticAdmission.Completion result = null;
+            while (System.nanoTime() < pollDeadline) {
+                requireExternalDiagnosticCurrent(captured); requireNoPlayerActivity();
+                var results = nativeTransport.pollDiagnosticResults(2);
+                if (results.size() > 1) throw new IllegalStateException("Multiple external diagnostic completions");
+                if (!results.isEmpty()) { result = results.get(0); break; }
+                long remaining = pollDeadline - System.nanoTime();
+                if (remaining > 0) TimeUnit.NANOSECONDS.sleep(Math.min(TimeUnit.MILLISECONDS.toNanos(20), remaining));
+            }
+            if (result == null) throw new TimeoutException("External diagnostic exceeded its original bounded result wait");
+            requireExternalDiagnosticCurrent(captured); requireNoPlayerActivity();
+            if (nativeTransport.channel().liveNativePeers() != 0 || !nativeTransport.pollDiagnosticResults(1).isEmpty())
+                throw new IllegalStateException("External diagnostic did not release its only native peer");
+            var event = diagnosticCompletion(captured.policy(), result, captured.listener());
+            event.add("installation", acknowledgement(captured.document()));
+            event.addProperty("policyExpiresAt", captured.document().expiresAt()); event.addProperty("playerChildren", playerChildren);
+            event.addProperty("creationAttempts", nativeTransport.channel().creationAttempts()); event.addProperty("liveNativePeers", nativeTransport.channel().liveNativePeers());
+            event.addProperty("nativeServing", nativeTransport.channel().isServing()); event.addProperty("gameplay", false);
+            requireExternalDiagnosticCurrent(captured); remainingMillis(1);
+            diagnosticComplete = true; emit("diagnostic_complete", id, mode, event);
+        }
+        private void requireExternalDiagnosticCurrent(ExternalDiagnostic captured) {
+            captured.capture().requireCurrent();
+            if (nativeTransport.captureDiagnosticInstallation().orElse(null) != captured.capture()
+                    || !nativeTransport.channel().isServing())
+                throw new IllegalStateException("External diagnostic original installation is no longer current");
+        }
+        private void requireNoPlayerActivity() {
+            if (playerChildren != 0 || nativeTransport.channel().creationAttempts() != 0 || !nativeTransport.pollEvents(32).isEmpty())
+                throw new IllegalStateException("External diagnostic created player activity");
+        }
         void diagnostic() throws Exception {
-            if (!diagnosticCheck || !ready || diagnosticComplete) throw new IllegalStateException("Unexpected diagnostic command");
+            if (!diagnosticCheck || externalDiagnosticCheck || !ready || diagnosticComplete) throw new IllegalStateException("Unexpected diagnostic command");
             client.readiness().get(15, TimeUnit.SECONDS);
             var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144);
             var application = root.getAsJsonObject("controlApplication");
@@ -263,6 +339,7 @@ public final class ControlledProviderLocalSmokeClient {
         if (requestedDiagnosticCheck != null && (!requestedDiagnosticCheck.isJsonPrimitive() || !requestedDiagnosticCheck.getAsJsonPrimitive().isBoolean()))
             throw new IllegalArgumentException("diagnosticCheck must be a boolean");
         diagnosticCheck = requestedDiagnosticCheck != null && requestedDiagnosticCheck.getAsBoolean();
+        externalDiagnosticCheck = externalDiagnosticMode(config, diagnosticCheck);
         if (diagnosticCheck && (ownerCheck || candidateCheck || runtimeCheck)) throw new IllegalArgumentException("Diagnostic installation requires its separate scenario");
         if (ownerCheck && (candidateCheck || runtimeCheck)) throw new IllegalArgumentException("Owner faults require their separate scenario");
         if (candidateCheck && runtimeCheck) throw new IllegalArgumentException("Candidate and timed rotation scenarios are separate");
@@ -311,7 +388,16 @@ public final class ControlledProviderLocalSmokeClient {
                         throw new IllegalStateException("Candidate scenario stopped before restoration");
                     return;
                 }
-                if (diagnosticCheck && "diagnostic".equals(value)) {
+                if (externalDiagnosticCheck && "diagnostic-ready".equals(value)) {
+                    for (var host : hosts) host.externalDiagnosticReady();
+                    command = reader.submit(input::readLine); continue;
+                }
+                if (externalDiagnosticCheck && value != null && value.startsWith("diagnostic-result:")) {
+                    String wanted = value.substring("diagnostic-result:".length());
+                    hosts.stream().filter(host -> host.id.equals(wanted)).findFirst().orElseThrow().externalDiagnosticResult();
+                    command = reader.submit(input::readLine); continue;
+                }
+                if (diagnosticCheck && !externalDiagnosticCheck && "diagnostic".equals(value)) {
                     for (var host : hosts) host.diagnostic();
                     command = reader.submit(input::readLine); continue;
                 }
@@ -343,6 +429,72 @@ public final class ControlledProviderLocalSmokeClient {
             }
         }
         if (failed) System.exit(1);
+    }
+    private long remainingMillis(long maximum) throws TimeoutException {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) throw new TimeoutException("Controlled fixture original deadline expired");
+        return Math.min(maximum, Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining)));
+    }
+    static boolean externalDiagnosticMode(JsonObject config, boolean diagnostics) {
+        var requested = config.get("externalDiagnosticCheck");
+        if (requested != null && (!requested.isJsonPrimitive() || !requested.getAsJsonPrimitive().isBoolean()))
+            throw new IllegalArgumentException("externalDiagnosticCheck must be a boolean");
+        boolean enabled = requested != null && requested.getAsBoolean();
+        if (enabled && !diagnostics) throw new IllegalArgumentException("External diagnostic requires diagnosticCheck");
+        return enabled;
+    }
+    private static JsonObject acknowledgement(ControlDiagnosticInstallationCodec.Installation document) {
+        return JsonParser.parseString(ControlDiagnosticInstallationCodec.encodeAcknowledgement(
+                new ControlDiagnosticInstallationCodec.Acknowledgement(document.binding()))).getAsJsonObject();
+    }
+    private static JsonObject diagnosticTuple(InetSocketAddress endpoint) {
+        if (endpoint == null || endpoint.isUnresolved() || endpoint.getPort() < 1 || endpoint.getPort() > 65535)
+            throw new IllegalStateException("Missing actual diagnostic endpoint");
+        int family = endpoint.getAddress() instanceof Inet6Address ? 6 : 4;
+        var value = new JsonObject(); value.addProperty("family", family);
+        value.addProperty("addressHex", DiagnosticAdmissionCodec.address(family, endpoint.getAddress().getHostAddress()));
+        value.addProperty("port", endpoint.getPort()); return value;
+    }
+    private static JsonObject diagnosticTarget(DiagnosticHostPolicy.Endpoint endpoint) {
+        var value = new JsonObject(); value.addProperty("family", endpoint.family()); value.addProperty("addressHex", endpoint.addressHex());
+        value.addProperty("port", endpoint.port()); value.addProperty("candidateRevision", endpoint.candidateRevision()); return value;
+    }
+    static JsonObject diagnosticCompletion(DiagnosticAdmission.Policy policy, DiagnosticAdmission.Completion result, InetSocketAddress listener) {
+        var endpoint = policy.endpoints().stream().filter(value -> value.target().equals(result.target())).findFirst().orElseThrow();
+        var local = diagnosticTuple(result.selectedLocal()); var remote = diagnosticTuple(result.selectedRemote()); var udp = result.udp();
+        if (!result.success() || !result.cleanupComplete() || !"complete".equals(result.reason())
+                || !policy.binding().equals(result.installation()) || !policy.binding().context().equals(result.context())
+                || policy.keys().stream().noneMatch(key -> key.keyId().equals(result.keyId()))
+                || result.expiresAt() > Math.min(policy.expiresAt(), endpoint.expiresAt()) || result.completedAt() < policy.notBefore()
+                || result.completedAt() >= result.expiresAt() || result.completionDigestHex() == null || !result.completionDigestHex().matches("[0-9a-f]{64}")
+                || result.attemptId() == null || !result.attemptId().matches("[0-9a-f]{32}")
+                || result.offerDigestHex() == null || !result.offerDigestHex().matches("[0-9a-f]{64}")
+                || result.clientFingerprintHex() == null || !result.clientFingerprintHex().matches("[0-9a-f]{64}")
+                || result.sentFrames() < 1 || result.sentFrames() > DiagnosticAdmissionCodec.MAX_FRAMES
+                || result.receivedFrames() < 1 || result.receivedFrames() > DiagnosticAdmissionCodec.MAX_FRAMES
+                || result.sentBytes() < 1 || result.sentBytes() > DiagnosticAdmissionCodec.MAX_APPLICATION_SEND_BYTES
+                || result.receivedBytes() < 1 || result.receivedBytes() > DiagnosticAdmissionCodec.MAX_APPLICATION_SEND_BYTES
+                || udp == null || udp.sent() < 1 || udp.reserved() < udp.sent() || udp.reserved() > DiagnosticAdmissionCodec.MAX_UDP_SENDS
+                || udp.sentBytes() < udp.sent() || udp.sentBytes() > udp.sent() * DiagnosticAdmissionCodec.MAX_UDP_PAYLOAD_BYTES || udp.rejected() != 0
+                || result.selectedLocal().getPort() != listener.getPort()
+                || !listener.getAddress().isAnyLocalAddress() && !result.selectedLocal().getAddress().equals(listener.getAddress())
+                || number(local, "family") != result.target().family() || number(remote, "family") != result.target().family()
+                || !string(local, "addressHex").equals(result.target().addressHex()) || number(local, "port") != result.target().port())
+            throw new IllegalStateException("External diagnostic completion does not prove the original installed transport");
+        var event = new JsonObject();
+        event.addProperty("attemptExpiresAt", result.expiresAt()); event.addProperty("attemptId", result.attemptId());
+        event.addProperty("offerDigestHex", result.offerDigestHex()); event.addProperty("clientFingerprintHex", result.clientFingerprintHex());
+        event.addProperty("completionDigestHex", result.completionDigestHex()); event.addProperty("completedAt", result.completedAt());
+        event.addProperty("sentFrames", result.sentFrames()); event.addProperty("receivedFrames", result.receivedFrames());
+        event.addProperty("sentBytes", result.sentBytes()); event.addProperty("receivedBytes", result.receivedBytes());
+        event.addProperty("udpSent", udp.sent()); event.addProperty("cleanupComplete", true);
+        event.addProperty("keyId", result.keyId()); event.addProperty("candidateRevision", result.target().candidateRevision());
+        event.add("target", diagnosticTarget(result.target())); event.add("selectedLocal", local); event.add("selectedRemote", remote);
+        var counters = new JsonObject(); counters.addProperty("reserved", udp.reserved()); counters.addProperty("sent", udp.sent());
+        counters.addProperty("sentBytes", udp.sentBytes()); counters.addProperty("rejected", udp.rejected()); event.add("udp", counters);
+        // Native success means its complete four-direction transcript matched and native teardown settled.
+        var directions = new JsonArray(); for (int i = 0; i < 4; i++) directions.add(1); event.add("directions", directions);
+        return event;
     }
     private static JsonObject failureType(Throwable failure) { var value = new JsonObject(); value.addProperty("errorType", failure.getClass().getSimpleName()); return value; }
     private static synchronized void emit(String phase, String host, String mode, JsonObject fields) {
