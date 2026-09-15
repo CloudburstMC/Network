@@ -241,6 +241,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (snapshot.pending() != null && snapshot.pending().candidate() != null) throw new IllegalStateException("Resolve machine key rotation before replacing writer");
         if (snapshot.pendingBootstrap() != null) throw new IllegalStateException("Resolve existing bootstrap intent first");
         if (outcomeAcknowledgementIo != null) throw new IllegalStateException("Durable outcome acknowledgement still running");
+        if (cancellationInFlight) throw new IllegalStateException("Intent cancellation still running");
         desiredTransport = transport; desiredCapabilities = List.copyOf(capabilities);
         attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; beginPrepare();
     }
@@ -338,6 +339,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     acknowledgeOutcome(receipt, () -> acceptCurrent(credential, writer, current, currentRequestIssuedAt)); return;
                 }
                 persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(), null, snapshot.pendingBootstrap(), grant(current), snapshot.authorityFloor()));
+                cancellationIntentDigest = null; cancellationInFlight = false; cancellationWriterSelected = false;
                 long continuationAttempt = attempt; State continuationState = state;
                 completeResult(ControlOperationResult.reconciled(receipt));
                 // CompletableFuture completion may synchronously close, replace or resynchronize this client.
@@ -505,7 +507,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
             ControlLifecycleCodec.verifyReceipt(receipt, pending.intent());
             persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null,
                     snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
-            cancellationInFlight = false; cancellationWriterSelected = false; cancellationIntentDigest = null; pendingSynchronization = null;
+            operationInFlight = false; cancellationInFlight = false; cancellationWriterSelected = false; cancellationIntentDigest = null; pendingSynchronization = null;
             long generation = attempt; State previous = state;
             completeResult(ControlOperationResult.reconciled(receipt));
             if (generation == attempt && state == previous) synchronize();
@@ -640,7 +642,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     var pending = snapshot.pending();
                     if (pending == null || !pending.intent().operation().equals("heartbeat")) { halt(); return; }
                     cancellationIntentDigest = ControlLifecycleCodec.intentDigest(pending.intent());
-                    attempt++; if (!resetAuthorityWork()) return; authority = null; cancellationWriterSelected = true;
+                    attempt++; operationInFlight = false; cancellationInFlight = false; if (!resetAuthorityWork()) return; authority = null; cancellationWriterSelected = true;
                     cancelBeforeSynchronization(); return;
                 }
                 // Delivery has already been consumed. Only the installed inner authority/current trust applies here.

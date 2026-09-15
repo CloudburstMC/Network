@@ -94,6 +94,35 @@ class ControlNativeIntentCancellationTest {
             assertEquals(1, h.operations.size()); assertTrue(h.authorityRequests.isEmpty()); assertFalse(h.client.ready());
         }
     }
+    @Test void terminalStatusCallbackMayQueueAnotherIntentWithoutOldCancellationMarker() throws Exception {
+        for (String disposition : List.of("committed", "cancelled")) {
+            var h = started("websocket"); var original = submit(h); var receipt = h.receipt(disposition); h.receipts.put(receipt.intentDigest(), receipt);
+            var next = new java.util.concurrent.atomic.AtomicReference<CompletionStage<ControlOperationResult>>();
+            original.whenComplete((ignored, failure) -> next.set(h.client.submit("outcomes", "{}".getBytes(StandardCharsets.UTF_8), true)));
+            h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
+            assertNotEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state()); assertNotNull(next.get());
+            h.synchronizedReady(); assertEquals("outcomes", h.journal.value.pending().intent().operation());
+            assertEquals(2, h.operations.size()); assertTrue(h.requests.isEmpty());
+        }
+    }
+    @Test void nativeReconciliationFencesHeldOperationAndAllowsNextHeartbeat() throws Exception {
+        var h = started("websocket"); submit(h); var old = h.operations.get(0);
+        h.client.synchronize(); h.respondAuthority();
+        h.synchronizations.get(h.synchronizations.size()-1).completeExceptionally(new ControlClientIo.ReconciliationRequired("native instance replaced"));
+        var request = h.next("cancel-intent"); var receipt = h.receipt("cancelled"); reply(h, request, receipt);
+        h.respondAuthority(); var lane = h.synchronizationExchanges.get(h.synchronizationExchanges.size()-1); lane.heartbeat("{}".getBytes(StandardCharsets.UTF_8));
+        var pending = h.journal.value.pending();
+        assertEquals(2, h.operations.size() + h.links.get(0).sent.size());
+        old.reply().complete(new ControlClientIo.HttpReply(old.endpoint(), "POST", old.endpoint(), 200, ControlClientCoordinatorTest.resultWire(receipt)));
+        assertEquals(pending, h.journal.value.pending());
+    }
+    @Test void explicitReplacementCannotAbandonOwnedCancellationIo() throws Exception {
+        var h = started("websocket"); submit(h); h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
+        var request = h.next("cancel-intent"); var writer = h.client.snapshot().writer();
+        assertThrows(IllegalStateException.class, () -> h.client.replaceTransport("https", List.of("request-response")));
+        assertEquals(writer, h.client.snapshot().writer()); assertTrue(h.requests.isEmpty());
+        reply(h, request, h.receipt("cancelled")); assertNull(h.journal.value.pending()); assertEquals(1, h.authorityRequests.size());
+    }
     @Test void reentrantCloseAfterTerminalReceiptPreventsReadinessContinuation() throws Exception {
         var h = started("websocket"); var result = submit(h); h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
         var request = h.next("cancel-intent");
