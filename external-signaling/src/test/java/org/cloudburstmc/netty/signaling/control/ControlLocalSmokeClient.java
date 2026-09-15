@@ -162,8 +162,198 @@ public final class ControlLocalSmokeClient {
             if (await(transport.authority(endpoint("authority"), wrongAuthority)).status() != 503) throw new IllegalStateException("Wrong authority key material was accepted");
             if (socket != null && socket.closed().toCompletableFuture().isDone()) throw new IllegalStateException("Physical socket closed before initial proof verification");
             emit("verified-floor-and-negatives", hostId, mode);
+            var lifecycleEvidence = lifecycle(journalPath, snapshot);
+            if (socket != null && socket.closed().toCompletableFuture().isDone()) throw new IllegalStateException("Fixture socket changed during one-off HTTP operations");
+            lifecycleEvidence.addProperty("phase", "verified-lifecycle"); lifecycleEvidence.addProperty("hostId", hostId);
+            lifecycleEvidence.addProperty("transport", mode); System.out.println(lifecycleEvidence); System.out.flush();
         } finally { if (socket != null) socket.abort(); }
     }
+
+    /** Manual test orchestration, not coordinator READY or a synchronized production socket owner. */
+    private JsonObject lifecycle(Path journalPath, ControlClientJournal.Snapshot initial) throws Exception {
+        var state = initial;
+        JsonObject heartbeat = new JsonObject();
+        heartbeat.addProperty("acceptingPlayers", false); heartbeat.addProperty("healthy", true);
+        heartbeat.addProperty("capacity", 10); heartbeat.addProperty("load", 0.25);
+        heartbeat.addProperty("protocolVersion", "nethernet"); heartbeat.addProperty("clockUnixMillis", clock.nowMillis());
+        heartbeat.addProperty("checkInVersion", 1); heartbeat.addProperty("state", "serving");
+        heartbeat.addProperty("appliedStateRevision", 0); heartbeat.addProperty("gameOutcomes", "available");
+        heartbeat.addProperty("build", "private-smoke-α"); heartbeat.addProperty("keyRequestId", UUID.randomUUID().toString());
+        // Preserve whitespace and non-ASCII bytes through the production header/body transport.
+        state = pending(journalPath, state, "heartbeat", (" " + heartbeat + "\n").getBytes(StandardCharsets.UTF_8), null);
+        var heartbeatRequest = operational(state);
+        var checkedHeartbeat = operation(heartbeatRequest, state.pending().bodyBytes());
+        byte[] application = checkedHeartbeat.bodyBytes();
+        try {
+            var body = ControlJson.parse(new String(application, StandardCharsets.UTF_8), ControlResultCodec.MAX_BODY_BYTES);
+            String secret = ControlJson.string(ControlJson.object(body, "ticketKey"), "secret");
+            if (!secret.matches("[A-Za-z0-9_-]{43}")) throw new IllegalStateException("Missing one-time ticket key");
+        } finally { java.util.Arrays.fill(application, (byte) 0); }
+        var heartbeatReplay = operation(heartbeatRequest, state.pending().bodyBytes());
+        if (!heartbeatReplay.receipt().equals(checkedHeartbeat.receipt())
+                || ControlJson.parse(new String(heartbeatReplay.bodyBytes(), StandardCharsets.UTF_8), ControlResultCodec.MAX_BODY_BYTES).has("ticketKey")) {
+            throw new IllegalStateException("Heartbeat replay changed receipt or repeated a secret");
+        }
+        state = completed(journalPath, state, checkedHeartbeat.receipt());
+
+        JsonObject outcomes = new JsonObject(); var events = new com.google.gson.JsonArray();
+        String ticketId = UUID.randomUUID().toString(), occurredAt = java.time.Instant.now().toString();
+        for (String stage : List.of("ticket.ice_seen", "ticket.dtls_connected", "ticket.sctp_connected")) {
+            JsonObject event = new JsonObject(); event.addProperty("ticketId", ticketId);
+            event.addProperty("stage", stage); event.addProperty("occurredAt", occurredAt); events.add(event);
+        }
+        outcomes.add("events", events);
+        state = pending(journalPath, state, "outcomes", outcomes.toString().getBytes(StandardCharsets.UTF_8), null);
+        var outcomesRequest = operational(state); var outcomeResult = operation(outcomesRequest, state.pending().bodyBytes());
+        if (!outcomeResult.equals(operation(outcomesRequest, state.pending().bodyBytes()))
+                || ControlJson.number(ControlJson.parse(new String(outcomeResult.bodyBytes(), StandardCharsets.UTF_8), ControlResultCodec.MAX_BODY_BYTES), "eventCount") != 3) {
+            throw new IllegalStateException("Outcome replay changed original result");
+        }
+        state = completed(journalPath, state, outcomeResult.receipt());
+
+        var oldCredential = state.currentKey(); var originalWriter = state.writer();
+        String rotationId = UUID.randomUUID().toString();
+        var candidate = ControlClientJournal.Credential.from("key_" + UUID.randomUUID().toString().replace("-", ""), ProviderCrypto.generate());
+        var rotation = ControlRotationCodec.create(candidate.keyId(), candidate.keyPair(), new ControlRotationCodec.Context(
+                origin.toString(), state.subject().instanceId(), 1, oldCredential.keyId(), rotationId));
+        state = pending(journalPath, state, "rotate", ControlRotationCodec.encode(rotation).getBytes(StandardCharsets.UTF_8), candidate, rotationId);
+        var rotateRequest = operational(state); var rotationResult = operation(rotateRequest, state.pending().bodyBytes());
+        emptyResult(rotationResult);
+        // Discard the direct acknowledgement for reconciliation purposes. Recover only from the
+        // previously persisted exact intent/candidate plus strongly authenticated candidate status.
+        state = reopen(journalPath, state);
+        JsonObject selected = currentStatus(state.subject().instanceId(), candidate);
+        var selectedWriter = ControlWriterFence.read(ControlJson.object(selected, "writer"));
+        var wanted = new ControlWriterFence(originalWriter.transport(), originalWriter.sessionEpoch(), originalWriter.sessionId(),
+                originalWriter.connectionId(), candidate.keyId(), originalWriter.machineKeyRevision() + 1);
+        if (!selectedWriter.equals(wanted)) throw new IllegalStateException("Rotation changed physical writer or selected wrong key");
+        historicalGrant(selected, state.grant(), true);
+        var recoveredRotation = receiptStatus(state.subject().instanceId(), candidate, state.pending().intent());
+        if (!recoveredRotation.equals(rotationResult.receipt())) throw new IllegalStateException("Recovered rotation receipt changed");
+        rejectStatus(state.subject().instanceId(), oldCredential);
+        if (await(transport.operation(operationEndpoint("rotate"), rotateRequest, state.pending().bodyBytes())).status() != 503) {
+            throw new IllegalStateException("Old selected-key carrier was accepted after rotation");
+        }
+        var withReceipt = new ControlClientJournal.Pending(state.pending().intent(), state.pending().originalBody(), candidate, recoveredRotation);
+        state = persist(journalPath, new ControlClientJournal.Snapshot(state.subject(), oldCredential, originalWriter,
+                state.lastSequence(), withReceipt, null, state.grant(), state.authorityFloor()));
+        state = persist(journalPath, new ControlClientJournal.Snapshot(state.subject(), candidate, selectedWriter,
+                state.lastSequence(), null, null, state.grant(), state.authorityFloor()));
+
+        JsonObject retirement = new JsonObject(); retirement.addProperty("keyId", oldCredential.keyId());
+        state = pending(journalPath, state, "retire", retirement.toString().getBytes(StandardCharsets.UTF_8), null);
+        var retirementRequest = operational(state); var retired = operation(retirementRequest, state.pending().bodyBytes());
+        emptyResult(retired);
+        if (!retired.equals(operation(retirementRequest, state.pending().bodyBytes()))
+                || !retired.receipt().equals(receiptStatus(state.subject().instanceId(), candidate, state.pending().intent()))) {
+            throw new IllegalStateException("Retirement replay or status changed receipt");
+        }
+        state = completed(journalPath, state, retired.receipt()); rejectStatus(state.subject().instanceId(), oldCredential);
+
+        state = pending(journalPath, state, "deregister", "{}".getBytes(StandardCharsets.UTF_8), null);
+        var deregisterRequest = operational(state); var deregistered = operation(deregisterRequest, state.pending().bodyBytes());
+        emptyResult(deregistered);
+        if (!deregistered.receipt().equals(receiptStatus(state.subject().instanceId(), candidate, state.pending().intent()))) {
+            throw new IllegalStateException("Terminal receipt is not recoverable by selected key");
+        }
+        JsonObject disabled = currentStatus(state.subject().instanceId(), candidate);
+        if (!ControlWriterFence.read(ControlJson.object(disabled, "writer")).equals(selectedWriter)) throw new IllegalStateException("Terminal state changed retained writer");
+        historicalGrant(disabled, state.grant(), false);
+        if (await(transport.operation(operationEndpoint("deregister"), deregisterRequest, state.pending().bodyBytes())).status() != 503) {
+            throw new IllegalStateException("Disabled writer accepted another lifecycle carrier");
+        }
+        state = completed(journalPath, state, deregistered.receipt());
+        // A fresh higher sequence is also refused. It is a negative request, not a committed journal intent.
+        byte[] rejectedBody = "{}".getBytes(StandardCharsets.UTF_8);
+        var rejectedIntent = ControlLifecycleCodec.intent(origin.toString(), "deregister", state.subject().instanceId(), 1,
+                state.lastSequence() + 1, UUID.randomUUID().toString(), rejectedBody);
+        if (await(transport.operation(operationEndpoint("deregister"), operational(state, rejectedIntent), rejectedBody)).status() != 503) {
+            throw new IllegalStateException("Terminal writer accepted a fresh operation");
+        }
+        if (state.lastSequence() != 5 || state.pending() != null) throw new IllegalStateException("Unexpected durable lifecycle state");
+        JsonObject evidence = new JsonObject(); var receipts = new com.google.gson.JsonArray();
+        for (var receipt : List.of(checkedHeartbeat.receipt(), outcomeResult.receipt(), recoveredRotation, retired.receipt(), deregistered.receipt())) {
+            receipts.add(ControlJson.parse(ControlLifecycleCodec.encodeReceipt(receipt), ControlLifecycleCodec.MAX_INTENT_BYTES));
+        }
+        evidence.add("receipts", receipts); evidence.add("originalWriter", originalWriter.object());
+        evidence.add("selectedWriter", selectedWriter.object()); evidence.addProperty("rotationParentExpiresAt", rotateRequest.expiresAt());
+        evidence.addProperty("retainedFloorSha256", ControlFrameCodec.payloadDigest(initial.authorityFloor().originalResponse().getBytes(StandardCharsets.UTF_8)));
+        evidence.addProperty("terminalDisabled", true); evidence.addProperty("journalReopenedBeforeEveryOperation", true);
+        evidence.addProperty("candidateStatusRecoveryVerified", true); evidence.addProperty("historicalGrantUnchanged", true);
+        return evidence;
+    }
+
+    private ControlClientJournal.Snapshot pending(Path path, ControlClientJournal.Snapshot state, String operation, byte[] body,
+                                                 ControlClientJournal.Credential candidate) throws Exception {
+        return pending(path, state, operation, body, candidate, UUID.randomUUID().toString());
+    }
+    private ControlClientJournal.Snapshot pending(Path path, ControlClientJournal.Snapshot state, String operation, byte[] body,
+                                                 ControlClientJournal.Credential candidate, String idempotencyKey) throws Exception {
+        if (state.pending() != null) throw new IllegalStateException("Previous intent is unresolved");
+        var intent = ControlLifecycleCodec.intent(origin.toString(), operation, state.subject().instanceId(), 1,
+                state.lastSequence() + 1, idempotencyKey, body);
+        return persist(path, new ControlClientJournal.Snapshot(state.subject(), state.currentKey(), state.writer(), intent.sequence(),
+                new ControlClientJournal.Pending(intent, ProviderCrypto.base64(body), candidate, null), null, state.grant(), state.authorityFloor()));
+    }
+    private ControlClientJournal.Snapshot completed(Path path, ControlClientJournal.Snapshot state, ControlLifecycleCodec.Receipt receipt) throws Exception {
+        ControlLifecycleCodec.verifyReceipt(receipt, state.pending().intent());
+        return persist(path, new ControlClientJournal.Snapshot(state.subject(), state.currentKey(), state.writer(), state.lastSequence(),
+                null, null, state.grant(), state.authorityFloor()));
+    }
+    private ControlClientJournal.Snapshot persist(Path path, ControlClientJournal.Snapshot snapshot) throws Exception {
+        try (var journal = new FileControlClientJournal(path)) { journal.commit(snapshot); }
+        return reopen(path, snapshot);
+    }
+    private ControlClientJournal.Snapshot reopen(Path path, ControlClientJournal.Snapshot expected) throws Exception {
+        try (var journal = new FileControlClientJournal(path)) {
+            var stored = journal.read().orElseThrow();
+            if (!stored.equals(expected)) throw new IllegalStateException("Exact intent/key/writer did not survive journal reopen");
+            return stored;
+        }
+    }
+    private ControlHttpCodec.Request operational(ControlClientJournal.Snapshot state) throws Exception { return operational(state, state.pending().intent()); }
+    private ControlHttpCodec.Request operational(ControlClientJournal.Snapshot state, ControlLifecycleCodec.Intent intent) throws Exception {
+        long now = clock.nowMillis(), expiry = Math.min(now + 30_000, Math.min(state.grant().authorityExpiresAt(), state.grant().sessionExpiresAt()));
+        var writer = state.writer();
+        return ControlHttpCodec.sign(new ControlHttpCodec.Request(1, origin.toString(), "POST", "/nxs/v1/" + intent.operation(), now, expiry,
+                intent, writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), writer.transport(), CAPABILITIES,
+                new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, state.currentKey().keyId(), "")), state.currentKey().keyPair().getPrivate());
+    }
+    private ControlResultCodec.Result operation(ControlHttpCodec.Request request, byte[] body) throws Exception {
+        var reply = await(transport.operation(operationEndpoint(request.intent().operation()), request, body));
+        if (reply.status() != 200) throw new IllegalStateException("Lifecycle HTTP envelope unavailable");
+        var result = ControlResultCodec.verify(ControlResultCodec.decode(reply.body()), request.intent());
+        if (!result.receipt().disposition().equals("committed")) throw new IllegalStateException("Operation was not committed");
+        return result;
+    }
+    private static void emptyResult(ControlResultCodec.Result result) {
+        if (!new String(result.bodyBytes(), StandardCharsets.UTF_8).equals("{}")) throw new IllegalStateException("Mutator delivered application state");
+    }
+    private JsonObject currentStatus(String hostId, ControlClientJournal.Credential credential) throws Exception {
+        JsonObject query = new JsonObject(); query.addProperty("query", "current-writer");
+        var request = request(hostId, credential.keyId(), credential.keyPair().getPrivate(), "status", "/control/status", query);
+        return payload(response(await(transport.bootstrap(endpoint("status"), request)), request));
+    }
+    private void rejectStatus(String hostId, ControlClientJournal.Credential credential) throws Exception {
+        JsonObject query = new JsonObject(); query.addProperty("query", "current-writer");
+        var request = request(hostId, credential.keyId(), credential.keyPair().getPrivate(), "status", "/control/status", query);
+        if (await(transport.bootstrap(endpoint("status"), request)).status() != 503) throw new IllegalStateException("Old key recovered current-writer status");
+    }
+    private ControlLifecycleCodec.Receipt receiptStatus(String hostId, ControlClientJournal.Credential credential,
+                                                       ControlLifecycleCodec.Intent intent) throws Exception {
+        JsonObject query = new JsonObject(); query.addProperty("query", "intent-receipt"); query.addProperty("intentDigest", ControlLifecycleCodec.intentDigest(intent));
+        var request = request(hostId, credential.keyId(), credential.keyPair().getPrivate(), "status", "/control/status", query);
+        var body = payload(response(await(transport.bootstrap(endpoint("status"), request)), request));
+        var receipt = ControlLifecycleCodec.decodeReceipt(ControlJson.object(body, "receipt").toString());
+        ControlLifecycleCodec.verifyReceipt(receipt, intent); return receipt;
+    }
+    private static void historicalGrant(JsonObject status, ControlClientJournal.Grant grant, boolean enabled) {
+        if (status.get("writerEnabled").getAsBoolean() != enabled || !ControlJson.strings(status, "capabilities").equals(grant.capabilities())
+                || ControlJson.number(status, "activatedAt") != grant.activatedAt() || ControlJson.number(status, "sessionExpiresAt") != grant.sessionExpiresAt()
+                || ControlJson.number(status, "authoritySourceCheckedAt") != grant.authoritySourceCheckedAt()
+                || ControlJson.number(status, "authorityExpiresAt") != grant.authorityExpiresAt()) throw new IllegalStateException("Status restamped the historical grant");
+    }
+    private URI operationEndpoint(String action) { return URI.create(origin + "/nxs/v1/" + action); }
     private URI endpoint(String action) { return URI.create(origin + "/control/" + action); }
     private ControlSessionCodec.Request request(String host, String keyId, PrivateKey key, String action, String target, JsonObject payload) throws Exception {
         long now = clock.nowMillis(), expires = now + 30_000; byte[] bytes = payload.toString().getBytes(StandardCharsets.UTF_8);
