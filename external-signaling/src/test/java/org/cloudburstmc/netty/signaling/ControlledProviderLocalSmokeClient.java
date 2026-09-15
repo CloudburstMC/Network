@@ -20,7 +20,7 @@ import java.util.concurrent.*;
 /** Private localhost fixture using the actual ProviderClient and native controlled listener. Never a gameplay test. */
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
-    private final boolean runtimeCheck, rotationCheck, candidateCheck;
+    private final boolean runtimeCheck, rotationCheck, candidateCheck, ownerCheck;
     private final long deadline;
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
@@ -30,7 +30,7 @@ public final class ControlledProviderLocalSmokeClient {
         final String id, mode; final Path directory; final NativeProviderTransport nativeTransport; final ProviderClient client;
         final NativeCandidateSnapshot originalCandidates;
         final CompletableFuture<JsonObject> started; String writerSeen, basisSeen; boolean ready;
-        CompletableFuture<JsonObject> candidateReadiness; int candidateStage;
+        CompletableFuture<JsonObject> candidateReadiness; int candidateStage; boolean ownerRemapped;
         CompletableFuture<Long> runtimeReadiness; boolean runtimeReady; long allReadyAtNanos, initialSessionEpoch, nextRuntimeReadinessAtNanos;
         int runtimeRefreshAttempts;
         Host(JsonObject value) throws Exception {
@@ -44,7 +44,7 @@ public final class ControlledProviderLocalSmokeClient {
             var control = new ProviderControlConfiguration(new ControlClientCoordinator.Config(string(config, "origin"), uri(route, "prepare"), uri(route, "activate"), uri(route, "status"),
                     uri(route, "upgrade"), uri(route, "authority"), operations, mode, List.of("request-response"), 600000, 30000, 200, 10000, route.has("cancelIntent") ? uri(route, "cancelIntent") : null),
                     List.of(new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.PROVIDER_CONTROL, string(config, "providerKeyId"), ProviderCrypto.publicKey(config.getAsJsonObject("providerPublicKeyJwk")),
-                            number(config, "validFrom"), number(config, "validUntil"))), reporting);
+                            number(config, "validFrom"), number(config, "validUntil"))), reporting, ownerCheck ? ProviderControlConfiguration.NativeOwnership.ISSUED : ProviderControlConfiguration.NativeOwnership.DISABLED);
             var nativeConfig = config.getAsJsonObject("native"); String address = string(nativeConfig, "bindAddress");
             if (!Set.of("127.0.0.1", "::1", "::").contains(address)) throw new IllegalArgumentException("Only isolated loopback native fixture binds are allowed");
             int port = Math.toIntExact(number(value, "udpPort")); if (port < 1 || port > 65535) throw new IllegalArgumentException("Fixed UDP fixture port required");
@@ -55,7 +55,7 @@ public final class ControlledProviderLocalSmokeClient {
                     ? List.of(new InetSocketAddress("127.0.0.1", port), new InetSocketAddress("::1", port)) : List.of(new InetSocketAddress(address, port)));
             var bind = new InetSocketAddress(InetAddress.getByName(address), port);
             var certificate = Path.of(string(nativeConfig, "certificate")); var privateKey = Path.of(string(nativeConfig, "privateKey"));
-            nativeTransport = (candidateCheck
+            nativeTransport = (candidateCheck || ownerCheck
                     ? NativeProviderTransport.openControlledVersion2(bootstrap, bind, originalCandidates, certificate, privateKey, AdmissionGate.Limits.defaults())
                     : NativeProviderTransport.openControlled(bootstrap, bind, () -> originalCandidates.candidates().stream().map(NativeCandidateSnapshot.Candidate::endpoint).toList(),
                         certificate, privateKey, AdmissionGate.Limits.defaults()))
@@ -128,6 +128,25 @@ public final class ControlledProviderLocalSmokeClient {
                 emit("runtime_ready", id, mode, event); runtimeReady = true;
             }
         }
+        void remapPendingOwner() throws Exception {
+            if (!ownerCheck || ownerRemapped || ready) throw new IllegalStateException("Unexpected owner remap");
+            var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144);
+            var journal = ControlledProviderJson.parse(Files.readString(directory.resolve("control-session/provider-state.json")), 196608);
+            var pending = journal.getAsJsonObject("pending");
+            if (pending == null || !pending.has("receipt") || !"committed".equals(ControlLifecycleCodec.decodeReceipt(string(pending, "receipt")).disposition())
+                    || root.getAsJsonObject("controlApplication").has("nativeOwnerReceipt") || nativeTransport.channel().isServing())
+                throw new IllegalStateException("Owner remap requires durable committed journal receipt before root owner save or native enable");
+            var replacement = NativeCandidateSnapshot.hosts(originalCandidates.candidates().stream().map(candidate -> {
+                var endpoint = candidate.endpoint();
+                return new InetSocketAddress(endpoint.getAddress(), endpoint.getPort() == 65535 ? 65534 : endpoint.getPort() + 1);
+            }).toList());
+            if (!nativeTransport.replaceCandidates(replacement)) throw new IllegalStateException("Owner remap did not replace material");
+            ownerRemapped = true;
+            var event = new JsonObject(); event.addProperty("nativeServing", false); event.addProperty("committedReceiptRetained", true);
+            event.addProperty("ownerSaved", false); event.addProperty("nativeIncarnation", nativeTransport.captureNativeIdentity().incarnation());
+            event.addProperty("intentDigest", ControlLifecycleCodec.decodeReceipt(string(pending, "receipt")).intentDigest());
+            emit("owner_remapped", id, mode, event);
+        }
         void changeCandidates(boolean withdraw) {
             if (!candidateCheck || !ready || candidateReadiness != null || candidateStage != (withdraw ? 0 : 2))
                 throw new IllegalStateException("Unexpected candidate transition command");
@@ -164,7 +183,16 @@ public final class ControlledProviderLocalSmokeClient {
             var event = new JsonObject(); event.addProperty("nativeServing", true); event.addProperty("nativeProfileMatches", true); event.addProperty("gameplay", false);
             event.addProperty("basisSha256", ControlStateCodec.appliedBasisDigest(basis)); event.addProperty("sessionEpoch", sessionEpoch());
             event.addProperty("candidateCount", actual.getAsJsonArray("candidates").size());
-            event.addProperty("profileVersion", actual.has("version") ? number(actual, "version") : 0); return event;
+            event.addProperty("profileVersion", actual.has("version") ? number(actual, "version") : 0);
+            if (ownerCheck) {
+                var marker = applied.getAsJsonObject("nativeOwnerReceipt");
+                if (marker == null) throw new IllegalStateException("READY has no durable owner receipt");
+                var owner = CandidateLeaseCodec.decodeNativeOwner(marker.get("owner").toString());
+                if (!owner.nativeIncarnation().equals(nativeTransport.captureNativeIdentity().incarnation()))
+                    throw new IllegalStateException("READY owner does not match actual native lifetime");
+                event.add("nativeOwnerReceipt", marker.deepCopy());
+            }
+            return event;
         }
         void stop() throws Exception {
             client.stop().toCompletableFuture().get(12, TimeUnit.SECONDS);
@@ -192,6 +220,11 @@ public final class ControlledProviderLocalSmokeClient {
         if (requestedCandidateCheck != null && (!requestedCandidateCheck.isJsonPrimitive() || !requestedCandidateCheck.getAsJsonPrimitive().isBoolean()))
             throw new IllegalArgumentException("candidateCheck must be a boolean");
         candidateCheck = requestedCandidateCheck != null && requestedCandidateCheck.getAsBoolean();
+        var requestedOwnerCheck = config.get("ownerCheck");
+        if (requestedOwnerCheck != null && (!requestedOwnerCheck.isJsonPrimitive() || !requestedOwnerCheck.getAsJsonPrimitive().isBoolean()))
+            throw new IllegalArgumentException("ownerCheck must be a boolean");
+        ownerCheck = requestedOwnerCheck != null && requestedOwnerCheck.getAsBoolean();
+        if (ownerCheck && (candidateCheck || runtimeCheck)) throw new IllegalArgumentException("Owner faults require their separate scenario");
         if (candidateCheck && runtimeCheck) throw new IllegalArgumentException("Candidate and timed rotation scenarios are separate");
         if (!string(config, "origin").matches("https://127\\.0\\.0\\.1:[1-9][0-9]{0,4}")) throw new IllegalArgumentException("Explicit local HTTPS fixture required");
         var trust = KeyStore.getInstance("PKCS12"); trust.load(null, null);
@@ -235,6 +268,11 @@ public final class ControlledProviderLocalSmokeClient {
                     if (candidateCheck && hosts.stream().anyMatch(host -> host.candidateStage != 4))
                         throw new IllegalStateException("Candidate scenario stopped before restoration");
                     return;
+                }
+                if (ownerCheck && value != null && value.startsWith("owner-remap:")) {
+                    String wanted = value.substring("owner-remap:".length());
+                    hosts.stream().filter(host -> host.id.equals(wanted)).findFirst().orElseThrow().remapPendingOwner();
+                    command = reader.submit(input::readLine); continue;
                 }
                 if (!candidateCheck || !("withdraw".equals(value) || "restore".equals(value)))
                     throw new IllegalStateException("Expected explicit local transition or stop command");
