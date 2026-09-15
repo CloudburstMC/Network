@@ -56,9 +56,12 @@ document requires its own exact installation capture/acknowledgement.
 
 Each admitted diagnostic session captures its original `Binding`. Policy refresh
 or player-key/profile rebinding does not rewrite that binding or extend the
-session deadline. Changing native/control owner, removing its endpoint/key, or
-passing the current endpoint/global/original permit expiry terminates affected
-authority. Remap A→B→A cannot reopen an already stopped session or its old
+session deadline. A shorter same-endpoint renewal governs new admissions while
+already admitted sessions retain their original policy/endpoint-bounded permit.
+Changing native/control owner, removing its endpoint/key, or passing the original
+permit expiry terminates affected authority. To revoke existing attempts the
+authority withdraws their endpoint revision or key; changing a renewal timestamp
+does not substitute for that fence. Remap A→B→A cannot reopen an already stopped session or its old
 acknowledgement capture. Other still-authorized sessions survive.
 
 `pollDiagnosticResults(maximum)` drains at most 0–32 results into neutral immutable

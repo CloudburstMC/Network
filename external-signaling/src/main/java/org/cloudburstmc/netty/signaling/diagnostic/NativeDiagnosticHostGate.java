@@ -151,9 +151,12 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     }
     private boolean authorized(Session session, long now) {
         Claims claims = session.admission.claims();
-        return !closed && closeFailure == null && !clockFailed && session.admission.context().equals(policy.context()) && now < claims.expiresAt() && now < policy.expiresAt() && lastNanos - session.deadlineNanos < 0 &&
+        // Admission capped this permit by its original policy and endpoint deadlines. A later
+        // same-endpoint renewal governs new admissions without shortening this captured permit.
+        // Explicit owner/key/endpoint withdrawal still retires it immediately.
+        return !closed && closeFailure == null && !clockFailed && session.admission.context().equals(policy.context()) && now < claims.expiresAt() && lastNanos - session.deadlineNanos < 0 &&
             keyEquals(session.key, policy.key(session.key.keyId())) && now >= session.key.notBefore() && now < session.key.retireAt() &&
-            sameOwner(session.installation, policy.installation()) && now < policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims));
+            sameOwner(session.installation, policy.installation()) && policy.endpoints().contains(DiagnosticHostPolicy.Endpoint.from(claims));
     }
     private static boolean sameOwner(DiagnosticAdmission.Binding first, DiagnosticAdmission.Binding second) {
         return first == null ? second == null : second != null && first.nativeOwnerEpoch() == second.nativeOwnerEpoch()

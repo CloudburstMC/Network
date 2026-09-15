@@ -13,8 +13,8 @@ public final class DiagnosticAdmission {
                           long policyRevision, String installationSha256, String hostFingerprintHex) {
         public Binding {
             Objects.requireNonNull(context); integer(nativeOwnerEpoch, 1, SAFE); integer(policyRevision, 1, SAFE);
-            if (authorityIncarnation == null || !authorityIncarnation.matches("[A-Za-z0-9_-]{16,128}")) throw invalid();
-            if (hostProfileRevision == null || !hostProfileRevision.matches("[A-Za-z0-9_-]{16,128}")) throw invalid();
+            if (authorityIncarnation == null || !authorityIncarnation.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")) throw invalid();
+            if (hostProfileRevision == null || !hostProfileRevision.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")) throw invalid();
             digest(hostProfileSha256); digest(installationSha256); unhex(hostFingerprintHex, 32);
         }
     }
