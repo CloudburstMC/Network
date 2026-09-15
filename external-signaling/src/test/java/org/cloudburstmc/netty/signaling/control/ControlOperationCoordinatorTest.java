@@ -14,15 +14,23 @@ import static org.junit.jupiter.api.Assertions.*;
 class ControlOperationCoordinatorTest {
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
     private static ControlClientCoordinatorTest.Harness activated() throws Exception {
-        var h = new ControlClientCoordinatorTest.Harness(); h.client.start(); h.respondStatus(); h.respondPrepare();
-        h.links.get(0).challenge(); h.respondActivation(); h.respondAuthority(); return h;
+        return activated("https");
+    }
+    private static ControlClientCoordinatorTest.Harness activated(String mode) throws Exception {
+        var h = new ControlClientCoordinatorTest.Harness(mode); h.client.start(); h.respondStatus(); h.respondPrepare();
+        if (mode.equals("websocket")) h.links.get(0).challenge(); h.respondActivation(); h.respondAuthority(); return h;
     }
     private static String wire(ControlLifecycleCodec.Receipt receipt, String body) {
         return ControlResultCodec.encode(ControlResultCodec.create(receipt, bytes(body)));
     }
-    private static void reply(ControlClientCoordinatorTest.Harness h, int index, ControlLifecycleCodec.Receipt receipt, String body) {
-        var operation = h.operations.get(index);
-        operation.reply().complete(new ControlClientIo.HttpReply(operation.endpoint(), "POST", operation.endpoint(), 200, wire(receipt, body)));
+    private static void reply(ControlClientCoordinatorTest.Harness h, int index, ControlLifecycleCodec.Receipt receipt, String body) throws Exception {
+        if (h.operations.size() > index) {
+            var operation = h.operations.get(index);
+            operation.reply().complete(new ControlClientIo.HttpReply(operation.endpoint(), "POST", operation.endpoint(), 200, wire(receipt, body)));
+        } else {
+            var link = h.links.get(h.links.size() - 1);
+            h.incomingActual(link, h.writer, "lifecycle.receipt", bytes(wire(receipt, body)), link.nextProviderSequence);
+        }
     }
 
     @Test void bothCarriersDeliverLargeOwnedBodiesAfterPersistingOnlyTheReceiptBarrier() throws Exception {
@@ -112,11 +120,11 @@ class ControlOperationCoordinatorTest {
     }
 
     @Test void initialHeartbeatUsesSameJournalAndWriterAndWaitsForApplicationAndSignedProviderReadiness() throws Exception {
-        var h = activated(); h.autoReady = false; var lane = h.synchronizationExchanges.get(0); var writer = h.writer;
+        var h = activated("websocket"); h.autoReady = false; var lane = h.synchronizationExchanges.get(0); var writer = h.writer;
         assertTrue(lane.pendingHeartbeat().isEmpty());
         var result = lane.heartbeat(bytes("{\"state\":\"serving\",\"appliedStateRevision\":0}"));
-        assertEquals(1, h.operations.size()); assertEquals(writer.connectionId(), h.operations.get(0).request().connectionId());
-        assertEquals("websocket", h.operations.get(0).request().writerTransport()); assertTrue(h.links.get(0).sent.isEmpty());
+        assertTrue(h.operations.isEmpty()); assertEquals(1, h.links.get(0).sent.size());
+        assertEquals(writer.connectionId(), ControlFrameCodec.decode(h.links.get(0).sent.get(0)).connectionId());
         assertEquals(1, h.journal.value.lastSequence()); assertEquals(1, h.journal.value.pending().intent().sequence());
         assertThrows(IllegalStateException.class, () -> h.client.submit("heartbeat", bytes("{}"), true));
         assertThrows(IllegalStateException.class, h.client::rotateMachineKey);
@@ -150,7 +158,7 @@ class ControlOperationCoordinatorTest {
         assertFalse(h.client.ready()); assertNotNull(h.journal.value.pending());
         reply(h, 0, receipt, "{\"ticketKey\":\"must-be-withheld-after-scope-expiry\"}");
         var reconciled = result.toCompletableFuture().join(); assertFalse(reconciled.hasBody()); assertNull(h.journal.value.pending());
-        assertFalse(h.client.ready()); assertEquals(3, h.bootstrapCalls); assertEquals(0, h.links.get(0).abortCalls);
+        assertFalse(h.client.ready()); assertEquals(3, h.bootstrapCalls); assertTrue(h.links.isEmpty());
     }
 
     @Test void asynchronousApplicationMustRecheckAuthorityAndCannotCompleteSupersededScope() throws Exception {

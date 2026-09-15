@@ -157,7 +157,7 @@ class ControlClientCoordinatorTest {
             final List<String> appliedFrames = new ArrayList<>();
             int readinessFrames;
             long nextProviderSequence = 1;
-            CompletableFuture<Void> appliedSend;
+            CompletableFuture<Void> appliedSend, lifecycleSend;
             FakeLink(ControlSessionCodec.Request request, Consumer<String> receiver) { this.upgrade = request; this.receiver = receiver; }
             @Override public CompletionStage<Void> opened() { return opened; }
             @Override public CompletionStage<?> closed() { return closed; }
@@ -174,7 +174,7 @@ class ControlClientCoordinatorTest {
                 assertNotNull(journal.value.pending());
                 var intent = ControlLifecycleCodec.decodeWsRequest(new String(frame.payloadBytes(), StandardCharsets.UTF_8));
                 assertEquals(journal.value.pending().intent(), intent.intent()); assertArrayEquals(journal.value.pending().bodyBytes(), intent.bodyBytes());
-                sent.add(wire); return CompletableFuture.completedFuture(null);
+                sent.add(wire); return lifecycleSend == null ? CompletableFuture.completedFuture(null) : lifecycleSend;
             }
             void readyReply(ControlStateCodec.Acknowledgement ack) throws Exception {
                 incomingActual(this, writer, "session.ready", ControlStateCodec.encodeAcknowledgement(ack).getBytes(StandardCharsets.UTF_8), nextProviderSequence);

@@ -87,7 +87,7 @@ final class ControlledProviderRuntime {
                 storage.appendEvents(polledEvents); polledEvents = java.util.List.of(); var body = storage.outcomeBatch();
                 if (!body.getAsJsonArray("events").isEmpty()) {
                     outcomesInFlight = true;
-                    coordinator.submit("outcomes", body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8), true).whenCompleteAsync((receipt, failure) -> {
+                    coordinator.submit("outcomes", body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8), false).whenCompleteAsync((receipt, failure) -> {
                         outcomesInFlight = false;
                         if (failure != null) { diagnostics.accept("controlled_outcomes_unavailable"); return; }
                         try { committed(receipt); }

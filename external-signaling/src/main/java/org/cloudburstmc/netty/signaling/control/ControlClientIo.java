@@ -33,7 +33,7 @@ public interface ControlClientIo {
         long deadlineMillis();
         /** Exact retained heartbeat bytes, if recovery must finish one before issuing a fresh heartbeat. */
         Optional<byte[]> pendingHeartbeat();
-        /** One-off HTTPS under the selected writer; it does not replace the transport or bypass the journal. */
+        /** Selected writer carrier (HTTPS for an HTTPS writer/oversized body); never replaces transport or bypasses the journal. */
         CompletionStage<ControlOperationResult> heartbeat(byte[] originalBody);
         /**
          * Call only after actual native application and durable save. The coordinator compares the exact basis
