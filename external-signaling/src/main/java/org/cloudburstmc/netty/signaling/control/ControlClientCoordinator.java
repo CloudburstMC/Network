@@ -1082,9 +1082,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
             if (pending.receipt() != null && pending.receipt().disposition().equals("committed") && !pending.receipt().equals(receipt)) throw ControlJson.invalid("committed outcome receipt changed");
             persistPendingReceipt(receipt); acknowledgeCommitted(receipt, () -> resumeAfterOutcomes(pending.intent())); return;
         }
-        if (nativeOwnerAcknowledgement(pending)) {
+        if (nativeOwnerAcknowledgement(pending) || diagnosticAcknowledgement(pending)) {
             persistPendingReceipt(receipt);
-            acknowledgeCommitted(receipt, () -> resumeAfterOutcomes(pending.intent()), () -> deliverCommittedResult(result, bodyGuard));
+            acknowledgeCommitted(receipt, () -> resumeAfterOutcomes(pending.intent()), () -> deliverCommittedResult(result, bodyGuard), result.bodyBytes());
             return;
         }
         persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
@@ -1112,8 +1112,12 @@ public final class ControlClientCoordinator implements AutoCloseable {
         return pending != null && pending.intent().operation().equals("heartbeat")
                 && io.requiresNativeOwnerAcknowledgement(pending.intent(), pending.bodyBytes());
     }
+    private boolean diagnosticAcknowledgement(ControlClientJournal.Pending pending) {
+        return pending != null && pending.intent().operation().equals("heartbeat")
+                && io.requiresDiagnosticCompletionAcknowledgement(pending.intent(), pending.bodyBytes());
+    }
     private boolean durableAcknowledgement(ControlClientJournal.Pending pending) {
-        return outcomeAcknowledgement(pending) || nativeOwnerAcknowledgement(pending);
+        return outcomeAcknowledgement(pending) || nativeOwnerAcknowledgement(pending) || diagnosticAcknowledgement(pending);
     }
     private boolean committedAcknowledgement(ControlClientJournal.Pending pending) {
         return durableAcknowledgement(pending) && pending.receipt() != null && pending.receipt().disposition().equals("committed");
@@ -1122,6 +1126,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
         acknowledgeCommitted(receipt, continuation, () -> completeResult(ControlOperationResult.reconciled(receipt)));
     }
     private void acknowledgeCommitted(ControlLifecycleCodec.Receipt receipt, Runnable continuation, Runnable delivery) {
+        acknowledgeCommitted(receipt, continuation, delivery, null);
+    }
+    private void acknowledgeCommitted(ControlLifecycleCodec.Receipt receipt, Runnable continuation, Runnable delivery, byte[] responseBody) {
         if (durableAcknowledgementIo != null) return;
         var pending = snapshot.pending();
         if (!committedAcknowledgement(pending) || !receipt.equals(pending.receipt())) throw new IllegalStateException("Missing owned committed application receipt");
@@ -1131,9 +1138,15 @@ public final class ControlClientCoordinator implements AutoCloseable {
             if (durableAcknowledgementIo == identity && attempt == generation) fail();
         }}, config.proofMillis());
         CompletionStage<Void> work;
-        try { work = Objects.requireNonNull(outcomeAcknowledgement(pending)
-                ? io.acknowledgeCommittedOutcomes(pending.intent(), pending.bodyBytes(), receipt)
-                : io.acknowledgeCommittedNativeOwner(pending.intent(), pending.bodyBytes(), receipt)); }
+        try {
+            work = outcomeAcknowledgement(pending)
+                    ? Objects.requireNonNull(io.acknowledgeCommittedOutcomes(pending.intent(), pending.bodyBytes(), receipt))
+                    : CompletableFuture.completedFuture(null);
+            if (nativeOwnerAcknowledgement(pending)) work = work.thenCompose(ignored ->
+                    io.acknowledgeCommittedNativeOwner(pending.intent(), pending.bodyBytes(), receipt));
+            if (diagnosticAcknowledgement(pending)) work = work.thenCompose(ignored ->
+                    io.acknowledgeCommittedDiagnosticCompletions(pending.intent(), pending.bodyBytes(), receipt, responseBody));
+        }
         catch (RuntimeException failure) { work = CompletableFuture.failedFuture(failure); }
         work.whenComplete((ignored, failure) -> { synchronized (this) {
             if (durableAcknowledgementIo != identity) return;

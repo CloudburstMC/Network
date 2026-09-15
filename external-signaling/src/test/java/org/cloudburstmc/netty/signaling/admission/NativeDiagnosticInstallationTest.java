@@ -73,8 +73,10 @@ class NativeDiagnosticInstallationTest {
         for(String family:List.of("127.0.0.1","::1")) try(Host host=new Host(family)) {
             assertTrue(host.transport.supportsDiagnosticAdmission()); assertTrue(host.transport.captureDiagnosticInstallation().isEmpty());
             assertTrue(host.transport.pollDiagnosticResults(0).isEmpty()); assertFalse(host.transport.channel().isServing());
+            assertTrue(host.transport.diagnosticDroppedResultCount().isEmpty());
             long expiry=(System.currentTimeMillis()+18_000)/1000*1000;
             var original=host.policy(1,1,expiry+1000); var first=host.install(original); first.requireCurrent();
+            assertEquals(0, host.transport.diagnosticDroppedResultCount().orElseThrow());
             try(Client client=host.client(expiry)) {
                 host.connect(client,original); await(()->client.channels[0].isOpen()&&client.channels[1].isOpen());
                 // Rebind the full player profile to a new key while this peer still owns its old diagnostic binding.
@@ -86,6 +88,11 @@ class NativeDiagnosticInstallationTest {
                 await(()->{client.tick(); completed.addAll(host.transport.pollDiagnosticResults(1)); return !completed.isEmpty();});
                 var report=completed.get(0); assertTrue(report.success(),report.toString()); assertTrue(report.cleanupComplete());
                 assertEquals(original.binding(),report.installation()); assertNotEquals(renewed.binding(),report.installation());
+                var wireReport = DiagnosticCompletionEmitter.from(report);
+                assertEquals(original.binding().nativeOwnerEpoch(), wireReport.installation().nativeOwnerEpoch());
+                assertEquals(report.completionDigestHex(), wireReport.completionDigestHex());
+                assertEquals(report.completedAt(), wireReport.completedAt());
+                assertEquals(0, host.transport.diagnosticDroppedResultCount().orElseThrow());
                 assertEquals(expiry,report.expiresAt()); assertEquals(client.exchange.completionDigestHex(),report.completionDigestHex());
                 assertEquals(host.port,report.selectedLocal().getPort()); assertEquals(host.bind,report.selectedRemote().getAddress());
                 assertTrue(report.udp().sent()>0); assertTrue(report.udp().reserved()<=256); assertEquals(0,report.udp().rejected());

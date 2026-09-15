@@ -133,6 +133,9 @@ public interface ProviderTransport {
         throw new UnsupportedOperationException("Diagnostic admission unavailable");
     }
     default java.util.Optional<DiagnosticAdmission.Installation> captureDiagnosticInstallation() { return java.util.Optional.empty(); }
+    /** Cumulative overflow count for the current native result queue; absent means unavailable, not zero loss. */
+    default java.util.OptionalLong diagnosticDroppedResultCount() { return java.util.OptionalLong.empty(); }
+
     default List<DiagnosticAdmission.Completion> pollDiagnosticResults(int maximum) {
         if (maximum < 0 || maximum > 32) throw new IllegalArgumentException("Diagnostic result poll bound");
         return List.of();

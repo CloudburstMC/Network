@@ -74,6 +74,13 @@ public interface ControlClientIo {
     default boolean requiresOutcomeAcknowledgement() { return false; }
     /** Pure original-body classification; only opted-in owner claims use this durable handoff. */
     default boolean requiresNativeOwnerAcknowledgement(ControlLifecycleCodec.Intent intent, byte[] originalBody) { return false; }
+    /** Original diagnostic reports can outlive native ownership. Their queue has a separate durable settlement. */
+    default boolean requiresDiagnosticCompletionAcknowledgement(ControlLifecycleCodec.Intent intent, byte[] originalBody) { return false; }
+    /** Authenticated response bytes are optional on strong recovery and must never be journaled (they can contain secrets). */
+    default CompletionStage<Void> acknowledgeCommittedDiagnosticCompletions(ControlLifecycleCodec.Intent intent, byte[] originalBody,
+            ControlLifecycleCodec.Receipt receipt, byte[] responseBody) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("No durable diagnostic completion owner"));
+    }
     /** Persist historical committed issuance before journal release; never manufacture an application body. */
     default CompletionStage<Void> acknowledgeCommittedNativeOwner(ControlLifecycleCodec.Intent intent, byte[] originalBody,
                                                                  ControlLifecycleCodec.Receipt receipt) {
