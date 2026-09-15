@@ -34,6 +34,12 @@ final class ControlledProviderApplication {
     private ServerStatus lastStatus;
     private ProviderClient.Health lastHealth;
     private final boolean issuedOwnership;
+    private final boolean maintainedCandidates;
+    private ProviderTransport.CandidateLeaseSnapshot latestCandidates, acceptedCandidates;
+    private boolean reflexivePublicationAllowed;
+    private PendingCandidatePublication pendingCandidatePublication;
+    private record PendingCandidatePublication(String bodyDigest, ProviderTransport.CandidateLeaseSnapshot capture,
+                                               CandidateLeaseCodec.NativeOwner owner) { }
     private ProviderTransport.NativeIdentitySnapshot nativeIdentity;
     private CandidateLeaseCodec.NativeOwner observedNativeOwner, liveNativeOwner;
     private boolean ownerDiscovered, ownerServingDesired;
@@ -48,12 +54,14 @@ final class ControlledProviderApplication {
         this.storage = storage; this.transport = transport; this.executor = executor; this.clock = clock;
         this.status = status; this.health = health; this.region = region; this.data = storage.application();
         issuedOwnership = data.has("nativeOwnership");
+        maintainedCandidates = data.has("candidatePublication");
+        if (maintainedCandidates && !transport.supportsMaintainedCandidateLeases()) throw new IllegalArgumentException("Maintained candidate transport required");
     }
     static boolean requiresNativeCancellation(ControlLifecycleCodec.Intent intent, byte[] originalBody) {
         if (!intent.operation().equals("heartbeat")) return false;
         ControlLifecycleCodec.verifyBody(intent, originalBody);
         var body = ControlledProviderJson.parse(new String(originalBody, StandardCharsets.UTF_8), ControlLifecycleCodec.MAX_HTTP_BODY_BYTES);
-        return body.has("hostProfile") || body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean();
+        return body.has("hostProfile") || body.has("candidateLeases") || body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean();
     }
     CompletionStage<Void> acknowledgeOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
         byte[] owned = originalBody.clone();
@@ -86,9 +94,17 @@ final class ControlledProviderApplication {
     void onFatal(Consumer<Throwable> callback) { fatal = Objects.requireNonNull(callback); }
     void invalidate() { version.incrementAndGet(); }
     void request() { demand = true; }
+    /** Runs on the application executor, including while a control response is awaited. */
+    void maintainCandidates() {
+        if (!maintainedCandidates || closed || nativeClosed || permanentlyDrained) return;
+        var next = transport.maintainCandidateLeases(reflexivePublicationAllowed && nativeOwnerCurrent());
+        if (latestCandidates == null || !latestCandidates.materialRevision().equals(next.materialRevision())) demand = true;
+        latestCandidates = next;
+    }
     boolean due() {
         if (closed) return false;
         if (demand || clock.nowMillis() >= nextHeartbeat || !snapshotCurrent(liveSnapshot) || ownerRequired() && !nativeOwnerCurrent()) return true;
+        if (acceptedCandidates != null) try { acceptedCandidates.requireCurrent(); } catch (IllegalStateException expired) { return true; }
         if (clock.nowMillis() < nextUpdate) return false;
         var current = health.get();
         return !Objects.equals(status.get(), lastStatus) || lastHealth == null
@@ -106,9 +122,14 @@ final class ControlledProviderApplication {
     CompletionStage<ControlSynchronizationResult> synchronize(ControlClientIo.Synchronization exchange) {
         long owner = version.get();
         var operation = CompletableFuture.completedFuture(null).thenComposeAsync(ignored -> {
+            // Ownership issuance uses a host-only profile; a subsequent pass may publish reflexive candidates.
+            reflexivePublicationAllowed = nativeOwnerCurrent(); maintainCandidates();
             var pass = new Pass(exchange, owner); pass.check();
             if ((!ownerRequired() || nativeOwnerCurrent()) && liveBasis != null && acceptedDigest != null && acceptedDigest.equals(ControlStateCodec.appliedBasisDigest(liveBasis))
                     && !due() && exchange.pendingHeartbeat().isEmpty()) {
+                if (maintainedCandidates && acceptedCandidates != null) {
+                    pass.candidates = acceptedCandidates; pass.leaseOwner = liveNativeOwner; pass.leased = true; pass.check();
+                }
                 return validateLive(pass).thenComposeAsync(valid -> {
                     pass.check(); if (valid) return confirmApplied(pass); demand = true; return initialize(pass);
                 }, executor);
@@ -116,7 +137,11 @@ final class ControlledProviderApplication {
             return initialize(pass);
         }, executor);
         return operation.handleAsync((result, failure) -> {
-            if (failure == null) return CompletableFuture.completedFuture(result);
+            if (failure == null) {
+                if (maintainedCandidates && !nativeClosed && !permanentlyDrained) transport.candidateControlSynchronized();
+                reflexivePublicationAllowed = nativeOwnerCurrent();
+                return CompletableFuture.completedFuture(result);
+            }
             // A failed/late transition cannot leave a just-enabled snapshot admitting new players.
             // The coordinator keeps this I/O lane occupied until cleanup actually settles.
             liveBasis = null; liveSnapshot = null; acceptedDigest = null;
@@ -147,6 +172,8 @@ final class ControlledProviderApplication {
             if (retained.isEmpty()) {
                 pendingOwnerClaim = body.has("nativeOwnerClaim")
                         ? new PendingOwnerClaim(ControlledNativeOwner.claim(bytes), pass.latestSnapshot, nativeIdentity) : null;
+                pendingCandidatePublication = body.has("candidateLeases")
+                        ? new PendingCandidatePublication(ControlFrameCodec.payloadDigest(bytes), pass.candidates, liveNativeOwner) : null;
             }
             long started = clock.nowMillis();
             return pass.exchange.heartbeat(bytes, pass::check).thenComposeAsync(result -> {
@@ -173,6 +200,15 @@ final class ControlledProviderApplication {
     private CompletionStage<JsonObject> retainedHeartbeat(Pass pass, byte[] original) {
         pass.check();
         var body = ControlledProviderJson.parse(new String(original, StandardCharsets.UTF_8), 65536);
+        if (body.has("candidateLeases")) {
+            var retained = pendingCandidatePublication;
+            if (retained == null || !retained.bodyDigest().equals(ControlFrameCodec.payloadDigest(original))
+                    || !nativeOwnerCurrent() || !retained.owner().equals(liveNativeOwner))
+                return CompletableFuture.failedFuture(new ControlClientIo.ReconciliationRequired("Retained candidate publication has no original live owner"));
+            try { retained.capture().requireCurrent(); }
+            catch (IllegalStateException stale) { return CompletableFuture.failedFuture(new ControlClientIo.ReconciliationRequired("Retained candidate publication expired or remapped")); }
+            pass.candidates = retained.capture(); pass.leaseOwner = retained.owner(); pass.leased = true;
+        }
         if (!body.has("hostProfile")) return retainedApplicationClaim(pass, body);
         // A non-accepting publication still binds the old native incarnation and endpoint set.
         // Only an exact current native profile permits an application-lane retry of its original bytes.
@@ -232,6 +268,12 @@ final class ControlledProviderApplication {
                 } else {
                     if (!data.has("profile") || !actual.equals(data.getAsJsonObject("profile"))) body.add("hostProfile", actual);
                     else if (data.has("profileRevision")) body.addProperty("hostProfileRevision", string(data, "profileRevision"));
+                    if (maintainedCandidates) {
+                        if (pass.candidates == null) throw new IllegalStateException("Candidate capture unavailable");
+                        pass.leaseOwner = liveNativeOwner; pass.leased = true; pass.check();
+                        body.add("candidateLeases", JsonParser.parseString(CandidateLeaseCodec.encodeLeases(
+                                pass.candidates.bind(CandidateLeaseCodec.readProfile(actual), pass.leaseOwner))));
+                    }
                 }
             }
             var installedIds = new JsonArray(); for (var key : data.getAsJsonArray("keys")) installedIds.add(key.getAsJsonObject().get("keyId"));
@@ -299,6 +341,14 @@ final class ControlledProviderApplication {
         if (body.has("hostProfile")) {
             String profileRevision = string(response, "hostProfileRevision");
             next.add("profile", body.get("hostProfile").deepCopy()); next.addProperty("profileRevision", profileRevision);
+            next.remove("candidateLeaseReceipt");
+        }
+        if (body.has("candidateLeases")) {
+            var leases = CandidateLeaseCodec.decodeLeases(body.get("candidateLeases").toString());
+            if (!response.has("candidateLeaseReceipt") || !next.has("profileRevision")) throw new IllegalStateException("Candidate lease acceptance receipt required");
+            var receipt = CandidateLeaseCodec.decodeReceipt(response.get("candidateLeaseReceipt").toString());
+            if (!CandidateLeaseCodec.matches(receipt, string(next, "profileRevision"), leases)) throw new IllegalStateException("Candidate lease receipt association mismatch");
+            guard.run(); next.add("candidateLeaseReceipt", JsonParser.parseString(CandidateLeaseCodec.encodeReceipt(receipt)));
         }
         if (freshKey) {
             var key = response.getAsJsonObject("ticketKey"); var request = response.getAsJsonObject("keyRequest");
@@ -308,12 +358,19 @@ final class ControlledProviderApplication {
             for (var old : next.getAsJsonArray("keys")) if (string(old.getAsJsonObject(), "keyId").equals(string(key, "keyId"))) throw new IllegalStateException("Admission key identity reused");
             var installedKey = new JsonObject(); installedKey.addProperty("keyId", string(key, "keyId")); installedKey.addProperty("secret", string(key, "secret")); installedKey.addProperty("notBefore", 0);
             next.getAsJsonArray("keys").add(installedKey); next.remove("keyRequestId"); next.remove("profile"); next.remove("basis");
+            next.remove("candidateLeaseReceipt");
             acceptedDigest = null; liveBasis = null; liveSnapshot = null; liveProfile = null;
         } else if (next.has("keyRequestId") && response.has("keyRequest")
                 && string(next, "keyRequestId").equals(string(response.getAsJsonObject("keyRequest"), "id"))) {
             next.addProperty("keyRequestId", ids.get()); // Lost one-time material requires a new independent request.
         }
         schedule(response, started); lastResponse = response.deepCopy(); lastResponse.remove("ticketKey");
+        if (body.has("candidateLeases")) {
+            // A new key deliberately clears the old profile association in next, but the original
+            // response's already validated lease deadline still bounds this refresh.
+            var receipt = CandidateLeaseCodec.decodeReceipt(response.get("candidateLeaseReceipt").toString());
+            if (receipt.expiresAt() != 0) nextHeartbeat = Math.min(nextHeartbeat, receipt.expiresAt() - CandidateLeaseCodec.CLOCK_SKEW_MILLIS);
+        }
         if (freshKey || basis == null || issuedOwnership && basis.state().equals("serving") && !nativeOwnerCurrent()) {
             if (issuedOwnership && !nativeOwnerCurrent()) next.remove("basis");
             acceptedDigest = null; liveBasis = null; liveSnapshot = null;
@@ -324,7 +381,7 @@ final class ControlledProviderApplication {
         if (policy == null) next.remove("policy"); else next.addProperty("policy", ControlStateCodec.encodeTicketPolicy(policy));
         if (!basis.state().equals("serving")) {
             // The owned response now requires no serving profile. Our own close may retire that capture.
-            guard.run(); pass.endpointOwner = null; pass.latestSnapshot = null;
+            guard.run(); pass.endpointOwner = null; pass.latestSnapshot = null; pass.leased = false; acceptedCandidates = null;
             liveBasis = null; liveSnapshot = null; acceptedDigest = null;
             if (!nativeClosed && !permanentlyDrained) begin(pass, guard);
             return transport.applyState(basis.state()).thenAcceptAsync(applied -> {
@@ -338,11 +395,15 @@ final class ControlledProviderApplication {
         if (basis.equals(liveBasis) && Objects.equals(next.get("policy"), data.get("policy"))) {
             return validateLive(pass).thenComposeAsync(valid -> {
                 guard.run();
-                if (valid) { save(next); guard.run(); acceptedDigest = accepted; return CompletableFuture.completedFuture(null); }
-                return applyServing(pass, next, basis, accepted, guard);
+                if (valid) { save(next); guard.run(); acceptCandidates(pass, body); acceptedDigest = accepted; return CompletableFuture.completedFuture(null); }
+                return applyServing(pass, next, basis, accepted, guard).thenRunAsync(() -> { guard.run(); acceptCandidates(pass, body); }, executor);
             }, executor);
         }
-        return applyServing(pass, next, basis, accepted, guard);
+        return applyServing(pass, next, basis, accepted, guard).thenRunAsync(() -> { guard.run(); acceptCandidates(pass, body); }, executor);
+    }
+    private void acceptCandidates(Pass pass, JsonObject body) {
+        if (body.has("candidateLeases")) { pass.check(); acceptedCandidates = pass.candidates; }
+        else if (body.has("hostProfile")) acceptedCandidates = null;
     }
     private CompletionStage<Void> applyServing(Pass pass, JsonObject next, ControlStateCodec.AppliedBasis basis, String accepted, Runnable guard) {
         return install(pass, next, true, guard).thenComposeAsync(ignored -> captureProfile(pass), executor).thenComposeAsync(actual -> {
@@ -467,7 +528,10 @@ final class ControlledProviderApplication {
     private final class Pass {
         final ControlClientIo.Synchronization exchange; final long owner;
         ProviderTransport.HostProfileSnapshot endpointOwner, latestSnapshot;
-        Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; }
+        ProviderTransport.CandidateLeaseSnapshot candidates;
+        CandidateLeaseCodec.NativeOwner leaseOwner;
+        boolean leased;
+        Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; candidates = latestCandidates; }
         void own(ProviderTransport.HostProfileSnapshot snapshot) {
             check(); Objects.requireNonNull(snapshot).requireCurrent();
             if (endpointOwner == null) endpointOwner = snapshot;
@@ -477,6 +541,10 @@ final class ControlledProviderApplication {
             exchange.requireCurrent();
             if (closed || version.get() != owner || clock.nowMillis() >= exchange.deadlineMillis()) throw new IllegalStateException("Application owner expired or changed");
             if (endpointOwner != null) endpointOwner.requireCurrent();
+            if (leased) {
+                candidates.requireCurrent();
+                if (!nativeOwnerCurrent() || !Objects.equals(leaseOwner, liveNativeOwner)) throw new IllegalStateException("Candidate publication native owner changed");
+            }
         }
     }
     private static Throwable unwrap(Throwable failure) {

@@ -14,12 +14,18 @@ import java.util.Set;
  * migration cannot restore the legacy lifecycle.
  */
 public record ProviderControlConfiguration(ControlClientCoordinator.Config routes,
-        List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed, NativeOwnership nativeOwnership) {
+        List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed, NativeOwnership nativeOwnership,
+        CandidatePublication candidatePublication) {
     /** Issued ownership alone does not enable candidate leases or STUN publication. */
     public enum NativeOwnership { DISABLED, ISSUED }
+    public enum CandidatePublication { DISABLED, MAINTAINED }
+    public ProviderControlConfiguration(ControlClientCoordinator.Config routes,
+            List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed, NativeOwnership nativeOwnership) {
+        this(routes, providerKeys, migrationSeed, nativeOwnership, CandidatePublication.DISABLED);
+    }
     public ProviderControlConfiguration(ControlClientCoordinator.Config routes,
             List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed) {
-        this(routes, providerKeys, migrationSeed, NativeOwnership.DISABLED);
+        this(routes, providerKeys, migrationSeed, NativeOwnership.DISABLED, CandidatePublication.DISABLED);
     }
     /** Reporting floor only. The new native instance must still apply actual state before acknowledging it. */
     public record ReportingSeed(long generation, long appliedRevision, String reportedState) {
@@ -33,6 +39,9 @@ public record ProviderControlConfiguration(ControlClientCoordinator.Config route
     }
     public ProviderControlConfiguration {
         Objects.requireNonNull(routes); Objects.requireNonNull(migrationSeed); Objects.requireNonNull(nativeOwnership);
+        Objects.requireNonNull(candidatePublication);
+        if (candidatePublication == CandidatePublication.MAINTAINED && nativeOwnership != NativeOwnership.ISSUED)
+            throw new IllegalArgumentException("Maintained candidate publication requires issued native ownership");
         providerKeys = List.copyOf(providerKeys);
         if (providerKeys.isEmpty() || providerKeys.size() > 8
                 || !routes.operations().keySet().containsAll(Set.of("heartbeat", "outcomes", "rotate", "retire", "deregister"))) {

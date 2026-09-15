@@ -4,6 +4,8 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
+import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
+import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import tel.schich.libdatachannel.*;
@@ -35,7 +37,9 @@ class NativeAdmissionStagingTest {
         final NativeProviderTransport transport;
         final int port;
         Host() throws Exception { this(false); }
-        Host(boolean version2) throws Exception {
+        Host(boolean version2) throws Exception { this(version2, null); }
+        Host(Map<EndpointSelection.Family, InetSocketAddress> servers) throws Exception { this(true, servers); }
+        Host(boolean version2, Map<EndpointSelection.Family, InetSocketAddress> servers) throws Exception {
             var helper = new NativeAdmissionIntegrationTest();
             helper.directory = directory;
             identity = helper.identity();
@@ -54,7 +58,10 @@ class NativeAdmissionStagingTest {
                     });
                 }
             });
-            transport = (version2 ? NativeProviderTransport.openControlledVersion2(bootstrap, new InetSocketAddress("::", port),
+            transport = (servers != null ? NativeProviderTransport.openControlledMaintained(bootstrap,
+                    EndpointSelection.select(new InetSocketAddress("::", port), List.of(), List.of()), servers,
+                    identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                    : version2 ? NativeProviderTransport.openControlledVersion2(bootstrap, new InetSocketAddress("::", port),
                     NativeCandidateSnapshot.hosts(List.of()), identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
                     : NativeProviderTransport.openControlled(bootstrap, new InetSocketAddress("::", port),
                     () -> List.of(new InetSocketAddress("127.0.0.1", port), new InetSocketAddress("::1", port)),
@@ -323,7 +330,8 @@ class NativeAdmissionStagingTest {
         final PeerConnection player;
         final DataChannel reliable, unreliable;
         final AtomicInteger reliableEchoes = new AtomicInteger(), unreliableEchoes = new AtomicInteger();
-        ConnectedPlayer(Host host, String ip) throws Exception {
+        ConnectedPlayer(Host host, String ip) throws Exception { this(host, ip, 30000); }
+        ConnectedPlayer(Host host, String ip, long ticketMillis) throws Exception {
             player = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
                     .withBindAddress(InetAddress.getByName(ip)), Runnable::run);
             reliable = player.createDataChannel("ReliableDataChannel");
@@ -337,7 +345,7 @@ class NativeAdmissionStagingTest {
             }));
             player.setLocalDescription("offer", ip.equals("::1") ? "snapshotPlayer6" : "snapshotPlayer4", "p".repeat(32));
             var answer = TestSignalingProvider.answer(player.localDescription(), host.identity.fingerprint(), host.port,
-                    System.currentTimeMillis() + 30_000, host.audience(), false);
+                    System.currentTimeMillis() + ticketMillis, host.audience(), false);
             player.setRemoteDescription(answer.sdp().replace("127.0.0.1", ip), SessionDescriptionType.ANSWER);
             NativeAdmissionIntegrationTest.await(() -> reliable.isOpen() && unreliable.isOpen());
         }
@@ -349,6 +357,72 @@ class NativeAdmissionStagingTest {
             assertTrue(reliable.isOpen() && unreliable.isOpen());
         }
         @Override public void close() { assertTrue(player.closeAndAwait(Duration.ofSeconds(5))); }
+    }
+
+    /** Synthetic public mapping response tests publication only; source tuples remain real loopback gameplay mux tuples. */
+    private static void maintainedResponses(DatagramSocket server, int gameplayPort) throws Exception {
+        server.setSoTimeout(20000);
+        for (int sequence = 1; sequence <= 3; sequence++) {
+            byte[] bytes = new byte[1024]; var request = new DatagramPacket(bytes, bytes.length); server.receive(request);
+            assertEquals(gameplayPort, request.getPort());
+            var input = ByteBuffer.wrap(bytes); assertEquals(1, Short.toUnsignedInt(input.getShort()));
+            input.getShort(); assertEquals(0x2112a442, input.getInt()); var transaction = new byte[12]; input.get(transaction);
+            byte[] address = InetAddress.getByName(server.getLocalAddress() instanceof Inet4Address ? "8.8.8.8" : "2606:4700:4700::1001").getAddress();
+            var response = ByteBuffer.allocate(address.length == 4 ? 32 : 44);
+            response.putShort((short) 0x101).putShort((short) (response.capacity() - 20)).putInt(0x2112a442).put(transaction)
+                    .putShort((short) 0x20).putShort((short) (address.length + 4)).put((byte) 0).put((byte) (address.length == 4 ? 1 : 2))
+                    .putShort((short) ((43000 + (sequence == 3 ? 1 : 0)) ^ 0x2112));
+            for (int i = 0; i < address.length; i++) response.put((byte) (address[i] ^ bytes[4 + i]));
+            server.send(new DatagramPacket(response.array(), response.capacity(), request.getSocketAddress()));
+        }
+    }
+
+    private static ProviderTransport.CandidateLeaseSnapshot awaitMaintained(NativeProviderTransport transport, long sequence) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        do {
+            var capture = transport.maintainCandidateLeases(true);
+            if (capture.observations().size() == 2 && capture.observations().stream().allMatch(value -> value.observationSequence() >= sequence)) return capture;
+            Thread.sleep(20);
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("Native maintained observations did not reach sequence " + sequence);
+    }
+
+    @Test @Timeout(60)
+    void maintainedMuxRenewsAndRemapsWithoutReinstallingIdentityKeysOrEstablishedPeers() throws Exception {
+        var responders = Executors.newFixedThreadPool(2);
+        try (var stun4 = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0)); var stun6 = new DatagramSocket(new InetSocketAddress("::1", 0));
+             var host = new Host(Map.of(EndpointSelection.Family.IPV4, (InetSocketAddress) stun4.getLocalSocketAddress(), EndpointSelection.Family.IPV6, (InetSocketAddress) stun6.getLocalSocketAddress()))) {
+            var v4 = responders.submit(() -> { maintainedResponses(stun4, host.port); return null; });
+            var v6 = responders.submit(() -> { maintainedResponses(stun6, host.port); return null; });
+            host.transport.installTicketKeys(KEYS).toCompletableFuture().get();
+            var initial = host.transport.maintainCandidateLeases(false);
+            assertTrue(initial.observations().isEmpty()); assertEquals(0, host.transport.channel().creationAttempts());
+            var first = awaitMaintained(host.transport, 1); var profile = host.transport.captureHostProfile().toCompletableFuture().get();
+            var identity = host.transport.captureNativeIdentity();
+            var owner = new CandidateLeaseCodec.NativeOwner(1, identity.incarnation(), "native_test_owner_claim");
+            var leases = first.bind(CandidateLeaseCodec.readProfile(profile.profile()), owner); assertEquals(2, leases.observations().size());
+            var stage = host.transport.beginAdmissionUpdate(deadline()); host.transport.installTicketKeys(stage, KEYS).toCompletableFuture().get();
+            assertEquals(ProviderTransport.ApplyResult.APPLIED, host.transport.commitAdmissionUpdate(stage, first::requireCurrent).toCompletableFuture().get());
+            // This transport-only fixture never completes the game identity proof. Keep its signed
+            // login deadline valid across the real 15-second STUN refresh intervals (still <60s).
+            try (var player4 = new ConnectedPlayer(host, "127.0.0.1", 55000); var player6 = new ConnectedPlayer(host, "::1", 55000)) {
+                var second = awaitMaintained(host.transport, 2);
+                first.requireCurrent(); profile.requireCurrent(); assertEquals(profile.profile(), host.transport.hostProfile().toCompletableFuture().get());
+                assertNotEquals(first.observations(), second.observations()); player4.exchange(); player6.exchange();
+                var remapped = awaitMaintained(host.transport, 3); assertThrows(IllegalStateException.class, first::requireCurrent);
+                assertThrows(IllegalStateException.class, profile::requireCurrent); identity.requireCurrent();
+                assertTrue(host.transport.channel().isServing()); player4.exchange(); player6.exchange();
+                host.transport.maintainCandidateLeases(false);
+                assertTrue(host.transport.hostProfile().toCompletableFuture().get().getAsJsonArray("candidates").isEmpty());
+                assertThrows(IllegalStateException.class, remapped::requireCurrent); player4.exchange(); player6.exchange();
+                var restored = host.transport.maintainCandidateLeases(true); assertEquals(remapped.observations(), restored.observations());
+                assertEquals("K001", host.transport.hostProfile().toCompletableFuture().get().get("credentialKeyId").getAsString());
+                identity.requireCurrent(); assertEquals(2, host.transport.channel().creationAttempts()); assertEquals(2, host.transport.channel().liveNativePeers());
+                player4.exchange(); player6.exchange();
+            }
+            v4.get(1, TimeUnit.SECONDS); v6.get(1, TimeUnit.SECONDS);
+            System.out.println("maintained-native PASS families=2 sameGameplayPort=true observationsPerFamily=3 renewalNoReinstall=true peersPreserved=2 syntheticPublicMappings=true");
+        } finally { responders.shutdownNow(); assertTrue(responders.awaitTermination(2, TimeUnit.SECONDS)); }
     }
 
     @Test @Timeout(35)

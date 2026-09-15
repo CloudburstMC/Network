@@ -58,6 +58,8 @@ final class ControlledProviderState implements AutoCloseable {
             application.addProperty("reportedState", config.migrationSeed().reportedState());
             if (config.nativeOwnership() == ProviderControlConfiguration.NativeOwnership.ISSUED)
                 application.addProperty("nativeOwnership", ControlledNativeOwner.MODE);
+            if (config.candidatePublication() == ProviderControlConfiguration.CandidatePublication.MAINTAINED)
+                application.addProperty("candidatePublication", "maintained-v1");
             var keys = new JsonArray();
             if (root.has("ticketKeys")) for (var value : root.getAsJsonArray("ticketKeys")) {
                 var previous = value.getAsJsonObject(); var item = new JsonObject();
@@ -92,6 +94,13 @@ final class ControlledProviderState implements AutoCloseable {
             root = root.deepCopy(); root.getAsJsonObject("controlApplication").addProperty("nativeOwnership", ControlledNativeOwner.MODE);
             save.write(root.deepCopy());
         }
+        boolean maintained = config.candidatePublication() == ProviderControlConfiguration.CandidatePublication.MAINTAINED;
+        boolean retainedPublication = root.getAsJsonObject("controlApplication").has("candidatePublication");
+        if (retainedPublication && !maintained) throw new IOException("Persisted maintained publication requires its explicit configuration");
+        if (maintained && !retainedPublication) {
+            root = root.deepCopy(); root.getAsJsonObject("controlApplication").addProperty("candidatePublication", "maintained-v1");
+            save.write(root.deepCopy());
+        }
         return root;
     }
     JsonObject application() { return root.getAsJsonObject("controlApplication").deepCopy(); }
@@ -100,6 +109,7 @@ final class ControlledProviderState implements AutoCloseable {
         var old = root.getAsJsonObject("controlApplication");
         if (ControlledProviderJson.number(application, "appliedRevision") < ControlledProviderJson.number(old, "appliedRevision")) throw new IOException("Application revision rollback");
         if (old.has("nativeOwnership") && !old.get("nativeOwnership").equals(application.get("nativeOwnership"))) throw new IOException("Native ownership mode rollback");
+        if (old.has("candidatePublication") && !old.get("candidatePublication").equals(application.get("candidatePublication"))) throw new IOException("Candidate publication mode rollback");
         if (old.has("nativeOwnerReceipt")) {
             var prior = old.getAsJsonObject("nativeOwnerReceipt"); var nextReceipt = application.getAsJsonObject("nativeOwnerReceipt");
             if (nextReceipt == null || ControlledProviderJson.number(nextReceipt, "sequence") < ControlledProviderJson.number(prior, "sequence")
@@ -197,6 +207,15 @@ final class ControlledProviderState implements AutoCloseable {
         }
         if (application.has("policy")) ControlStateCodec.decodeTicketPolicy(ControlledProviderJson.string(application, "policy"));
         if (application.has("nativeOwnership") && !ControlledNativeOwner.MODE.equals(ControlledProviderJson.string(application, "nativeOwnership"))) throw ControlledProviderJson.invalid();
+        if (application.has("candidatePublication") && (!application.has("nativeOwnership") || !"maintained-v1".equals(ControlledProviderJson.string(application, "candidatePublication")))) throw ControlledProviderJson.invalid();
+        if (application.has("candidateLeaseReceipt")) {
+            if (!application.has("candidatePublication")) throw ControlledProviderJson.invalid();
+            var receipt = CandidateLeaseCodec.decodeReceipt(application.get("candidateLeaseReceipt").toString());
+            if (!application.has("profile") || !application.has("profileRevision")
+                    || !receipt.hostProfileRevision().equals(ControlledProviderJson.string(application, "profileRevision"))
+                    || !receipt.profileSha256().equals(CandidateLeaseCodec.profileDigest(CandidateLeaseCodec.readProfile(application.getAsJsonObject("profile")))))
+                throw ControlledProviderJson.invalid();
+        }
         if (application.has("nativeOwnerReceipt")) {
             if (!application.has("nativeOwnership")) throw ControlledProviderJson.invalid();
             ControlledNativeOwner.validateMarker(application.getAsJsonObject("nativeOwnerReceipt"));

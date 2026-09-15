@@ -16,6 +16,26 @@ import java.util.concurrent.CompletionException;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NativeProviderHostFactoryTest {
+    @Test void maintainedPathAllowsEmptyBindFirstAndConfiguredEndpointsSuppressStunParsing() throws Exception {
+        var empty = NativeProviderHostFactory.maintainedSelection(endpoint("10.0.0.1", 19133), strict("[]"));
+        assertTrue(empty.candidates().isEmpty());
+        var options = new HashMap<>(strict("[{\"address\":\"2606:4700:4700::1111\",\"port\":39133}]"));
+        options.put("stunServers", "not even JSON: configured endpoints suppress this unused input");
+        var explicit = NativeProviderHostFactory.maintainedSelection(endpoint("0.0.0.0", 19133), options);
+        assertEquals(List.of(endpoint("2606:4700:4700::1111", 39133)), explicit.candidates().stream().map(c -> c.endpoint()).toList());
+        assertTrue(NativeProviderHostFactory.stunServers(explicit, options).isEmpty());
+    }
+
+    @Test void maintainedNumericServersAreStrictPerFamilyAndDirectPrecedenceIsIndependent() throws Exception {
+        var selection = NativeProviderHostFactory.maintainedSelection(endpoint("10.0.0.1", 19133), strict("[]"));
+        for (String servers : List.of("[{\"address\":\"stun.example\",\"port\":3478}]", "[{\"address\":\"1.1.1.1\",\"port\":1.5}]",
+                "[{\"address\":\"1.1.1.1\",\"port\":3478},{\"address\":\"1.0.0.1\",\"port\":3478}]"))
+            assertThrows(IllegalArgumentException.class, () -> NativeProviderHostFactory.stunServers(selection, Map.of("stunServers", servers)));
+        String both = "[{\"address\":\"1.1.1.1\",\"port\":3478},{\"address\":\"2606:4700:4700::1111\",\"port\":3478}]";
+        assertEquals(1, NativeProviderHostFactory.stunServers(selection, Map.of("stunServers", both)).size());
+        var direct = NativeProviderHostFactory.maintainedSelection(endpoint("8.8.8.8", 19133), strict("[]"));
+        assertTrue(NativeProviderHostFactory.stunServers(direct, Map.of("stunServers", both)).isEmpty());
+    }
     private static Map<String, String> strict(String endpoints) {
         return Map.of("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL, "advertisedEndpoints", endpoints);
     }

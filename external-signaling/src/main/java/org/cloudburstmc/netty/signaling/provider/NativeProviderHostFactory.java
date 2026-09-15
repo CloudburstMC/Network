@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.EnumMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -40,6 +41,7 @@ import java.util.concurrent.CompletionStage;
 public final class NativeProviderHostFactory implements ProviderHostFactory {
     /** Complete configured set, otherwise public addresses owned by the gameplay listener. */
     public static final String EXPLICIT_OR_PUBLIC_LOCAL = "explicit-or-public-local";
+    public static final String MAINTAINED_V1 = "maintained-v1";
 
     @FunctionalInterface
     interface EndpointSource {
@@ -50,19 +52,7 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
     static EndpointSource endpointSource(InetSocketAddress bind, Map<String, String> options) {
         String policy = options.get("endpointPolicy");
         if (policy != null && !policy.equals(EXPLICIT_OR_PUBLIC_LOCAL)) throw new IllegalArgumentException("Unknown provider endpoint policy");
-        var encoded = JsonParser.parseString(options.getOrDefault("advertisedEndpoints", "[]")).getAsJsonArray();
-        if (policy != null && encoded.size() > 32) throw new IllegalArgumentException("At most 32 configured endpoints");
-        List<InetSocketAddress> parsed = new ArrayList<>();
-        for (var value : encoded) {
-            var address = value.getAsJsonObject();
-            try {
-                int port = policy == null ? address.get("port").getAsInt() : strictPort(address.get("port"));
-                parsed.add(new InetSocketAddress(EndpointAddress.parse(address.get("address").getAsString()), port));
-            } catch (java.net.UnknownHostException invalid) {
-                throw new IllegalArgumentException("Advertised endpoint must be a numeric IP address", invalid);
-            }
-        }
-        List<InetSocketAddress> external = List.copyOf(parsed);
+        List<InetSocketAddress> external = externalEndpoints(options, policy != null);
         boolean localDevelopment = Boolean.parseBoolean(options.getOrDefault("localDevelopment", "false"));
         if (policy == null) return () -> ProviderEndpoint.resolve(bind, external, localDevelopment);
         return () -> {
@@ -72,6 +62,50 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             if (selected.candidates().isEmpty()) throw new IOException("No public local UDP endpoints; configure explicit advertised endpoints for external forwarding");
             return new ProviderEndpoint(selected.bind(), selected.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
         };
+    }
+
+    private static List<InetSocketAddress> externalEndpoints(Map<String, String> options, boolean strict) {
+        var encoded = JsonParser.parseString(options.getOrDefault("advertisedEndpoints", "[]")).getAsJsonArray();
+        if (strict && encoded.size() > 32) throw new IllegalArgumentException("At most 32 configured endpoints");
+        List<InetSocketAddress> parsed = new ArrayList<>();
+        for (var value : encoded) {
+            var address = value.getAsJsonObject();
+            try {
+                int port = strict ? strictPort(address.get("port")) : address.get("port").getAsInt();
+                parsed.add(new InetSocketAddress(EndpointAddress.parse(address.get("address").getAsString()), port));
+            } catch (java.net.UnknownHostException invalid) {
+                throw new IllegalArgumentException("Advertised endpoint must be a numeric IP address", invalid);
+            }
+        }
+        return List.copyOf(parsed);
+    }
+
+    static EndpointSelection maintainedSelection(InetSocketAddress bind, Map<String, String> options) throws IOException {
+        if (!EXPLICIT_OR_PUBLIC_LOCAL.equals(options.get("endpointPolicy")))
+            throw new IllegalArgumentException("Maintained publication requires the explicit-or-public-local endpoint policy");
+        var external = externalEndpoints(options, true);
+        return external.isEmpty() ? EndpointSelection.discover(bind, external, List.of()) : EndpointSelection.select(bind, external, List.of());
+    }
+
+    /** Numeric endpoints only; DNS/provider selection belongs to the embedding platform. */
+    static Map<EndpointSelection.Family, InetSocketAddress> stunServers(EndpointSelection selection, Map<String, String> options) {
+        if (selection.configured()) return Map.of();
+        var encoded = JsonParser.parseString(options.getOrDefault("stunServers", "[]")).getAsJsonArray();
+        if (encoded.size() > 2) throw new IllegalArgumentException("At most one STUN server per family");
+        var servers = new EnumMap<EndpointSelection.Family, InetSocketAddress>(EndpointSelection.Family.class);
+        for (var entry : encoded) {
+            var value = entry.getAsJsonObject();
+            try {
+                var address = EndpointAddress.parse(value.get("address").getAsString());
+                var family = EndpointSelection.Family.of(address);
+                var server = new InetSocketAddress(address, strictPort(value.get("port")));
+                if (address.isAnyLocalAddress() || address.isMulticastAddress() || servers.putIfAbsent(family, server) != null)
+                    throw new IllegalArgumentException("One numeric unicast STUN server per family required");
+            } catch (java.net.UnknownHostException invalid) { throw new IllegalArgumentException("STUN server must be numeric", invalid); }
+        }
+        // Unknown direct reachability does not authorize fallback or monitor creation.
+        servers.keySet().removeIf(family -> !selection.socketFamilies().contains(family) || !selection.candidates(family).isEmpty());
+        return Map.copyOf(servers);
     }
 
     private static int strictPort(JsonElement value) {
@@ -96,6 +130,15 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
 
             String mode = options.get("controlMode");
             if (mode != null && !mode.equals("nethernet-control-v1")) throw new IllegalArgumentException("Unknown provider control mode");
+            String publication = options.get("candidatePublication");
+            if (publication != null) {
+                if (!MAINTAINED_V1.equals(publication) || mode == null) throw new IllegalArgumentException("Maintained publication requires controlled mode");
+                var selected = maintainedSelection(udpBind, options);
+                var servers = stunServers(selected, options);
+                var identity = ProviderHostIdentity.ensure(Path.of(directory));
+                return NativeProviderTransport.openControlledMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                        .thenApply(transport -> new Host(transport, transport.channel(), List.of()));
+            }
             EndpointSource endpoints = endpointSource(udpBind, options);
             ProviderEndpoint endpoint = endpoints.get();
             var identity = ProviderHostIdentity.ensure(Path.of(directory));
