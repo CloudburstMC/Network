@@ -64,7 +64,12 @@ public final class ProviderNativeBench {
         ProviderClient provider = null;
         try {
             String advertisedAddress = System.getProperty("providerAdvertisedAddress");
-            var bind = new InetSocketAddress("127.0.0.1", port);
+            var bindAddress = org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(
+                    System.getProperty("providerBindAddress", "127.0.0.1"));
+            if (!bindAddress.isLoopbackAddress()) {
+                throw new IllegalArgumentException("Loopback bench bind only");
+            }
+            var bind = new InetSocketAddress(bindAddress, port);
             var advertised = advertisedAddress == null ? bind : new InetSocketAddress(
                     org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(advertisedAddress), port);
             nativeHost = NativeProviderTransport.open(bootstrap, bind, advertised,
@@ -107,6 +112,18 @@ public final class ProviderNativeBench {
                                     1));
                     updated = true;
                 }
+                if (Files.deleteIfExists(state.resolve("check-connectivity"))) {
+                    JsonObject refreshed = provider.readiness().get(10, TimeUnit.SECONDS);
+                    JsonObject feedback = new JsonObject();
+                    if (refreshed.has("extensions")) {
+                        JsonObject extensions = refreshed.getAsJsonObject("extensions");
+                        if (extensions.has("org.nethernet.connectivity")) {
+                            feedback = extensions.getAsJsonObject("org.nethernet.connectivity")
+                                    .getAsJsonObject("data");
+                        }
+                    }
+                    emit("connectivity", feedback);
+                }
                 var endpoint = nativeHost.channel();
                 emit("stats", Map.of("admission", endpoint.admissionStats(), "native", endpoint.nativeStats(),
                         "nativeCreationAttempts", NativeDiagnostics.creationAttempts().orElse(-1), "hostCreations",
@@ -115,7 +132,7 @@ public final class ProviderNativeBench {
             }
             provider.stop().toCompletableFuture().get(20, TimeUnit.SECONDS);
             provider = null;
-            try (var reuse = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
+            try (var reuse = new DatagramSocket(bind)) {
                 emit("closed", Map.of("udpReleased", reuse.getLocalPort() == port));
             }
         } finally {
