@@ -24,6 +24,7 @@ import java.util.concurrent.*;
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
     private final boolean runtimeCheck, rotationCheck, candidateCheck, ownerCheck, diagnosticCheck, externalDiagnosticCheck;
+    private final String diagnosticRecoveryHostId;
     private final long deadline;
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
@@ -286,6 +287,46 @@ public final class ControlledProviderLocalSmokeClient {
             diagnosticComplete = true; emit("diagnostic_upload_settled", id, mode, event);
         }
 
+        void externalDiagnosticRecovery() throws Exception {
+            if (!externalDiagnosticCheck || !id.equals(diagnosticRecoveryHostId) || !ready || diagnosticComplete || !config.has("recoveryOriginal"))
+                throw new IllegalStateException("Unexpected diagnostic recovery command");
+            var original = config.getAsJsonObject("recoveryOriginal");
+            var completion = ControlDiagnosticCompletionCodec.decodeCompletion(original.get("completion").toString());
+            if (!completion.installation().hostId().equals(id)) throw new IllegalStateException("Wrong historical completion host");
+            final long stop = Math.min(deadline, System.nanoTime() + TimeUnit.SECONDS.toNanos(90));
+            JsonObject queue = null;
+            while (System.nanoTime() < stop) {
+                requireNoPlayerActivity();
+                var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144);
+                var current = root.getAsJsonObject("controlDiagnosticCompletions");
+                if (current != null && number(current, "recorded") == 1 && current.getAsJsonArray("pending").isEmpty()
+                        && current.has("acknowledgement") && current.getAsJsonObject("acknowledgement").get("settled").getAsBoolean()
+                        && number(current.getAsJsonObject("acknowledgement"), "sequence") > number(original, "sequence")) {
+                    var journal = ControlledProviderJson.parse(Files.readString(directory.resolve("control-session/provider-state.json")), 196608);
+                    if (!journal.has("pending")) { queue = current; break; }
+                }
+                TimeUnit.MILLISECONDS.sleep(20);
+            }
+            if (queue == null) throw new TimeoutException("Historical diagnostic upload did not settle in bounded recovery");
+            for (String counter : List.of("unknown", "invalidNative", "nativeDropped"))
+                if (number(queue, counter) != 0) throw new IllegalStateException("Historical diagnostic recovery has unknown loss");
+            if (number(queue, "unsettledBatches") != 1) throw new IllegalStateException("Expected one bodyless committed recovery");
+            var event = readyFields("historical diagnostic recovery");
+            var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144);
+            var app = root.getAsJsonObject("controlApplication");
+            var owner = CandidateLeaseCodec.decodeNativeOwner(app.getAsJsonObject("nativeOwnerReceipt").get("owner").toString());
+            if (owner.epoch() <= completion.installation().nativeOwnerEpoch() || owner.nativeIncarnation().equals(completion.installation().nativeIncarnation())
+                    || !owner.nativeIncarnation().equals(nativeTransport.captureNativeIdentity().incarnation()))
+                throw new IllegalStateException("Recovery did not establish a different physical native owner");
+            requireNoPlayerActivity();
+            if (nativeTransport.channel().liveNativePeers() != 0) throw new IllegalStateException("Recovery created a new native probe peer");
+            event.add("queue", queue); event.add("nativeOwner", JsonParser.parseString(CandidateLeaseCodec.encodeNativeOwner(owner)));
+            event.addProperty("originalCompletionDigest", ControlDiagnosticCompletionCodec.completionDigest(completion));
+            event.addProperty("playerChildren", playerChildren); event.addProperty("creationAttempts", nativeTransport.channel().creationAttempts());
+            event.addProperty("liveNativePeers", 0); event.addProperty("historicalOnly", true);
+            diagnosticComplete = true; emit("diagnostic_recovery_settled", id, mode, event);
+        }
+
         private void requireExternalDiagnosticCurrent(ExternalDiagnostic captured) {
             captured.capture().requireCurrent();
             if (nativeTransport.captureDiagnosticInstallation().orElse(null) != captured.capture()
@@ -365,6 +406,9 @@ public final class ControlledProviderLocalSmokeClient {
             throw new IllegalArgumentException("diagnosticCheck must be a boolean");
         diagnosticCheck = requestedDiagnosticCheck != null && requestedDiagnosticCheck.getAsBoolean();
         externalDiagnosticCheck = externalDiagnosticMode(config, diagnosticCheck);
+        diagnosticRecoveryHostId = config.has("diagnosticRecoveryHostId") ? string(config, "diagnosticRecoveryHostId") : null;
+        if (diagnosticRecoveryHostId != null && (!externalDiagnosticCheck || !diagnosticRecoveryHostId.matches("[A-Za-z0-9_-]{1,128}")))
+            throw new IllegalArgumentException("Diagnostic recovery requires its explicit external fixture host");
         if (diagnosticCheck && (ownerCheck || candidateCheck || runtimeCheck)) throw new IllegalArgumentException("Diagnostic installation requires its separate scenario");
         if (ownerCheck && (candidateCheck || runtimeCheck)) throw new IllegalArgumentException("Owner faults require their separate scenario");
         if (candidateCheck && runtimeCheck) throw new IllegalArgumentException("Candidate and timed rotation scenarios are separate");
@@ -407,14 +451,18 @@ public final class ControlledProviderLocalSmokeClient {
             if (command.isDone()) {
                 String value = command.get();
                 if ("stop".equals(value)) {
-                    if (diagnosticCheck && hosts.stream().anyMatch(host -> !host.diagnosticComplete))
+                    if (diagnosticCheck && hosts.stream().anyMatch(host -> (diagnosticRecoveryHostId == null || host.id.equals(diagnosticRecoveryHostId)) && !host.diagnosticComplete))
                         throw new IllegalStateException("Diagnostic scenario stopped before the signed exchange");
                     if (candidateCheck && hosts.stream().anyMatch(host -> host.candidateStage != 4))
                         throw new IllegalStateException("Candidate scenario stopped before restoration");
                     return;
                 }
                 if (externalDiagnosticCheck && "diagnostic-ready".equals(value)) {
-                    for (var host : hosts) host.externalDiagnosticReady();
+                    for (var host : hosts) if (diagnosticRecoveryHostId == null || host.id.equals(diagnosticRecoveryHostId)) host.externalDiagnosticReady();
+                    command = reader.submit(input::readLine); continue;
+                }
+                if (externalDiagnosticCheck && diagnosticRecoveryHostId != null && "diagnostic-recovery".equals(value)) {
+                    hosts.stream().filter(host -> host.id.equals(diagnosticRecoveryHostId)).findFirst().orElseThrow().externalDiagnosticRecovery();
                     command = reader.submit(input::readLine); continue;
                 }
                 if (externalDiagnosticCheck && value != null && value.startsWith("diagnostic-result:")) {
