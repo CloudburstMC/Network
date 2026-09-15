@@ -45,6 +45,15 @@ class ControlRotationCodecTest {
             assertThrows(IllegalArgumentException.class, () -> ControlRotationCodec.verify(changed.toString(), expected));
         }
     }
+    @Test void chosenIdMustAlsoBeUsableAsTheSelectedMachineIdentifier() throws Exception {
+        var vector = fixture().getAsJsonArray("vectors").get(0).getAsJsonObject();
+        var expected = context(vector.getAsJsonObject("context"));
+        for (String id : List.of("_" + "x".repeat(31), "-" + "x".repeat(31), "a".repeat(129), "a.b" + "x".repeat(20))) {
+            var body = vector.getAsJsonObject("body").deepCopy(); body.addProperty("newKeyId", id);
+            assertThrows(IllegalArgumentException.class, () -> ControlRotationCodec.decode(body.toString()));
+            assertThrows(IllegalArgumentException.class, () -> ControlRotationCodec.create(id, candidate(), expected));
+        }
+    }
     @Test void rejectsPrivateMaterialAliasesAndMismatchedCandidateKeys() throws Exception {
         var vector = fixture().getAsJsonArray("vectors").get(0).getAsJsonObject();
         String wire = vector.get("body").toString();

@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -62,6 +63,7 @@ class ControlClientCoordinatorTest {
         final List<Synchronization> synchronizationExchanges = new ArrayList<>();
         Consumer<ControlFrameCodec.Frame> synchronizationFrames = ignored -> { };
         final AtomicInteger ids = new AtomicInteger();
+        Supplier<String> identifierSupplier = () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet());
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls;
         long sourceRevision, issuedAuthorityExpires;
@@ -79,7 +81,7 @@ class ControlClientCoordinatorTest {
                     Map.of("heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate")),
                     "websocket", CAPS, 21_600_000, 30_000, 200, 30_000);
             client = new ControlClientCoordinator(journal, initial, config, this, time, time, () -> 0.5,
-                    () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet()), key -> keyAvailable && key.equals(providerKey.keyId()) ? providerKey : additionalKeys.get(key));
+                    () -> identifierSupplier.get(), key -> keyAvailable && key.equals(providerKey.keyId()) ? providerKey : additionalKeys.get(key));
         }
         @Override public CompletionStage<HttpReply> bootstrap(URI endpoint, ControlSessionCodec.Request request) {
             bootstrapCalls++;

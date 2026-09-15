@@ -73,7 +73,7 @@ public final class ControlRotationCodec {
         return jwk;
     }
     private static void validate(Body body, boolean signature) {
-        ControlJson.opaque(body.newKeyId()); publicJwk(body);
+        ControlJson.opaque(body.newKeyId()); ControlJson.identifier(body.newKeyId()); publicJwk(body);
         if (signature && ControlJson.base64(body.proof(), 96, false).length != 96) throw ControlJson.invalid("rotation proof size");
     }
 }
