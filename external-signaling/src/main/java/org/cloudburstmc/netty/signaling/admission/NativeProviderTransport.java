@@ -20,6 +20,8 @@ import com.google.gson.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
+import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
+import org.cloudburstmc.netty.signaling.diagnostic.*;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
 import org.cloudburstmc.netty.signaling.provider.connectivity.MaintainedCandidatePublisher;
 import org.cloudburstmc.netty.signaling.provider.connectivity.ObservationLeaseTracker;
@@ -32,6 +34,7 @@ import java.time.Instant;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 /**
@@ -53,10 +56,54 @@ public final class NativeProviderTransport implements ProviderTransport {
     private NativeCandidateSnapshot candidateSnapshot;
     private volatile long candidateGeneration = 1;
     private MaintainedCandidatePublisher candidatePublisher;
-    private List<Epoch> epochs = List.of();
+    private volatile List<Epoch> epochs = List.of();
     private Update update;
     private volatile boolean draining;
     private volatile boolean closed;
+    private NativeDiagnosticHostGate diagnosticGate;
+    private volatile DiagnosticInstall diagnosticInstall;
+    private DiagnosticAdmission.Policy lastDiagnosticPolicy;
+    private volatile long diagnosticMutation;
+    private boolean diagnosticInstalling;
+    private volatile long diagnosticKeyGeneration;
+    private final long diagnosticAnchorNanos = System.nanoTime(), diagnosticAnchorMillis = System.currentTimeMillis();
+    private final AtomicLong diagnosticTime = new AtomicLong(diagnosticAnchorMillis);
+
+    private long diagnosticNow() {
+        long elapsed = System.nanoTime() - diagnosticAnchorNanos;
+        if (elapsed < 0) throw new IllegalStateException("Diagnostic monotonic clock rollback");
+        long now = Math.max(System.currentTimeMillis(), Math.addExact(diagnosticAnchorMillis, elapsed / 1_000_000));
+        return diagnosticTime.accumulateAndGet(now, Math::max);
+    }
+    private final class DiagnosticInstall {
+        final DiagnosticAdmission.Installation handle;
+        final long notBefore, expiresAt;
+        final String profileKeyId;
+        final long[] endpointExpiries;
+        final long endpoints = candidateGeneration, keys = diagnosticKeyGeneration;
+        final long mutation = diagnosticMutation;
+        volatile boolean valid = true;
+        DiagnosticInstall(DiagnosticAdmission.Policy policy, String profileKeyId) {
+            this.profileKeyId = profileKeyId;
+            notBefore = policy.notBefore(); expiresAt = policy.expiresAt();
+            endpointExpiries = policy.endpoints().stream().mapToLong(DiagnosticAdmission.Endpoint::expiresAt).toArray();
+            handle = new DiagnosticAdmission.Installation(policy.binding(), this::requireCurrent);
+        }
+        void requireCurrent() {
+            long now = diagnosticNow();
+            if (!valid || diagnosticInstall != this || diagnosticMutation != mutation || closed || draining || !channel.isActive()
+                    || candidateGeneration != endpoints || diagnosticKeyGeneration != keys
+                    || !profileKeyId.equals(diagnosticProfileKey(now))
+                    || now < notBefore || now >= expiresAt
+                    || Arrays.stream(endpointExpiries).anyMatch(expiry -> now >= expiry))
+                throw new IllegalStateException("Diagnostic installation changed or expired");
+        }
+    }
+    private String diagnosticProfileKey(long now) {
+        String key = null;
+        for (Epoch epoch : epochs) if (now >= epoch.notBefore() && now < epoch.retireAfter()) key = epoch.id();
+        return key;
+    }
 
     private static final class Update implements AdmissionUpdate {
         private final AdmissionGate.Staging nativeUpdate;
@@ -205,6 +252,12 @@ public final class NativeProviderTransport implements ProviderTransport {
         long nextGeneration = Math.incrementExact(candidateGeneration);
         candidateSnapshot = next;
         candidateGeneration = nextGeneration;
+        if (diagnosticInstall != null) diagnosticInstall.valid = false;
+        if (diagnosticGate != null && lastDiagnosticPolicy != null) {
+            var retained = new HashSet<DiagnosticHostPolicy.Endpoint>();
+            for (var endpoint : lastDiagnosticPolicy.endpoints()) if (containsEndpoint(next, endpoint)) retained.add(endpoint.target());
+            diagnosticGate.retainEndpoints(retained);
+        }
         if (update != null) invalidateUpdate();
         return true;
     }
@@ -225,6 +278,119 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     @Override public synchronized void candidateControlSynchronized() {
         if (candidatePublisher != null) candidatePublisher.controlSynchronized();
+    }
+
+    @Override public boolean supportsDiagnosticAdmission() { return controlled && version2; }
+
+    /** Trusted parsed policy only; the application supplies its original authority/native-owner fence. */
+    @Override public CompletionStage<DiagnosticAdmission.Installation> installDiagnosticPolicy(DiagnosticAdmission.Policy policy, Runnable requireCurrent) {
+        Objects.requireNonNull(policy); Objects.requireNonNull(requireCurrent);
+        var result = new CompletableFuture<DiagnosticAdmission.Installation>();
+        final long mutation;
+        synchronized (this) {
+            if (!supportsDiagnosticAdmission()) return CompletableFuture.failedFuture(new UnsupportedOperationException("Controlled v2 diagnostic ownership required"));
+            if (diagnosticInstalling) return CompletableFuture.failedFuture(new IllegalStateException("Diagnostic installation already in flight"));
+            diagnosticInstalling = true;
+            mutation = ++diagnosticMutation;
+        }
+        try {
+            channel.eventLoop().execute(() -> {
+                synchronized (NativeProviderTransport.this) {
+                    DiagnosticInstall installed = null;
+                    try {
+                        requireCurrent.run(); requireDiagnosticMutation(mutation);
+                        long now = diagnosticNow();
+                        if (now < policy.notBefore() || now >= policy.expiresAt()
+                                || policy.endpoints().stream().anyMatch(endpoint -> now >= endpoint.expiresAt()))
+                            throw new IllegalStateException("Expired diagnostic policy");
+                        // This adapter produces its profile synchronously; no native or application future is awaited here.
+                        long capturedKeys = diagnosticKeyGeneration;
+                        var snapshot = captureHostProfile().toCompletableFuture().getNow(null);
+                        if (snapshot == null) throw new IllegalStateException("Native profile unavailable");
+                        var profile = CandidateLeaseCodec.readProfile(snapshot.profile());
+                        var binding = policy.binding();
+                        if (!incarnation.equals(binding.context().incarnation())
+                                || !channel.identity().fingerprint().substring(8).replace(":", "").toLowerCase(Locale.ROOT).equals(binding.hostFingerprintHex())
+                                || !CandidateLeaseCodec.profileDigest(profile).equals(binding.hostProfileSha256())
+                                || policy.endpoints().stream().anyMatch(endpoint -> !containsEndpoint(candidateSnapshot, endpoint)))
+                            throw new IllegalStateException("Diagnostic native profile mismatch");
+                        if (lastDiagnosticPolicy != null) {
+                            var old = lastDiagnosticPolicy.binding();
+                            if (!old.context().providerOrigin().equals(binding.context().providerOrigin()) || !old.context().hostId().equals(binding.context().hostId())
+                                    || binding.context().generation() < old.context().generation()
+                                    || binding.context().generation() == old.context().generation() && (binding.nativeOwnerEpoch() < old.nativeOwnerEpoch()
+                                        || binding.policyRevision() < old.policyRevision()
+                                        || binding.policyRevision() == old.policyRevision() && !policy.equals(lastDiagnosticPolicy)))
+                                throw new IllegalStateException("Diagnostic policy rollback or revision conflict");
+                        }
+                        requireCurrent.run(); requireDiagnosticMutation(mutation); snapshot.requireCurrent();
+                        if (capturedKeys != diagnosticKeyGeneration) throw new IllegalStateException("Diagnostic profile key changed");
+                        installed = new DiagnosticInstall(policy, profile.credentialKeyId());
+                        diagnosticGate = channel.installDiagnostics(policy.hostPolicy(), diagnosticGate);
+                        if (diagnosticInstall != null) diagnosticInstall.valid = false;
+                        diagnosticInstall = installed; lastDiagnosticPolicy = policy;
+                        requireCurrent.run(); requireDiagnosticMutation(mutation); installed.requireCurrent();
+                        diagnosticInstalling = false;
+                        result.complete(installed.handle);
+                    } catch (Throwable failure) {
+                        // Reentrant callbacks may already own a replacement. Only this exact install can be removed.
+                        if (installed != null && diagnosticInstall == installed) clearDiagnostic(installed);
+                        diagnosticInstalling = false;
+                        result.completeExceptionally(failure);
+                    }
+                }
+            });
+        } catch (RuntimeException failure) {
+            synchronized (this) { diagnosticInstalling = false; }
+            result.completeExceptionally(failure);
+        }
+        return result.minimalCompletionStage();
+    }
+
+    private void requireDiagnosticMutation(long mutation) {
+        if (diagnosticMutation != mutation || closed || draining || !channel.isActive())
+            throw new IllegalStateException("Diagnostic native owner replaced");
+    }
+    private static boolean containsEndpoint(NativeCandidateSnapshot snapshot, DiagnosticAdmission.Endpoint endpoint) {
+        return snapshot.candidates().stream().anyMatch(candidate -> {
+            var address = candidate.endpoint().getAddress();
+            int family = address instanceof java.net.Inet6Address ? 6 : 4;
+            return family == endpoint.target().family() && candidate.endpoint().getPort() == endpoint.target().port()
+                    && candidate.type().wire().equals(endpoint.type())
+                    && DiagnosticAdmissionCodec.address(family, address.getHostAddress()).equals(endpoint.target().addressHex());
+        });
+    }
+    private void clearDiagnostic(DiagnosticInstall expected) {
+        if (diagnosticInstall != expected) return;
+        expected.valid = false; diagnosticInstall = null;
+        if (diagnosticGate != null) diagnosticGate.retainEndpoints(Set.of());
+    }
+    @Override public CompletionStage<Boolean> withdrawDiagnosticPolicy(DiagnosticAdmission.Installation expected) {
+        Objects.requireNonNull(expected);
+        synchronized (this) {
+            if (diagnosticInstall == null || diagnosticInstall.handle != expected || diagnosticInstall.mutation != diagnosticMutation)
+                return CompletableFuture.completedFuture(false);
+            ++diagnosticMutation; clearDiagnostic(diagnosticInstall);
+            return CompletableFuture.completedFuture(true);
+        }
+    }
+    @Override public Optional<DiagnosticAdmission.Installation> captureDiagnosticInstallation() {
+        var installed = diagnosticInstall;
+        if (installed == null) return Optional.empty();
+        try { installed.requireCurrent(); return Optional.of(installed.handle); }
+        catch (IllegalStateException unavailable) { return Optional.empty(); }
+    }
+    @Override public synchronized List<DiagnosticAdmission.Completion> pollDiagnosticResults(int maximum) {
+        if (maximum < 0 || maximum > 32) throw new IllegalArgumentException("Diagnostic result poll bound");
+        if (diagnosticGate == null) return List.of();
+        return diagnosticGate.pollResults(maximum).stream().map(result -> {
+            var udp = result.udp();
+            var counters = udp == null ? null : new DiagnosticAdmission.UdpCounters(udp.reservedDatagrams(), udp.sentDatagrams(), udp.sentBytes(), udp.rejectedDatagrams());
+            return new DiagnosticAdmission.Completion(result.installation(), result.context(), result.keyId(), result.attemptId(), result.offerDigestHex(),
+                    result.clientFingerprintHex(), result.expiresAt(), result.target(), result.success(), result.cleanupComplete(), result.reason(),
+                    result.selectedLocal(), result.selectedRemote(), counters, result.sentFrames(), result.sentBytes(), result.receivedFrames(),
+                    result.receivedBytes(), result.completionDigestHex(), result.completedAt());
+        }).toList();
     }
 
     private static void requirePublishableCandidates(NativeCandidateSnapshot value) {
@@ -424,6 +590,7 @@ public final class NativeProviderTransport implements ProviderTransport {
                     .map(k -> new StatelessAdmissionValidator.TicketKey(k.keyId(), k.secret(), k.notBefore(),
                             k.retireAfter())).toList());
             epochs = keys.stream().map(k -> new Epoch(k.keyId(), k.notBefore(), k.retireAfter())).toList();
+            diagnosticKeyGeneration++;
             validator.retireKeys(System.currentTimeMillis());
 
             return CompletableFuture.completedFuture(null);
@@ -474,6 +641,8 @@ public final class NativeProviderTransport implements ProviderTransport {
     public synchronized CompletionStage<Void> drain() {
         if (controlled) invalidateUpdate();
         draining = true;
+        ++diagnosticMutation;
+        if (diagnosticInstall != null) clearDiagnostic(diagnosticInstall);
         if (candidatePublisher != null) candidatePublisher.close();
         channel.drainAdmissions();
         return CompletableFuture.completedFuture(null);
@@ -485,6 +654,8 @@ public final class NativeProviderTransport implements ProviderTransport {
             if (controlled) invalidateUpdate();
             closed = true;
             draining = true;
+            ++diagnosticMutation;
+            if (diagnosticInstall != null) clearDiagnostic(diagnosticInstall);
             retireTask.cancel(false);
             validator.clear();
             epochs = List.of();

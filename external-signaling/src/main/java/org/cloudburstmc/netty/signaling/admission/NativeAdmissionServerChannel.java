@@ -439,6 +439,15 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         return result.minimalCompletionStage();
     }
 
+    /** Internal controlled owner; one gate retains replay and result history across policy replacement/withdrawal. */
+    NativeDiagnosticHostGate installDiagnostics(DiagnosticHostPolicy policy, NativeDiagnosticHostGate expected) {
+        if (!eventLoop().inEventLoop() || !isActive() || diagnostics != expected)
+            throw new IllegalStateException("Diagnostic gate owner changed");
+        if (diagnostics == null) diagnostics = new NativeDiagnosticHostGate(identity, address, policy);
+        else diagnostics.replacePolicy(policy);
+        return diagnostics;
+    }
+
     public CompletionStage<Void> termination() {
         return termination;
     }
