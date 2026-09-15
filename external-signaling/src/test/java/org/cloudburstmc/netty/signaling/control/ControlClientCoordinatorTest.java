@@ -63,18 +63,30 @@ class ControlClientCoordinatorTest {
         final List<FakeLink> links = new ArrayList<>(); final List<CompletableFuture<Void>> synchronizations = new ArrayList<>();
         final Queue<AuthorityExchange> authorityRequests = new ArrayDeque<>();
         final List<Synchronization> synchronizationExchanges = new ArrayList<>();
+        final List<CompletionStage<ControlSynchronizationResult>> synchronizationResults = new ArrayList<>();
         Consumer<ControlFrameCodec.Frame> synchronizationFrames = ignored -> { };
         final List<ControlFrameDelivery> frameDeliveries = new ArrayList<>();
         final AtomicInteger ids = new AtomicInteger();
         Supplier<String> identifierSupplier = () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet());
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls;
+        boolean autoReady = true, nullSynchronizationResult, failApplicationDispatch;
+        ControlStateCodec.AppliedBasis appliedBasis;
+        ControlStateCodec.Summary sourceState;
         long sourceRevision, issuedAuthorityExpires;
         final Map<String, ControlLifecycleCodec.Receipt> receipts = new HashMap<>();
         final Map<String, ControlFrameCodec.VerificationKey> additionalKeys = new HashMap<>();
+        final String initialTransport;
         Harness() throws Exception { this(new Journal(), new Time(), FileControlClientJournalTest.initial()); }
+        Harness(String transport) throws Exception { this(new Journal(), new Time(), FileControlClientJournalTest.initial(), transport); }
         Harness(Journal journal, Time time, ControlClientJournal.Snapshot initial) throws Exception {
+            this(journal, time, initial, "websocket");
+        }
+        Harness(Journal journal, Time time, ControlClientJournal.Snapshot initial, String transport) throws Exception {
             this.journal = journal; this.time = time; this.initial = initial; writer = initial.writer();
+            initialTransport = transport;
+            appliedBasis = new ControlStateCodec.AppliedBasis(initial.subject().generation(), 0, "draining", "disabled", null, null);
+            sourceState = new ControlStateCodec.Summary(0, "draining", ControlStateCodec.appliedBasisDigest(appliedBasis));
             providerKey = new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.PROVIDER_CONTROL, "provider_control_test_01", provider.getPublic(), 0, 100_000_000);
             newClient();
         }
@@ -84,7 +96,7 @@ class ControlClientCoordinatorTest {
                     URI.create(ORIGIN + "/control/status"), URI.create("wss://provider.example/control/upgrade"), URI.create(ORIGIN + "/control/authority"),
                     Map.of("heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate"),
                             "deregister", URI.create(ORIGIN + "/signal/deregister")),
-                    "websocket", CAPS, 21_600_000, 30_000, 200, 30_000);
+                    initialTransport, initialTransport.equals("https") ? List.of("request-response") : CAPS, 21_600_000, 30_000, 200, 30_000);
             client = new ControlClientCoordinator(store, initial, config, this, time, time, () -> 0.5,
                     () -> identifierSupplier.get(), key -> keyAvailable && key.equals(providerKey.keyId()) ? providerKey : additionalKeys.get(key));
         }
@@ -107,31 +119,54 @@ class ControlClientCoordinatorTest {
         @Override public CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request) {
             authorityCalls++; var reply = new CompletableFuture<HttpReply>(); authorityRequests.add(new AuthorityExchange(endpoint, request, reply)); return reply;
         }
-        @Override public CompletionStage<Void> synchronize(ControlWriterFence wanted, ControlClientJournal.Grant fixed, ControlAuthorityCodec.Verified authority, Synchronization exchange) {
+        @Override public CompletionStage<ControlSynchronizationResult> synchronize(ControlWriterFence wanted, ControlClientJournal.Grant fixed, ControlAuthorityCodec.Verified authority, Synchronization exchange) {
             assertEquals(writer, wanted); assertEquals(grant, fixed);
             assertNotNull(journal.value.authorityFloor());
             assertEquals(authority.floor(), journal.value.authorityFloor().value());
             if (absentSynchronization) return null;
             synchronizationExchanges.add(exchange);
-            var result = new CompletableFuture<Void>(); synchronizations.add(result); return result;
+            var result = new CompletableFuture<Void>(); synchronizations.add(result);
+            var outcome = result.thenCompose(ignored -> nullSynchronizationResult ? CompletableFuture.<ControlSynchronizationResult>completedFuture(null) : exchange.applied(appliedBasis));
+            synchronizationResults.add(outcome); return outcome;
         }
         @Override public void onSynchronizationFrame(ControlFrameDelivery delivery) {
             frameDeliveries.add(delivery); synchronizationFrames.accept(delivery.frame());
         }
-        @Override public void onVerifiedFrame(ControlFrameDelivery delivery) { delivery.requireCurrent(); frameDeliveries.add(delivery); applicationFrames++; }
+        @Override public void onVerifiedFrame(ControlFrameDelivery delivery) {
+            delivery.requireCurrent();
+            if (failApplicationDispatch) throw new java.util.concurrent.RejectedExecutionException("injected application enqueue failure");
+            frameDeliveries.add(delivery); applicationFrames++;
+        }
 
         final class FakeLink implements Link {
             final ControlSessionCodec.Request upgrade; final Consumer<String> receiver;
             final CompletableFuture<Void> opened = CompletableFuture.completedFuture(null), closed = new CompletableFuture<>();
             final List<String> sent = new ArrayList<>(); int closeCalls, abortCalls;
+            final List<String> appliedFrames = new ArrayList<>();
+            int readinessFrames;
+            long nextProviderSequence = 1;
+            CompletableFuture<Void> appliedSend;
             FakeLink(ControlSessionCodec.Request request, Consumer<String> receiver) { this.upgrade = request; this.receiver = receiver; }
             @Override public CompletionStage<Void> opened() { return opened; }
             @Override public CompletionStage<?> closed() { return closed; }
             @Override public CompletionStage<Void> sendText(String wire) {
-                var frame = ControlFrameCodec.decode(wire); assertNotNull(journal.value.pending());
+                var frame = ControlFrameCodec.decode(wire);
+                if (frame.type().equals("state.applied")) {
+                    appliedFrames.add(wire);
+                    if (autoReady) {
+                        try { readyReply(ControlStateCodec.decodeAcknowledgement(new String(frame.payloadBytes(), StandardCharsets.UTF_8))); }
+                        catch (Exception error) { throw new IllegalStateException(error); }
+                    }
+                    return appliedSend == null ? CompletableFuture.completedFuture(null) : appliedSend;
+                }
+                assertNotNull(journal.value.pending());
                 var intent = ControlLifecycleCodec.decodeWsRequest(new String(frame.payloadBytes(), StandardCharsets.UTF_8));
                 assertEquals(journal.value.pending().intent(), intent.intent()); assertArrayEquals(journal.value.pending().bodyBytes(), intent.bodyBytes());
                 sent.add(wire); return CompletableFuture.completedFuture(null);
+            }
+            void readyReply(ControlStateCodec.Acknowledgement ack) throws Exception {
+                incomingActual(this, writer, "session.ready", ControlStateCodec.encodeAcknowledgement(ack).getBytes(StandardCharsets.UTF_8), nextProviderSequence);
+                readinessFrames++;
             }
             @Override public void close() { closeCalls++; closed.complete(null); }
             @Override public void abort() { abortCalls++; closed.completeExceptionally(new IOException("aborted")); }
@@ -216,7 +251,7 @@ class ControlClientCoordinatorTest {
             issuedAuthorityExpires = Math.min(request.authorityNotAfter(), Math.min(source.sourceExpiresAt(), grant.sessionExpiresAt()));
             var response = new ControlAuthorityCodec.Response(1, "authority-response", request.requestId(), ORIGIN, initial.subject().instanceId(), initial.subject().generation(),
                     writer, grant.capabilities(), time.now, Math.min(request.expiresAt(), time.now + 30000), ControlAuthorityCodec.requestDigest(request),
-                    source, grant.sessionExpiresAt(), issuedAuthorityExpires, List.of("control.status"), new ControlStateCodec.Summary(1, "serving", null),
+                    source, grant.sessionExpiresAt(), issuedAuthorityExpires, List.of("control.status"), sourceState,
                     new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, providerKey.keyId(), ""));
             return ControlAuthorityCodec.encode(ControlAuthorityCodec.sign(response, provider.getPrivate()));
         }
@@ -235,6 +270,10 @@ class ControlClientCoordinatorTest {
                     disposition, committed ? time.now : null, committed ? 10L : null, committed ? null : "not_committed");
         }
         void incoming(FakeLink link, ControlWriterFence target, String type, byte[] payload, long sequence) throws Exception {
+            incomingActual(link, target, type, payload, sequence + link.readinessFrames);
+        }
+        void incomingActual(FakeLink link, ControlWriterFence target, String type, byte[] payload, long sequence) throws Exception {
+            link.nextProviderSequence = Math.max(link.nextProviderSequence, sequence + 1);
             var frame = new ControlFrameCodec.Frame(1, type, "provider_frame_0000001", sequence, ControlFrameCodec.Direction.PROVIDER_TO_HOST, ORIGIN,
                     initial.subject().instanceId(), initial.subject().generation(), target.sessionId(), target.sessionEpoch(), target.connectionId(), grant.capabilities(),
                     time.now, Math.min(time.now + 30000, issuedAuthorityExpires), ProviderCrypto.base64(payload), ControlFrameCodec.payloadDigest(payload),
@@ -271,7 +310,7 @@ class ControlClientCoordinatorTest {
     @Test void queuedSynchronizationFrameBelongsOnlyToItsOriginalSynchronization() throws Exception {
         var h = new Harness(); h.client.start(); h.respondStatus(); h.respondPrepare();
         h.links.get(0).challenge(); h.respondActivation(); h.respondAuthority();
-        h.incoming(h.links.get(0), h.writer, "session.ready", "{}".getBytes(StandardCharsets.UTF_8), 1);
+        h.incoming(h.links.get(0), h.writer, "state.desired", "{}".getBytes(StandardCharsets.UTF_8), 1);
         var delivery = h.frameDeliveries.get(0); delivery.requireCurrent();
         h.synchronizedReady();
         assertThrows(IllegalStateException.class, delivery::requireCurrent);
@@ -603,7 +642,7 @@ class ControlClientCoordinatorTest {
         assertFalse(h.client.ready()); h.respondStatus(); h.respondStatus(); h.synchronizedReady(); assertEquals(receipt, completed.join().receipt());
         assertEquals(physical.sessionEpoch(), h.client.snapshot().writer().sessionEpoch()); assertEquals(1, h.links.size()); assertEquals(0, link.closeCalls + link.abortCalls);
         h.client.submit("heartbeat", new byte[0], false); var next = ControlFrameCodec.decode(link.sent.get(1));
-        assertEquals(2, next.sequence()); assertEquals(pending.candidate().keyId(), next.authentication().keyId());
+        assertEquals(2 + link.appliedFrames.size(), next.sequence()); assertEquals(pending.candidate().keyId(), next.authentication().keyId());
     }
 
     @Test void scheduledRotationIsBeforeFixedGrantExpiryAndOldControlCallbacksStayFenced() throws Exception {
