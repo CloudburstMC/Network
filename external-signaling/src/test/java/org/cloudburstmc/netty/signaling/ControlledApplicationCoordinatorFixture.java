@@ -26,6 +26,9 @@ public final class ControlledApplicationCoordinatorFixture implements AutoClosea
         application = new ControlledProviderApplication(storage, nativeTransport, tasks::add, clock, () -> null,
                 () -> new ProviderClient.Health(true, true, 10, 0, "fixture", "fixture"), null);
     }
+    public static boolean requiresNativeCancellation(ControlLifecycleCodec.Intent intent, byte[] body) {
+        return ControlledProviderApplication.requiresNativeCancellation(intent, body);
+    }
     public ControlClientJournal.Snapshot initial() { return storage.initial; }
     public ControlClientJournal journal() { return storage.journal; }
     public CompletionStage<ControlSynchronizationResult> synchronize(ControlClientIo.Synchronization exchange) { return application.synchronize(exchange); }

@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.signaling.control;
 
 import com.google.gson.JsonObject;
+import org.cloudburstmc.netty.signaling.ControlledApplicationCoordinatorFixture;
 import org.junit.jupiter.api.Test;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -43,6 +44,42 @@ class ControlNativeIntentCancellationTest {
             assertEquals(1, h.operations.size());
         }
     }
+    @Test void retainedNonAcceptingProfileUsesActualPolicyAndStrongCancellationBeforeReplacement() throws Exception {
+        byte[] body = " {\"hostProfile\":{\"incarnation\":\"old-native\"},\"acceptingPlayers\":false}\n".getBytes(StandardCharsets.UTF_8);
+        for (String mode : List.of("https", "websocket")) {
+            var h = started(mode); h.nativeCancellationPolicy = ControlledApplicationCoordinatorFixture::requiresNativeCancellation;
+            h.client.submit("heartbeat", body, true); var original = h.journal.value.pending();
+            restartToCancellation(h); var cancellation = h.next("cancel-intent");
+            assertEquals(original, h.journal.value.pending()); assertArrayEquals(body, h.operations.get(0).body());
+            assertEquals(1, h.operations.size()); assertTrue(h.authorityRequests.isEmpty()); assertFalse(h.client.ready());
+            var request = ControlSessionPayloadCodec.decodeRequest("cancel-intent", cancellation.request().payloadBytes());
+            assertEquals(original.intent(), ControlLifecycleCodec.readIntent(request.getAsJsonObject("intent")));
+            reply(h, cancellation, h.receipt("cancelled"));
+            assertNull(h.journal.value.pending()); assertEquals(original.intent().sequence(), h.journal.value.lastSequence());
+            h.synchronizedReady();
+            byte[] fresh = "{\"hostProfile\":{\"incarnation\":\"current-native\"},\"acceptingPlayers\":false}".getBytes(StandardCharsets.UTF_8);
+            h.client.submit("heartbeat", fresh, true);
+            assertEquals(original.intent().sequence() + 1, h.journal.value.pending().intent().sequence());
+            assertArrayEquals(fresh, h.operations.get(1).body()); h.client.close();
+        }
+    }
+
+    @Test void committedProfileReceiptSettlesWithoutReplayAndPlainReportsStillRetryExactly() throws Exception {
+        var committed = started("https"); committed.nativeCancellationPolicy = ControlledApplicationCoordinatorFixture::requiresNativeCancellation;
+        committed.client.submit("heartbeat", "{\"hostProfile\":{},\"acceptingPlayers\":false}".getBytes(StandardCharsets.UTF_8), true);
+        var receipt = committed.receipt("committed"); committed.receipts.put(receipt.intentDigest(), receipt);
+        committed.client.close(); committed.newClient(); committed.client.start(); committed.respondStatus(); committed.respondStatus();
+        assertNull(committed.journal.value.pending()); assertEquals("prepare", committed.requests.element().request().action()); assertEquals(1, committed.operations.size());
+        committed.client.close();
+        for (String original : List.of(" {\"healthy\":true,\"acceptingPlayers\":false}\n", "{\"keyRequestId\":\"original_key_request\",\"acceptingPlayers\":false}")) {
+            var h = started("https"); h.nativeCancellationPolicy = ControlledApplicationCoordinatorFixture::requiresNativeCancellation;
+            byte[] body = original.getBytes(StandardCharsets.UTF_8); h.client.submit("heartbeat", body, true); var pending = h.journal.value.pending();
+            restartToCancellation(h); assertTrue(h.requests.isEmpty()); assertEquals(1, h.authorityRequests.size());
+            h.synchronizedReady(); assertEquals(pending, h.journal.value.pending()); assertEquals(2, h.operations.size());
+            assertArrayEquals(body, h.operations.get(1).body()); h.client.close();
+        }
+    }
+
     @Test void originalCommitWinningCancellationOnlyReturnsReceiptAndFreshSynchronization() throws Exception {
         var h = started("websocket"); var result = submit(h); h.client.reconcilePending(); h.respondStatus(); h.respondStatus();
         var request = h.next("cancel-intent"); var receipt = h.receipt("committed"); reply(h, request, receipt);

@@ -19,6 +19,7 @@ class ControlledProviderApplicationTest {
     static final String SECRET = "a-secret-admission-key-01234567890123456789";
     static final class Native implements ProviderTransport {
         final Executor executor; final ControlledProviderState storage;
+        java.util.function.Supplier<CompletionStage<JsonObject>> profileOverride;
         List<TicketKey> keys = List.of(); AdmissionUpdate update; boolean enabled, closed; int commits, installs, profileVersion; Runnable afterCommit = () -> { }; Runnable beforeInstall = () -> { };
         Native(Executor executor, ControlledProviderState storage) { this.executor = executor; this.storage = storage; }
         @Override public boolean supportsAdmissionStaging() { return true; }
@@ -29,7 +30,7 @@ class ControlledProviderApplicationTest {
         @Override public CompletionStage<ApplyResult> commitAdmissionUpdate(AdmissionUpdate token, Runnable current) {
             return CompletableFuture.supplyAsync(() -> { current.run(); assertSame(update, token); assertTrue(storage.application().has("basis"), "durable basis precedes native enable"); enabled = true; commits++; afterCommit.run(); return ApplyResult.APPLIED; }, executor);
         }
-        @Override public CompletionStage<JsonObject> hostProfile() { return CompletableFuture.supplyAsync(() -> { var profile = new JsonObject(); profile.addProperty("credentialKeyId", keys.get(keys.size() - 1).keyId()); profile.addProperty("fixtureNativeInstance", "actual-" + System.identityHashCode(this)); profile.addProperty("fixtureProfileVersion", profileVersion); return profile; }, executor); }
+        @Override public CompletionStage<JsonObject> hostProfile() { if (profileOverride != null) return profileOverride.get(); return CompletableFuture.supplyAsync(() -> { var profile = new JsonObject(); profile.addProperty("credentialKeyId", keys.get(keys.size() - 1).keyId()); profile.addProperty("fixtureNativeInstance", "actual-" + System.identityHashCode(this)); profile.addProperty("fixtureProfileVersion", profileVersion); return profile; }, executor); }
         @Override public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) { throw new AssertionError("Legacy key install must not run"); }
         @Override public CompletionStage<ApplyResult> applyState(String state) { return CompletableFuture.supplyAsync(() -> { if (state.equals("serving")) return enabled && !closed ? ApplyResult.APPLIED : ApplyResult.REJECTED; enabled = false; closed |= state.equals("closed"); return ApplyResult.APPLIED; }, executor); }
         @Override public List<JsonObject> pollEvents() { return List.of(); }
@@ -38,6 +39,7 @@ class ControlledProviderApplicationTest {
     }
     static final class Exchange implements ControlClientIo.Synchronization {
         final Executor executor; final AtomicLong now; final long deadline; final List<JsonObject> bodies = new ArrayList<>();
+        final List<byte[]> originalBodies = new ArrayList<>();
         java.util.function.Consumer<JsonObject> inspectBody = ignored -> { };
         byte[] retained;
         final String target; ControlStateCodec.AppliedBasis applied; boolean current = true, rejectApplied; long desiredRevision = 1; String profileRevision, acceptedBasisSha256;
@@ -47,7 +49,7 @@ class ControlledProviderApplicationTest {
         @Override public Optional<byte[]> pendingHeartbeat() { return Optional.ofNullable(retained); }
         @Override public void requireCurrent() { if (!current || now.get() >= deadline) throw new IllegalStateException("expired pass"); }
         @Override public CompletionStage<ControlOperationResult> heartbeat(byte[] bytes) {
-            requireCurrent(); var body = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject(); bodies.add(body); inspectBody.accept(body);
+            requireCurrent(); var body = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject(); bodies.add(body); originalBodies.add(bytes.clone()); inspectBody.accept(body);
             return CompletableFuture.supplyAsync(() -> {
                 var result = new JsonObject(); result.addProperty("receivedAt", "1970-01-01T00:00:01.000Z");
                 if (body.has("hostProfile")) profileRevision = "hpr_fixture_" + bodies.size();
@@ -68,6 +70,7 @@ class ControlledProviderApplicationTest {
                     var key = new JsonObject(); key.addProperty("keyId", "A001"); key.addProperty("secret", SECRET); result.add("ticketKey", key);
                     var request = new JsonObject(); request.addProperty("id", body.get("keyRequestId").getAsString()); request.addProperty("keyId", "A001"); result.add("keyRequest", request);
                 }
+                retained = null; // A committed result settles the pending original before the next heartbeat.
                 return ControlledApplicationResultFixture.delivered(result.toString(), this::requireCurrent);
             }, executor);
         }
@@ -220,6 +223,68 @@ class ControlledProviderApplicationTest {
             }
         } finally { executor.shutdownNow(); }
     }
+    @Test void staleFullProfileWithoutAcceptingPlayersCannotReplayAfterRemapOrRestart(@TempDir Path directory) throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            for (String scenario : List.of("remap", "restart")) try (var store = new ProviderStateStore(directory.resolve(scenario))) {
+                ControlledProviderStateTest.seed(store, ORIGIN);
+                try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN))) {
+                    var now = new AtomicLong(1000); var previous = new Native(executor, storage); var application = app(storage, previous, executor, now);
+                    var first = new Exchange(executor, now, "serving");
+                    application.synchronize(first).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                    byte[] original = first.originalBodies.get(1).clone();
+                    assertTrue(first.bodies.get(1).has("hostProfile")); assertFalse(first.bodies.get(1).get("acceptingPlayers").getAsBoolean());
+                    var current = previous;
+                    if (scenario.equals("remap")) current.profileVersion++;
+                    else { current = new Native(executor, storage); application = app(storage, current, executor, now); }
+                    var replacement = new Exchange(executor, now, "serving"); replacement.retained = original;
+                    var result = application.synchronize(replacement).toCompletableFuture();
+                    var failure = assertThrows(ExecutionException.class, () -> result.get(3, TimeUnit.SECONDS));
+                    assertInstanceOf(ControlClientIo.ReconciliationRequired.class, failure.getCause());
+                    assertTrue(replacement.bodies.isEmpty(), "Stale full profiles must be cancelled or strongly resolved before any replay");
+                    assertArrayEquals(original, replacement.retained); assertFalse(current.enabled); assertNull(replacement.applied);
+                }
+            }
+        } finally { executor.shutdownNow(); }
+    }
+
+    @Test void unchangedOwnedFullProfileRetainsExactOriginalBytesForRetry(@TempDir Path directory) throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        try (var store = new ProviderStateStore(directory)) {
+            ControlledProviderStateTest.seed(store, ORIGIN);
+            try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN))) {
+                var now = new AtomicLong(1000); var current = new Native(executor, storage); var application = app(storage, current, executor, now);
+                var first = new Exchange(executor, now, "serving"); application.synchronize(first).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                byte[] original = (" \n" + first.bodies.get(1) + "\n").getBytes(StandardCharsets.UTF_8);
+                var retry = new Exchange(executor, now, "serving"); retry.retained = original;
+                application.synchronize(retry).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertArrayEquals(original, retry.originalBodies.get(0)); assertEquals(2, retry.bodies.size());
+                assertTrue(retry.bodies.get(1).has("applicationAck")); assertTrue(retry.bodies.get(1).get("acceptingPlayers").getAsBoolean());
+                assertNotNull(retry.applied); assertTrue(current.enabled);
+            }
+        } finally { executor.shutdownNow(); }
+    }
+
+    @Test void retainedProfileReadCannotOutliveOriginalSynchronizationDeadline(@TempDir Path directory) throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        try (var store = new ProviderStateStore(directory)) {
+            ControlledProviderStateTest.seed(store, ORIGIN);
+            try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN))) {
+                var now = new AtomicLong(1000); var current = new Native(executor, storage); var application = app(storage, current, executor, now);
+                var first = new Exchange(executor, now, "serving"); application.synchronize(first).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                var original = first.originalBodies.get(1).clone(); var held = new CompletableFuture<JsonObject>(); var requested = new CountDownLatch(1);
+                current.profileOverride = () -> { requested.countDown(); return held; };
+                var retry = new Exchange(executor, now, "serving"); retry.retained = original;
+                var result = application.synchronize(retry).toCompletableFuture();
+                assertTrue(requested.await(3, TimeUnit.SECONDS)); assertFalse(result.isDone()); assertTrue(retry.bodies.isEmpty());
+                now.set(retry.deadline); held.complete(first.bodies.get(1).getAsJsonObject("hostProfile").deepCopy());
+                var failure = assertThrows(ExecutionException.class, () -> result.get(3, TimeUnit.SECONDS));
+                assertInstanceOf(IllegalStateException.class, failure.getCause()); assertArrayEquals(original, retry.retained);
+                assertTrue(retry.bodies.isEmpty()); assertFalse(current.enabled); assertNull(retry.applied);
+            }
+        } finally { executor.shutdownNow(); }
+    }
+
     @Test void keyRequestSaveFailureAfterServingFencesNativeAndSignalsFatal(@TempDir Path directory) throws Exception {
         var executor = Executors.newSingleThreadExecutor(); var reject = new AtomicBoolean();
         try (var store = new ProviderStateStore(directory)) {
@@ -239,7 +304,7 @@ class ControlledProviderApplicationTest {
         } finally { executor.shutdownNow(); }
     }
     @Test void retainedNativeClaimPolicyIsBoundToOriginalHeartbeatBytes() {
-        for (String body : List.of("{\"acceptingPlayers\":true}", "{\"applicationAck\":{}}", "{\"acceptingPlayers\":false}")) {
+        for (String body : List.of("{\"acceptingPlayers\":true}", "{\"applicationAck\":{}}", "{\"hostProfile\":{},\"acceptingPlayers\":false}", "{\"acceptingPlayers\":false}")) {
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             var intent = ControlLifecycleCodec.intent(ORIGIN, "heartbeat", "fixture_host", 1, 18, "native_claim_fixture_18", bytes);
             assertEquals(!body.equals("{\"acceptingPlayers\":false}"), ControlledProviderApplication.requiresNativeCancellation(intent, bytes));
