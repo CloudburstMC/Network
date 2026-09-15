@@ -41,6 +41,12 @@ public final class ControlSessionPayloadCodec {
                     ControlJson.digest(ControlJson.string(value, "intentDigest"));
                 } else throw ControlJson.invalid("status query");
             }
+            case "cancel-intent" -> {
+                ControlJson.fields(value, "intent", "expectedWriter", "reason");
+                var intent = ControlLifecycleCodec.readIntent(ControlJson.object(value, "intent"));
+                if (!intent.operation().equals("heartbeat") || !ControlJson.string(value, "reason").equals("native-application-replaced")
+                        || fence(value, "expectedWriter").transport().equals("legacy-http")) throw ControlJson.invalid("cancellation intent");
+            }
             default -> throw ControlJson.invalid("session action");
         }
         return value;
@@ -99,6 +105,12 @@ public final class ControlSessionPayloadCodec {
                         if (!receipt.intentDigest().equals(digest)) throw ControlJson.invalid("status receipt digest");
                     }
                 } else throw ControlJson.invalid("status result");
+            }
+            case "cancel-intent" -> {
+                ControlJson.fields(value, "intentDigest", "receipt"); var digest = ControlJson.string(value, "intentDigest"); ControlJson.digest(digest);
+                var receipt = ControlLifecycleCodec.decodeReceipt(ControlJson.object(value, "receipt").toString());
+                if (!receipt.intentDigest().equals(digest) || !receipt.operation().equals("heartbeat")
+                        || !java.util.Set.of("committed", "rejected", "cancelled").contains(receipt.disposition())) throw ControlJson.invalid("cancellation receipt");
             }
             default -> throw ControlJson.invalid("session response kind");
         }
@@ -197,6 +209,11 @@ public final class ControlSessionPayloadCodec {
                         || timestamp(result, "sessionExpiresAt") - activatedAt != timestamp(prepared, "sessionDurationMillis")) {
                     throw ControlJson.invalid("activation result association");
                 }
+            }
+            case "cancel-intent" -> {
+                var original = ControlLifecycleCodec.readIntent(ControlJson.object(intent, "intent"));
+                if (!ControlJson.string(result, "intentDigest").equals(ControlLifecycleCodec.intentDigest(original))) throw ControlJson.invalid("cancellation request association");
+                ControlLifecycleCodec.verifyReceipt(ControlLifecycleCodec.decodeReceipt(ControlJson.object(result, "receipt").toString()), original);
             }
             default -> throw ControlJson.invalid("session result association");
         }

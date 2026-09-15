@@ -13,7 +13,7 @@ public final class ControlSessionCodec {
     public static final int MAX_ENVELOPE_BYTES = 16384;
     public static final int MAX_PAYLOAD_BYTES = 8192;
     private static final Map<String, String> KINDS = Map.of("prepare", "prepared", "upgrade", "connection-challenge",
-            "activate", "activated", "status", "status");
+            "activate", "activated", "status", "status", "cancel-intent", "cancel-intent");
 
     public record Request(int version, String action, String requestId, String audience, String method,
                           String encodedPathAndQuery, String instanceId, long generation, long sentAt, long expiresAt,
@@ -199,6 +199,12 @@ public final class ControlSessionCodec {
         ControlProof.path(request.encodedPathAndQuery());
         JsonObject payload = ControlSessionPayloadCodec.decodeRequest(request.action(), request.payloadBytes());
         if (request.action().equals("prepare") && request.expiresAt() > ControlJson.number(payload, "intentExpiresAt")) throw ControlJson.invalid("prepare delivery deadline");
+        if (request.action().equals("cancel-intent")) {
+            var intent = ControlLifecycleCodec.readIntent(ControlJson.object(payload, "intent"));
+            var writer = ControlWriterFence.read(ControlJson.object(payload, "expectedWriter"));
+            if (!intent.audience().equals(request.audience()) || !intent.instanceId().equals(request.instanceId())
+                    || intent.generation() != request.generation() || !writer.keyId().equals(request.authentication().keyId())) throw ControlJson.invalid("cancellation subject");
+        }
     }
 
     private static void validate(Response response, boolean signature) {
