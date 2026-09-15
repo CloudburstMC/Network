@@ -39,7 +39,7 @@ final class ControlledProviderState implements AutoCloseable {
                 if (retained == null || !retained.subject().equals(subject) || root.has("privateKey") || root.has("sequence")
                         || registration.has("keyId")) throw new IOException("Conflicting controlled identity storage");
                 validate(root.getAsJsonObject("controlApplication"), generation);
-                return new ControlledProviderState(save, root, journal, retained);
+                return new ControlledProviderState(save, ownerMode(save, root, config), journal, retained);
             }
             if (config.migrationSeed().generation() != generation || root.has("pendingPrivateKey") || root.has("pendingPublicKeyJwk"))
                 throw new IOException("Legacy state needs explicit reconciliation before controlled migration");
@@ -56,6 +56,8 @@ final class ControlledProviderState implements AutoCloseable {
             var application = new JsonObject(); application.addProperty("version", 1); application.addProperty("generation", generation);
             application.addProperty("appliedRevision", config.migrationSeed().appliedRevision());
             application.addProperty("reportedState", config.migrationSeed().reportedState());
+            if (config.nativeOwnership() == ProviderControlConfiguration.NativeOwnership.ISSUED)
+                application.addProperty("nativeOwnership", ControlledNativeOwner.MODE);
             var keys = new JsonArray();
             if (root.has("ticketKeys")) for (var value : root.getAsJsonArray("ticketKeys")) {
                 var previous = value.getAsJsonObject(); var item = new JsonObject();
@@ -82,12 +84,38 @@ final class ControlledProviderState implements AutoCloseable {
     private ControlledProviderState(Save save, JsonObject root, FileControlClientJournal journal, ControlClientJournal.Snapshot initial) {
         this.save = save; this.root = root.deepCopy(); this.journal = journal; this.initial = initial;
     }
+    private static JsonObject ownerMode(Save save, JsonObject root, ProviderControlConfiguration config) throws IOException {
+        var application = root.getAsJsonObject("controlApplication");
+        boolean retained = application.has("nativeOwnership"), enabled = config.nativeOwnership() == ProviderControlConfiguration.NativeOwnership.ISSUED;
+        if (retained && !enabled) throw new IOException("Persisted issued native ownership requires its explicit configuration");
+        if (enabled && !retained) {
+            root = root.deepCopy(); root.getAsJsonObject("controlApplication").addProperty("nativeOwnership", ControlledNativeOwner.MODE);
+            save.write(root.deepCopy());
+        }
+        return root;
+    }
     JsonObject application() { return root.getAsJsonObject("controlApplication").deepCopy(); }
     void saveApplication(JsonObject application) throws IOException {
         application = ControlledProviderJson.parse(application.toString(), 32768); validate(application, initial.subject().generation());
         var old = root.getAsJsonObject("controlApplication");
         if (ControlledProviderJson.number(application, "appliedRevision") < ControlledProviderJson.number(old, "appliedRevision")) throw new IOException("Application revision rollback");
+        if (old.has("nativeOwnership") && !old.get("nativeOwnership").equals(application.get("nativeOwnership"))) throw new IOException("Native ownership mode rollback");
+        if (old.has("nativeOwnerReceipt")) {
+            var prior = old.getAsJsonObject("nativeOwnerReceipt"); var nextReceipt = application.getAsJsonObject("nativeOwnerReceipt");
+            if (nextReceipt == null || ControlledProviderJson.number(nextReceipt, "sequence") < ControlledProviderJson.number(prior, "sequence")
+                    || ControlledProviderJson.number(nextReceipt, "sequence") == ControlledProviderJson.number(prior, "sequence") && !nextReceipt.equals(prior))
+                throw new IOException("Native ownership receipt rollback");
+        }
         var next = root.deepCopy(); next.add("controlApplication", application); writeRoot(next);
+    }
+    void acknowledgeNativeOwner(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) throws IOException {
+        if (!intent.audience().equals(initial.subject().audience()) || !intent.instanceId().equals(initial.subject().instanceId())
+                || intent.generation() != initial.subject().generation()) throw new IOException("Unowned native adoption receipt");
+        var marker = ControlledNativeOwner.marker(intent, originalBody, receipt);
+        var application = application();
+        if (!application.has("nativeOwnership")) throw new IOException("Native ownership not opted in");
+        if (marker.equals(application.get("nativeOwnerReceipt"))) return;
+        application.add("nativeOwnerReceipt", marker); saveApplication(application);
     }
     int eventCapacity() {
         int count = root.has("pendingEvents") ? root.getAsJsonArray("pendingEvents").size() : 0;
@@ -168,6 +196,11 @@ final class ControlledProviderState implements AutoCloseable {
             if (basis.generation() != generation) throw ControlledProviderJson.invalid();
         }
         if (application.has("policy")) ControlStateCodec.decodeTicketPolicy(ControlledProviderJson.string(application, "policy"));
+        if (application.has("nativeOwnership") && !ControlledNativeOwner.MODE.equals(ControlledProviderJson.string(application, "nativeOwnership"))) throw ControlledProviderJson.invalid();
+        if (application.has("nativeOwnerReceipt")) {
+            if (!application.has("nativeOwnership")) throw ControlledProviderJson.invalid();
+            ControlledNativeOwner.validateMarker(application.getAsJsonObject("nativeOwnerReceipt"));
+        }
     }
     @Override public void close() throws IOException { journal.close(); }
 }

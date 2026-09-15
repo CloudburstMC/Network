@@ -77,6 +77,23 @@ public interface ProviderTransport {
         public void requireCurrent() { current.run(); }
     }
 
+    /** Native listener lifetime, independent of endpoint material, ticket keys and control sockets. */
+    final class NativeIdentitySnapshot {
+        private final String incarnation;
+        private final Runnable current;
+        public NativeIdentitySnapshot(String incarnation, Runnable requireCurrent) {
+            if (incarnation == null || !incarnation.matches("[0-9a-f]{32}")) throw new IllegalArgumentException("Invalid native incarnation");
+            this.incarnation = incarnation; current = Objects.requireNonNull(requireCurrent);
+        }
+        public String incarnation() { return incarnation; }
+        public void requireCurrent() { current.run(); }
+    }
+
+    default boolean supportsNativeIdentityCapture() { return false; }
+
+    /** Bounded nonblocking capture; unsupported adapters cannot opt into issued native ownership. */
+    default NativeIdentitySnapshot captureNativeIdentity() { throw new UnsupportedOperationException("Native identity capture unavailable"); }
+
     /**
      * Capture endpoint ownership across asynchronous publication, persistence and application.
      * Legacy adapters retain their unversioned behavior; versioned profiles require an owned override.

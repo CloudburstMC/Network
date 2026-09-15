@@ -64,6 +64,13 @@ public interface ControlClientIo {
     default boolean requiresNativeIntentCancellation(ControlLifecycleCodec.Intent intent, byte[] originalBody) { return false; }
     /** Opt-in application queue owner: committed receipts must be durably applied before releasing their intent. */
     default boolean requiresOutcomeAcknowledgement() { return false; }
+    /** Pure original-body classification; only opted-in owner claims use this durable handoff. */
+    default boolean requiresNativeOwnerAcknowledgement(ControlLifecycleCodec.Intent intent, byte[] originalBody) { return false; }
+    /** Persist historical committed issuance before journal release; never manufacture an application body. */
+    default CompletionStage<Void> acknowledgeCommittedNativeOwner(ControlLifecycleCodec.Intent intent, byte[] originalBody,
+                                                                 ControlLifecycleCodec.Receipt receipt) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("No durable native owner acknowledgement"));
+    }
     /**
      * Runs on the adapter's serialized application executor. Remove the exact original queue prefix and
      * retain an idempotent intent/receipt marker atomically. This is local receipt application, not a grant.

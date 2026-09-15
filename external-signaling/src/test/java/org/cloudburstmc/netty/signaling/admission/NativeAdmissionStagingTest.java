@@ -354,6 +354,7 @@ class NativeAdmissionStagingTest {
     @Test @Timeout(35)
     void versionTwoWithdrawalPreservesBothFamiliesEstablishedPeersKeysAndIdentity() throws Exception {
         try (var host = new Host(true)) {
+            var lifetime = host.transport.captureNativeIdentity(); lifetime.requireCurrent();
             var initial = host.transport.beginAdmissionUpdate(deadline());
             host.transport.installTicketKeys(initial, KEYS).toCompletableFuture().get();
             var empty = host.transport.captureHostProfile().toCompletableFuture().get();
@@ -382,6 +383,7 @@ class NativeAdmissionStagingTest {
                     if (changed) assertThrows(IllegalStateException.class, before::requireCurrent); else before.requireCurrent();
                     assertTrue(host.transport.channel().isServing(), "publication updates do not drop native identity or existing tickets");
                     var profile = host.transport.captureHostProfile().toCompletableFuture().get();
+                    lifetime.requireCurrent(); assertEquals(lifetime.incarnation(), profile.profile().getAsJsonObject("statelessAdmission").get("incarnation").getAsString());
                     assertEquals(selection.candidates().size(), profile.profile().getAsJsonArray("candidates").size());
                     var metadata = profile.profile(); metadata.remove("candidates"); assertEquals(stableMetadata, metadata);
                     var stage = host.transport.beginAdmissionUpdate(deadline());
@@ -402,6 +404,29 @@ class NativeAdmissionStagingTest {
                 current.requireCurrent(); assertEquals(first.profile(), current.profile());
                 player4.exchange(); player6.exchange();
             }
+        }
+    }
+
+    @Test @Timeout(20)
+    void nativeLifetimeSurvivesKeyChangesAndDesiredDrainButNeverCloseOrPermanentDrain() throws Exception {
+        ProviderTransport.NativeIdentitySnapshot predecessor;
+        try (var host = new Host(true)) {
+            predecessor = host.transport.captureNativeIdentity();
+            var token = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(token, KEYS).toCompletableFuture().get(); predecessor.requireCurrent();
+            var replacement = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(replacement, List.of(new ProviderTransport.TicketKey("K002", TestSignalingProvider.SECRET))).toCompletableFuture().get();
+            predecessor.requireCurrent(); host.transport.applyState("draining").toCompletableFuture().get(); predecessor.requireCurrent();
+            host.transport.close().toCompletableFuture().get(); assertThrows(IllegalStateException.class, predecessor::requireCurrent);
+        }
+        try (var replacement = new Host(true)) {
+            var current = replacement.transport.captureNativeIdentity(); current.requireCurrent();
+            assertNotEquals(predecessor.incarnation(), current.incarnation()); assertThrows(IllegalStateException.class, predecessor::requireCurrent);
+            replacement.transport.drain().toCompletableFuture().get(); assertThrows(IllegalStateException.class, current::requireCurrent);
+        }
+        try (var legacy = new Host()) {
+            assertFalse(legacy.transport.supportsNativeIdentityCapture());
+            assertThrows(UnsupportedOperationException.class, legacy.transport::captureNativeIdentity);
         }
     }
 

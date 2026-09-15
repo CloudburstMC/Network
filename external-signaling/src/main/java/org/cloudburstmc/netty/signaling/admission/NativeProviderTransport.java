@@ -189,6 +189,16 @@ public final class NativeProviderTransport implements ProviderTransport {
         return captureHostProfile().thenApply(HostProfileSnapshot::profile);
     }
 
+    @Override public boolean supportsNativeIdentityCapture() { return controlled && version2; }
+
+    @Override public NativeIdentitySnapshot captureNativeIdentity() {
+        if (!supportsNativeIdentityCapture()) throw new UnsupportedOperationException("Issued native ownership requires controlled version 2");
+        var snapshot = new NativeIdentitySnapshot(incarnation, () -> {
+            if (closed || draining || !channel.isActive()) throw new IllegalStateException("Native listener identity retired");
+        });
+        snapshot.requireCurrent(); return snapshot;
+    }
+
     @Override
     public synchronized CompletionStage<HostProfileSnapshot> captureHostProfile() {
         if (closed || draining || !channel.isActive()) {
