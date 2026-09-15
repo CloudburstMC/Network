@@ -121,10 +121,11 @@ final class ControlledProviderApplication {
     }
     CompletionStage<ControlSynchronizationResult> synchronize(ControlClientIo.Synchronization exchange) {
         long owner = version.get();
+        var pass = new Pass(exchange, owner);
         var operation = CompletableFuture.completedFuture(null).thenComposeAsync(ignored -> {
             // Ownership issuance uses a host-only profile; a subsequent pass may publish reflexive candidates.
             reflexivePublicationAllowed = nativeOwnerCurrent(); maintainCandidates();
-            var pass = new Pass(exchange, owner); pass.check();
+            pass.candidates = latestCandidates; pass.check();
             if ((!ownerRequired() || nativeOwnerCurrent()) && liveBasis != null && acceptedDigest != null && acceptedDigest.equals(ControlStateCodec.appliedBasisDigest(liveBasis))
                     && !due() && exchange.pendingHeartbeat().isEmpty()) {
                 if (maintainedCandidates && acceptedCandidates != null) {
@@ -138,15 +139,21 @@ final class ControlledProviderApplication {
         }, executor);
         return operation.handleAsync((result, failure) -> {
             if (failure == null) {
-                if (maintainedCandidates && !nativeClosed && !permanentlyDrained) transport.candidateControlSynchronized();
-                reflexivePublicationAllowed = nativeOwnerCurrent();
-                return CompletableFuture.completedFuture(result);
+                try {
+                    // Maintenance can retire the captured material while this final handler is queued.
+                    pass.check();
+                    if (maintainedCandidates && !nativeClosed && !permanentlyDrained) transport.candidateControlSynchronized();
+                    pass.check();
+                    reflexivePublicationAllowed = nativeOwnerCurrent();
+                    return CompletableFuture.completedFuture(result);
+                } catch (RuntimeException changed) { failure = changed; }
             }
             // A failed/late transition cannot leave a just-enabled snapshot admitting new players.
             // The coordinator keeps this I/O lane occupied until cleanup actually settles.
             liveBasis = null; liveSnapshot = null; acceptedDigest = null;
+            var originalFailure = failure;
             return transport.applyState("draining").handle((ignored, cleanupFailure) -> {
-                throw new CompletionException(unwrap(failure));
+                throw new CompletionException(unwrap(originalFailure));
             }).thenApply(ignored -> result);
         }, executor).thenCompose(Function.identity());
     }
@@ -369,7 +376,11 @@ final class ControlledProviderApplication {
             // A new key deliberately clears the old profile association in next, but the original
             // response's already validated lease deadline still bounds this refresh.
             var receipt = CandidateLeaseCodec.decodeReceipt(response.get("candidateLeaseReceipt").toString());
-            if (receipt.expiresAt() != 0) nextHeartbeat = Math.min(nextHeartbeat, receipt.expiresAt() - CandidateLeaseCodec.CLOCK_SKEW_MILLIS);
+            long preemptAt = receipt.expiresAt() - CandidateLeaseCodec.CLOCK_SKEW_MILLIS;
+            // Once inside the preemption window, retry at the normal check-in cadence. Reusing
+            // a past target would otherwise request synchronization on every maintenance tick.
+            // The original capture still makes actual expiry or remapping immediately due.
+            if (receipt.expiresAt() != 0 && preemptAt > clock.nowMillis()) nextHeartbeat = Math.min(nextHeartbeat, preemptAt);
         }
         if (freshKey || basis == null || issuedOwnership && basis.state().equals("serving") && !nativeOwnerCurrent()) {
             if (issuedOwnership && !nativeOwnerCurrent()) next.remove("basis");
@@ -531,7 +542,7 @@ final class ControlledProviderApplication {
         ProviderTransport.CandidateLeaseSnapshot candidates;
         CandidateLeaseCodec.NativeOwner leaseOwner;
         boolean leased;
-        Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; candidates = latestCandidates; }
+        Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; }
         void own(ProviderTransport.HostProfileSnapshot snapshot) {
             check(); Objects.requireNonNull(snapshot).requireCurrent();
             if (endpointOwner == null) endpointOwner = snapshot;

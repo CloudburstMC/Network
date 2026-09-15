@@ -22,12 +22,14 @@ class ControlledCandidateLeaseApplicationTest {
     static final class Native extends ControlledNativeOwnerApplicationTest.Native {
         final AtomicLong now;
         CandidateLeaseCodec.Observation observation;
+        Runnable onControlSynchronized = () -> {};
         Native(ControlledProviderState state, AtomicLong now) { super(state, 1, true); this.now = now; success(1, 1, 43000); }
         void success(long revision, long sequence, int port) {
             if (observation != null && (observation.mappingRevision() != revision || observation.port() != port)) material++;
             observation = new CandidateLeaseCodec.Observation("ipv4", "08080808", port, 1, revision, sequence, now.get(), now.get() + 269000);
         }
         @Override public boolean supportsMaintainedCandidateLeases() { return true; }
+        @Override public void candidateControlSynchronized() { onControlSynchronized.run(); }
         @Override public CandidateLeaseSnapshot maintainCandidateLeases(boolean allowed) {
             boolean nextEmpty = !allowed || observation == null || observation.expiresAt() <= now.get();
             if (nextEmpty != empty) { empty = nextEmpty; material++; }
@@ -82,9 +84,13 @@ class ControlledCandidateLeaseApplicationTest {
         final ControlledNativeOwnerApplicationTest.Provider provider = new ControlledNativeOwnerApplicationTest.Provider();
         Harness(Path directory) throws Exception { this(directory, ignored -> {}); }
         Harness(Path directory, Consumer<JsonObject> afterSave) throws Exception {
+            this(directory, afterSave, Runnable::run);
+        }
+        Harness(Path directory, Consumer<JsonObject> afterSave, Executor executor) throws Exception {
             store = new ProviderStateStore(directory); ControlledProviderStateTest.seed(store, ControlledNativeOwnerApplicationTest.ORIGIN);
             state = ControlledProviderState.open(store, config(), root -> { store.write(root); afterSave.accept(root); }); nativeHost = new Native(state, now);
-            app = ControlledNativeOwnerApplicationTest.app(state, nativeHost, now);
+            app = new ControlledProviderApplication(state, nativeHost, executor, now::get, () -> null,
+                    () -> new ProviderClient.Health(true, true, 10, 0, "fixture", "fixture"), null);
         }
         Exchange exchange() { app.request(); return new Exchange(provider, app, now); }
         Exchange sync() throws Exception { var exchange = exchange(); app.synchronize(exchange).toCompletableFuture().get(3, TimeUnit.SECONDS); return exchange; }
@@ -126,6 +132,82 @@ class ControlledCandidateLeaseApplicationTest {
             h.app.synchronize(exchange).toCompletableFuture().get(3, TimeUnit.SECONDS);
             var published = CandidateLeaseCodec.decodeLeases(exchange.owner.delegate.bodies.get(0).get("candidateLeases").toString());
             assertEquals(List.of(original), published.observations()); assertTrue(h.nativeHost.delegate.enabled);
+        }
+    }
+
+    @Test void repeatedObservationInsidePreemptionWindowKeepsNormalHeartbeatCadence(@TempDir Path directory) throws Exception {
+        try (var h = new Harness(directory)) {
+            h.ready(); var original = h.state.application().get("candidateLeaseReceipt");
+            h.now.set(h.nativeHost.observation.expiresAt() - 29000);
+            h.sync();
+            assertEquals(original, h.state.application().get("candidateLeaseReceipt"));
+            assertFalse(h.app.due(), "A past preemption target must not schedule every runtime tick");
+            h.now.addAndGet(9999); assertFalse(h.app.due());
+            h.now.incrementAndGet(); assertTrue(h.app.due());
+            h.sync(); assertFalse(h.app.due());
+            h.now.set(h.nativeHost.observation.expiresAt());
+            assertTrue(h.app.due(), "Expiry still bypasses the normal heartbeat cadence");
+            h.app.maintainCandidates(); h.sync(); assertTrue(h.nativeHost.empty);
+        }
+    }
+
+    private static final class DeferredExecutor implements Executor {
+        final ArrayDeque<Runnable> tasks = new ArrayDeque<>(); boolean deferred;
+        @Override public void execute(Runnable command) { if (deferred) tasks.addLast(command); else command.run(); }
+        void one() { assertFalse(tasks.isEmpty()); tasks.removeFirst().run(); }
+        void all() { for (int i = 0; !tasks.isEmpty() && i < 100; i++) one(); assertTrue(tasks.isEmpty()); }
+    }
+    private void afterFinalConfirmation(Path directory, String change) throws Exception {
+        var executor = new DeferredExecutor();
+        try (var h = new Harness(directory, ignored -> {}, executor)) {
+            h.ready();
+            if (change.equals("expiry")) h.now.set(h.nativeHost.observation.expiresAt() - 1000);
+            executor.deferred = true;
+            var exchange = h.exchange(); var result = h.app.synchronize(exchange).toCompletableFuture();
+            for (int i = 0; exchange.owner.delegate.applied == null && i < 100; i++) executor.one();
+            assertNotNull(exchange.owner.delegate.applied);
+            assertEquals(1, executor.tasks.size());
+            executor.one(); // The final confirmation guard passes; its outer success handler is now queued.
+            assertFalse(result.isDone()); assertEquals(1, executor.tasks.size());
+            if (change.equals("expiry")) {
+                h.now.set(h.nativeHost.observation.expiresAt());
+                assertTrue(h.now.get() < exchange.deadlineMillis(), "The lease expires while the original control pass is still live");
+            }
+            else { h.now.incrementAndGet(); h.nativeHost.success(change.equals("remap") ? 2 : 1, 2, change.equals("remap") ? 43001 : 43000); }
+            h.app.maintainCandidates(); executor.all();
+            if (change.equals("same-mapping")) {
+                assertNotNull(result.get(3, TimeUnit.SECONDS)); assertTrue(h.nativeHost.delegate.enabled);
+            } else {
+                assertThrows(ExecutionException.class, () -> result.get(3, TimeUnit.SECONDS));
+                assertFalse(h.nativeHost.delegate.enabled, "A final ownership failure still drains native admission");
+            }
+        }
+    }
+    @Test void remapBeforeQueuedSuccessHandlerCannotCompleteReady(@TempDir Path directory) throws Exception { afterFinalConfirmation(directory, "remap"); }
+    @Test void expiryBeforeQueuedSuccessHandlerCannotCompleteReady(@TempDir Path directory) throws Exception { afterFinalConfirmation(directory, "expiry"); }
+    @Test void newSameMappingSuccessBeforeQueuedSuccessHandlerPreservesOriginalCapture(@TempDir Path directory) throws Exception { afterFinalConfirmation(directory, "same-mapping"); }
+
+    @Test void candidateControlSynchronizationFailureOrRetirementUsesNativeDrainCleanup(@TempDir Path directory) throws Exception {
+        for (boolean remap : List.of(false, true)) try (var h = new Harness(directory.resolve(Boolean.toString(remap)))) {
+            h.ready();
+            h.nativeHost.onControlSynchronized = () -> {
+                if (!remap) throw new IllegalStateException("candidate synchronization callback failed");
+                h.nativeHost.success(2, 2, 43001); h.app.maintainCandidates();
+            };
+            var exchange = h.exchange();
+            assertThrows(ExecutionException.class, () -> h.app.synchronize(exchange).toCompletableFuture().get(3, TimeUnit.SECONDS));
+            assertFalse(h.nativeHost.delegate.enabled);
+        }
+    }
+
+    @Test void futureLeasePreemptionRunsOnceBeforeNormalNearExpiryCadence(@TempDir Path directory) throws Exception {
+        try (var h = new Harness(directory)) {
+            h.ready(); h.now.set(h.nativeHost.observation.expiresAt() - 31000); h.sync();
+            h.now.addAndGet(999); assertFalse(h.app.due());
+            h.now.incrementAndGet(); assertTrue(h.app.due());
+            h.sync(); assertFalse(h.app.due());
+            h.now.addAndGet(9999); assertFalse(h.app.due());
+            h.now.incrementAndGet(); assertTrue(h.app.due());
         }
     }
 
