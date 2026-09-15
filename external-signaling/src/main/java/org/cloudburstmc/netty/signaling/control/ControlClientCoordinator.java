@@ -68,11 +68,15 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private long synchronizationVersion;
     private String quarantinedFrame;
     private boolean quarantinedGap;
+    private PendingApplicationFrame pendingApplicationFrame;
     private long outgoingSequence, incomingSequence = 1;
     private boolean operationInFlight, synchronizationInFlight;
     private CompletableFuture<ControlOperationResult> pendingResult;
     private SynchronizationExchange synchronizationExchange, pendingSynchronization;
     private boolean forceHttp;
+
+    private record PendingApplicationFrame(ControlFrameCodec.Frame frame, ControlFrameCodec.VerificationKey key,
+            ControlAuthorityCodec.Verified proof, long attempt, long synchronization) { }
 
     private static final class Candidate {
         ControlClientIo.Link link;
@@ -80,6 +84,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         ControlSessionCodec.VerifiedResponse prepared, challenge;
         boolean opened, activating;
         ControlWriterFence writer;
+        Object stateSend;
     }
     private static final class PendingAuthority {
         final ControlAuthorityCodec.Request request;
@@ -100,6 +105,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
         private final ControlClientJournal.Grant grant = snapshot.grant();
         private final ControlAuthorityCodec.Verified proof;
         private final long deadline;
+        private CompletableFuture<ControlSynchronizationResult> confirmation;
+        private ControlStateCodec.Acknowledgement acknowledgement;
+        private boolean appliedCalled, sent, received;
         SynchronizationExchange(ControlAuthorityCodec.Verified proof, long deadline) { this.proof = proof; this.deadline = deadline; }
         private boolean current() {
             return synchronizationExchange == this && generation == attempt && version == synchronizationVersion
@@ -117,6 +125,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         } }
         @Override public CompletionStage<ControlOperationResult> heartbeat(byte[] originalBody) { synchronized (ControlClientCoordinator.this) {
             requireCurrent(); Objects.requireNonNull(originalBody);
+            if (appliedCalled) throw new IllegalStateException("Application confirmation already started");
             var pending = snapshot.pending();
             if (pending == null) return submit("heartbeat", originalBody.clone(), null, true, id(), this);
             if (!pending.intent().operation().equals("heartbeat") || pending.candidate() != null || !Arrays.equals(originalBody, pending.bodyBytes()))
@@ -127,6 +136,69 @@ public final class ControlClientCoordinator implements AutoCloseable {
             var result = pendingResult; pendingSynchronization = this; forceHttp = true; deliverPending();
             return result.minimalCompletionStage();
         } }
+        @Override public CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis basis) { synchronized (ControlClientCoordinator.this) {
+            requireCurrent(); Objects.requireNonNull(basis);
+            if (appliedCalled || snapshot.pending() != null && pendingSynchronization == this)
+                throw new IllegalStateException("Application confirmation requires a settled synchronization heartbeat");
+            if (basis.generation() != snapshot.subject().generation()) throw ControlJson.invalid("applied generation");
+            appliedCalled = true;
+            var summary = new ControlStateCodec.Summary(basis.desiredRevision(), basis.state(), ControlStateCodec.appliedBasisDigest(basis));
+            if (!summary.equals(proof.response().state())) return CompletableFuture.completedFuture(ControlSynchronizationResult.awaitingSource());
+            acknowledgement = new ControlStateCodec.Acknowledgement(id(), summary);
+            confirmation = new CompletableFuture<>();
+            if (writer.transport().equals("https")) {
+                requireCurrent(); confirmation.complete(ControlSynchronizationResult.confirmed(this, acknowledgement));
+                return confirmation.minimalCompletionStage();
+            }
+            if (active.stateSend != null) return CompletableFuture.completedFuture(ControlSynchronizationResult.awaitingSource());
+            var connection = active; Object sendIdentity = new Object();
+            try {
+                byte[] payload = ControlStateCodec.encodeAcknowledgement(acknowledgement).getBytes(StandardCharsets.UTF_8);
+                long now = clock.nowMillis();
+                long sequence = outgoingSequence + 1;
+                var frame = new ControlFrameCodec.Frame(1, "state.applied", id(), sequence, ControlFrameCodec.Direction.HOST_TO_PROVIDER,
+                        config.audience(), snapshot.subject().instanceId(), snapshot.subject().generation(), writer.sessionId(), writer.sessionEpoch(),
+                        writer.connectionId(), grant.capabilities(), now, deadline, ProviderCrypto.base64(payload), ControlFrameCodec.payloadDigest(payload),
+                        authentication(snapshot.currentKey()));
+                String wire = ControlFrameCodec.encode(ControlFrameCodec.sign(frame, ControlFrameCodec.KeyFamily.MACHINE, snapshot.currentKey().keyPair().getPrivate()));
+                requireCurrent();
+                connection.stateSend = sendIdentity; outgoingSequence = sequence;
+                var sending = Objects.requireNonNull(connection.link.sendText(wire), "Missing state.applied send");
+                sending.whenComplete((ignored, failure) -> { synchronized (ControlClientCoordinator.this) {
+                    if (connection.stateSend == sendIdentity) connection.stateSend = null;
+                    if (failure != null) {
+                        // Failed handoff cannot tell us whether the peer consumed this sequence.
+                        if (connection == active) fail();
+                        cancelConfirmation(); return;
+                    }
+                    if (!current()) { cancelConfirmation(); return; }
+                    sent = true; completeConfirmation();
+                }});
+            } catch (GeneralSecurityException | RuntimeException failure) {
+                // A throwing handoff may already have accepted bytes: recover the physical sequence owner.
+                if (connection.stateSend == sendIdentity && connection == active) fail();
+                confirmation.completeExceptionally(failure);
+            }
+            return confirmation.minimalCompletionStage();
+        } }
+        private void ready(ControlFrameCodec.Frame frame) {
+            var ack = ControlStateCodec.decodeAcknowledgement(new String(frame.payloadBytes(), StandardCharsets.UTF_8));
+            // A delayed response from an earlier pass cannot confirm this pass or authorize application work.
+            if (acknowledgement == null || !ack.syncId().equals(acknowledgement.syncId())) return;
+            if (!ack.equals(acknowledgement) || !current() || !ControlStateCodec.matches(proof.response().state(), ack)) {
+                cancelConfirmation(); return;
+            }
+            received = true; completeConfirmation();
+        }
+        private void completeConfirmation() {
+            if (sent && received && current()) confirmation.complete(ControlSynchronizationResult.confirmed(this, acknowledgement));
+        }
+        private void resync() {
+            if (confirmation != null) confirmation.complete(ControlSynchronizationResult.awaitingSource());
+        }
+        private void cancelConfirmation() {
+            if (confirmation != null) confirmation.completeExceptionally(new IllegalStateException("Application confirmation superseded or unavailable"));
+        }
     }
 
     public ControlClientCoordinator(ControlClientJournal journal, ControlClientJournal.Snapshot initial, Config config,
@@ -160,7 +232,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (snapshot.pending() != null && snapshot.pending().candidate() != null) throw new IllegalStateException("Resolve machine key rotation before replacing writer");
         if (snapshot.pendingBootstrap() != null) throw new IllegalStateException("Resolve existing bootstrap intent first");
         desiredTransport = transport; desiredCapabilities = List.copyOf(capabilities);
-        attempt++; operationInFlight = false; resetAuthorityWork(); beginPrepare();
+        attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; beginPrepare();
     }
 
     /** Body and stable intent are committed before network effects. Apply returned body on a serialized application executor. */
@@ -205,7 +277,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
 
     private void recover() {
         if (hasTerminalReceipt()) { stopDeregistered(); return; }
-        attempt++; operationInFlight = false; resetAuthorityWork(); state = State.RECONCILING;
+        attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; state = State.RECONCILING;
         cancel(retry); retry = null;
         var pending = snapshot.pending();
         var credential = pending != null && pending.candidate() != null ? pending.candidate() : snapshot.currentKey();
@@ -293,7 +365,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
             }
         }
         persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(), snapshot.pending(), snapshot.pendingBootstrap(), grant(current), snapshot.authorityFloor()));
-        if (current.get("writerEnabled").getAsBoolean() && snapshot.pendingBootstrap() == null && active != null && active.link != null && active.writer != null
+        if (current.get("writerEnabled").getAsBoolean() && snapshot.pendingBootstrap() == null && active != null && active != discardedGapConnection && active.link != null && active.writer != null
                 && samePhysicalWriter(active.writer, writer) && !active.link.closed().toCompletableFuture().isDone()
                 && clock.nowMillis() < snapshot.grant().sessionExpiresAt()) {
             // A committed machine rotation changes selected key/revision without replacing this socket or its frame sequences.
@@ -436,6 +508,10 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     if (!currentKey(key)) { authorityUnavailable(); return; }
                     proof.requireFreshDelivery(clock.nowMillis(), authorityFloor());
                     cancel(pending.timeout); pendingAuthority = null; authority = proof; authorityKey = key;
+                    if (pendingApplicationFrame != null && pendingApplicationFrame.proof() != proof) {
+                        // An already consumed application frame lost its original scope. Recover ordered delivery.
+                        replaceAfterFrameGap(); return;
+                    }
                     applySynchronizedState(proof);
                 } catch (RuntimeException invalid) { if (currentPending(pending)) authorityUnavailable(); }
             }});
@@ -451,7 +527,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 && pending.grant.equals(snapshot.grant()) && ownsActiveWriter();
     }
     private boolean ownsActiveWriter() {
-        return snapshot.writer().transport().equals("https") || active != null && active.link != null && active.writer != null
+        return snapshot.writer().transport().equals("https") || active != null && active != discardedGapConnection && active.link != null && active.writer != null
                 && active.writer.equals(snapshot.writer()) && !active.link.closed().toCompletableFuture().isDone();
     }
     private ControlAuthorityCodec.Floor authorityFloor() { return snapshot.authorityFloor() == null ? null : snapshot.authorityFloor().value(); }
@@ -473,16 +549,20 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return;
         if (pendingAuthority != null) cancel(pendingAuthority.timeout);
         pendingAuthority = null; authority = null; authorityKey = null; synchronizationInFlight = false; synchronizationVersion++;
-        synchronizationExchange = null; pendingSynchronization = null;
+        var invalidated = synchronizationExchange; synchronizationExchange = null; pendingSynchronization = null;
         cancel(synchronizationTimeout); synchronizationTimeout = null; state = State.AUTHORITY_EXPIRED;
         cancel(authorityRetry);
-        var grant = snapshot.grant(); if (grant == null || clock.nowMillis() >= grant.sessionExpiresAt()) return;
+        var grant = snapshot.grant();
+        if (grant == null || clock.nowMillis() >= grant.sessionExpiresAt()) { if (invalidated != null) invalidated.cancelConfirmation(); return; }
         long bound = backoffBound(authorityFailures); authorityFailures = Math.min(authorityFailures + 1, 30);
-        double random = jitter.getAsDouble(); if (!Double.isFinite(random) || random < 0 || random >= 1) { halt(); return; }
+        double random = jitter.getAsDouble();
+        if (!Double.isFinite(random) || random < 0 || random >= 1) { halt(); if (invalidated != null) invalidated.cancelConfirmation(); return; }
         long generation = attempt;
         authorityRetry = scheduler.schedule(() -> { synchronized (this) {
             if (generation == attempt && state == State.AUTHORITY_EXPIRED) beginAuthorityRefresh();
         }}, Math.max(50, (long) (bound * (0.5 + random * 0.5))));
+        // No transition work follows callbacks: they may close or replace this coordinator.
+        if (invalidated != null) invalidated.cancelConfirmation();
     }
     private void applySynchronizedState(ControlAuthorityCodec.Verified proof) {
         synchronizationInFlight = true; state = State.SYNCHRONIZING;
@@ -495,18 +575,29 @@ public final class ControlClientCoordinator implements AutoCloseable {
         Object operationIdentity = new Object(); synchronizationIo = operationIdentity;
         try {
             var operation = Objects.requireNonNull(io.synchronize(snapshot.writer(), snapshot.grant(), proof, exchange), "Missing synchronization I/O");
-            operation.whenComplete((ignored, failure) -> { synchronized (this) {
+            operation.whenComplete((result, failure) -> { synchronized (this) {
                 if (synchronizationIo == operationIdentity) synchronizationIo = null;
                 if (generation != attempt || synchronization != synchronizationVersion || state == State.CLOSED || state == State.UNRESOLVED) return;
                 cancel(synchronizationTimeout); synchronizationTimeout = null; synchronizationInFlight = false;
                 // Delivery has already been consumed. Only the installed inner authority/current trust applies here.
-                if (failure != null || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()
+                if (failure != null || result == null || !result.belongsTo(exchange, proof.response().state())
+                        || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()
                         || synchronizationExchange != exchange || !exchange.writer.equals(snapshot.writer()) || !exchange.grant.equals(snapshot.grant())
                         || snapshot.pending() != null && pendingSynchronization == exchange) { authorityUnavailable(); return; }
                 synchronizationExchange = null; pendingSynchronization = null;
                 state = State.READY; failures = 0; authorityFailures = 0; cancel(authorityTimer);
                 authorityTimer = scheduler.schedule(() -> { synchronized (this) { if (generation == attempt) expireAuthority(); }}, proof.response().authorityExpiresAt() - clock.nowMillis());
-                flushQuarantinedFrame();
+                try {
+                    flushQuarantinedFrame();
+                    flushApplicationFrame();
+                } catch (RuntimeException deliveryFailure) {
+                    // This runs in a CompletionStage callback; an ignored dependent failure must not leave READY.
+                    if (generation == attempt && state == State.READY) {
+                        if (hasAuthority()) replaceAfterFrameGap();
+                        else authorityUnavailable();
+                    }
+                    return;
+                }
                 if (generation == attempt && state == State.READY && authority == proof && hasAuthority()) deliverPending();
             }});
             flushQuarantinedFrame();
@@ -515,12 +606,17 @@ public final class ControlClientCoordinator implements AutoCloseable {
             authorityUnavailable();
         }
     }
-    private void resetAuthorityWork() {
+    private boolean resetAuthorityWork() {
+        long generation = attempt; State phase = state;
         if (pendingAuthority != null) cancel(pendingAuthority.timeout);
         pendingAuthority = null; cancel(authorityRetry); authorityRetry = null;
         cancel(synchronizationTimeout); synchronizationTimeout = null;
+        var invalidated = synchronizationExchange;
         synchronizationInFlight = false; synchronizationVersion++; synchronizationExchange = null; pendingSynchronization = null;
-        quarantinedFrame = null; quarantinedGap = false;
+        long version = synchronizationVersion;
+        quarantinedFrame = null; quarantinedGap = false; pendingApplicationFrame = null;
+        if (invalidated != null) invalidated.cancelConfirmation();
+        return generation == attempt && version == synchronizationVersion && phase == state;
     }
 
     private void activeFrame(String wire) {
@@ -533,10 +629,14 @@ public final class ControlClientCoordinator implements AutoCloseable {
         }
         var raw = ControlFrameCodec.decode(wire);
         // Applying required state is a separate gate. Preserve ordering instead of accepting then dropping application work.
-        if (quarantinedFrame != null) { retainQuarantinedFrame(wire); flushQuarantinedFrame(); return; }
-        if (state == State.SYNCHRONIZING && !List.of("session.ready", "session.resync", "state.desired", "lifecycle.receipt").contains(raw.type())) {
-            retainQuarantinedFrame(wire); flushQuarantinedFrame(); return;
+        if (quarantinedFrame != null) {
+            if (quarantinedFrame.equals(wire)) { flushQuarantinedFrame(); return; }
+            long generation = attempt; var connection = active;
+            flushQuarantinedFrame();
+            if (attempt != generation || active != connection || quarantinedFrame != null) return;
+            activeFrame(wire); return;
         }
+        if (pendingApplicationFrame != null && pendingApplicationFrame.frame().equals(raw)) return;
         var writer = snapshot.writer(); var grant = snapshot.grant();
         var context = new ControlFrameCodec.Context(ControlFrameCodec.Direction.PROVIDER_TO_HOST, config.audience(), snapshot.subject().instanceId(), snapshot.subject().generation(),
                 writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), grant.capabilities(), incomingSequence, clock.nowMillis(), authority.response().authorityExpiresAt(), 30000);
@@ -549,9 +649,31 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (frame.type().equals("lifecycle.receipt")) acceptResult(ControlResultCodec.decode(new String(frame.payloadBytes(), StandardCharsets.UTF_8)),
                 resultGuard(writer, grant, attempt, frame.expiresAt(), frameKey, pendingSynchronization));
         else if (frame.type().equals("session.reconnect")) replaceTransport(desiredTransport, desiredCapabilities);
-        else if (state == State.SYNCHRONIZING && List.of("session.ready", "session.resync", "state.desired").contains(frame.type()))
+        else if (frame.type().equals("session.ready")) {
+            if (state == State.SYNCHRONIZING && synchronizationExchange != null) synchronizationExchange.ready(frame);
+        }
+        else if (state == State.SYNCHRONIZING && frame.type().equals("session.resync") && synchronizationExchange != null && synchronizationExchange.confirmation != null)
+            synchronizationExchange.resync();
+        else if (state == State.SYNCHRONIZING && frame.type().equals("state.desired") && synchronizationExchange != null && synchronizationExchange.appliedCalled)
+            authorityUnavailable();
+        else if (state == State.SYNCHRONIZING && List.of("session.resync", "state.desired").contains(frame.type()))
             io.onSynchronizationFrame(frameDelivery(frame, frameKey));
+        else if (state == State.SYNCHRONIZING) {
+            if (pendingApplicationFrame != null) { replaceAfterFrameGap(); return; }
+            pendingApplicationFrame = new PendingApplicationFrame(frame, frameKey, authority, attempt, synchronizationVersion);
+        }
         else if (state == State.READY) io.onVerifiedFrame(frameDelivery(frame, frameKey));
+    }
+
+    private void flushApplicationFrame() {
+        var pending = pendingApplicationFrame;
+        if (pending == null || state != State.READY || !hasAuthority()) return;
+        if (pending.proof() != authority || pending.attempt() != attempt || pending.synchronization() != synchronizationVersion
+                || clock.nowMillis() >= pending.frame().expiresAt() || !currentKey(pending.key()) || quarantinedGap) {
+            replaceAfterFrameGap(); return;
+        }
+        io.onVerifiedFrame(frameDelivery(pending.frame(), pending.key()));
+        if (pendingApplicationFrame == pending) pendingApplicationFrame = null;
     }
 
     private ControlFrameDelivery frameDelivery(ControlFrameCodec.Frame frame, ControlFrameCodec.VerificationKey frameKey) {
@@ -566,6 +688,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
         } });
     }
 
+    private void replaceAfterFrameGap() {
+        discardedGapConnection = active;
+        replaceTransport(desiredTransport, desiredCapabilities);
+    }
+
     private void flushQuarantinedFrame() {
         if (quarantinedFrame == null || !hasAuthority()) return;
         String wire = quarantinedFrame;
@@ -575,10 +702,10 @@ public final class ControlClientCoordinator implements AutoCloseable {
             quarantinedFrame = null; quarantinedGap = false;
             // An expired signature is evidence of a lost ordered frame only, never permission to dispatch it.
             // Wait for positive fresh source authority first; unverified traffic cannot cause a replacement CAS.
-            if (authenticatedControlEvidence(frame) && hasAuthority()) { discardedGapConnection = active; replaceTransport(desiredTransport, desiredCapabilities); }
+            if (authenticatedControlEvidence(frame) && hasAuthority()) replaceAfterFrameGap();
             return;
         }
-        if (state != State.READY && !List.of("session.ready", "session.resync", "state.desired", "lifecycle.receipt").contains(frame.type())) return;
+        if (state != State.READY && state != State.SYNCHRONIZING) return;
         quarantinedFrame = null; quarantinedGap = false;
         activeFrame(wire);
     }
@@ -588,6 +715,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
             if (wire.equals(quarantinedFrame)) return;
             var frame = ControlFrameCodec.decode(wire);
             if (frame.sequence() < incomingSequence || !authenticatedControlEvidence(frame)) return;
+            if (pendingApplicationFrame != null) { quarantinedGap = true; return; }
             if (quarantinedFrame != null) {
                 var previous = ControlFrameCodec.decode(quarantinedFrame);
                 if (previous.equals(frame)) return;
@@ -780,7 +908,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private void stopDeregistered() {
         if (!hasTerminalReceipt()) throw new IllegalStateException("Missing committed deregistration");
         var receipt = snapshot.pending().receipt();
-        state = State.DEREGISTERED; attempt++; operationInFlight = false; resetAuthorityWork(); authority = null;
+        state = State.DEREGISTERED; attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; authority = null;
         cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
         Candidate previous = active, standby = candidate; active = null; candidate = null;
         // Fence all callbacks before closing either connection; cleanup failure cannot erase commit knowledge.
@@ -793,7 +921,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
 
     private void halt() {
         if (state == State.CLOSED || state == State.DEREGISTERED) return;
-        state = State.UNRESOLVED; attempt++; operationInFlight = false; resetAuthorityWork(); authority = null;
+        state = State.UNRESOLVED; attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; authority = null;
         cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
         Candidate oldCandidate = candidate, oldActive = active; candidate = null; active = null;
         if (oldCandidate != null && oldCandidate.link != null) oldCandidate.link.abort();
@@ -803,7 +931,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
     private void fail() {
         if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return;
-        attempt++; operationInFlight = false; resetAuthorityWork(); authority = null; state = State.BACKOFF;
+        attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; authority = null; state = State.BACKOFF;
         Candidate oldCandidate = candidate, oldActive = active; candidate = null; active = null;
         if (oldCandidate != null && oldCandidate.link != null) oldCandidate.link.abort();
         if (oldActive != null && oldActive != oldCandidate && oldActive.link != null) oldActive.link.abort();
@@ -894,7 +1022,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     }
     private static void cancel(ControlClientIo.Scheduler.Task task) { if (task != null) task.cancel(); }
     @Override public synchronized void close() throws IOException {
-        if (state == State.CLOSED) return; state = State.CLOSED; attempt++; resetAuthorityWork(); cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
+        if (state == State.CLOSED) return; state = State.CLOSED; attempt++; if (!resetAuthorityWork()) return; cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
         Candidate previous = active, standby = candidate; active = null; candidate = null;
         if (previous != null && previous.link != null) previous.link.close();
         if (standby != null && standby != previous && standby.link != null) standby.link.abort();

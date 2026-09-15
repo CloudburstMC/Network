@@ -24,6 +24,8 @@ class ControlAuthorityCoordinatorTest {
     private static String frame(ControlClientCoordinatorTest.Harness h, long sentAt, long expiresAt, boolean validSignature,
                                 long sequence, String type) throws Exception {
         var writer = h.writer; byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+        var link = h.links.get(h.links.size() - 1); sequence += link.readinessFrames;
+        if (validSignature) link.nextProviderSequence = Math.max(link.nextProviderSequence, sequence + 1);
         var value = new ControlFrameCodec.Frame(1, type, "provider_frame_0000001", sequence,
                 ControlFrameCodec.Direction.PROVIDER_TO_HOST, ControlClientCoordinatorTest.ORIGIN, h.initial.subject().instanceId(), h.initial.subject().generation(),
                 writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), h.grant.capabilities(), sentAt, expiresAt,
@@ -203,9 +205,43 @@ class ControlAuthorityCoordinatorTest {
     @Test void applicationFrameCannotSilentlyHideLaterSynchronizationFrame() throws Exception {
         var h = activated(); h.respondAuthority(); int bootstrap = h.bootstrapCalls;
         h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true, 1, "connectivity.report"));
-        h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true, 2, "session.ready"));
+        h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true, 2, "state.desired"));
+        assertEquals(ControlClientCoordinator.State.SYNCHRONIZING, h.client.state());
+        assertEquals("state.desired", h.frameDeliveries.get(0).frame().type());
+        assertEquals(bootstrap, h.bootstrapCalls); assertEquals(0, h.applicationFrames);
+        h.synchronizedReady(); assertEquals(1, h.applicationFrames); assertEquals(bootstrap, h.bootstrapCalls);
+    }
+
+    @Test void secondApplicationFrameDuringSynchronizationDoesNotGrowTheDeferredBuffer() throws Exception {
+        var h = activated(); h.respondAuthority(); int bootstrap = h.bootstrapCalls;
+        String first = frame(h, h.time.now, h.time.now + 30000, true, 1, "connectivity.report");
+        String second = frame(h, h.time.now, h.time.now + 30000, true, 2, "connectivity.report");
+        h.links.get(0).receiver.accept(first); h.links.get(0).receiver.accept(second);
         assertEquals(ControlClientCoordinator.State.PREPARING, h.client.state());
         assertEquals(bootstrap + 1, h.bootstrapCalls); assertEquals(0, h.applicationFrames);
+        for (int i = 0; i < 10; i++) { h.links.get(0).receiver.accept(first); h.links.get(0).receiver.accept(second); }
+        assertEquals(ControlClientCoordinator.State.PREPARING, h.client.state());
+        assertEquals(bootstrap + 1, h.bootstrapCalls); assertEquals(0, h.links.get(0).abortCalls);
+    }
+
+    @Test void consumedDeferredApplicationFrameCannotSurviveAChangedAuthorityPass() throws Exception {
+        var h = activated(); h.respondAuthority(); int bootstrap = h.bootstrapCalls;
+        h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true));
+        h.synchronizations.get(0).completeExceptionally(new IllegalStateException("application failed"));
+        assertEquals(bootstrap, h.bootstrapCalls); h.time.advance(h.time.nextDelay()); h.respondAuthority();
+        assertEquals(ControlClientCoordinator.State.PREPARING, h.client.state());
+        assertEquals(bootstrap + 1, h.bootstrapCalls); assertEquals(0, h.applicationFrames);
+    }
+
+    @Test void failedDeferredApplicationEnqueueCannotLeaveReadinessOrLoseItsRecoveryFence() throws Exception {
+        var h = activated(); h.respondAuthority(); int bootstrap = h.bootstrapCalls;
+        String wire = frame(h, h.time.now, h.time.now + 30000, true);
+        h.links.get(0).receiver.accept(wire); h.failApplicationDispatch = true;
+        h.synchronizations.get(0).complete(null);
+        assertFalse(h.client.ready()); assertEquals(ControlClientCoordinator.State.PREPARING, h.client.state());
+        assertEquals(0, h.applicationFrames); assertEquals(bootstrap + 1, h.bootstrapCalls);
+        h.links.get(0).receiver.accept(wire);
+        assertEquals(ControlClientCoordinator.State.PREPARING, h.client.state()); assertEquals(bootstrap + 1, h.bootstrapCalls);
     }
 
     @Test void unauthenticatedSecondFrameAndExactDuplicateDoNotDisplaceRetainedFrame() throws Exception {

@@ -29,6 +29,12 @@ public interface ControlClientIo {
         Optional<byte[]> pendingHeartbeat();
         /** One-off HTTPS under the selected writer; it does not replace the transport or bypass the journal. */
         CompletionStage<ControlOperationResult> heartbeat(byte[] originalBody);
+        /**
+         * Call only after actual native application and durable save. The coordinator compares the exact basis
+         * with cached authority; WebSocket confirmation additionally requires a matching signed session.ready.
+         * One call per synchronization pass. A source mismatch returns awaitingSource without a database query.
+         */
+        CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis basis);
         /** Recheck immediately before and after asynchronous state/key application. */
         void requireCurrent();
     }
@@ -43,9 +49,9 @@ public interface ControlClientIo {
      * Use the restricted lane for initial heartbeat/key/state exchange and requireCurrent before/after async application.
      * Complete only after actual application and provider readiness confirmation; a committed receipt is insufficient.
      */
-    CompletionStage<Void> synchronize(ControlWriterFence writer, ControlClientJournal.Grant fixedGrant,
+    CompletionStage<ControlSynchronizationResult> synchronize(ControlWriterFence writer, ControlClientJournal.Grant fixedGrant,
                                       ControlAuthorityCodec.Verified authority, Synchronization exchange);
-    /** Only session.ready/session.resync/state.desired during active synchronization; recheck the delivery when queued work runs. */
+    /** State/resync notices during active synchronization; readiness acknowledgements belong to the coordinator. */
     void onSynchronizationFrame(ControlFrameDelivery delivery);
     /** Verified active frames, guarded through queued application; standby traffic never reaches this hook. */
     void onVerifiedFrame(ControlFrameDelivery delivery);

@@ -92,7 +92,7 @@ class ControlOperationCoordinatorTest {
             h.additionalKeys.put(key.keyId(), key);
             var future = h.client.submit("heartbeat", bytes("{}"), false).toCompletableFuture();
             byte[] body = bytes(wire(h.receipt("committed"), "{\"ticketKey\":\"private-result-key\"}"));
-            var frame = new ControlFrameCodec.Frame(1, "lifecycle.receipt", "provider_frame_0000001", 1,
+            var frame = new ControlFrameCodec.Frame(1, "lifecycle.receipt", "provider_frame_0000001", 1 + h.links.get(0).readinessFrames,
                     ControlFrameCodec.Direction.PROVIDER_TO_HOST, ControlClientCoordinatorTest.ORIGIN,
                     h.initial.subject().instanceId(), h.initial.subject().generation(), h.writer.sessionId(), h.writer.sessionEpoch(),
                     h.writer.connectionId(), h.grant.capabilities(), h.time.now, h.time.now + 30000,
@@ -112,7 +112,7 @@ class ControlOperationCoordinatorTest {
     }
 
     @Test void initialHeartbeatUsesSameJournalAndWriterAndWaitsForApplicationAndSignedProviderReadiness() throws Exception {
-        var h = activated(); var lane = h.synchronizationExchanges.get(0); var writer = h.writer;
+        var h = activated(); h.autoReady = false; var lane = h.synchronizationExchanges.get(0); var writer = h.writer;
         assertTrue(lane.pendingHeartbeat().isEmpty());
         var result = lane.heartbeat(bytes("{\"state\":\"serving\",\"appliedStateRevision\":0}"));
         assertEquals(1, h.operations.size()); assertEquals(writer.connectionId(), h.operations.get(0).request().connectionId());
@@ -120,21 +120,23 @@ class ControlOperationCoordinatorTest {
         assertEquals(1, h.journal.value.lastSequence()); assertEquals(1, h.journal.value.pending().intent().sequence());
         assertThrows(IllegalStateException.class, () -> h.client.submit("heartbeat", bytes("{}"), true));
         assertThrows(IllegalStateException.class, h.client::rotateMachineKey);
-        var applicationStarted = new CompletableFuture<Void>(); var applied = new CompletableFuture<Void>(); var providerReady = new CompletableFuture<Void>();
-        h.synchronizationFrames = frame -> { if (frame.type().equals("session.ready")) providerReady.complete(null); };
+        var applicationStarted = new CompletableFuture<Void>(); var applied = new CompletableFuture<Void>();
         var executor = Executors.newSingleThreadExecutor();
         try {
             var application = result.thenComposeAsync(value -> {
                 assertFalse(Thread.holdsLock(h.client)); lane.requireCurrent(); value.requireCurrent();
                 assertTrue(new String(value.bodyBytes().orElseThrow(), StandardCharsets.UTF_8).contains("desiredState"));
                 applicationStarted.complete(null);
-                return applied.thenCombine(providerReady, (a, b) -> { value.requireCurrent(); lane.requireCurrent(); return (Void)null; });
+                return applied.thenApply(a -> { value.requireCurrent(); lane.requireCurrent(); return (Void)null; });
             }, executor);
             var completion = application.whenComplete((nothing, failure) -> { if (failure == null) h.synchronizations.get(0).complete(null); else h.synchronizations.get(0).completeExceptionally(failure); });
             reply(h, 0, h.receipt("committed"), "{\"desiredState\":{\"revision\":1,\"state\":\"serving\"}}");
             applicationStarted.get(2, TimeUnit.SECONDS); assertNull(h.journal.value.pending()); assertFalse(h.client.ready());
             applied.complete(null); assertFalse(h.client.ready());
-            h.incoming(h.links.get(0), writer, "session.ready", bytes("{}"), 1);
+            completion.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            var link = h.links.get(0);
+            var ack = ControlStateCodec.decodeAcknowledgement(new String(ControlFrameCodec.decode(link.appliedFrames.get(0)).payloadBytes(), StandardCharsets.UTF_8));
+            link.readyReply(ack);
             completion.toCompletableFuture().get(2, TimeUnit.SECONDS);
             assertTrue(h.client.ready()); assertEquals(writer, h.client.snapshot().writer()); assertEquals(3, h.bootstrapCalls);
             assertThrows(IllegalStateException.class, () -> lane.heartbeat(bytes("{}")));
@@ -183,13 +185,26 @@ class ControlOperationCoordinatorTest {
     }
 
     @Test void noncommittedResultCannotExposeBodyReleaseBarrierOrAllowAnotherHeartbeat() throws Exception {
-        for (String disposition : new String[]{"unknown", "rejected", "expired"}) {
+        for (String disposition : new String[]{"unknown"}) {
             var h = activated(); var lane = h.synchronizationExchanges.get(0);
             var result = lane.heartbeat(bytes("{}")); reply(h, 0, h.receipt(disposition), "{}");
             assertFalse(result.toCompletableFuture().isDone()); assertNotNull(h.journal.value.pending());
             assertThrows(IllegalStateException.class, () -> lane.heartbeat(bytes("{\"different\":true}")));
             if (!disposition.equals("unknown")) assertThrows(IllegalStateException.class, () -> lane.heartbeat(bytes("{}")));
             h.synchronizations.get(0).complete(null); assertFalse(h.client.ready());
+        }
+    }
+
+    @Test void terminalRejectionReleasesSynchronizationLaneWithoutBodyOrAutomaticReadiness() throws Exception {
+        for (String disposition : new String[]{"rejected", "expired"}) {
+            var h = activated(); var lane = h.synchronizationExchanges.get(0);
+            var result = lane.heartbeat(bytes("[]")); reply(h, 0, h.receipt(disposition), "{}");
+            assertFalse(result.toCompletableFuture().join().hasBody()); assertNull(h.journal.value.pending());
+            assertFalse(h.client.ready());
+            var corrected = lane.heartbeat(bytes("{}")); assertEquals(2, h.journal.value.pending().intent().sequence());
+            reply(h, 1, h.receipt("committed"), "{\"accepted\":true}");
+            assertTrue(corrected.toCompletableFuture().join().hasBody()); assertFalse(h.client.ready());
+            h.synchronizedReady(); h.client.close();
         }
     }
 }
