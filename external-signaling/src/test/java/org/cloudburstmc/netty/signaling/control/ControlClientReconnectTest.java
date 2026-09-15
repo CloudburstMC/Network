@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.signaling.control;
 
 import org.junit.jupiter.api.Test;
+import org.cloudburstmc.netty.signaling.ProviderCrypto;
 
 import java.nio.charset.StandardCharsets;
 
@@ -10,6 +11,34 @@ import static org.junit.jupiter.api.Assertions.*;
 /** A provider may retire its physical socket while a durable operation is unsettled. */
 class ControlClientReconnectTest {
     private static final byte[] NOTICE = "{}".getBytes(StandardCharsets.UTF_8);
+
+    @Test void noticeArrivingAfterSourceExpiryCannotAuthorizeReplacementAndDrainCloseRecoversPendingIntent() throws Exception {
+        var h = new Harness(); h.ready(); var old = h.links.get(0); var writer = h.writer;
+        h.time.advance(h.issuedAuthorityExpires - h.time.now - 1000);
+        var frame = new ControlFrameCodec.Frame(1, "session.reconnect", "retirement_notice_00001", old.nextProviderSequence,
+                ControlFrameCodec.Direction.PROVIDER_TO_HOST, ORIGIN, h.initial.subject().instanceId(), h.initial.subject().generation(),
+                writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), h.grant.capabilities(), h.time.now, h.issuedAuthorityExpires,
+                ProviderCrypto.base64(NOTICE), ControlFrameCodec.payloadDigest(NOTICE),
+                new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, h.providerKey.keyId(), ""));
+        String wire = ControlFrameCodec.encode(ControlFrameCodec.sign(frame, ControlFrameCodec.KeyFamily.PROVIDER_CONTROL, h.provider.getPrivate()));
+        h.time.advance(1001); int bootstrap = h.bootstrapCalls;
+        old.receiver.accept(wire);
+        assertFalse(h.client.ready()); assertEquals(bootstrap, h.bootstrapCalls);
+        h.client.submit("heartbeat", " { }\n".getBytes(StandardCharsets.UTF_8), false);
+        var pending = h.journal.value.pending();
+        assertTrue(h.requests.isEmpty()); assertEquals(pending, h.journal.value.pending());
+        h.awaitAuthorityRequest(); var refused = h.authorityRequests.remove();
+        refused.reply().complete(new ControlClientIo.HttpReply(refused.endpoint(), "POST", refused.endpoint(), 503, ""));
+        assertEquals(bootstrap, h.bootstrapCalls); assertEquals(pending, h.journal.value.pending());
+        // The independently bounded provider drain ends with ordinary close; stale notice is not a grant.
+        old.abort(); assertEquals(ControlClientCoordinator.State.BACKOFF, h.client.state());
+        h.time.advance(h.time.nextDelay()); h.respondStatus(); h.respondStatus();
+        h.respondPrepare(); h.links.get(1).challenge(); h.respondActivation(); h.synchronizedReady();
+        var resent = ControlLifecycleCodec.decodeWsRequest(new String(ControlFrameCodec.decode(h.links.get(1).sent.get(0)).payloadBytes(), StandardCharsets.UTF_8));
+        assertEquals(pending.intent(), resent.intent()); assertArrayEquals(pending.bodyBytes(), resent.bodyBytes());
+        assertEquals(writer.sessionEpoch() + 1, h.writer.sessionEpoch()); assertEquals(0, h.httpAuthorityCalls);
+        h.client.close();
+    }
 
     @Test void noticeReplacesWriterWithoutClosingOldSocketBeforeActivationOrChangingPendingBody() throws Exception {
         var h = new Harness(); h.ready(); var old = h.links.get(0); var writer = h.writer;
