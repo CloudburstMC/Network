@@ -29,7 +29,7 @@ public final class ControlledProviderLocalSmokeClient {
     private final class Host {
         final String id, mode; final Path directory; final NativeProviderTransport nativeTransport; final ProviderClient client;
         final CompletableFuture<JsonObject> started; String writerSeen, basisSeen; boolean ready;
-        CompletableFuture<JsonObject> runtimeReadiness; boolean runtimeReady;
+        CompletableFuture<JsonObject> runtimeReadiness; boolean runtimeReady; long allReadyAtNanos;
         Host(JsonObject value) throws Exception {
             id = string(value, "hostId"); mode = string(value, "transport");
             if (!id.matches("[A-Za-z0-9_-]{1,128}") || !Set.of("https", "websocket").contains(mode)) throw new IllegalArgumentException("Invalid fixture host");
@@ -95,7 +95,9 @@ public final class ControlledProviderLocalSmokeClient {
             if (!runtimeReady && runtimeReadiness != null && runtimeReadiness.isDone()) {
                 // Observe the actual returned result without stalling journal/native observation while it is pending.
                 runtimeReadiness.getNow(null);
-                emit("runtime_ready", id, mode, readyFields("runtime readiness")); runtimeReady = true;
+                var event = readyFields("runtime readiness");
+                event.addProperty("elapsedSinceInitialReadyMillis", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - allReadyAtNanos));
+                emit("runtime_ready", id, mode, event); runtimeReady = true;
             }
         }
         JsonObject readyFields(String phase) throws Exception {
@@ -145,7 +147,10 @@ public final class ControlledProviderLocalSmokeClient {
                 if (now - allReadyAt >= TimeUnit.SECONDS.toNanos(35)) {
                     runtimeCheckStarted = true;
                     // ProviderClient queues each refresh on its own application executor and returns immediately.
-                    for (var host : hosts) host.runtimeReadiness = host.client.readiness();
+                    for (var host : hosts) {
+                        host.allReadyAtNanos = allReadyAt;
+                        host.runtimeReadiness = host.client.readiness();
+                    }
                 }
             }
             if (stop.isDone()) { if (!"stop".equals(stop.get())) throw new IllegalStateException("Expected explicit local stop command"); return; }
