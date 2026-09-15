@@ -62,6 +62,29 @@ public final class TransportIdentityBinding {
         };
     }
 
+    /** Where the binding on a channel stands, for diagnostics. */
+    public enum State {
+        /** The transport validated no identity, so nothing binds the login chain */
+        NONE,
+        /** Validated, and no login has been decided against it yet */
+        PENDING,
+        /** A login was accepted against it */
+        ACCEPTED,
+        /** Spent on a refused login, closed, or the admission behind it has lapsed */
+        REJECTED
+    }
+
+    public static State state(Channel channel) {
+        IdentityKeyVerifier verifier = channel.attr(KEY).get();
+        if (verifier == null) {
+            return State.NONE;
+        }
+        if (verifier.pending()) {
+            return State.PENDING;
+        }
+        return verifier.rejected() ? State.REJECTED : State.ACCEPTED;
+    }
+
     /** Release only after the application has accepted its existing trusted forwarding identity. */
     public static String acceptForwardedIdentity(Channel channel) {
         if (!(channel instanceof NetherNetChildChannel)) {
