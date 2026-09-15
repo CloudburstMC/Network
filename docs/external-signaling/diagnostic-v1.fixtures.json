@@ -1,0 +1,168 @@
+{
+  "kind": "nxs-diagnostic-v1-fixtures",
+  "version": 1,
+  "experimental": true,
+  "warning": "PUBLIC test keys, signatures, secrets and nonces. Never deploy or reuse.",
+  "context": {
+    "providerOrigin": "https://provider.example",
+    "hostId": "host_01",
+    "incarnation": "0123456789abcdef0123456789abcdef",
+    "generation": 7
+  },
+  "key": {
+    "keyId": "D001",
+    "secret": "PUBLIC-diagnostic-fixture-secret-never-deploy",
+    "notBefore": 1788484700000,
+    "retireAt": 1788484900000
+  },
+  "now": 1788484800000,
+  "parentExpiresAt": 1788484860000,
+  "contextDigestHex": "cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e551",
+  "privateKeyPkcs8Hex": "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b0201010430e4376215a9f12d0873f0f5988662f84fa36d13f0a586fbd1539067cc7efdffb3bba4a567ca66c47342e1265d63978558a164036200049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+  "vectors": [
+    {
+      "name": "v4-password22",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuv",
+        "attemptIdHex": "04040404040404040404040404040416",
+        "offerDigestHex": "a95b345bb141825b26f254a5459dead1ebcea75d0d897191a33f0a53383bcfa6",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuv\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "161718191a1b1c1d1e1f2021",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "42932cf782f3c277cdd2e9f7db2b8033fbee5d0385410d3de8635cc0971194350b51534459843d3d325ccd656f3d71db9afc766458850421bc56ab6df95d7793eb7bd743c60ea1324674c49e89b165b0e44d4ba8093266e97557859a7c0a18d0",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0000000000000000000000000000000004040404040404040404040404040416a95b345bb141825b26f254a5459dead1ebcea75d0d897191a33f0a53383bcfa6000000000000000901000000000000000000000000cb0071084abc166162636465666768696a6b6c6d6e6f70717273747576000461626344",
+      "authHex": "004e58445001010004040404040404040404040404040416049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf42932cf782f3c277cdd2e9f7db2b8033fbee5d0385410d3de8635cc0971194350b51534459843d3d325ccd656f3d71db9afc766458850421bc56ab6df95d7793eb7bd743c60ea1324674c49e89b165b0e44d4ba8093266e97557859a7c0a18d0",
+      "localUfrag": "NXD1D001FhcYGRobHB0eHyAhj/Xkap8Htj2BG+jbjrKji40NWz7w4smKxI3sDa5epAKb3MY0JenC8/tvt5MwCg3zsDT0C/F10B9x7eRkmtR4M+cYT9PAKcS5JuOjlflG8OHNqE/dZnNsL5W+6sO+vr69PRKmu8kDeWHPcaBiNKWj6M+T1m7tiRp3wdfR2Yp6sYZz4PquyN+idMQkcP9qgaqZNITOfXa2xaX0NGPaFRtQygtXBK5/ag",
+      "icePwd": "Kx2ieavkHRzARjxudpGcozFwCtqM/9Vc"
+    },
+    {
+      "name": "v4-password24",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "04040404040404040404040404040418",
+        "offerDigestHex": "813e5becb79fe36140fb2458f690d88aa56ec6aef3f287acbd5a68233c245d92",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "18191a1b1c1d1e1f20212223",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "042dfe485e882a6c91656067b8493cdcf7b82434f26d2f61bb102fe32b15700711b1c2b9f12726139740abf762eb6d3370dfc8e3c7fe8a26222377199469fafc7015dba22b003ed840df9e20a5e52b5ec138b395783ecd22d53663ebf57a8b5c",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0000000000000000000000000000000004040404040404040404040404040418813e5becb79fe36140fb2458f690d88aa56ec6aef3f287acbd5a68233c245d92000000000000000901000000000000000000000000cb0071084abc186162636465666768696a6b6c6d6e6f707172737475767778000461626344",
+      "authHex": "004e58445001010004040404040404040404040404040418049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf042dfe485e882a6c91656067b8493cdcf7b82434f26d2f61bb102fe32b15700711b1c2b9f12726139740abf762eb6d3370dfc8e3c7fe8a26222377199469fafc7015dba22b003ed840df9e20a5e52b5ec138b395783ecd22d53663ebf57a8b5c",
+      "localUfrag": "NXD1D001GBkaGxwdHh8gISIj4pUPqSo47jct1iOLkJ6NCbrPybgSpohdePjCwtVczspa8YWiRhMkEdBja5Z3rClnURnS5Q2qQZ64VMqTCRpVpGSgEOAVEIiyzxyTd9au6ny/hq8/NJXwOmTnupYlahcpY5xKKC7i94iQEIoBYZsuyaAvwHUzewGWe0ZO3IqBkL7tjc/ZKJ9/LWD7wkiTE3QsYrm7Yn+8JYAaNSFUm1lGal1h8sSS2XVU",
+      "icePwd": "sO0InAJIY9tkS9485oXjBdymw153KY5z"
+    },
+    {
+      "name": "v4-password30",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwxyzABCD",
+        "attemptIdHex": "0404040404040404040404040404041e",
+        "offerDigestHex": "2d3e9e5627b7c23e0b16123fbb50e23dc936a1488dc4f5b2b04ff48048e602df",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwxyzABCD\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "1e1f20212223242526272829",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "61d2c882311d820f6eba92bd6b31f7dc2e632eb8ab69cd35dc8e97a4edbc9811a734c5bf219974327ce3db3dead768a00915ed78ed9512c781a652188380f464cf5579dbd4d2f0797325b274b3ffbb81f59dcd7777a25cbb47f23ab68e9d2419",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef000000000000000000000000000000000404040404040404040404040404041e2d3e9e5627b7c23e0b16123fbb50e23dc936a1488dc4f5b2b04ff48048e602df000000000000000901000000000000000000000000cb0071084abc1e6162636465666768696a6b6c6d6e6f707172737475767778797a41424344000461626344",
+      "authHex": "004e5844500101000404040404040404040404040404041e049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf61d2c882311d820f6eba92bd6b31f7dc2e632eb8ab69cd35dc8e97a4edbc9811a734c5bf219974327ce3db3dead768a00915ed78ed9512c781a652188380f464cf5579dbd4d2f0797325b274b3ffbb81f59dcd7777a25cbb47f23ab68e9d2419",
+      "localUfrag": "NXD1D001Hh8gISIjJCUmJygp/2Gq3h0yqHYmhHFMEsTh3YDeg26AwsO4pEihhG4RW/KHxktOFQFm9aROPJRn1a0hzgmXgauE/kGCIPG8VIprV3o42hw/xocAc1TroKcv0RMGfYevV6AlB+DZ0CCtGSpgCBnDlCg0VjIvXhJhJufGM0tXpbpfb+7CIBsN+q3SQRk7xGLit50t/M71m+B9/Ww0Z08C6Wk5NBMZ+Vz5hspxKu1cedjcHz72u34yi8++",
+      "icePwd": "yo35eTW0EgTVnDDKkVhMNuluXS+Ws6mZ"
+    },
+    {
+      "name": "v6-password22",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuv",
+        "attemptIdHex": "06060606060606060606060606060616",
+        "offerDigestHex": "1d7ab97bd71088b770ea1a85b72a177cda829cfdc9dd9e9b7c122bed9854ffa9",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuv\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "2a2b2c2d2e2f303132333435",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "c7d74defe76983fb82a870303a046f5b6b5823a75f56b0990e2f55431a821c16ae17cda9c0079257cdc6aad756214ddb844a51d9ae68858293dea2c45779fdbf99c5442d3abe152cec8451e29deab2eff8dd0d123c77d0c2fd6794d0616ab75c",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00000000000000000000000000000000060606060606060606060606060606161d7ab97bd71088b770ea1a85b72a177cda829cfdc9dd9e9b7c122bed9854ffa900000000000000098120010db80001000000000000000000084abc166162636465666768696a6b6c6d6e6f70717273747576000461626344",
+      "authHex": "004e58445001010006060606060606060606060606060616049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bfc7d74defe76983fb82a870303a046f5b6b5823a75f56b0990e2f55431a821c16ae17cda9c0079257cdc6aad756214ddb844a51d9ae68858293dea2c45779fdbf99c5442d3abe152cec8451e29deab2eff8dd0d123c77d0c2fd6794d0616ab75c",
+      "localUfrag": "NXD1D001KissLS4vMDEyMzQ1nYzgg++9OLyanhsc+jstrRLcnYevEJUMuzel2KTq9zlwB+xicQreAOOUyFfqrIb1m0lRdjE1xSqIwx9HngMJdzAWOtyNOCKAV6BH/rLxEl9aAk2tz2U/BAxzF9XeFesQ0SAf5MHjntV3M7jyt8W/44sxcxvbnsw3xI+RbaeOIaS2wzblwbFBOZxW2SyE8W6iPO5k9KKLNmW3qOozjNjnGTqBrecepA",
+      "icePwd": "Kf0y3kzTbVqBc/mm7QBCC2LTdR1x5zvU"
+    },
+    {
+      "name": "v6-password24",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "06060606060606060606060606060618",
+        "offerDigestHex": "61e448065f1b5d461fc095ba08f1e8718b4b28fc4fc7002839d4055db255d4e7",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "2c2d2e2f3031323334353637",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "82167ebac2b006f69eccf7069c58f5e2e21c8dfd0626a5a1a7bdc17cacfc9972fcf30418b534caafc8bf4cc22b551bdf3e372c2a6729b1c7f67151038f343c9625bb9257c014b4d84e178e7f9a57b897b0fe3533926f7601615022ca0e9f4703",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef000000000000000000000000000000000606060606060606060606060606061861e448065f1b5d461fc095ba08f1e8718b4b28fc4fc7002839d4055db255d4e700000000000000098120010db80001000000000000000000084abc186162636465666768696a6b6c6d6e6f707172737475767778000461626344",
+      "authHex": "004e58445001010006060606060606060606060606060618049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf82167ebac2b006f69eccf7069c58f5e2e21c8dfd0626a5a1a7bdc17cacfc9972fcf30418b534caafc8bf4cc22b551bdf3e372c2a6729b1c7f67151038f343c9625bb9257c014b4d84e178e7f9a57b897b0fe3533926f7601615022ca0e9f4703",
+      "localUfrag": "NXD1D001LC0uLzAxMjM0NTY33z55I603Mw64nEsKfAY9lPd45K8em7cbN9ccARLT1XUEYWAyzTGuofgPIp+dR85LcyCXtNbSDiLg4Eb/XsbVTufRac9fhxQOz+7QbH2/nKgujmtT2y9TLUwVPEGBHIgD0dfbCN8seBw/9LpixyfOBrpSoPYkbMYjFhKJPwX7lsLjFMwb/OyULeKe5s9ZEwwlxiS2iWH1qJFMlHvulBvWJa2i1McN4fyE",
+      "icePwd": "Q3ubGg9IpsTF3rNohT+M794A6JS/Whh3"
+    },
+    {
+      "name": "v6-password30",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwxyzABCD",
+        "attemptIdHex": "0606060606060606060606060606061e",
+        "offerDigestHex": "d28ab4d48ccc52de3c1bc535b958709abfc6a0d7809ee6d0e21081c767df2cc8",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwxyzABCD\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "32333435363738393a3b3c3d",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "8b21e4f96675555e61b2ca8194d96e823583994fe91cc449641adc394ecbd9fb4d5b9634bead8eda056cc67c3c39ef825a79f727420011786cd215fe7ed5a6036c5441afc921edf1a9531b1ae1b4ccda6497acb9db2589e49e2e2b781b59412a",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef000000000000000000000000000000000606060606060606060606060606061ed28ab4d48ccc52de3c1bc535b958709abfc6a0d7809ee6d0e21081c767df2cc800000000000000098120010db80001000000000000000000084abc1e6162636465666768696a6b6c6d6e6f707172737475767778797a41424344000461626344",
+      "authHex": "004e5844500101000606060606060606060606060606061e049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf8b21e4f96675555e61b2ca8194d96e823583994fe91cc449641adc394ecbd9fb4d5b9634bead8eda056cc67c3c39ef825a79f727420011786cd215fe7ed5a6036c5441afc921edf1a9531b1ae1b4ccda6497acb9db2589e49e2e2b781b59412a",
+      "localUfrag": "NXD1D001MjM0NTY3ODk6Ozw97htgamy1JrYVAdCeBkA0N6FUu/JI3VyRLC9c0UCN6S95Nb9OfzGZ+5dblHz0tSi2t/fYaN0KJT2OV3z2MQfodu9RlOoDcVNRW99JYiD9x4iXbFBD3Yi2fSRgGOibJiiQNC/Tr06tu41GSVPkcRhmFshNXKbd6nIxW9B+3J4TGFa1+dr7PCb9PLjLXsklCkMH515jnObmFSgyYfegVKslCjcw71j0/zgU74kqNlUv",
+      "icePwd": "GUNp4lNgvyEdXQuMlOntCLbIajwUNmR9"
+    }
+  ]
+}
