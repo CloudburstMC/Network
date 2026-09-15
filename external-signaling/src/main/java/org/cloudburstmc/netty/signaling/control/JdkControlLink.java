@@ -2,6 +2,8 @@ package org.cloudburstmc.netty.signaling.control;
 
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -12,6 +14,14 @@ import java.util.function.Consumer;
 public final class JdkControlLink implements ControlClientIo.Link {
     private final JdkWebSocketTransport delegate;
     private JdkControlLink(JdkWebSocketTransport delegate) { this.delegate = delegate; }
+
+    /** Exact staged Worker carrier; the signed envelope is never placed in a query string. */
+    public static JdkControlLink connect(HttpClient client, URI endpoint, ControlSessionCodec.Request upgrade,
+            JdkWebSocketTransport.Limits limits, Executor receiverExecutor,
+            ScheduledExecutorService scheduler, Consumer<String> received) {
+        String proof = Base64.getUrlEncoder().withoutPadding().encodeToString(ControlSessionCodec.encode(upgrade).getBytes(StandardCharsets.UTF_8));
+        return connect(client, endpoint, upgrade, Map.of("Nxs-Control-Proof", proof), limits, receiverExecutor, scheduler, received);
+    }
 
     public static JdkControlLink connect(HttpClient client, URI endpoint, ControlSessionCodec.Request upgrade,
             Map<String, String> proofHeaders, JdkWebSocketTransport.Limits limits, Executor receiverExecutor,
