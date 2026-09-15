@@ -74,9 +74,9 @@ class SdpUtilTest {
     }
 
     @Test
-    void keepsEveryCandidateRatherThanLeavingNone() {
-        // No candidate matches, and a description with no candidates can never connect
-        assertEquals(SDP, SdpUtil.withAdvertisedCandidates(SDP, Set.of("198.51.100.1")));
+    void keepsEveryCandidateWhenNothingCouldBeAnnounced() {
+        // Nothing gathered matches, and nothing of that family exists to translate from
+        assertEquals(SDP, SdpUtil.withAdvertisedCandidates(SDP, Set.of("2001:db8::1")));
     }
 
     private static final String HOST_ONLY_OFFER = "v=0\r\n"
@@ -266,5 +266,69 @@ class SdpUtilTest {
 
         assertFalse(filtered.contains("\r\n\r\n"), "a blank line anywhere is enough to be rejected");
         assertTrue(filtered.contains("a=candidate:1 "), "and the candidates around it still stand");
+    }
+
+    private static final String GATHERED = "v=0\r\n"
+            + "a=candidate:1 1 udp 2130706431 10.88.0.4 19135 typ host\r\n"
+            + "a=candidate:2 1 udp 2130706431 172.17.0.2 19135 typ host\r\n"
+            + "a=candidate:3 1 udp 2130706431 fd7a::1 19135 typ host\r\n"
+            + "a=candidate:4 1 tcp 2130706431 10.88.0.4 9 typ host tcptype active\r\n"
+            + "a=end-of-candidates\r\n"
+            + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+
+    private static final String TRANSLATED =
+            "a=candidate:80000000 1 udp 1694498815 203.0.113.99 19135 typ srflx raddr 10.88.0.4 rport 19135\r\n";
+
+    @Test
+    void announcesAnAddressThisHostDoesNotHoldOnTheMediaPort() {
+        // Everything gathered stays, since nothing listed is ours to narrow to. One line for the
+        // address and port whatever the number of interfaces, and never for another family or transport
+        String expected = GATHERED.replace("a=end-of-candidates", TRANSLATED + "a=end-of-candidates");
+        assertEquals(expected, SdpUtil.withAdvertisedCandidates(GATHERED, Set.of("203.0.113.99")));
+    }
+
+    @Test
+    void narrowsToTheHeldAddressesAndTranslatesTheRest() {
+        String result = SdpUtil.withAdvertisedCandidates(GATHERED, Set.of("10.88.0.4", "203.0.113.99"));
+        assertTrue(result.contains("a=candidate:1 1 udp 2130706431 10.88.0.4 19135 typ host\r\n"));
+        assertTrue(result.contains(TRANSLATED));
+        assertFalse(result.contains("172.17.0.2"));
+    }
+
+    @Test
+    void aTranslationIsBasedOnAHeldHostWhenThereIsOne() {
+        String result = SdpUtil.withAdvertisedCandidates(GATHERED, Set.of("172.17.0.2", "203.0.113.99"));
+        assertTrue(result.contains(" 203.0.113.99 19135 typ srflx raddr 172.17.0.2 rport 19135\r\n"));
+        assertFalse(result.contains("10.88.0.4"));
+    }
+
+    @Test
+    void translatesOnlyWithinTheFamily() {
+        String result = SdpUtil.withAdvertisedCandidates(GATHERED, Set.of("2001:db8::99"));
+        assertTrue(result.contains(" 2001:db8:0:0:0:0:0:99 19135 typ srflx raddr fd7a::1 rport 19135\r\n"));
+        assertFalse(result.contains("raddr 10.88.0.4"));
+        assertTrue(result.contains("a=candidate:1 1 udp 2130706431 10.88.0.4 19135 typ host\r\n"));
+    }
+
+    @Test
+    void leavesANameAloneRatherThanGuessingAnAddress() {
+        assertEquals(GATHERED, SdpUtil.withAdvertisedCandidates(GATHERED, Set.of("proxy.example")));
+    }
+
+    @Test
+    void narrowingLeavesReflexiveAndRelayedCandidatesAlone() {
+        // A STUN or TURN server answers with what the outside sees, which is never an interface
+        String gathered = "v=0\r\n"
+                + "a=candidate:1 1 udp 2130706431 192.168.1.5 19135 typ host\r\n"
+                + "a=candidate:2 1 udp 2130706431 172.17.0.2 19135 typ host\r\n"
+                + "a=candidate:3 1 udp 1694498815 203.0.113.7 19135 typ srflx raddr 192.168.1.5 rport 19135\r\n"
+                + "a=candidate:4 1 udp 16777215 198.51.100.9 40000 typ relay raddr 203.0.113.7 rport 19135\r\n"
+                + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+
+        String result = SdpUtil.withAdvertisedCandidates(gathered, Set.of("192.168.1.5"));
+        assertTrue(result.contains("192.168.1.5 19135 typ host"));
+        assertFalse(result.contains("172.17.0.2"));
+        assertTrue(result.contains("203.0.113.7 19135 typ srflx"));
+        assertTrue(result.contains("198.51.100.9 40000 typ relay"));
     }
 }
