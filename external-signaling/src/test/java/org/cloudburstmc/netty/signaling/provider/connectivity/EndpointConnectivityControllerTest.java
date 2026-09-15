@@ -191,6 +191,30 @@ class EndpointConnectivityControllerTest {
         f.controller.close();
     }
 
+    @Test void retainedSuccessKeepsItsOriginalDeadlineAndMaterialChangeFencesOutstandingChecks() {
+        var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST))));
+        var positive = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
+        assertTrue(f.controller.completeDirectCheck(positive, CheckOutcome.SUCCEEDED));
+        f.clock.addAndGet(Duration.ofSeconds(5).toNanos());
+        assertFalse(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.FAILED));
+        assertFalse(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.UNKNOWN));
+        assertTrue(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(1)), CheckOutcome.SUCCEEDED));
+        assertEquals(positive.expiresAtNanos(), f.snapshot().families().get(Family.IPV4).directCheckExpiresAtNanos().orElseThrow());
+        var pending = f.controller.beginDirectCheck(Family.IPV4);
+        f.controller.invalidateDirectChecks();
+        assertFalse(f.controller.completeDirectCheck(pending, CheckOutcome.SUCCEEDED));
+        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
+        assertNull(f.monitors.get(Family.IPV4));
+        assertTrue(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.FAILED));
+        assertEquals(State.STUN_PENDING, f.state(Family.IPV4));
+        var monitor = f.monitors.get(Family.IPV4);
+        f.controller.invalidateDirectChecks();
+        assertEquals(State.STUN_PENDING, f.state(Family.IPV4));
+        assertSame(monitor, f.monitors.get(Family.IPV4));
+        assertFalse(monitor.closed);
+        f.controller.close();
+    }
+
     @Test void expiredFailureBecomesUnknownWhilePreviouslyStartedStunStaysWarm() {
         var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST))));
         var check = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));

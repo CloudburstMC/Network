@@ -60,7 +60,7 @@ final class ProviderWebSocket implements AutoCloseable {
 
     /** Null means HTTP should be used without a WS attempt (backoff or oversized envelope). */
     Reply exchange(String operation, HttpRequest request, String body, Map<String, String> upgradeHeaders,
-                   int timeoutSeconds, BeforeSend beforeSend) throws Exception {
+                   int timeoutSeconds, BeforeSend beforeSend, Runnable requireCurrent) throws Exception {
         JsonObject frame = new JsonObject(), headers = new JsonObject();
         for (String name : AUTH_HEADERS) headers.addProperty(name, request.headers().firstValue(name).orElseThrow());
         frame.addProperty("operation", operation);
@@ -92,7 +92,7 @@ final class ProviderWebSocket implements AutoCloseable {
             }
             // Executed on ProviderClient's serialized thread before any operation frame can be sent.
             beforeSend.persist();
-            connection.transport.sendText(wire).whenComplete((ignored, failure) -> {
+            connection.transport.sendText(wire, requireCurrent).whenComplete((ignored, failure) -> {
                 if (failure != null) reply.completeExceptionally(failure);
             });
             Reply result = reply.get(timeoutSeconds, TimeUnit.SECONDS);

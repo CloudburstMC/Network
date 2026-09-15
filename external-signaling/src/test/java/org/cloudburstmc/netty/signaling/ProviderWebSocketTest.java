@@ -159,7 +159,7 @@ class ProviderWebSocketTest {
     }
 
     @Test
-    void validationRejectionAfterLostAcknowledgementDoesNotClearAmbiguity(@TempDir Path directory) throws Exception {
+    void lostAcknowledgementRequiresOrdinaryRecoveryBeforeFreshHeartbeat(@TempDir Path directory) throws Exception {
         try (Provider provider = new Provider()) {
             ProviderClient client = client(provider, directory, ProviderClient.ControlTransport.AUTO, new ProviderClientTest.FakeTransport());
             try {
@@ -168,9 +168,11 @@ class ProviderWebSocketTest {
                 provider.rejectAfterDrop = new Provider.Result(400, "{\"code\":\"invalid_heartbeat\"}");
                 assertThrows(ExecutionException.class, () -> client.drain().get(10, TimeUnit.SECONDS));
                 assertTrue(Files.readString(directory.resolve("provider-state.json")).contains("pendingWebSocketOperation"));
-                int received = provider.websocketOps.size() + provider.httpOps.size();
-                assertThrows(ExecutionException.class, () -> client.drain().get(10, TimeUnit.SECONDS));
-                assertEquals(received, provider.websocketOps.size() + provider.httpOps.size());
+                client.drain().get(10, TimeUnit.SECONDS);
+                assertEquals(2, provider.stub.generation, "Fresh signed operations require a recovered generation");
+                assertEquals(List.of(1L, 2L), provider.generations);
+                assertFalse(Files.readString(directory.resolve("provider-state.json")).contains("pendingWebSocketOperation"));
+                assertEquals("draining", provider.stub.lastHeartbeat.get("state").getAsString());
             } finally { client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
         }
     }

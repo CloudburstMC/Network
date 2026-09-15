@@ -6,7 +6,6 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.DefaultEventLoopGroup;
 import org.cloudburstmc.netty.signaling.ProviderCrypto;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
-import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec;
 import org.junit.jupiter.api.Tag;
@@ -43,7 +42,7 @@ class NativeProviderHostFactoryNativeTest {
                 try {
                     var nativeHost = (org.cloudburstmc.netty.signaling.admission.NativeProviderTransport) host.transport();
                     assertTrue(nativeHost.supportsDiagnosticAdmission()); assertFalse(nativeHost.supportsNativeIdentityCapture());
-                    assertFalse(nativeHost.supportsMaintainedCandidateLeases()); assertTrue(nativeHost.channel().isServing());
+                    assertEquals(0, nativeHost.candidatePublicationVersion()); assertTrue(nativeHost.channel().isServing());
                     nativeHost.installTicketKeys(List.of(new ProviderTransport.TicketKey("A001", "public-test-only-player-admission-secret"))).toCompletableFuture().get(5, TimeUnit.SECONDS);
                     var snapshot = nativeHost.captureHostProfile().toCompletableFuture().get(5, TimeUnit.SECONDS);
                     var profile = snapshot.profile(); assertFalse(profile.has("version")); assertTrue(snapshot.candidateRevision() > 0); long now = System.currentTimeMillis();
@@ -66,7 +65,7 @@ class NativeProviderHostFactoryNativeTest {
                 String advertised = ip.equals("::1") ? "2606:4700:4700::1111" : "8.8.8.8";
                 var options = new HashMap<String, String>();
                 options.put("stateDirectory", directory.resolve(ip.equals("::1") ? "v6" : "v4").toString());
-                options.put("controlMode", "nethernet-control-v1"); options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
+                options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
                 options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
                 options.put("advertisedEndpoints", "[{\"address\":\"" + advertised + "\",\"port\":43000}]");
                 options.put("stunServers", "unused configured-only input must not be parsed or resolved");
@@ -76,11 +75,11 @@ class NativeProviderHostFactoryNativeTest {
                 var host = new NativeProviderHostFactory().open(bootstrap, new InetSocketAddress(InetAddress.getByName(ip), port), options).toCompletableFuture().get(10, TimeUnit.SECONDS);
                 try {
                     var nativeHost = (org.cloudburstmc.netty.signaling.admission.NativeProviderTransport) host.transport();
-                    assertTrue(nativeHost.supportsMaintainedCandidateLeases()); assertFalse(nativeHost.channel().isServing());
+                    assertTrue(nativeHost.candidatePublicationVersion() > 0); assertTrue(nativeHost.channel().isServing());
                     nativeHost.installTicketKeys(List.of(new ProviderTransport.TicketKey("A001", ProviderCrypto.base64(new byte[32])))).toCompletableFuture().get();
                     var before = nativeHost.captureHostProfile().toCompletableFuture().get();
                     for (boolean owned : List.of(false, true, false, true)) {
-                        assertTrue(nativeHost.maintainCandidateLeases(owned).observations().isEmpty()); before.requireCurrent();
+                        before.requireCurrent(); assertFalse(before.profile().has("version"));
                         assertEquals(0, nativeHost.channel().nativeStats()[2], "Configured forwarding suppresses monitor allocation");
                         var candidates = nativeHost.hostProfile().toCompletableFuture().get().getAsJsonArray("candidates"); assertEquals(1, candidates.size());
                         assertEquals(InetAddress.getByName(advertised).getHostAddress(), candidates.get(0).getAsJsonObject().get("address").getAsString());
@@ -93,7 +92,7 @@ class NativeProviderHostFactoryNativeTest {
     @Test void actualListenerPublishesOnlyConfiguredEndpointOnBothFamiliesAndControlModes(@TempDir Path directory) throws Exception {
         var group = new DefaultEventLoopGroup(2);
         try {
-            for (String bindAddress : List.of("127.0.0.1", "::1")) for (boolean controlled : List.of(false, true)) {
+            for (String bindAddress : List.of("127.0.0.1", "::1")) for (boolean controlled : List.of(false)) {
                 int port;
                 try (var reservation = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(bindAddress), 0))) { port = reservation.getLocalPort(); }
                 var options = new HashMap<String, String>();
@@ -103,7 +102,6 @@ class NativeProviderHostFactoryNativeTest {
                 int forwardedPort = bindAddress.equals("::1") ? 39133 : 29133;
                 options.put("advertisedEndpoints", "[{\"address\":\"" + configuredAddress + "\",\"port\":" + forwardedPort + "}]");
                 options.put("localDevelopment", "true");
-                if (controlled) options.put("controlMode", "nethernet-control-v1");
                 var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
                     @Override protected void initChannel(Channel channel) { channel.close(); }
                 });

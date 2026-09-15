@@ -1,6 +1,5 @@
 package org.cloudburstmc.netty.signaling.provider.connectivity;
 
-import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 
 import java.net.InetSocketAddress;
@@ -18,20 +17,38 @@ import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSel
 /**
  * Converts already sampled gameplay-mux observations into fixed lease bytes. This owner neither
  * polls native state nor publishes candidates. Use one tracker per native listener incarnation and
- * close it before that listener; host/generation authentication remains the enclosing control owner.
+ * close it before that listener; host/generation authentication remains the ordinary heartbeat owner.
  *
  * Capture/recovery/close serialize local observation updates. Captured guards use only immutable
  * owner state and raw clocks, without locks, native reads, storage or network work. Preserve guards
  * through every asynchronous publication boundary; a receipt alone never replaces one.
  */
 public final class ObservationLeaseTracker implements AutoCloseable {
+    public static final long MAX_SAFE_INTEGER = 9007199254740991L;
+    public static final long MAX_OBSERVATION_AGE_MILLIS = 300000, CLOCK_SKEW_MILLIS = 30000;
+    public static final long MAX_LEASE_MILLIS = MAX_OBSERVATION_AGE_MILLIS - CLOCK_SKEW_MILLIS;
+
+    /** Local native observation, never a separate wire grant. */
+    public record Observation(String family, String addressHex, int port, long monitorEpoch,
+                              long mappingRevision, long observationSequence, long observedAt, long expiresAt) {
+        public Observation {
+            int length = "ipv4".equals(family) ? 8 : "ipv6".equals(family) ? 32 : 0;
+            if (length == 0 || addressHex == null || !addressHex.matches("[0-9a-f]{" + length + "}")
+                    || length == 32 && addressHex.startsWith("00000000000000000000ffff")
+                    || port < 1 || port > 65535) throw new IllegalArgumentException("Invalid observation endpoint");
+            safe(monitorEpoch, true); safe(mappingRevision, true); safe(observationSequence, true);
+            safe(observedAt, false); safe(expiresAt, false);
+            if (expiresAt <= observedAt || expiresAt - observedAt > MAX_LEASE_MILLIS)
+                throw new IllegalArgumentException("Invalid observation lifetime");
+        }
+    }
     private static final long NANOS_PER_MILLI = 1000000;
-    private static final long NATIVE_AGE_NANOS = CandidateLeaseCodec.MAX_OBSERVATION_AGE_MILLIS * NANOS_PER_MILLI;
-    private static final long LEASE_NANOS = CandidateLeaseCodec.MAX_LEASE_MILLIS * NANOS_PER_MILLI;
+    private static final long NATIVE_AGE_NANOS = MAX_OBSERVATION_AGE_MILLIS * NANOS_PER_MILLI;
+    private static final long LEASE_NANOS = MAX_LEASE_MILLIS * NANOS_PER_MILLI;
 
     private record Material(long monitorEpoch, long mappingRevision, String addressHex, int port,
                             String serverAddressHex, int serverPort) { }
-    private record Entry(CandidateLeaseCodec.Observation observation, long nativeEndNanos, long leaseEndNanos,
+    private record Entry(Observation observation, long nativeEndNanos, long leaseEndNanos,
                          ClockEpoch clock) { }
     private record HighWater(Material material, long sequence, Entry entry) { }
     private record Active(Material material, Object token) { }
@@ -54,21 +71,13 @@ public final class ObservationLeaseTracker implements AutoCloseable {
     public final class Capture {
         private final ClockEpoch clock;
         private final List<Retained> retained;
-        private final List<CandidateLeaseCodec.Observation> observations;
+        private final List<Observation> observations;
         private Capture(ClockEpoch clock, List<Retained> retained) {
             this.clock = clock; this.retained = List.copyOf(retained);
             observations = this.retained.stream().map(item -> item.entry().observation()).toList();
         }
         public String nativeIncarnation() { return nativeIncarnation; }
-        public List<CandidateLeaseCodec.Observation> observations() { return observations; }
-
-        /** Rebinds the same response to a new profile/key without renewing its observation dates. */
-        public CandidateLeaseCodec.Leases bind(CandidateLeaseCodec.Profile profile, CandidateLeaseCodec.NativeOwner issuedOwner) {
-            requireCurrent();
-            if (!nativeIncarnation.equals(profile.nativeIncarnation())) throw new IllegalArgumentException("Different native incarnation");
-            CandidateLeaseCodec.Leases leases = CandidateLeaseCodec.bind(profile, issuedOwner, observations);
-            requireCurrent(); return leases;
-        }
+        public List<Observation> observations() { return observations; }
 
         /** Fail closed immediately before actual send and after asynchronous result delivery. */
         public void requireCurrent() {
@@ -194,7 +203,7 @@ public final class ObservationLeaseTracker implements AutoCloseable {
 
     private Entry entry(Family family, EndpointConnectivityController.Observation sample, ClockEpoch clock, ClockReading now) {
         // A stale or ineligible new response still advances replay protection but supplies no lease.
-        if (sample.lastSuccessAgeMillis() >= CandidateLeaseCodec.MAX_OBSERVATION_AGE_MILLIS
+        if (sample.lastSuccessAgeMillis() >= MAX_OBSERVATION_AGE_MILLIS
                 || EndpointAddress.scope(sample.mapped().getAddress()) != EndpointAddress.Scope.PUBLIC
                 || sample.freshUntilNanos() <= now.monotonicNanos()) return null;
         try {
@@ -203,12 +212,12 @@ public final class ObservationLeaseTracker implements AutoCloseable {
             long successLower = Math.subtractExact(Math.subtractExact(sample.freshUntilNanos(), NATIVE_AGE_NANOS), NANOS_PER_MILLI);
             long observedAt = Math.addExact(clock.wallAnchor,
                     Math.floorDiv(Math.subtractExact(successLower, clock.monotonicAnchor), NANOS_PER_MILLI));
-            long expiresAt = Math.addExact(observedAt, CandidateLeaseCodec.MAX_LEASE_MILLIS);
+            long expiresAt = Math.addExact(observedAt, MAX_LEASE_MILLIS);
             long leaseEnd = Math.addExact(successLower, LEASE_NANOS);
-            if (observedAt < 0 || observedAt > CandidateLeaseCodec.MAX_SAFE_INTEGER
-                    || expiresAt < 0 || expiresAt > CandidateLeaseCodec.MAX_SAFE_INTEGER)
+            if (observedAt < 0 || observedAt > MAX_SAFE_INTEGER
+                    || expiresAt < 0 || expiresAt > MAX_SAFE_INTEGER)
                 throw new ArithmeticException("Derived lease time is not a nonnegative safe integer");
-            var observation = new CandidateLeaseCodec.Observation(family == Family.IPV4 ? "ipv4" : "ipv6", hex(sample.mapped()),
+            var observation = new Observation(family == Family.IPV4 ? "ipv4" : "ipv6", hex(sample.mapped()),
                     sample.mapped().getPort(), sample.monitorEpoch(), sample.mappingRevision(), sample.successfulResponses(), observedAt, expiresAt);
             return new Entry(observation, sample.freshUntilNanos(), leaseEnd, clock);
         } catch (ArithmeticException failure) {
@@ -224,12 +233,11 @@ public final class ObservationLeaseTracker implements AutoCloseable {
     public boolean clockValid() { return !closed && currentClock.reading.get().valid(); }
 
     /**
-     * Caller must have just completed a fresh successful control synchronization. This deliberate
-     * recovery never retimestamps an already seen success: each family requires a newer native
+     * Local recovery never retimestamps an already seen success: each family requires a newer native
      * response (or a newer monitor owner) before it can issue a lease in the new clock epoch.
      * No capture from the invalidated epoch can ever become valid again.
      */
-    public synchronized void recoverAfterSuccessfulControlSynchronization() {
+    public synchronized void recoverClockForFutureObservations() {
         requireOpen();
         if (currentClock.reading.get().valid()) throw new IllegalStateException("Candidate lease clock has not failed");
         currentClock = anchorClock(); active.set(Map.of());
@@ -262,7 +270,7 @@ public final class ObservationLeaseTracker implements AutoCloseable {
                         Math.floorDiv(Math.subtractExact(after, clock.monotonicAnchor), NANOS_PER_MILLI));
                 safe(affineWall, false);
                 long deviation = Math.subtractExact(rawWall, affineWall);
-                if (deviation < -CandidateLeaseCodec.CLOCK_SKEW_MILLIS || deviation > CandidateLeaseCodec.CLOCK_SKEW_MILLIS)
+                if (deviation < -CLOCK_SKEW_MILLIS || deviation > CLOCK_SKEW_MILLIS)
                     throw new IllegalStateException("Wall clock deviated from lease anchor");
                 // An allowed raw-wall rollback must never revive authority already expired by an
                 // earlier reading. Retain this high-water in the same CAS as monotonic ordering.
@@ -280,7 +288,7 @@ public final class ObservationLeaseTracker implements AutoCloseable {
 
     private void requireOpen() { if (closed) throw new IllegalStateException("Candidate lease tracker closed"); }
     private static void safe(long value, boolean positive) {
-        if (value < (positive ? 1 : 0) || value > CandidateLeaseCodec.MAX_SAFE_INTEGER)
+        if (value < (positive ? 1 : 0) || value > MAX_SAFE_INTEGER)
             throw new IllegalArgumentException("Invalid observation safe integer");
     }
     private static String hex(InetSocketAddress endpoint) { return HexFormat.of().formatHex(endpoint.getAddress().getAddress()); }

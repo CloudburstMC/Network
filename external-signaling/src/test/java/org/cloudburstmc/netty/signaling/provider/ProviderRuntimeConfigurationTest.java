@@ -13,6 +13,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -146,5 +147,19 @@ class ProviderRuntimeConfigurationTest {
                 () -> ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 0, 20, "Host"));
         assertEquals(65535,
                 ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 65535, 20, "Host").udpPort());
+    }
+
+    @Test void maintainedSettingsUseOrdinaryFactoryAndConfiguredAddressesSuppressStun(@TempDir Path dir) throws Exception {
+        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, true, true,
+                List.of("1.1.1.1:3478", "[2606:4700:4700::1111]:3478"));
+        var selected = runtime(dir, settings);
+        assertEquals(2, selected.stunServers().size());
+        assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
+        assertFalse(selected.nativeHostOptions().containsKey("controlMode"));
+        var configured = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of("8.8.8.8:19133"), Map.of(),
+                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, false, true, List.of("not parsed", "still unused", "entire family set ignored"));
+        assertTrue(runtime(dir, configured).stunServers().isEmpty());
+        assertEquals("[]", runtime(dir, configured).nativeHostOptions().get("stunServers"));
     }
 }

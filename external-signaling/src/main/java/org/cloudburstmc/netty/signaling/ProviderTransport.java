@@ -17,7 +17,6 @@
 package org.cloudburstmc.netty.signaling;
 
 import com.google.gson.JsonObject;
-import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 
 import java.util.List;
@@ -71,11 +70,17 @@ public interface ProviderTransport {
     final class HostProfileSnapshot {
         private final JsonObject profile;
         private final long candidateRevision;
+        private final long publicationVersion;
         private final Runnable current;
         public HostProfileSnapshot(JsonObject profile, Runnable requireCurrent) {
             this(profile, 0, requireCurrent);
         }
         public HostProfileSnapshot(JsonObject profile, long candidateRevision, Runnable requireCurrent) {
+            this(profile, candidateRevision, 0, requireCurrent);
+        }
+        public HostProfileSnapshot(JsonObject profile, long candidateRevision, long publicationVersion, Runnable requireCurrent) {
+            if (publicationVersion < 0) throw new IllegalArgumentException("Publication version");
+            this.publicationVersion = publicationVersion;
             if (candidateRevision < 0 || candidateRevision > 9007199254740991L) throw new IllegalArgumentException("Candidate revision");
             this.candidateRevision = candidateRevision;
             this.profile = Objects.requireNonNull(profile, "profile").deepCopy();
@@ -84,6 +89,7 @@ public interface ProviderTransport {
         public JsonObject profile() { return profile.deepCopy(); }
         /** Zero means this adapter has no revisioned native capture. */
         public long candidateRevision() { return candidateRevision; }
+        public long publicationVersion() { return publicationVersion; }
         public void requireCurrent() { current.run(); }
     }
 
@@ -104,32 +110,23 @@ public interface ProviderTransport {
     /** Bounded nonblocking capture; unsupported adapters cannot opt into issued native ownership. */
     default NativeIdentitySnapshot captureNativeIdentity() { throw new UnsupportedOperationException("Native identity capture unavailable"); }
 
-    /** One immutable observation publication, independent of later successes on the same mapping. */
-    final class CandidateLeaseSnapshot {
-        private final String materialRevision;
-        private final List<CandidateLeaseCodec.Observation> observations;
-        private final Runnable current;
-        public CandidateLeaseSnapshot(String materialRevision, List<CandidateLeaseCodec.Observation> observations, Runnable current) {
-            this.materialRevision = Objects.requireNonNull(materialRevision);
-            this.observations = List.copyOf(observations); this.current = Objects.requireNonNull(current);
-        }
-        public String materialRevision() { return materialRevision; }
-        public List<CandidateLeaseCodec.Observation> observations() { return observations; }
-        public void requireCurrent() { current.run(); }
-        public CandidateLeaseCodec.Leases bind(CandidateLeaseCodec.Profile profile, CandidateLeaseCodec.NativeOwner owner) {
-            requireCurrent(); var leases = CandidateLeaseCodec.bind(profile, owner, observations); requireCurrent(); return leases;
+    /** Cheap local publication counter; freshness changes do not change candidateRevision. */
+    default long candidatePublicationVersion() { return 0; }
+
+    enum ConnectivityOutcome { ESTABLISHED, NOT_ESTABLISHED, UNKNOWN }
+    record ConnectivityCheck(int family, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
+        public ConnectivityCheck {
+            Objects.requireNonNull(outcome);
+            if ((family != 4 && family != 6) || checkedAt < 0 || expiresAt > 9007199254740991L
+                    || expiresAt <= checkedAt || expiresAt - checkedAt > 300000)
+                throw new IllegalArgumentException("Invalid connectivity check");
         }
     }
 
-    default boolean supportsMaintainedCandidateLeases() { return false; }
-
-    /** Serialized bounded native sampling; guards on returned captures perform no native reads or I/O. */
-    default CandidateLeaseSnapshot maintainCandidateLeases(boolean reflexivePublicationAllowed) {
-        throw new UnsupportedOperationException("Maintained candidate leases unavailable");
+    /** Existing heartbeat feedback only; no state/health command or reachability assertion. */
+    default CompletionStage<Void> reportConnectivityChecks(long candidateRevision, List<ConnectivityCheck> checks) {
+        return java.util.concurrent.CompletableFuture.completedFuture(null);
     }
-
-    /** Explicit recovery boundary after a fresh successful control synchronization. */
-    default void candidateControlSynchronized() { }
 
     /** Local opt-in, independent of player serving state. Incoming probes cannot configure their own authority. */
     default boolean supportsDiagnosticAdmission() { return false; }

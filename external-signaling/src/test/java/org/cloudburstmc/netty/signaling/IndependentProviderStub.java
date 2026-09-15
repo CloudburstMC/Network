@@ -17,6 +17,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     final HttpServer server;
     String origin;
     volatile Runnable heartbeatResponseHook = () -> { };
+    volatile Runnable heartbeatAttemptHook = () -> { };
     String operationPrefix = "/example/";
     final Map<String, JsonObject> challenges = new HashMap<>(), keys = new HashMap<>(), placements = new HashMap<>();
     JsonObject registration;
@@ -281,6 +282,7 @@ public final class IndependentProviderStub implements AutoCloseable {
             }
             return registration.deepCopy();
         }
+        if (path.equals("/example/heartbeat")) heartbeatAttemptHook.run();
         if (path.equals("/example/heartbeat") && failHeartbeats-- > 0) {
             throw new Failure(503, "fixture_transient");
         }
