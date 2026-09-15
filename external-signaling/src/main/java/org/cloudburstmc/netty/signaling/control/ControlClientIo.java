@@ -11,6 +11,10 @@ import java.util.function.Consumer;
  * It owns no gameplay/native transport. Missing synchronization must fail, never default to ready.
  */
 public interface ControlClientIo {
+    /** Application refuses to replay an immutable intent whose physical state no longer exists. */
+    final class ReconciliationRequired extends IllegalStateException {
+        public ReconciliationRequired(String message) { super(message); }
+    }
     record HttpReply(URI requestUri, String requestMethod, URI responseUri, int status, String body) { }
     interface Link {
         CompletionStage<Void> opened();

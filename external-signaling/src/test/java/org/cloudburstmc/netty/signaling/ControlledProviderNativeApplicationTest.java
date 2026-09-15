@@ -48,6 +48,13 @@ class ControlledProviderNativeApplicationTest {
                         if (firstIncarnation == null) firstIncarnation = incarnation; else assertNotEquals(firstIncarnation, incarnation);
                         assertTrue(exchange.bodies.stream().anyMatch(body -> body.has("hostProfile")));
                         assertFalse(exchange.bodies.get(0).has("applicationAck"));
+                        // External native drain keeps profile metadata available but must withdraw fresh application claims.
+                        nativeTransport.channel().drainAdmissions(); application.request();
+                        var afterDrain = new ControlledProviderApplicationTest.Exchange(executor, now, "serving");
+                        afterDrain.profileRevision = storage.application().get("profileRevision").getAsString();
+                        assertThrows(ExecutionException.class, () -> application.synchronize(afterDrain).toCompletableFuture().get(5, TimeUnit.SECONDS));
+                        assertFalse(afterDrain.bodies.isEmpty()); assertFalse(afterDrain.bodies.get(0).has("applicationAck"));
+                        assertFalse(afterDrain.bodies.get(0).get("acceptingPlayers").getAsBoolean()); assertFalse(nativeTransport.channel().isServing());
                     } finally {
                         nativeTransport.close().toCompletableFuture().get(8, TimeUnit.SECONDS);
                         assertFalse(nativeTransport.channel().isActive()); assertEquals(0, nativeTransport.channel().liveNativePeers());

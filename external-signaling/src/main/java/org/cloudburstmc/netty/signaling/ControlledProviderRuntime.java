@@ -49,6 +49,7 @@ final class ControlledProviderRuntime {
             coordinator = new ControlClientCoordinator(storage.journal, storage.initial, config.control().routes(), io, clock,
                     (action, delay) -> { var task = timer.schedule(action, delay, TimeUnit.MILLISECONDS); return () -> task.cancel(false); },
                     Math::random, ControlClientCoordinator.secureIdentifiers(), config.control().trustedKeys());
+            application.onFatal(failure -> { diagnostics.accept("controlled_application_persistence_failed"); stop(); });
         } catch (Throwable failure) {
             io.close(); storage.close(); timer.shutdownNow(); ioExecutor.shutdownNow(); receiver.shutdownNow();
             if (failure instanceof IOException error) throw error; throw new IOException("Controlled coordinator could not start", failure);
@@ -66,8 +67,8 @@ final class ControlledProviderRuntime {
     private void tick() {
         if (stopped.get()) return;
         var state = coordinator.state();
-        if (state == ControlClientCoordinator.State.DEREGISTERED) {
-            if (awaitingReady != null) { awaitingReady.completeExceptionally(new IllegalStateException("Host is durably deregistered")); awaitingReady = null; }
+        if (state == ControlClientCoordinator.State.DEREGISTERED || state == ControlClientCoordinator.State.UNRESOLVED || state == ControlClientCoordinator.State.CLOSED) {
+            if (awaitingReady != null) { awaitingReady.completeExceptionally(new IllegalStateException("Controlled lifecycle requires reconciliation: " + state)); awaitingReady = null; }
             return;
         }
         if (state == ControlClientCoordinator.State.READY) synchronizationDemand = false;

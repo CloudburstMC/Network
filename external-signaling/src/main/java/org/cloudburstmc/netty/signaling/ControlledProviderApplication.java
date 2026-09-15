@@ -26,6 +26,7 @@ final class ControlledProviderApplication {
     private JsonObject data, extensions = new JsonObject(), lastResponse = new JsonObject(), liveProfile;
     private ControlStateCodec.AppliedBasis liveBasis;
     private String acceptedDigest;
+    private Consumer<Throwable> fatal = ignored -> { };
     private boolean installed, demand = true, closed, permanentlyDrained, nativeClosed;
     private long nextHeartbeat, nextUpdate, snapshotClock;
     private ServerStatus lastStatus;
@@ -36,6 +37,7 @@ final class ControlledProviderApplication {
         this.storage = storage; this.transport = transport; this.executor = executor; this.clock = clock;
         this.status = status; this.health = health; this.region = region; this.data = storage.application();
     }
+    void onFatal(Consumer<Throwable> callback) { fatal = Objects.requireNonNull(callback); }
     void invalidate() { version.incrementAndGet(); }
     void request() { demand = true; }
     boolean due() {
@@ -57,7 +59,7 @@ final class ControlledProviderApplication {
     }
     CompletionStage<ControlSynchronizationResult> synchronize(ControlClientIo.Synchronization exchange) {
         long owner = version.get();
-        return CompletableFuture.completedFuture(null).thenComposeAsync(ignored -> {
+        var operation = CompletableFuture.completedFuture(null).thenComposeAsync(ignored -> {
             var pass = new Pass(exchange, owner); pass.check();
             if (liveBasis != null && acceptedDigest != null && acceptedDigest.equals(ControlStateCodec.appliedBasisDigest(liveBasis))
                     && !due() && exchange.pendingHeartbeat().isEmpty()) {
@@ -67,6 +69,15 @@ final class ControlledProviderApplication {
             }
             return initialize(pass);
         }, executor);
+        return operation.handleAsync((result, failure) -> {
+            if (failure == null) return CompletableFuture.completedFuture(result);
+            // A failed/late transition cannot leave a just-enabled snapshot admitting new players.
+            // The coordinator keeps this I/O lane occupied until cleanup actually settles.
+            liveBasis = null; acceptedDigest = null;
+            return transport.applyState("draining").handle((ignored, cleanupFailure) -> {
+                throw new CompletionException(unwrap(failure));
+            }).thenApply(ignored -> result);
+        }, executor).thenCompose(Function.identity());
     }
     private CompletionStage<ControlSynchronizationResult> initialize(Pass pass) {
         pass.check(); demand = false;
@@ -81,7 +92,7 @@ final class ControlledProviderApplication {
         if (count >= 6) return CompletableFuture.failedFuture(new IOException("Controlled application exchange bound reached"));
         var retained = pass.exchange.pendingHeartbeat();
         CompletionStage<JsonObject> request = retained.isPresent()
-                ? CompletableFuture.completedFuture(ControlledProviderJson.parse(new String(retained.get(), StandardCharsets.UTF_8), 65536))
+                ? retainedHeartbeat(pass, retained.get())
                 : heartbeat(pass);
         return request.thenComposeAsync(body -> {
             pass.check(); byte[] bytes = retained.orElseGet(() -> JSON.toJson(body).getBytes(StandardCharsets.UTF_8));
@@ -104,7 +115,33 @@ final class ControlledProviderApplication {
             }, executor);
         }, executor);
     }
+    private CompletionStage<JsonObject> retainedHeartbeat(Pass pass, byte[] original) {
+        var body = ControlledProviderJson.parse(new String(original, StandardCharsets.UTF_8), 65536);
+        // Status reconciliation runs before this lane. Unknown immutable claims from another
+        // native instance cannot be retransmitted; a provider terminal cancellation is required.
+        if (body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean()) {
+            if (liveBasis == null) return CompletableFuture.failedFuture(new ControlClientIo.ReconciliationRequired("Retained heartbeat claims an unowned native application"));
+            return validateLive(pass).thenApplyAsync(valid -> {
+                pass.check();
+                boolean exact = valid && body.has("applicationAck")
+                        && body.getAsJsonObject("applicationAck").get("basis").equals(JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(liveBasis)))
+                        && Objects.equals(body.getAsJsonObject("applicationAck").get("ticketPolicy"), data.has("policy") ? JsonParser.parseString(string(data, "policy")) : JsonNull.INSTANCE);
+                if (!exact) throw new ControlClientIo.ReconciliationRequired("Retained heartbeat native application changed");
+                return body;
+            }, executor);
+        }
+        return CompletableFuture.completedFuture(body);
+    }
     private CompletionStage<JsonObject> heartbeat(Pass pass) {
+        pass.check();
+        CompletionStage<Boolean> validation = liveBasis == null ? CompletableFuture.completedFuture(false) : validateLive(pass);
+        return validation.thenComposeAsync(valid -> {
+            pass.check();
+            if (!valid) { liveBasis = null; acceptedDigest = null; }
+            return heartbeatAfterValidation(pass);
+        }, executor);
+    }
+    private CompletionStage<JsonObject> heartbeatAfterValidation(Pass pass) {
         pass.check();
         boolean serving = !permanentlyDrained && "serving".equals(string(data, "reportedState"));
         CompletionStage<JsonObject> profile = serving && !data.getAsJsonArray("keys").isEmpty()
@@ -206,12 +243,16 @@ final class ControlledProviderApplication {
     private CompletionStage<Void> applyServing(Pass pass, JsonObject next, ControlStateCodec.AppliedBasis basis, String accepted, Runnable guard) {
         return install(pass, next, true, guard).thenComposeAsync(ignored -> transport.hostProfile(), executor).thenComposeAsync(actual -> {
             guard.run();
-            return transport.applyState("serving").thenAcceptAsync(serving -> {
+            return transport.applyState("serving").thenComposeAsync(serving -> {
                 guard.run();
                 if (serving != ProviderTransport.ApplyResult.APPLIED || actual == null || !actual.equals(next.getAsJsonObject("profile"))) {
-                    liveBasis = null; acceptedDigest = null; var changed = data.deepCopy(); changed.remove("profile"); changed.remove("basis"); save(changed); return;
+                    liveBasis = null; acceptedDigest = null;
+                    return transport.applyState("draining").thenRunAsync(() -> {
+                        guard.run(); var changed = data.deepCopy(); changed.remove("profile"); changed.remove("basis"); save(changed);
+                    }, executor);
                 }
                 liveBasis = basis; liveProfile = actual.deepCopy(); acceptedDigest = accepted;
+                return CompletableFuture.completedFuture(null);
             }, executor);
         }, executor);
     }
@@ -254,7 +295,7 @@ final class ControlledProviderApplication {
             nextHeartbeat = Math.min(started + schedule.afterMillis(), Math.max(received, clock.nowMillis())
                     + Math.max(0, number(response.getAsJsonObject("checkIn"), "nextCheckInAt") - Math.max(received, clock.nowMillis())));
             nextUpdate = clock.nowMillis() + schedule.minUpdateIntervalMillis();
-        } catch (IOException failure) { throw new CompletionException(failure); }
+        } catch (IOException failure) { throw new CompletionException(unwrap(failure)); }
     }
     static JsonArray exactPolicyKeys(JsonArray available, ControlStateCodec.TicketPolicy policy) {
         var byId = new HashMap<String, JsonObject>(); for (var item : available) byId.put(string(item.getAsJsonObject(), "keyId"), item.getAsJsonObject());
@@ -281,12 +322,21 @@ final class ControlledProviderApplication {
     void close() { closed = true; invalidate(); liveBasis = null; acceptedDigest = null; }
     private void save(JsonObject next) {
         try { storage.saveApplication(next); data = storage.application(); }
-        catch (IOException error) { closed = true; invalidate(); throw new CompletionException(error); }
+        catch (IOException error) {
+            closed = true; invalidate(); liveBasis = null; acceptedDigest = null;
+            // Persistence outside synchronization (for example a key request) must also fence admission.
+            try { transport.applyState("draining"); } finally { fatal.accept(error); }
+            throw new CompletionException(error);
+        }
     }
     private final class Pass {
         final ControlClientIo.Synchronization exchange; final long owner;
         Pass(ControlClientIo.Synchronization exchange, long owner) { this.exchange = exchange; this.owner = owner; }
         void check() { exchange.requireCurrent(); if (closed || version.get() != owner || clock.nowMillis() >= exchange.deadlineMillis()) throw new IllegalStateException("Application owner expired or changed"); }
+    }
+    private static Throwable unwrap(Throwable failure) {
+        while (failure instanceof CompletionException && failure.getCause() != null) failure = failure.getCause();
+        return failure;
     }
     private static String string(JsonObject value, String name) { return ControlledProviderJson.string(value, name); }
     private static long number(JsonObject value, String name) { return ControlledProviderJson.number(value, name); }
