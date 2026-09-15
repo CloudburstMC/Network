@@ -31,7 +31,9 @@ class NativeProviderHostFactoryNativeTest {
                 var options = new HashMap<String, String>();
                 options.put("stateDirectory", directory.resolve((bindAddress.equals("::1") ? "v6" : "v4") + controlled).toString());
                 options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
-                options.put("advertisedEndpoints", "[{\"address\":\"8.8.8.8\",\"port\":29133}]");
+                String configuredAddress = bindAddress.equals("::1") ? "2606:4700:4700::1111" : "8.8.8.8";
+                int forwardedPort = bindAddress.equals("::1") ? 39133 : 29133;
+                options.put("advertisedEndpoints", "[{\"address\":\"" + configuredAddress + "\",\"port\":" + forwardedPort + "}]");
                 options.put("localDevelopment", "true");
                 if (controlled) options.put("controlMode", "nethernet-control-v1");
                 var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
@@ -43,8 +45,8 @@ class NativeProviderHostFactoryNativeTest {
                     host.transport().installTicketKeys(List.of(new ProviderTransport.TicketKey("A001", ProviderCrypto.base64(new byte[32]), 0, Long.MAX_VALUE))).toCompletableFuture().get(5, TimeUnit.SECONDS);
                     var first = host.transport().hostProfile().toCompletableFuture().get(5, TimeUnit.SECONDS);
                     var candidates = first.getAsJsonArray("candidates"); assertEquals(1, candidates.size());
-                    assertEquals("8.8.8.8", candidates.get(0).getAsJsonObject().get("address").getAsString());
-                    assertEquals(29133, candidates.get(0).getAsJsonObject().get("port").getAsInt());
+                    assertEquals(InetAddress.getByName(configuredAddress).getHostAddress(), candidates.get(0).getAsJsonObject().get("address").getAsString());
+                    assertEquals(forwardedPort, candidates.get(0).getAsJsonObject().get("port").getAsInt());
                     assertEquals(first, host.transport().hostProfile().toCompletableFuture().get(5, TimeUnit.SECONDS));
                 } finally { host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
                 assertFalse(host.channel().isActive());
