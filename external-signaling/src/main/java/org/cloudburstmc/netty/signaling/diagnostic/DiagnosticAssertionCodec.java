@@ -16,7 +16,7 @@ public final class DiagnosticAssertionCodec {
     private DiagnosticAssertionCodec() { }
     private static final byte[] SPKI = unhex("3076301006072a8648ce3d020106052b81040022036200", 23);
     public record Assertion(byte[] publicPoint, byte[] signature) {
-        public Assertion { publicPoint = publicPoint.clone(); signature = signature.clone(); if (publicPoint.length != 97 || publicPoint[0] != 4 || signature.length != 96) throw invalid(); }
+        public Assertion { if (publicPoint.length != 97 || publicPoint[0] != 4 || signature.length != 96) throw invalid(); publicPoint = publicPoint.clone(); signature = signature.clone(); }
         @Override public byte[] publicPoint() { return publicPoint.clone(); }
         @Override public byte[] signature() { return signature.clone(); }
         @Override public String toString() { return "DiagnosticAssertion[redacted]"; }
@@ -47,18 +47,19 @@ public final class DiagnosticAssertionCodec {
         return concat(new byte[]{0, 78, 88, 68, 80, 1, 1, 0}, unhex(attemptIdHex, 16), assertion.publicPoint(), assertion.signature());
     }
     public static Assertion decodeAuth(byte[] input, String attemptIdHex) {
+        if (input.length != 217) throw invalid();
         byte[] b = input.clone();
         if (b.length != 217 || !Arrays.equals(Arrays.copyOf(b, 8), new byte[]{0, 78, 88, 68, 80, 1, 1, 0}) || !Arrays.equals(Arrays.copyOfRange(b, 8, 24), unhex(attemptIdHex, 16))) throw invalid();
         return new Assertion(Arrays.copyOfRange(b, 24, 121), Arrays.copyOfRange(b, 121, 217));
     }
     /** Checks the exact offer; never normalizes incompatible SCTP values or rewrites SDP. */
     public static void validateOffer(byte[] input, Claims c, String remoteUfrag) {
-        byte[] bytes = input.clone(); if (bytes.length == 0 || bytes.length > 16384) throw invalid(); String text;
+        if (input.length == 0 || input.length > 16384) throw invalid(); byte[] bytes = input.clone(); String text;
         try { text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString(); }
         catch (java.nio.charset.CharacterCodingException e) { throw invalid(); }
         if (text.indexOf(0) >= 0 || text.replace("\r\n", "").indexOf('\r') >= 0) throw invalid();
         List<String> lines = Arrays.stream(text.split("\r?\n")).filter(s -> !s.isEmpty()).toList();
-        if (!one(lines, "m=").matches("application [0-9]+ UDP/DTLS/SCTP webrtc-datachannel") || !one(lines, "a=group:").equals("BUNDLE 0") || !one(lines, "a=mid:").equals("0") || !one(lines, "a=setup:").equals("actpass") ||
+        if (!one(lines, "m=").matches("application [0-9]{1,5} UDP/DTLS/SCTP webrtc-datachannel") || Integer.parseInt(one(lines, "m=").split(" ")[1]) < 1 || Integer.parseInt(one(lines, "m=").split(" ")[1]) > 65535 || lines.stream().anyMatch(l -> l.startsWith("a=ice-lite")) || !one(lines, "a=group:").equals("BUNDLE 0") || !one(lines, "a=mid:").equals("0") || !one(lines, "a=setup:").equals("actpass") ||
                 !one(lines, "a=ice-ufrag:").equals(ufrag(remoteUfrag)) || !one(lines, "a=ice-pwd:").equals(c.clientIcePwd()) || !one(lines, "a=sctp-port:").equals("5000") || !one(lines, "a=max-message-size:").equals("262144") ||
                 lines.stream().filter(l -> l.equals("a=end-of-candidates")).count() != 1 || lines.stream().anyMatch(l -> l.startsWith("a=identity:"))) throw invalid();
         String fingerprint = one(lines, "a=fingerprint:");
