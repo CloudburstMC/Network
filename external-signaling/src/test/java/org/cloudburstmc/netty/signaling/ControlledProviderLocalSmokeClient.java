@@ -37,7 +37,7 @@ public final class ControlledProviderLocalSmokeClient {
             var route = config.getAsJsonObject("routes"); var operations = new HashMap<String, URI>();
             route.getAsJsonObject("operations").entrySet().forEach(entry -> operations.put(entry.getKey(), URI.create(entry.getValue().getAsString())));
             var control = new ProviderControlConfiguration(new ControlClientCoordinator.Config(string(config, "origin"), uri(route, "prepare"), uri(route, "activate"), uri(route, "status"),
-                    uri(route, "upgrade"), uri(route, "authority"), operations, mode, List.of("request-response"), 600000, 30000, 200, 10000),
+                    uri(route, "upgrade"), uri(route, "authority"), operations, mode, List.of("request-response"), 600000, 30000, 200, 10000, route.has("cancelIntent") ? uri(route, "cancelIntent") : null),
                     List.of(new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.PROVIDER_CONTROL, string(config, "providerKeyId"), ProviderCrypto.publicKey(config.getAsJsonObject("providerPublicKeyJwk")),
                             number(config, "validFrom"), number(config, "validUntil"))), reporting);
             var nativeConfig = config.getAsJsonObject("native"); String address = string(nativeConfig, "bindAddress");

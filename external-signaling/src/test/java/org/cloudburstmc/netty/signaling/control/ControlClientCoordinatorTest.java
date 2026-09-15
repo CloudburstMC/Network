@@ -70,6 +70,7 @@ class ControlClientCoordinatorTest {
         Supplier<String> identifierSupplier = () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet());
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls;
+        boolean cancelNativeClaims; URI cancelRoute;
         boolean durableOutcomes; final List<CompletableFuture<Void>> outcomeAcks = new ArrayList<>();
         Runnable onOutcomeAck;
         boolean autoReady = true, nullSynchronizationResult, failApplicationDispatch;
@@ -98,7 +99,7 @@ class ControlClientCoordinatorTest {
                     URI.create(ORIGIN + "/control/status"), URI.create("wss://provider.example/control/upgrade"), URI.create(ORIGIN + "/control/authority"),
                     Map.of("outcomes", URI.create(ORIGIN + "/signal/outcomes"), "heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate"),
                             "deregister", URI.create(ORIGIN + "/signal/deregister")),
-                    initialTransport, initialTransport.equals("https") ? List.of("request-response") : CAPS, 21_600_000, 30_000, 200, 30_000);
+                    initialTransport, initialTransport.equals("https") ? List.of("request-response") : CAPS, 21_600_000, 30_000, 200, 30_000, cancelRoute);
             client = new ControlClientCoordinator(store, initial, config, this, time, time, () -> 0.5,
                     () -> identifierSupplier.get(), key -> keyAvailable && key.equals(providerKey.keyId()) ? providerKey : additionalKeys.get(key));
         }
@@ -115,6 +116,7 @@ class ControlClientCoordinatorTest {
             assertArrayEquals(journal.value.pending().bodyBytes(), body);
             var reply = new CompletableFuture<HttpReply>(); operations.add(new Operation(endpoint, request, body.clone(), reply)); return reply;
         }
+        @Override public boolean requiresNativeIntentCancellation(ControlLifecycleCodec.Intent intent, byte[] body) { return cancelNativeClaims && intent.operation().equals("heartbeat"); }
         @Override public boolean requiresOutcomeAcknowledgement() { return durableOutcomes; }
         @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt) {
             assertEquals("committed", journal.value.pending().receipt().disposition());
@@ -277,7 +279,7 @@ class ControlClientCoordinatorTest {
         ControlLifecycleCodec.Receipt receipt(String disposition) {
             var intent = journal.value.pending().intent(); boolean committed = disposition.equals("committed");
             return new ControlLifecycleCodec.Receipt(1, ControlLifecycleCodec.intentDigest(intent), intent.operation(), intent.instanceId(), intent.generation(), intent.sequence(), intent.idempotencyKey(),
-                    disposition, committed ? time.now : null, committed ? 10L : null, committed ? null : "not_committed");
+                    disposition, committed ? time.now : null, committed ? 10L : null, committed ? null : disposition.equals("cancelled") ? "native-application-replaced" : "not_committed");
         }
         void incoming(FakeLink link, ControlWriterFence target, String type, byte[] payload, long sequence) throws Exception {
             incomingActual(link, target, type, payload, sequence + link.readinessFrames);

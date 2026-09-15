@@ -38,6 +38,12 @@ final class ControlledProviderApplication {
         this.storage = storage; this.transport = transport; this.executor = executor; this.clock = clock;
         this.status = status; this.health = health; this.region = region; this.data = storage.application();
     }
+    static boolean requiresNativeCancellation(ControlLifecycleCodec.Intent intent, byte[] originalBody) {
+        if (!intent.operation().equals("heartbeat")) return false;
+        ControlLifecycleCodec.verifyBody(intent, originalBody);
+        var body = ControlledProviderJson.parse(new String(originalBody, StandardCharsets.UTF_8), ControlLifecycleCodec.MAX_HTTP_BODY_BYTES);
+        return body.has("applicationAck") || body.has("acceptingPlayers") && body.get("acceptingPlayers").getAsBoolean();
+    }
     CompletionStage<Void> acknowledgeOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
         byte[] owned = originalBody.clone();
         return CompletableFuture.runAsync(() -> {

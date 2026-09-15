@@ -126,6 +126,29 @@ class JdkControlHttpTransportTest {
         }
     }
 
+    @Test void carriesCancellationAsExactBoundedSessionPostForBothFamilies() throws Exception {
+        for (String family : List.of("127.0.0.1", "::1")) {
+            var received = new AtomicReference<String>(); var target = new AtomicReference<String>();
+            var base = listen(family, exchange -> {
+                received.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)); target.set(exchange.getRequestURI().toASCIIString());
+                assertEquals("POST", exchange.getRequestMethod()); reply(exchange, 503, "unavailable".getBytes(StandardCharsets.UTF_8));
+            });
+            var endpoint = base.resolve("/control/cancel-intent?binding=%2F");
+            var value = ControlSessionCodecTest.vector("cancel-intent").getAsJsonObject("envelope").deepCopy();
+            String audience = endpoint.getScheme() + "://" + endpoint.getRawAuthority();
+            var payload = ControlSessionPayloadCodec.decodeRequest("cancel-intent", java.util.Base64.getUrlDecoder().decode(value.get("payload").getAsString()));
+            payload.getAsJsonObject("intent").addProperty("audience", audience); byte[] bytes = payload.toString().getBytes(StandardCharsets.UTF_8);
+            value.addProperty("audience", audience); value.addProperty("encodedPathAndQuery", endpoint.getRawPath() + "?binding=%2F");
+            value.addProperty("payload", org.cloudburstmc.netty.signaling.ProviderCrypto.base64(bytes)); value.addProperty("payloadSha256", ControlFrameCodec.payloadDigest(bytes));
+            long now = System.currentTimeMillis(); value.addProperty("sentAt", now); value.addProperty("expiresAt", now + 30000);
+            var request = ControlSessionCodec.sign(ControlSessionCodec.decodeRequest(value.toString()), ControlSessionCodecTest.privateKey("machine"));
+            var transport = transport(HttpClient.newHttpClient(), 3000, 2);
+            assertThrows(IllegalArgumentException.class, () -> transport.bootstrap(endpoint.resolve("/wrong"), request));
+            var response = await(transport.bootstrap(endpoint, request));
+            assertEquals(503, response.status()); assertEquals(endpoint, response.responseUri());
+            assertEquals(ControlSessionCodec.encode(request), received.get()); assertEquals("/control/cancel-intent?binding=%2F", target.get());
+        }
+    }
     @Test void refusesEndpointMismatchAndRedirectEnabledClients() throws Exception {
         AtomicInteger hits = new AtomicInteger(); URI endpoint = listen("127.0.0.1", exchange -> { hits.incrementAndGet(); exchange.close(); });
         var request = proof(endpoint); var client = transport(HttpClient.newHttpClient(), 1000, 1);

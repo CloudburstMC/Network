@@ -200,6 +200,14 @@ class ControlledProviderApplicationTest {
             }
         } finally { executor.shutdownNow(); }
     }
+    @Test void retainedNativeClaimPolicyIsBoundToOriginalHeartbeatBytes() {
+        for (String body : List.of("{\"acceptingPlayers\":true}", "{\"applicationAck\":{}}", "{\"acceptingPlayers\":false}")) {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            var intent = ControlLifecycleCodec.intent(ORIGIN, "heartbeat", "fixture_host", 1, 18, "native_claim_fixture_18", bytes);
+            assertEquals(!body.equals("{\"acceptingPlayers\":false}"), ControlledProviderApplication.requiresNativeCancellation(intent, bytes));
+            assertThrows(IllegalArgumentException.class, () -> ControlledProviderApplication.requiresNativeCancellation(intent, "{}".getBytes(StandardCharsets.UTF_8)));
+        }
+    }
     @Test void exactPolicyPreservesCutoffsAndOrdersActiveLast() {
         var available = new JsonArray();
         for (String id : List.of("Z999", "A001")) { var key = new JsonObject(); key.addProperty("keyId", id); key.addProperty("secret", SECRET); key.addProperty("notBefore", 0); if (id.equals("Z999")) key.addProperty("acceptUntil", 2000); available.add(key); }

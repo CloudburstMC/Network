@@ -40,7 +40,8 @@ class ControlOriginTest {
         JsonObject intent = fixture("control-v1.lifecycle.fixtures.json").getAsJsonArray("vectors").get(0).getAsJsonObject().getAsJsonObject("intent");
         JsonArray sessions = fixture("control-v1.sessions.fixtures.json").getAsJsonArray("vectors");
         JsonObject session = sessions.get(0).getAsJsonObject().getAsJsonObject("envelope");
-        JsonObject http = sessions.get(sessions.size() - 1).getAsJsonObject().getAsJsonObject("envelope");
+        JsonObject http = java.util.stream.StreamSupport.stream(sessions.spliterator(), false).map(value -> value.getAsJsonObject())
+                .filter(value -> value.get("kind").getAsString().equals("http")).findFirst().orElseThrow().getAsJsonObject("envelope");
         for (var item : fixture("control-v1.origins.fixtures.json").getAsJsonArray("vectors")) {
             JsonObject vector = item.getAsJsonObject();
             String origin = vector.get("origin").getAsString();

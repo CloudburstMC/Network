@@ -49,6 +49,8 @@ public interface ControlClientIo {
     CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request);
     /** Returns a raw result envelope bounded by ControlResultCodec.MAX_ENVELOPE_BYTES, never a bare receipt. */
     CompletionStage<HttpReply> operation(URI endpoint, ControlHttpCodec.Request request, byte[] originalBody);
+    /** Pure bounded body policy, called only for retained/recovering intents; never authenticates or replays the body. */
+    default boolean requiresNativeIntentCancellation(ControlLifecycleCodec.Intent intent, byte[] originalBody) { return false; }
     /** Opt-in application queue owner: committed receipts must be durably applied before releasing their intent. */
     default boolean requiresOutcomeAcknowledgement() { return false; }
     /**
