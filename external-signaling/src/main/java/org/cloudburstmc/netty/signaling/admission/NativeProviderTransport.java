@@ -45,10 +45,13 @@ public final class NativeProviderTransport implements ProviderTransport {
     private final Supplier<List<InetSocketAddress>> advertisedAddresses;
     private final ScheduledFuture<?> retireTask;
     private final boolean controlled;
+    private final boolean version2;
+    private NativeCandidateSnapshot candidateSnapshot;
+    private volatile long candidateGeneration = 1;
     private List<Epoch> epochs = List.of();
     private Update update;
-    private boolean draining;
-    private boolean closed;
+    private volatile boolean draining;
+    private volatile boolean closed;
 
     private static final class Update implements AdmissionUpdate {
         private final AdmissionGate.Staging nativeUpdate;
@@ -59,12 +62,14 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     private NativeProviderTransport(NativeAdmissionServerChannel channel, StatelessAdmissionValidator validator,
                                     String incarnation, Supplier<List<InetSocketAddress>> advertisedAddresses,
-                                    boolean controlled) {
+                                    boolean controlled, NativeCandidateSnapshot candidates) {
         this.channel = channel;
         this.validator = validator;
         this.incarnation = incarnation;
         this.advertisedAddresses = advertisedAddresses;
         this.controlled = controlled;
+        this.version2 = candidates != null;
+        this.candidateSnapshot = candidates;
         retireTask = channel.eventLoop()
                 .scheduleWithFixedDelay(() -> validator.retireKeys(System.currentTimeMillis()), 1, 1, TimeUnit.SECONDS);
     }
@@ -107,12 +112,27 @@ public final class NativeProviderTransport implements ProviderTransport {
         return open(bootstrap, bind, advertised, certificate, privateKey, limits, true);
     }
 
+    /** Explicit controlled v2 publication. Empty endpoints permit binding; STUN publication needs a later lease protocol. */
+    public static CompletionStage<NativeProviderTransport> openControlledVersion2(ServerBootstrap bootstrap,
+            InetSocketAddress bind, NativeCandidateSnapshot candidates, Path certificate, Path privateKey,
+            AdmissionGate.Limits limits) {
+        try { requirePublishableCandidates(candidates); }
+        catch (RuntimeException invalid) { return CompletableFuture.failedFuture(invalid); }
+        return open(bootstrap, bind, null, certificate, privateKey, limits, true, candidates);
+    }
+
     private static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
             Supplier<List<InetSocketAddress>> advertised, Path certificate, Path privateKey,
             AdmissionGate.Limits limits, boolean controlled) {
+        return open(bootstrap, bind, advertised, certificate, privateKey, limits, controlled, null);
+    }
+
+    private static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
+            Supplier<List<InetSocketAddress>> advertised, Path certificate, Path privateKey,
+            AdmissionGate.Limits limits, boolean controlled, NativeCandidateSnapshot candidates) {
         CompletableFuture<NativeProviderTransport> result = new CompletableFuture<>();
         try {
-            checkedEndpoints(advertised.get());
+            if (candidates == null) checkedEndpoints(advertised.get());
             NativeHostIdentity identity = NativeHostIdentity.load(certificate, privateKey);
             byte[] nonce = new byte[16];
             new SecureRandom().nextBytes(nonce);
@@ -121,7 +141,7 @@ public final class NativeProviderTransport implements ProviderTransport {
             var endpoint = new NativeAdmissionServerChannel(identity, validator, limits, true, !controlled);
             bootstrap.clone().channelFactory(() -> endpoint).bind(bind).addListener(future -> {
                 if (future.isSuccess()) {
-                    result.complete(new NativeProviderTransport(endpoint, validator, incarnation, advertised, controlled));
+                    result.complete(new NativeProviderTransport(endpoint, validator, incarnation, advertised, controlled, candidates));
                 } else {
                     endpoint.close();
                     validator.clear();
@@ -146,8 +166,31 @@ public final class NativeProviderTransport implements ProviderTransport {
         return channel;
     }
 
+    /** Replace semantic endpoint material without rotating native identity, keys or established peers. */
+    public synchronized boolean replaceCandidates(NativeCandidateSnapshot next) {
+        if (!version2 || closed || draining || !channel.isActive()) throw new IllegalStateException("Controlled v2 listener unavailable");
+        requirePublishableCandidates(next);
+        if (candidateSnapshot.equals(next)) return false;
+        long nextGeneration = Math.incrementExact(candidateGeneration);
+        candidateSnapshot = next;
+        candidateGeneration = nextGeneration;
+        if (update != null) invalidateUpdate();
+        return true;
+    }
+
+    private static void requirePublishableCandidates(NativeCandidateSnapshot value) {
+        Objects.requireNonNull(value, "candidates");
+        if (value.candidates().stream().anyMatch(candidate -> candidate.type() != NativeCandidateSnapshot.Type.HOST))
+            throw new IllegalArgumentException("STUN candidate publication requires a bounded candidate lease");
+    }
+
     @Override
-    public synchronized CompletionStage<JsonObject> hostProfile() {
+    public CompletionStage<JsonObject> hostProfile() {
+        return captureHostProfile().thenApply(HostProfileSnapshot::profile);
+    }
+
+    @Override
+    public synchronized CompletionStage<HostProfileSnapshot> captureHostProfile() {
         if (closed || draining || !channel.isActive()) {
             return CompletableFuture.failedFuture(new IllegalStateException("Native endpoint unavailable"));
         }
@@ -167,16 +210,18 @@ public final class NativeProviderTransport implements ProviderTransport {
             return CompletableFuture.failedFuture(new IllegalStateException("No active background admission key"));
         }
 
-        List<InetSocketAddress> endpoints;
+        List<NativeCandidateSnapshot.Candidate> endpoints;
         try {
-            endpoints = checkedEndpoints(advertisedAddresses.get());
+            endpoints = version2 ? candidateSnapshot.candidates() : checkedEndpoints(advertisedAddresses.get()).stream()
+                    .map(endpoint -> new NativeCandidateSnapshot.Candidate(endpoint, NativeCandidateSnapshot.Type.HOST)).toList();
         } catch (RuntimeException unavailable) {
             return CompletableFuture.failedFuture(unavailable);
         }
 
         JsonArray candidates = new JsonArray();
         int index = 0;
-        for (InetSocketAddress endpoint : endpoints) {
+        for (NativeCandidateSnapshot.Candidate selected : endpoints) {
+            InetSocketAddress endpoint = selected.endpoint();
             JsonObject candidate = new JsonObject();
             candidate.addProperty("address", endpoint.getAddress().getHostAddress());
             candidate.addProperty("port", endpoint.getPort());
@@ -184,7 +229,7 @@ public final class NativeProviderTransport implements ProviderTransport {
             candidate.addProperty("foundation", Integer.toString(++index));
             candidate.addProperty("priority", 2130706431 - (index - 1) * 256);
             candidate.addProperty("protocol", "udp");
-            candidate.addProperty("type", "host");
+            candidate.addProperty("type", selected.type().wire());
             candidates.add(candidate);
         }
 
@@ -193,6 +238,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         capability.addProperty("incarnation", incarnation);
 
         JsonObject profile = new JsonObject();
+        if (version2) profile.addProperty("version", 2);
         profile.add("candidates", candidates);
         profile.add("statelessAdmission", capability);
         profile.addProperty("credentialKeyId", keyId);
@@ -200,7 +246,11 @@ public final class NativeProviderTransport implements ProviderTransport {
         profile.addProperty("maxMessageSize", NetherNetFrameDecoder.MESSAGE_LIMIT);
         profile.addProperty("sctpPort", 5000);
 
-        return CompletableFuture.completedFuture(profile);
+        long capturedGeneration = candidateGeneration;
+        return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, () -> {
+            if (version2 && (candidateGeneration != capturedGeneration || closed || draining || !channel.isActive()))
+                throw new IllegalStateException("Native endpoint snapshot changed or closed");
+        }));
     }
 
     private static List<InetSocketAddress> checkedEndpoints(List<InetSocketAddress> endpoints) {

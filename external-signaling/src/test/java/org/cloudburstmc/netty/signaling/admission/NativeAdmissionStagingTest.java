@@ -34,7 +34,8 @@ class NativeAdmissionStagingTest {
         final NativeHostIdentity identity;
         final NativeProviderTransport transport;
         final int port;
-        Host() throws Exception {
+        Host() throws Exception { this(false); }
+        Host(boolean version2) throws Exception {
             var helper = new NativeAdmissionIntegrationTest();
             helper.directory = directory;
             identity = helper.identity();
@@ -42,15 +43,22 @@ class NativeAdmissionStagingTest {
             var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
                 @Override protected void initChannel(AdmittedNetherNetChildChannel channel) {
                     channel.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
+                        private boolean reliable = true;
+                        @Override public void userEventTriggered(ChannelHandlerContext ctx, Object event) throws Exception {
+                            if (event instanceof NetherNetPacket.Delivery delivery) reliable = delivery.reliable();
+                            else super.userEventTriggered(ctx, event);
+                        }
                         @Override protected void channelRead0(ChannelHandlerContext ctx, ByteBuf bytes) {
-                            ctx.writeAndFlush(bytes.retain());
+                            ctx.writeAndFlush(new NetherNetPacket(bytes.retain(), reliable));
                         }
                     });
                 }
             });
-            transport = NativeProviderTransport.openControlled(bootstrap, new InetSocketAddress("::", port),
+            transport = (version2 ? NativeProviderTransport.openControlledVersion2(bootstrap, new InetSocketAddress("::", port),
+                    NativeCandidateSnapshot.hosts(List.of()), identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                    : NativeProviderTransport.openControlled(bootstrap, new InetSocketAddress("::", port),
                     () -> List.of(new InetSocketAddress("127.0.0.1", port), new InetSocketAddress("::1", port)),
-                    identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                    identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults()))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertTrue(transport.supportsAdmissionStaging());
             assertFalse(transport.channel().isServing(), "disabled before any keys are installed");
@@ -307,6 +315,92 @@ class NativeAdmissionStagingTest {
                     assertTrue(reliable.isOpen() && unreliable.isOpen());
                     assertTrue(player.closeAndAwait(Duration.ofSeconds(5)));
                 }
+            }
+        }
+    }
+
+    private final class ConnectedPlayer implements AutoCloseable {
+        final PeerConnection player;
+        final DataChannel reliable, unreliable;
+        final AtomicInteger reliableEchoes = new AtomicInteger(), unreliableEchoes = new AtomicInteger();
+        ConnectedPlayer(Host host, String ip) throws Exception {
+            player = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
+                    .withBindAddress(InetAddress.getByName(ip)), Runnable::run);
+            reliable = player.createDataChannel("ReliableDataChannel");
+            unreliable = player.createDataChannel("UnreliableDataChannel", DataChannelInitSettings.DEFAULT
+                    .withReliability(new DataChannelReliability(true, true, 0, 0)));
+            reliable.onMessage.register(DataChannelCallback.Message.handleBinary((channel, bytes) -> {
+                if (bytes.remaining() == 2 && bytes.get() == 0 && bytes.get() == 42) reliableEchoes.incrementAndGet();
+            }));
+            unreliable.onMessage.register(DataChannelCallback.Message.handleBinary((channel, bytes) -> {
+                if (bytes.remaining() == 2 && bytes.get() == 0 && bytes.get() == 42) unreliableEchoes.incrementAndGet();
+            }));
+            player.setLocalDescription("offer", ip.equals("::1") ? "snapshotPlayer6" : "snapshotPlayer4", "p".repeat(32));
+            var answer = TestSignalingProvider.answer(player.localDescription(), host.identity.fingerprint(), host.port,
+                    System.currentTimeMillis() + 30_000, host.audience(), false);
+            player.setRemoteDescription(answer.sdp().replace("127.0.0.1", ip), SessionDescriptionType.ANSWER);
+            NativeAdmissionIntegrationTest.await(() -> reliable.isOpen() && unreliable.isOpen());
+        }
+        void exchange() throws Exception {
+            int expectedReliable = reliableEchoes.get() + 1, expectedUnreliable = unreliableEchoes.get() + 1;
+            reliable.sendMessage(ByteBuffer.allocateDirect(2).put((byte) 0).put((byte) 42).flip());
+            unreliable.sendMessage(ByteBuffer.allocateDirect(2).put((byte) 0).put((byte) 42).flip());
+            NativeAdmissionIntegrationTest.await(() -> reliableEchoes.get() == expectedReliable && unreliableEchoes.get() == expectedUnreliable);
+            assertTrue(reliable.isOpen() && unreliable.isOpen());
+        }
+        @Override public void close() { assertTrue(player.closeAndAwait(Duration.ofSeconds(5))); }
+    }
+
+    @Test @Timeout(35)
+    void versionTwoWithdrawalPreservesBothFamiliesEstablishedPeersKeysAndIdentity() throws Exception {
+        try (var host = new Host(true)) {
+            var initial = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(initial, KEYS).toCompletableFuture().get();
+            var empty = host.transport.captureHostProfile().toCompletableFuture().get();
+            assertEquals(2, empty.profile().get("version").getAsInt());
+            assertTrue(empty.profile().getAsJsonArray("candidates").isEmpty(), "bind and key install precede endpoint discovery");
+            var v4 = new InetSocketAddress("127.0.0.1", host.port);
+            var v6 = new InetSocketAddress("::1", host.port);
+            var dual = NativeCandidateSnapshot.hosts(List.of(v4, v6));
+            assertTrue(host.transport.replaceCandidates(dual));
+            assertThrows(IllegalStateException.class, empty::requireCurrent);
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    host.transport.commitAdmissionUpdate(initial, () -> {}).toCompletableFuture().get(), "changed candidates retire pending native staging");
+            var ready = host.transport.beginAdmissionUpdate(deadline());
+            host.transport.installTicketKeys(ready, KEYS).toCompletableFuture().get();
+            assertFalse(host.transport.replaceCandidates(NativeCandidateSnapshot.hosts(List.of(v6, v4, v4))));
+            assertEquals(ProviderTransport.ApplyResult.APPLIED, host.transport.commitAdmissionUpdate(ready, () -> {}).toCompletableFuture().get());
+            var first = host.transport.captureHostProfile().toCompletableFuture().get();
+            var stableMetadata = first.profile(); stableMetadata.remove("candidates");
+            long creations;
+            try (var player4 = new ConnectedPlayer(host, "127.0.0.1"); var player6 = new ConnectedPlayer(host, "::1")) {
+                creations = host.transport.channel().creationAttempts(); assertEquals(2, creations);
+                for (var selection : List.of(dual, NativeCandidateSnapshot.hosts(List.of(v6)),
+                        NativeCandidateSnapshot.hosts(List.of()), NativeCandidateSnapshot.hosts(List.of(v4)))) {
+                    var before = host.transport.captureHostProfile().toCompletableFuture().get();
+                    boolean changed = host.transport.replaceCandidates(selection);
+                    if (changed) assertThrows(IllegalStateException.class, before::requireCurrent); else before.requireCurrent();
+                    assertTrue(host.transport.channel().isServing(), "publication updates do not drop native identity or existing tickets");
+                    var profile = host.transport.captureHostProfile().toCompletableFuture().get();
+                    assertEquals(selection.candidates().size(), profile.profile().getAsJsonArray("candidates").size());
+                    var metadata = profile.profile(); metadata.remove("candidates"); assertEquals(stableMetadata, metadata);
+                    var stage = host.transport.beginAdmissionUpdate(deadline());
+                    host.transport.installTicketKeys(stage, KEYS).toCompletableFuture().get();
+                    player4.exchange(); player6.exchange();
+                    assertEquals(ProviderTransport.ApplyResult.APPLIED,
+                            host.transport.commitAdmissionUpdate(stage, profile::requireCurrent).toCompletableFuture().get());
+                    assertTrue(host.transport.channel().isServing());
+                    player4.exchange(); player6.exchange();
+                    assertEquals(creations, host.transport.channel().creationAttempts());
+                    assertEquals(2, host.transport.channel().liveNativePeers());
+                }
+                host.transport.replaceCandidates(dual);
+                assertThrows(IllegalStateException.class, first::requireCurrent, "A to B to A cannot revive old ownership");
+                var current = host.transport.captureHostProfile().toCompletableFuture().get();
+                assertThrows(IllegalArgumentException.class, () -> host.transport.replaceCandidates(new NativeCandidateSnapshot(List.of(
+                        new NativeCandidateSnapshot.Candidate(v4, NativeCandidateSnapshot.Type.SRFLX)))));
+                current.requireCurrent(); assertEquals(first.profile(), current.profile());
+                player4.exchange(); player6.exchange();
             }
         }
     }

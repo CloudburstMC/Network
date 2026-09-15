@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.signaling;
 import com.google.gson.JsonObject;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
 /**
@@ -60,6 +61,32 @@ public interface ProviderTransport {
      * Existing PublishHostProfileRequest, exported from actual bound native metadata.
      */
     CompletionStage<JsonObject> hostProfile();
+
+    /**
+     * Immutable profile bytes plus an endpoint-material ownership guard. The guard throws IllegalStateException
+     * after semantic replacement or native retirement; it must never wait, acquire a monitor or perform I/O.
+     */
+    final class HostProfileSnapshot {
+        private final JsonObject profile;
+        private final Runnable current;
+        public HostProfileSnapshot(JsonObject profile, Runnable requireCurrent) {
+            this.profile = Objects.requireNonNull(profile, "profile").deepCopy();
+            this.current = Objects.requireNonNull(requireCurrent, "requireCurrent");
+        }
+        public JsonObject profile() { return profile.deepCopy(); }
+        public void requireCurrent() { current.run(); }
+    }
+
+    /**
+     * Capture endpoint ownership across asynchronous publication, persistence and application.
+     * Legacy adapters retain their unversioned behavior; versioned profiles require an owned override.
+     */
+    default CompletionStage<HostProfileSnapshot> captureHostProfile() {
+        return hostProfile().thenApply(profile -> {
+            if (profile == null || profile.has("version")) throw new IllegalStateException("Versioned host profiles require snapshot ownership");
+            return new HostProfileSnapshot(profile, () -> { });
+        });
+    }
 
     /**
      * Atomic native snapshot installation. Durable application storage remains the caller's responsibility.

@@ -71,6 +71,49 @@ class ControlledProviderNativeApplicationTest {
             } finally { executor.shutdownNow(); group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync(); }
         }
     }
+    @Test void versionTwoEmptyStartupWithdrawalAndRecoveryKeepSameActualListener(@TempDir Path directory) throws Exception {
+        var group = new DefaultEventLoopGroup(1); var executor = Executors.newSingleThreadExecutor();
+        try (var store = new ProviderStateStore(directory)) {
+            ControlledProviderStateTest.seed(store, ControlledProviderApplicationTest.ORIGIN); var identity = ProviderHostIdentity.ensure(directory);
+            int port; try (var reservation = new DatagramSocket(new InetSocketAddress("::", 0))) { port = reservation.getLocalPort(); }
+            var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
+                @Override protected void initChannel(AdmittedNetherNetChildChannel channel) { channel.close(); }
+            });
+            var nativeTransport = NativeProviderTransport.openControlledVersion2(bootstrap, new InetSocketAddress("::", port),
+                    NativeCandidateSnapshot.hosts(List.of()), identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ControlledProviderApplicationTest.ORIGIN))) {
+                assertTrue(nativeTransport.channel().isActive()); assertFalse(nativeTransport.channel().isServing());
+                var now = new AtomicLong(System.currentTimeMillis());
+                var application = new ControlledProviderApplication(storage, nativeTransport, executor, now::get, () -> null,
+                        () -> new ProviderClient.Health(true, true, 10, 0, "fixture", "fixture"), null);
+                var v4 = new InetSocketAddress("127.0.0.1", port); var v6 = new InetSocketAddress("::1", port);
+                com.google.gson.JsonObject metadata = null; String revision = null;
+                for (var selection : List.of(NativeCandidateSnapshot.hosts(List.of()), NativeCandidateSnapshot.hosts(List.of(v4, v6)),
+                        NativeCandidateSnapshot.hosts(List.of(v6)), NativeCandidateSnapshot.hosts(List.of()), NativeCandidateSnapshot.hosts(List.of(v4)))) {
+                    nativeTransport.replaceCandidates(selection);
+                    var exchange = new ControlledProviderApplicationTest.Exchange(executor, now, "serving"); exchange.profileRevision = revision;
+                    application.synchronize(exchange).toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    assertEquals("serving", exchange.applied.state()); assertEquals("enabled", exchange.applied.admission());
+                    assertTrue(nativeTransport.channel().isServing()); assertTrue(nativeTransport.channel().isActive());
+                    var profile = nativeTransport.hostProfile().toCompletableFuture().get();
+                    assertEquals(profile, storage.application().getAsJsonObject("profile"));
+                    var current = profile.deepCopy(); current.remove("candidates");
+                    if (metadata == null) metadata = current; else assertEquals(metadata, current);
+                    var finalBody = exchange.bodies.get(exchange.bodies.size() - 1);
+                    assertEquals(!selection.candidates().isEmpty(), finalBody.get("acceptingPlayers").getAsBoolean());
+                    assertTrue(finalBody.get("healthy").getAsBoolean()); assertTrue(finalBody.has("applicationAck"));
+                    revision = exchange.profileRevision;
+                    assertFalse(nativeTransport.replaceCandidates(selection)); assertFalse(application.due());
+                }
+                for (String target : List.of("draining", "closed")) {
+                    application.request(); var exchange = new ControlledProviderApplicationTest.Exchange(executor, now, target);
+                    application.synchronize(exchange).toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    assertEquals(target, exchange.applied.state()); assertFalse(nativeTransport.channel().isServing());
+                }
+            } finally { nativeTransport.close().toCompletableFuture().get(8, TimeUnit.SECONDS); }
+        } finally { executor.shutdownNow(); group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync(); }
+    }
     @Test void actualNativeAdmissionRemainsClosedAfterApplicationSaveFailure(@TempDir Path directory) throws Exception {
         var group = new DefaultEventLoopGroup(1); var executor = Executors.newSingleThreadExecutor();
         try (var store = new ProviderStateStore(directory)) {
