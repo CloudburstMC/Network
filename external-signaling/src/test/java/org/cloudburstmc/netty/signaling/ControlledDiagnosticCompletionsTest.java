@@ -11,6 +11,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.*;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,6 +51,7 @@ class ControlledDiagnosticCompletionsTest {
         final List<DiagnosticAdmission.Completion> nativeResults = new ArrayList<>(); final List<String> notices = new ArrayList<>();
         final AtomicBoolean reject = new AtomicBoolean(); long dropped; int polls;
         final ProviderTransport transport = (ProviderTransport) java.lang.reflect.Proxy.newProxyInstance(ProviderTransport.class.getClassLoader(), new Class[]{ProviderTransport.class}, (proxy, method, args) -> {
+            if (method.getName().equals("supportsDiagnosticAdmission")) return true;
             if (method.getName().equals("diagnosticDroppedResultCount")) return OptionalLong.of(dropped);
             if (method.getName().equals("pollDiagnosticResults")) {
                 polls++; int n = Math.min((int) args[0], nativeResults.size()); var result = List.copyOf(nativeResults.subList(0, n)); nativeResults.subList(0, n).clear(); return result;
@@ -87,6 +89,35 @@ class ControlledDiagnosticCompletionsTest {
     }
     static byte[] response(ControlDiagnosticCompletionReceiptCodec.Batch b) {
         return b == null ? null : ("{\"diagnosticCompletions\":" + ControlDiagnosticCompletionReceiptCodec.encodeBatch(b) + "}").getBytes(StandardCharsets.UTF_8);
+    }
+    @Test void queuedApplicationReceiptCannotOverwriteSuccessorAfterRootLockRelease(@TempDir Path path) throws Exception {
+        try (var h = new Harness(path)) {
+            var c = completion(0); h.append(c);
+            var tasks = new ArrayDeque<Runnable>();
+            var app = new ControlledProviderApplication(h.storage, h.transport, tasks::add,
+                    () -> 1000, () -> null, () -> null, null);
+            byte[] body = h.body(); var intent = h.intent(body, 18);
+            var acknowledgement = app.acknowledgeDiagnosticCompletions(intent, body, h.receipt(intent), response(receipts(c))).toCompletableFuture();
+            assertEquals(1, tasks.size()); assertFalse(acknowledgement.isDone());
+            // ProviderClient.stop releases these locks before its executor drains queued callbacks.
+            app.close(); h.storage.close(); h.store.close();
+            try (var successorStore = new ProviderStateStore(path);
+                 var successor = ControlledProviderState.open(successorStore, ControlledDiagnosticApplicationTest.config())) {
+                var next = successor.application(); next.addProperty("appliedRevision", 2); successor.saveApplication(next);
+                var expected = successorStore.read();
+                tasks.remove().run();
+                var failure = assertThrows(CompletionException.class, acknowledgement::join);
+                assertInstanceOf(IOException.class, failure.getCause());
+                assertEquals(expected, successorStore.read());
+                assertEquals(1, successor.diagnosticCompletionBatch().completions().size());
+                assertEquals(0, successor.diagnosticCompletionState().get("recorded").getAsLong());
+                // The new owner can settle the original historical report normally.
+                successor.acknowledgeDiagnosticCompletions(intent, body, h.receipt(intent), receipts(c));
+                assertNull(successor.diagnosticCompletionBatch());
+                assertEquals(1, successor.diagnosticCompletionState().get("recorded").getAsLong());
+                assertEquals(2, successorStore.read().getAsJsonObject("controlApplication").get("appliedRevision").getAsInt());
+            }
+        }
     }
     @Test void nativeSaveFailureHoldsExactFourWithoutAnotherPollAndPreservesOtherRootUpdates(@TempDir Path path) throws Exception {
         try (var h = new Harness(path)) {
