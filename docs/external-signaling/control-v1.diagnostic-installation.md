@@ -1,10 +1,45 @@
 # Diagnostic installation and acknowledgement
 
 Draft, disabled unless explicitly negotiated and implemented by the provider and
-host. This document defines the installation document and its exact subsequent
-acknowledgement. It does not enable heartbeat fields, schedule a probe, establish
-public address ownership or define the independent host-completion upload yet.
+host. This document defines the installation document, its exact subsequent
+acknowledgement and their optional signed heartbeat wrappers. It does not enable
+deployment, schedule a probe, establish public address ownership or define the
+independent host-completion upload yet.
 Installation, player application readiness and transport reachability are separate.
+
+## Optional heartbeat wrappers
+
+The existing signed controlled heartbeat may carry a `diagnosticAdmission` field.
+Its omission means the host has not opted in. Its request shape is exactly
+`{version:1,installed:Ack|null}`. The response shape is exactly
+`{version:1,expected:Installation|null,accepted:Ack|null}`. Each `Ack` is the full
+`{version:1,binding}` acknowledgement below. No host-completion field is accepted
+by this installation slice. The native adapter must support installation before
+the host's explicit configuration may opt in.
+
+The original UTF-8 request wrapper is bounded to 2112 bytes and the response
+wrapper to 26752 bytes, within a 65536-byte complete heartbeat. Check duplicate
+fields throughout the original heartbeat before extracting the root field,
+including escaped spellings of its name. Health fields may contain fractional
+numbers; the diagnostic wrapper's integers retain their original unsigned
+decimal token rules. Nested decoded installation/ACK documents retain their own
+encoded size limits. Canonical wrapper member order is the order shown above.
+
+`installed:null` declares no current actual native installation. A disk record
+alone can never produce a non-null ACK after restart. Only actual guarded native
+installation and durable application save may produce the ACK on a subsequent
+heartbeat; native/profile/owner loss fences a pending ACK and requires normal
+status/cancellation reconciliation. That claim does not establish reachability.
+
+`expected:null` supplies no installation material and grants no renewal. It is
+also valid in secret-free historical receipts; it does not by itself withdraw a
+previously installed policy that remains within its original authority. Explicit
+withdrawal uses a new empty-endpoint installation or observed owner/endpoint/key
+revocation. An `accepted` ACK is exact historical acceptance, never fresh native
+authority. A fresh authenticated heartbeat can redeliver the same still-current
+installation with unchanged digest, key material and original absolute deadlines.
+Keep raw epoch secrets out of immutable receipts and archive data; attach private
+material only to an authenticated delivery with current final authority guards.
 
 `control-v1.diagnostic-installation.schema.json` describes the closed structural
 shapes. `control-v1.diagnostic-installation.fixtures.json` contains independent
