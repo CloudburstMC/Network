@@ -199,7 +199,11 @@ final class ControlledProviderApplication {
                 result.requireCurrent(); String originalResponse = new String(result.bodyBytes().orElseThrow(), StandardCharsets.UTF_8);
                 var response = ControlledProviderJson.parse(originalResponse, ControlResultCodec.MAX_BODY_BYTES);
                 String diagnosticWire = ControlledProviderJson.rootProperty(originalResponse, "diagnosticAdmission", ControlResultCodec.MAX_BODY_BYTES);
-                var diagnosticResponse = diagnosticWire == null ? null : ControlDiagnosticHeartbeatCodec.decodeResponse(diagnosticWire);
+                var diagnosticResponse = diagnosticResponse(diagnosticWire);
+                // Keep optional private material out of the general application response and notices.
+                response.remove("diagnosticAdmission");
+                if (diagnosticResponse != null) response.add("diagnosticAdmission", JsonParser.parseString(
+                        ControlDiagnosticHeartbeatCodec.encodeResponse(new ControlDiagnosticHeartbeatCodec.Response(null, diagnosticResponse.accepted()))));
                 // The old ACK was checked through its actual send and original authenticated response.
                 // Deliberate replacement below must not make that historical claim self-invalidating.
                 result.requireCurrent(); if (pass.diagnosticClaim != null) pass.diagnosticClaim.delivered(); pass.diagnosticClaim = null;
@@ -218,6 +222,14 @@ final class ControlledProviderApplication {
                 }, executor);
             }, executor);
         }, executor);
+    }
+    private ControlDiagnosticHeartbeatCodec.Response diagnosticResponse(String wire) {
+        if (!diagnostics.enabled || wire == null) return null;
+        try { return ControlDiagnosticHeartbeatCodec.decodeResponse(wire); }
+        catch (IllegalArgumentException unavailable) {
+            // A valid authenticated player response remains usable when its optional diagnostic slice is unavailable.
+            diagnosticNotice.accept("diagnostic_installation_unavailable"); return null;
+        }
     }
     private CompletionStage<JsonObject> retainedHeartbeat(Pass pass, byte[] original) {
         pass.check();
