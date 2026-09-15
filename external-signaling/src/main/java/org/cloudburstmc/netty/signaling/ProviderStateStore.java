@@ -90,12 +90,6 @@ public final class ProviderStateStore implements AutoCloseable {
 
     Path directory() { return directory; }
 
-    synchronized JsonObject readControlled() throws IOException {
-        // Apply the same permission and size checks before parsing original bytes strictly.
-        read();
-        return Files.exists(stateFile) ? ControlledProviderJson.parse(Files.readString(stateFile), 262144) : new JsonObject();
-    }
-
     public synchronized void write(JsonObject state) throws IOException {
         requireOwnership();
         Path tmp = Files.createTempFile(directory, "provider-state-", ".tmp", OWNER_ONLY_FILE);

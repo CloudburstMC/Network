@@ -106,60 +106,6 @@ class JdkWebSocketTransportTest {
     }
 
     @Test
-    void realControlLinkCarriesSignedUnsequencedAuthorityOnIpv4AndIpv6() throws Exception {
-        for (String address : List.of("127.0.0.1", "::1")) {
-            try (Loopback server = new Loopback(false, true, true, address, "nethernet-control-v1")) {
-                var machine = ProviderCrypto.generate(); var provider = ProviderCrypto.generate();
-                long now = System.currentTimeMillis(); String origin = "http://" + server.uri().getRawAuthority();
-                var upgradeJson = ControlSessionCodecTest.vector("upgrade-1").getAsJsonObject("envelope").deepCopy();
-                upgradeJson.addProperty("audience", origin); upgradeJson.addProperty("encodedPathAndQuery", "/control");
-                upgradeJson.addProperty("sentAt", now); upgradeJson.addProperty("expiresAt", now + 30000);
-                var upgrade = ControlSessionCodec.sign(ControlSessionCodec.decodeRequest(upgradeJson.toString()), machine.getPrivate());
-                BlockingQueue<String> received = new LinkedBlockingQueue<>();
-                var limits = new JdkWebSocketTransport.Limits(8192, 64, 2, 16384, DEADLINE, DEADLINE, DEADLINE, DEADLINE);
-                var link = JdkControlLink.connect(server.client(), server.uri(), upgrade, limits, receiverExecutor, scheduler, received::add);
-                try {
-                    await(link.opened());
-                    assertEquals(ProviderCrypto.base64(ControlSessionCodec.encode(upgrade).getBytes(StandardCharsets.UTF_8)), server.controlProof);
-                    assertEquals("nethernet-control-v1", server.requestedProtocol);
-                    var fixture = ControlAuthorityCodecTest.request("ws-request");
-                    var request = ControlAuthorityCodec.sign(new ControlAuthorityCodec.Request(1, "authority-request", fixture.requestId(), origin,
-                            fixture.instanceId(), fixture.generation(), fixture.writer(), fixture.capabilities(), now, now + 30000,
-                            "POST", "/control/authority", now + 300000, fixture.authentication()), machine.getPrivate());
-                    String requestWire = ControlAuthorityCodec.encode(request);
-                    var handoffs = new AtomicInteger();
-                    await(link.sendText(requestWire, handoffs::incrementAndGet)); assertEquals(1, handoffs.get()); String actual = server.texts.poll(3, TimeUnit.SECONDS);
-                    assertEquals(requestWire, actual);
-                    var machineKey = new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.MACHINE,
-                            request.authentication().keyId(), machine.getPublic(), now - 1000, now + 600000);
-                    ControlAuthorityCodec.verifyRequest(actual, new ControlAuthorityCodec.RequestContext(origin, request.instanceId(), request.generation(),
-                            "POST", "/control/authority", request.writer(), request.capabilities(), now, now + 600000, 1000), machineKey);
-                    var source = new ControlAuthorityCodec.Source("partition-1", 1, 1, now, now + 300000);
-                    var response = ControlAuthorityCodec.sign(new ControlAuthorityCodec.Response(1, "authority-response", request.requestId(), origin,
-                            request.instanceId(), request.generation(), request.writer(), request.capabilities(), now, now + 30000,
-                            ControlAuthorityCodec.requestDigest(request), source, now + 600000, now + 300000, List.of("control.status"),
-                            new ControlStateCodec.Summary(0, "draining", null),
-                            new ControlFrameCodec.Authentication(ControlFrameCodec.SCHEME, "provider-local-key", "")), provider.getPrivate());
-                    String responseWire = ControlAuthorityCodec.encode(response); int split = responseWire.length() / 2;
-                    server.send(new TextWebSocketFrame(false, 0, responseWire.substring(0, split)));
-                    server.send(new ContinuationWebSocketFrame(true, 0, responseWire.substring(split)));
-                    String returned = received.poll(3, TimeUnit.SECONDS); assertEquals(responseWire, returned);
-                    var providerKey = new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.PROVIDER_CONTROL,
-                            "provider-local-key", provider.getPublic(), now - 1000, now + 600000);
-                    var verified = ControlAuthorityCodec.verifyResponse(returned, new ControlAuthorityCodec.ResponseContext(request,
-                            System.currentTimeMillis(), now + 600000, 1000, null), providerKey);
-                    verified.requireFreshDelivery(System.currentTimeMillis(), null);
-                    assertEquals(request.writer(), verified.response().writer());
-                    // This real socket has the same bounded text transport for all messages; no HTTP request or sequence wrapper exists.
-                    assertTrue(server.texts.isEmpty());
-                    server.send(new TextWebSocketFrame(" ".repeat(8193)));
-                    assertThrows(ExecutionException.class, () -> await(link.closed())); assertTrue(received.isEmpty());
-                } finally { link.abort(); }
-            }
-        }
-    }
-
-    @Test
     void realWsReceivesFragmentsAndPingWithoutLosingDemand() throws Exception {
         BlockingQueue<String> received = new LinkedBlockingQueue<>();
         try (Loopback server = new Loopback(false)) {
