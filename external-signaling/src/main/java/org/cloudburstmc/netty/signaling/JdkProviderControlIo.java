@@ -24,6 +24,10 @@ final class JdkProviderControlIo implements ControlClientIo, AutoCloseable {
     @Override public CompletionStage<HttpReply> bootstrap(URI endpoint, ControlSessionCodec.Request request) { return http.bootstrap(endpoint, request); }
     @Override public CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request) { return http.authority(endpoint, request); }
     @Override public CompletionStage<HttpReply> operation(URI endpoint, ControlHttpCodec.Request request, byte[] body) { return http.operation(endpoint, request, body); }
+    @Override public boolean requiresOutcomeAcknowledgement() { return true; }
+    @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
+        return application.acknowledgeOutcomes(intent, originalBody, receipt);
+    }
     @Override public Link openWebSocket(URI endpoint, ControlSessionCodec.Request request, Consumer<String> received) {
         return JdkControlLink.connect(client, endpoint, request, new JdkWebSocketTransport.Limits(ControlFrameCodec.MAX_FRAME_BYTES,
                 1024, 8, 2L * ControlFrameCodec.MAX_FRAME_BYTES, Duration.ofSeconds(10), Duration.ofSeconds(10),

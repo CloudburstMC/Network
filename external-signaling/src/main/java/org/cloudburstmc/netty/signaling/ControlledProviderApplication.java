@@ -27,7 +27,8 @@ final class ControlledProviderApplication {
     private ControlStateCodec.AppliedBasis liveBasis;
     private String acceptedDigest;
     private Consumer<Throwable> fatal = ignored -> { };
-    private boolean installed, demand = true, closed, permanentlyDrained, nativeClosed;
+    private boolean installed, demand = true, permanentlyDrained, nativeClosed;
+    private volatile boolean closed;
     private long nextHeartbeat, nextUpdate, snapshotClock;
     private ServerStatus lastStatus;
     private ProviderClient.Health lastHealth;
@@ -36,6 +37,14 @@ final class ControlledProviderApplication {
             ControlClientClock clock, Supplier<ServerStatus> status, Supplier<ProviderClient.Health> health, String region) {
         this.storage = storage; this.transport = transport; this.executor = executor; this.clock = clock;
         this.status = status; this.health = health; this.region = region; this.data = storage.application();
+    }
+    CompletionStage<Void> acknowledgeOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) {
+        byte[] owned = originalBody.clone();
+        return CompletableFuture.runAsync(() -> {
+            if (closed) throw new IllegalStateException("Application closed");
+            try { storage.acknowledgeOutcomes(intent, owned, receipt); }
+            catch (IOException failure) { throw new CompletionException(failure); }
+        }, executor);
     }
     void onFatal(Consumer<Throwable> callback) { fatal = Objects.requireNonNull(callback); }
     void invalidate() { version.incrementAndGet(); }

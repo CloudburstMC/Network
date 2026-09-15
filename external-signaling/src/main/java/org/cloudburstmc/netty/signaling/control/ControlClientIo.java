@@ -49,6 +49,17 @@ public interface ControlClientIo {
     CompletionStage<HttpReply> authority(URI endpoint, ControlAuthorityCodec.Request request);
     /** Returns a raw result envelope bounded by ControlResultCodec.MAX_ENVELOPE_BYTES, never a bare receipt. */
     CompletionStage<HttpReply> operation(URI endpoint, ControlHttpCodec.Request request, byte[] originalBody);
+    /** Opt-in application queue owner: committed receipts must be durably applied before releasing their intent. */
+    default boolean requiresOutcomeAcknowledgement() { return false; }
+    /**
+     * Runs on the adapter's serialized application executor. Remove the exact original queue prefix and
+     * retain an idempotent intent/receipt marker atomically. This is local receipt application, not a grant.
+     * No response body or secrets are supplied. Failure keeps the committed receipt for local-only retry.
+     */
+    default CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody,
+                                                              ControlLifecycleCodec.Receipt receipt) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("No durable outcomes owner"));
+    }
     Link openWebSocket(URI endpoint, ControlSessionCodec.Request upgradeProof, Consumer<String> received);
     /**
      * Body application must run on the adapter's serialized application executor, not inline under the coordinator monitor.

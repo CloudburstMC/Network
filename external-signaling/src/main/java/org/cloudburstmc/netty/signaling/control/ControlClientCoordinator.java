@@ -63,7 +63,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private ControlClientIo.Scheduler.Task retry, authorityTimer, rotationTimer, authorityRetry, synchronizationTimeout;
     private PendingAuthority pendingAuthority;
     private PendingAuthority authorityIo;
-    private Object synchronizationIo;
+    private Object synchronizationIo, outcomeAcknowledgementIo;
     private int authorityFailures;
     private long synchronizationVersion;
     private String quarantinedFrame;
@@ -232,6 +232,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         requireRunning(); ControlProof.capabilities(transport, capabilities);
         if (snapshot.pending() != null && snapshot.pending().candidate() != null) throw new IllegalStateException("Resolve machine key rotation before replacing writer");
         if (snapshot.pendingBootstrap() != null) throw new IllegalStateException("Resolve existing bootstrap intent first");
+        if (outcomeAcknowledgementIo != null) throw new IllegalStateException("Durable outcome acknowledgement still running");
         desiredTransport = transport; desiredCapabilities = List.copyOf(capabilities);
         attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; beginPrepare();
     }
@@ -278,9 +279,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
 
     private void recover() {
         if (hasTerminalReceipt()) { stopDeregistered(); return; }
+        if (outcomeAcknowledgementIo != null) return; // Timeout/cancellation never releases unsettled application work.
         attempt++; operationInFlight = false; if (!resetAuthorityWork()) return; state = State.RECONCILING;
         cancel(retry); retry = null;
         var pending = snapshot.pending();
+        if (committedOutcome(pending)) { acknowledgeOutcome(pending.receipt(), this::recover); return; }
         var credential = pending != null && pending.candidate() != null ? pending.candidate() : snapshot.currentKey();
         currentStatus(credential, !credential.equals(snapshot.currentKey()));
     }
@@ -319,6 +322,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 // A no-commit receipt never proves candidate selection. Require a
                 // positive strong status under the original selected credential.
                 if (!committed && !credential.equals(snapshot.currentKey())) { halt(); return; }
+                if (committed && outcomeAcknowledgement(pending)) {
+                    persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(),
+                            new ControlClientJournal.Pending(pending.intent(), pending.originalBody(), pending.candidate(), receipt), snapshot.pendingBootstrap(), grant(current), snapshot.authorityFloor()));
+                    acknowledgeOutcome(receipt, () -> acceptCurrent(credential, writer, current, currentRequestIssuedAt)); return;
+                }
                 persist(new ControlClientJournal.Snapshot(snapshot.subject(), credential, writer, snapshot.lastSequence(), null, snapshot.pendingBootstrap(), grant(current), snapshot.authorityFloor()));
                 long continuationAttempt = attempt; State continuationState = state;
                 completeResult(ControlOperationResult.reconciled(receipt));
@@ -756,7 +764,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         var pending = snapshot.pending(); var grant = snapshot.grant();
         boolean initialHeartbeat = pendingSynchronization != null && pendingSynchronization.current()
                 && pending != null && pending.intent().operation().equals("heartbeat");
-        if (pending == null || operationInFlight || grant == null || state != State.READY && state != State.AUTHORITY_EXPIRED && !initialHeartbeat
+        if (pending == null || operationInFlight || outcomeAcknowledgementIo != null || grant == null || state != State.READY && state != State.AUTHORITY_EXPIRED && !initialHeartbeat
                 || pending.receipt() != null && !pending.receipt().disposition().equals("unknown") || clock.nowMillis() >= grant.sessionExpiresAt()) return;
         if (state == State.AUTHORITY_EXPIRED && !forceHttp && !snapshot.writer().transport().equals("https")) {
             if (pendingAuthority == null && !synchronizationInFlight && authorityRetry == null) beginAuthorityRefresh();
@@ -806,7 +814,10 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private void acceptResult(ControlResultCodec.Result result, Runnable bodyGuard) {
         var pending = snapshot.pending(); if (pending == null) return;
         var receipt = result.receipt();
-        ControlLifecycleCodec.verifyReceipt(receipt, pending.intent()); operationInFlight = false;
+        ControlLifecycleCodec.verifyReceipt(receipt, pending.intent());
+        if (pending.receipt() != null && pending.receipt().disposition().equals("committed") && !pending.receipt().equals(receipt))
+            throw ControlJson.invalid("immutable committed receipt changed");
+        operationInFlight = false;
         if (terminalNoCommit(receipt)) {
             // Durable removal retains the sequence floor and original credential.
             // Never expose a response body or promote a rotation candidate here.
@@ -820,6 +831,10 @@ public final class ControlClientCoordinator implements AutoCloseable {
             persistPendingReceipt(receipt); stopDeregistered(); return;
         }
         if (pending.candidate() != null) { persistPendingReceipt(receipt); recover(); return; }
+        if (outcomeAcknowledgement(pending)) {
+            if (pending.receipt() != null && pending.receipt().disposition().equals("committed") && !pending.receipt().equals(receipt)) throw ControlJson.invalid("committed outcome receipt changed");
+            persistPendingReceipt(receipt); acknowledgeOutcome(receipt, () -> { }); return;
+        }
         long generation = attempt;
         persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
         pendingSynchronization = null;
@@ -831,6 +846,50 @@ public final class ControlClientCoordinator implements AutoCloseable {
             return;
         }
         completeResult(ControlOperationResult.delivered(result, bodyGuard));
+    }
+
+    private boolean outcomeAcknowledgement(ControlClientJournal.Pending pending) {
+        return pending != null && pending.intent().operation().equals("outcomes") && io.requiresOutcomeAcknowledgement();
+    }
+    private boolean committedOutcome(ControlClientJournal.Pending pending) {
+        return outcomeAcknowledgement(pending) && pending.receipt() != null && pending.receipt().disposition().equals("committed");
+    }
+    private void acknowledgeOutcome(ControlLifecycleCodec.Receipt receipt, Runnable continuation) {
+        if (outcomeAcknowledgementIo != null) return;
+        var pending = snapshot.pending();
+        if (!committedOutcome(pending) || !receipt.equals(pending.receipt())) throw new IllegalStateException("Missing owned committed outcomes receipt");
+        Object identity = new Object(); outcomeAcknowledgementIo = identity; operationInFlight = true;
+        long generation = attempt;
+        var timeout = scheduler.schedule(() -> { synchronized (this) {
+            if (outcomeAcknowledgementIo == identity && attempt == generation) fail();
+        }}, config.proofMillis());
+        CompletionStage<Void> work;
+        try { work = Objects.requireNonNull(io.acknowledgeCommittedOutcomes(pending.intent(), pending.bodyBytes(), receipt)); }
+        catch (RuntimeException failure) { work = CompletableFuture.failedFuture(failure); }
+        work.whenComplete((ignored, failure) -> { synchronized (this) {
+            if (outcomeAcknowledgementIo != identity) return;
+            outcomeAcknowledgementIo = null; timeout.cancel(); operationInFlight = false;
+            if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return;
+            if (generation != attempt) {
+                // A timed-out hook may still have durably applied the queue. Retry only the idempotent
+                // local hook after settlement; never overlap it or retransmit the committed operation.
+                cancel(retry); long currentAttempt = attempt;
+                retry = scheduler.schedule(() -> { synchronized (this) {
+                    if (attempt == currentAttempt && state != State.CLOSED && state != State.UNRESOLVED) recover();
+                }}, config.baseBackoffMillis());
+                return;
+            }
+            var current = snapshot.pending();
+            if (current == null || !current.intent().equals(pending.intent()) || !receipt.equals(current.receipt())) { halt(); return; }
+            if (failure != null) { fail(); return; }
+            try {
+                persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null,
+                        snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
+                pendingSynchronization = null; State priorState = state;
+                completeResult(ControlOperationResult.reconciled(receipt));
+                if (attempt == generation && state == priorState) continuation.run();
+            } catch (RuntimeException unavailable) { fail(); }
+        }});
     }
 
     /** Only a verified provider terminal decision; carrier clocks never call this. */
