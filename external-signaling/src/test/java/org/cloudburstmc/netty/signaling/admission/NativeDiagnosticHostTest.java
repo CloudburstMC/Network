@@ -76,19 +76,25 @@ class NativeDiagnosticHostTest {
             peer.setLocalDescription("offer",ufrag,password); assertTrue(gathered.await(3,TimeUnit.SECONDS));
         }
         void connect(NativeHostIdentity identity,Context context,Key key,int family,String target,int port,boolean wrongDtls) throws Exception {
+            connect(identity, context, key, family, target, port, wrongDtls, 7, null, null);
+        }
+        void connect(NativeHostIdentity identity,Context context,Key key,int family,String target,int port,boolean wrongDtls,
+                long candidateRevision, DiagnosticAnswerCodec.Signer suppliedSigner, DiagnosticAnswerCodec.Catalog suppliedCatalog) throws Exception {
             String offer=peer.localDescription();
             String fingerprint=TestSignalingProvider.field(offer,"fingerprint").substring(8).replace(":","").toLowerCase(Locale.ROOT);
             if(wrongDtls) { String wrong=(fingerprint.charAt(0)=='0'?"1":"0")+fingerprint.substring(1); offer=offer.replace(TestSignalingProvider.field(offer,"fingerprint"),"sha-256 "+HexFormat.ofDelimiter(":").withUpperCase().formatHex(HexFormat.of().parseHex(wrong)));fingerprint=wrong; }
-            claims=new Claims(expiry,fingerprint,password,id(),hash(utf8(offer)),7,family,DiagnosticAdmissionCodec.address(family,target),port,1);
+            claims=new Claims(expiry,fingerprint,password,id(),hash(utf8(offer)),candidateRevision,family,DiagnosticAdmissionCodec.address(family,target),port,1);
             KeyPair prober=keyPair(); var assertion=DiagnosticAssertionCodec.sign(context,claims,ufrag,prober);
             credentials=DiagnosticAdmissionCodec.issue(context,key,claims,ufrag,utf8(offer),assertion,key.retireAt(),Clock.system());
             auth=DiagnosticAssertionCodec.encodeAuth(claims.attemptIdHex(),assertion);
             String answer="v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:active\r\na=ice-ufrag:"+credentials.localUfrag()+"\r\na=ice-pwd:"+credentials.icePwd()+"\r\na=fingerprint:"+identity.fingerprint()+"\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 "+target+" "+port+" typ host\r\na=end-of-candidates\r\n";
             KeyPair provider=keyPair(); byte[] encoded=provider.getPublic().getEncoded();
             var catalog=new DiagnosticAnswerCodec.Catalog(context.providerOrigin(),0,key.retireAt(),List.of(new DiagnosticAnswerCodec.VerificationKey("provider-diagnostic","test-answer",hex(Arrays.copyOfRange(encoded,encoded.length-97,encoded.length)),0,key.retireAt())));
+            var selectedCatalog = suppliedCatalog == null ? catalog : suppliedCatalog;
+            var signer = suppliedSigner == null ? new DiagnosticAnswerCodec.Signer("provider-diagnostic","test-answer",provider.getPrivate()) : suppliedSigner;
             var expected=new DiagnosticAnswerCodec.Expected(context,claims,ufrag,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT));
-            String signed=DiagnosticAnswerCodec.sign(expected,utf8(answer),new DiagnosticAnswerCodec.Signer("provider-diagnostic","test-answer",provider.getPrivate()),()->catalog,DiagnosticAnswerCodec.Options.system());
-            try(var verified=DiagnosticAnswerCodec.verify(expected,signed,()->catalog,DiagnosticAnswerCodec.Options.system())) {
+            String signed=DiagnosticAnswerCodec.sign(expected,utf8(answer),signer,()->selectedCatalog,DiagnosticAnswerCodec.Options.system());
+            try(var verified=DiagnosticAnswerCodec.verify(expected,signed,()->selectedCatalog,DiagnosticAnswerCodec.Options.system())) {
                 assertNotNull(verified); peer.setRemoteDescription(new String(verified.takeSdp(),StandardCharsets.UTF_8),SessionDescriptionType.ANSWER);
             }
         }

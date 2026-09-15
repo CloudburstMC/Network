@@ -20,7 +20,7 @@ import java.util.concurrent.*;
 /** Private localhost fixture using the actual ProviderClient and native controlled listener. Never a gameplay test. */
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
-    private final boolean runtimeCheck, rotationCheck, candidateCheck, ownerCheck;
+    private final boolean runtimeCheck, rotationCheck, candidateCheck, ownerCheck, diagnosticCheck;
     private final long deadline;
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
@@ -30,7 +30,7 @@ public final class ControlledProviderLocalSmokeClient {
         final String id, mode; final Path directory; final NativeProviderTransport nativeTransport; final ProviderClient client;
         final NativeCandidateSnapshot originalCandidates;
         final CompletableFuture<JsonObject> started; String writerSeen, basisSeen; boolean ready;
-        CompletableFuture<JsonObject> candidateReadiness; int candidateStage; boolean ownerRemapped;
+        CompletableFuture<JsonObject> candidateReadiness; int candidateStage; boolean ownerRemapped; int playerChildren; boolean diagnosticComplete;
         CompletableFuture<Long> runtimeReadiness; boolean runtimeReady; long allReadyAtNanos, initialSessionEpoch, nextRuntimeReadinessAtNanos;
         int runtimeRefreshAttempts;
         Host(JsonObject value) throws Exception {
@@ -44,18 +44,19 @@ public final class ControlledProviderLocalSmokeClient {
             var control = new ProviderControlConfiguration(new ControlClientCoordinator.Config(string(config, "origin"), uri(route, "prepare"), uri(route, "activate"), uri(route, "status"),
                     uri(route, "upgrade"), uri(route, "authority"), operations, mode, List.of("request-response"), 600000, 30000, 200, 10000, route.has("cancelIntent") ? uri(route, "cancelIntent") : null),
                     List.of(new ControlFrameCodec.VerificationKey(ControlFrameCodec.KeyFamily.PROVIDER_CONTROL, string(config, "providerKeyId"), ProviderCrypto.publicKey(config.getAsJsonObject("providerPublicKeyJwk")),
-                            number(config, "validFrom"), number(config, "validUntil"))), reporting, ownerCheck ? ProviderControlConfiguration.NativeOwnership.ISSUED : ProviderControlConfiguration.NativeOwnership.DISABLED);
+                            number(config, "validFrom"), number(config, "validUntil"))), reporting, ownerCheck || diagnosticCheck ? ProviderControlConfiguration.NativeOwnership.ISSUED : ProviderControlConfiguration.NativeOwnership.DISABLED,
+                    ProviderControlConfiguration.CandidatePublication.DISABLED, diagnosticCheck ? ProviderControlConfiguration.Diagnostics.ENABLED : ProviderControlConfiguration.Diagnostics.DISABLED);
             var nativeConfig = config.getAsJsonObject("native"); String address = string(nativeConfig, "bindAddress");
             if (!Set.of("127.0.0.1", "::1", "::").contains(address)) throw new IllegalArgumentException("Only isolated loopback native fixture binds are allowed");
             int port = Math.toIntExact(number(value, "udpPort")); if (port < 1 || port > 65535) throw new IllegalArgumentException("Fixed UDP fixture port required");
             var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
-                @Override protected void initChannel(AdmittedNetherNetChildChannel channel) { channel.close(); }
+                @Override protected void initChannel(AdmittedNetherNetChildChannel channel) { playerChildren++; channel.close(); }
             });
             originalCandidates = NativeCandidateSnapshot.hosts(address.equals("::")
                     ? List.of(new InetSocketAddress("127.0.0.1", port), new InetSocketAddress("::1", port)) : List.of(new InetSocketAddress(address, port)));
             var bind = new InetSocketAddress(InetAddress.getByName(address), port);
             var certificate = Path.of(string(nativeConfig, "certificate")); var privateKey = Path.of(string(nativeConfig, "privateKey"));
-            nativeTransport = (candidateCheck || ownerCheck
+            nativeTransport = (candidateCheck || ownerCheck || diagnosticCheck
                     ? NativeProviderTransport.openControlledVersion2(bootstrap, bind, originalCandidates, certificate, privateKey, AdmissionGate.Limits.defaults())
                     : NativeProviderTransport.openControlled(bootstrap, bind, () -> originalCandidates.candidates().stream().map(NativeCandidateSnapshot.Candidate::endpoint).toList(),
                         certificate, privateKey, AdmissionGate.Limits.defaults()))
@@ -194,6 +195,40 @@ public final class ControlledProviderLocalSmokeClient {
             }
             return event;
         }
+        void diagnostic() throws Exception {
+            if (!diagnosticCheck || !ready || diagnosticComplete) throw new IllegalStateException("Unexpected diagnostic command");
+            client.readiness().get(15, TimeUnit.SECONDS);
+            var root = ControlledProviderJson.parse(Files.readString(directory.resolve("provider-state.json")), 262144);
+            var application = root.getAsJsonObject("controlApplication");
+            var document = ControlDiagnosticInstallationCodec.decodeInstallation(application.get("diagnosticInstallation").toString());
+            ControlDiagnosticInstallationCodec.verifyInstallation(document);
+            var capture = nativeTransport.captureDiagnosticInstallation().orElseThrow(); capture.requireCurrent();
+            if (!capture.binding().installationSha256().equals(document.binding().installationSha256())) throw new IllegalStateException("Native diagnostic binding differs");
+            var nativeConfig = config.getAsJsonObject("native");
+            var identity = NativeHostIdentity.load(Path.of(string(nativeConfig, "certificate")), Path.of(string(nativeConfig, "privateKey")));
+            var catalog = document.answerCatalog();
+            var answerCatalog = new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAnswerCodec.Catalog(catalog.providerOrigin(), catalog.notBefore(), catalog.expiresAt(),
+                    catalog.keys().stream().map(key -> new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAnswerCodec.VerificationKey(
+                            key.family(), key.keyId(), key.publicPointHex(), key.validFrom(), key.validUntil())).toList());
+            var signer = new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAnswerCodec.Signer("provider-diagnostic", "test-answer",
+                    ProviderCrypto.privateKey(string(config, "diagnosticAnswerPrivateKeyPkcs8")));
+            var result = DiagnosticApplicationPeerFixture.admittedAcrossRebind(nativeTransport, identity,
+                    ControlledDiagnosticApplication.nativePolicy(document), signer, answerCatalog, capture::requireCurrent);
+            capture.requireCurrent();
+            if (playerChildren != 0 || nativeTransport.channel().creationAttempts() != 0 || !nativeTransport.pollEvents(32).isEmpty())
+                throw new IllegalStateException("Diagnostic created player activity");
+            var event = new JsonObject();
+            event.add("installation", JsonParser.parseString(ControlDiagnosticInstallationCodec.encodeAcknowledgement(
+                    new ControlDiagnosticInstallationCodec.Acknowledgement(document.binding()))));
+            event.addProperty("policyExpiresAt", document.expiresAt()); event.addProperty("attemptExpiresAt", result.expiresAt());
+            event.addProperty("attemptId", result.attemptId()); event.addProperty("offerDigestHex", result.offerDigestHex());
+            event.addProperty("clientFingerprintHex", result.clientFingerprintHex()); event.addProperty("completionDigestHex", result.completionDigestHex());
+            event.addProperty("completedAt", result.completedAt()); event.addProperty("sentFrames", result.sentFrames());
+            event.addProperty("receivedFrames", result.receivedFrames()); event.addProperty("udpSent", result.udp().sent());
+            event.addProperty("cleanupComplete", result.cleanupComplete()); event.addProperty("liveNativePeers", nativeTransport.channel().liveNativePeers());
+            event.addProperty("playerChildren", playerChildren); event.addProperty("nativeServing", nativeTransport.channel().isServing());
+            event.addProperty("gameplay", false); diagnosticComplete = true; emit("diagnostic_complete", id, mode, event);
+        }
         void stop() throws Exception {
             client.stop().toCompletableFuture().get(12, TimeUnit.SECONDS);
             nativeTransport.close().toCompletableFuture().get(8, TimeUnit.SECONDS);
@@ -224,6 +259,11 @@ public final class ControlledProviderLocalSmokeClient {
         if (requestedOwnerCheck != null && (!requestedOwnerCheck.isJsonPrimitive() || !requestedOwnerCheck.getAsJsonPrimitive().isBoolean()))
             throw new IllegalArgumentException("ownerCheck must be a boolean");
         ownerCheck = requestedOwnerCheck != null && requestedOwnerCheck.getAsBoolean();
+        var requestedDiagnosticCheck = config.get("diagnosticCheck");
+        if (requestedDiagnosticCheck != null && (!requestedDiagnosticCheck.isJsonPrimitive() || !requestedDiagnosticCheck.getAsJsonPrimitive().isBoolean()))
+            throw new IllegalArgumentException("diagnosticCheck must be a boolean");
+        diagnosticCheck = requestedDiagnosticCheck != null && requestedDiagnosticCheck.getAsBoolean();
+        if (diagnosticCheck && (ownerCheck || candidateCheck || runtimeCheck)) throw new IllegalArgumentException("Diagnostic installation requires its separate scenario");
         if (ownerCheck && (candidateCheck || runtimeCheck)) throw new IllegalArgumentException("Owner faults require their separate scenario");
         if (candidateCheck && runtimeCheck) throw new IllegalArgumentException("Candidate and timed rotation scenarios are separate");
         if (!string(config, "origin").matches("https://127\\.0\\.0\\.1:[1-9][0-9]{0,4}")) throw new IllegalArgumentException("Explicit local HTTPS fixture required");
@@ -265,9 +305,15 @@ public final class ControlledProviderLocalSmokeClient {
             if (command.isDone()) {
                 String value = command.get();
                 if ("stop".equals(value)) {
+                    if (diagnosticCheck && hosts.stream().anyMatch(host -> !host.diagnosticComplete))
+                        throw new IllegalStateException("Diagnostic scenario stopped before the signed exchange");
                     if (candidateCheck && hosts.stream().anyMatch(host -> host.candidateStage != 4))
                         throw new IllegalStateException("Candidate scenario stopped before restoration");
                     return;
+                }
+                if (diagnosticCheck && "diagnostic".equals(value)) {
+                    for (var host : hosts) host.diagnostic();
+                    command = reader.submit(input::readLine); continue;
                 }
                 if (ownerCheck && value != null && value.startsWith("owner-remap:")) {
                     String wanted = value.substring("owner-remap:".length());
