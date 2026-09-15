@@ -19,7 +19,7 @@ class ControlledProviderApplicationTest {
     static final String SECRET = "a-secret-admission-key-01234567890123456789";
     static final class Native implements ProviderTransport {
         final Executor executor; final ControlledProviderState storage;
-        List<TicketKey> keys = List.of(); AdmissionUpdate update; boolean enabled, closed; int commits, installs; Runnable beforeInstall = () -> { };
+        List<TicketKey> keys = List.of(); AdmissionUpdate update; boolean enabled, closed; int commits, installs, profileVersion; Runnable afterCommit = () -> { }; Runnable beforeInstall = () -> { };
         Native(Executor executor, ControlledProviderState storage) { this.executor = executor; this.storage = storage; }
         @Override public boolean supportsAdmissionStaging() { return true; }
         @Override public AdmissionUpdate beginAdmissionUpdate(long deadline) { assertTrue(deadline > System.nanoTime()); enabled = false; return update = new AdmissionUpdate() { }; }
@@ -27,9 +27,9 @@ class ControlledProviderApplicationTest {
             assertSame(update, token); return CompletableFuture.runAsync(() -> { beforeInstall.run(); assertFalse(enabled); keys = List.copyOf(value); installs++; }, executor);
         }
         @Override public CompletionStage<ApplyResult> commitAdmissionUpdate(AdmissionUpdate token, Runnable current) {
-            return CompletableFuture.supplyAsync(() -> { current.run(); assertSame(update, token); assertTrue(storage.application().has("basis"), "durable basis precedes native enable"); enabled = true; commits++; return ApplyResult.APPLIED; }, executor);
+            return CompletableFuture.supplyAsync(() -> { current.run(); assertSame(update, token); assertTrue(storage.application().has("basis"), "durable basis precedes native enable"); enabled = true; commits++; afterCommit.run(); return ApplyResult.APPLIED; }, executor);
         }
-        @Override public CompletionStage<JsonObject> hostProfile() { return CompletableFuture.supplyAsync(() -> { var profile = new JsonObject(); profile.addProperty("credentialKeyId", keys.get(keys.size() - 1).keyId()); profile.addProperty("fixtureNativeInstance", "actual-" + System.identityHashCode(this)); return profile; }, executor); }
+        @Override public CompletionStage<JsonObject> hostProfile() { return CompletableFuture.supplyAsync(() -> { var profile = new JsonObject(); profile.addProperty("credentialKeyId", keys.get(keys.size() - 1).keyId()); profile.addProperty("fixtureNativeInstance", "actual-" + System.identityHashCode(this)); profile.addProperty("fixtureProfileVersion", profileVersion); return profile; }, executor); }
         @Override public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) { throw new AssertionError("Legacy key install must not run"); }
         @Override public CompletionStage<ApplyResult> applyState(String state) { return CompletableFuture.supplyAsync(() -> { if (state.equals("serving")) return enabled && !closed ? ApplyResult.APPLIED : ApplyResult.REJECTED; enabled = false; closed |= state.equals("closed"); return ApplyResult.APPLIED; }, executor); }
         @Override public List<JsonObject> pollEvents() { return List.of(); }
@@ -38,14 +38,16 @@ class ControlledProviderApplicationTest {
     }
     static final class Exchange implements ControlClientIo.Synchronization {
         final Executor executor; final AtomicLong now; final long deadline; final List<JsonObject> bodies = new ArrayList<>();
+        java.util.function.Consumer<JsonObject> inspectBody = ignored -> { };
+        byte[] retained;
         final String target; ControlStateCodec.AppliedBasis applied; boolean current = true; long desiredRevision = 1; String profileRevision;
         ControlStateCodec.TicketPolicy policy = new ControlStateCodec.TicketPolicy("A001", List.of(new ControlStateCodec.TicketEpoch("A001", 0, null)));
         Exchange(Executor executor, AtomicLong now, String target) { this.executor = executor; this.now = now; this.target = target; deadline = now.get() + 30000; }
         @Override public long deadlineMillis() { return deadline; }
-        @Override public Optional<byte[]> pendingHeartbeat() { return Optional.empty(); }
+        @Override public Optional<byte[]> pendingHeartbeat() { return Optional.ofNullable(retained); }
         @Override public void requireCurrent() { if (!current || now.get() >= deadline) throw new IllegalStateException("expired pass"); }
         @Override public CompletionStage<ControlOperationResult> heartbeat(byte[] bytes) {
-            requireCurrent(); var body = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject(); bodies.add(body);
+            requireCurrent(); var body = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject(); bodies.add(body); inspectBody.accept(body);
             return CompletableFuture.supplyAsync(() -> {
                 var result = new JsonObject(); result.addProperty("receivedAt", "1970-01-01T00:00:01.000Z");
                 if (body.has("hostProfile")) profileRevision = "hpr_fixture_" + bodies.size();
@@ -143,6 +145,58 @@ class ControlledProviderApplicationTest {
                     assertEquals(target, exchange.applied.state()); assertFalse(nativeTransport.enabled); assertEquals(0, nativeTransport.commits);
                     assertTrue(nativeTransport.keys.isEmpty());
                 }
+            }
+        } finally { executor.shutdownNow(); }
+    }
+    @Test void profileChangeAfterCommitDisablesBeforeRepublishing(@TempDir Path directory) throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        try (var store = new ProviderStateStore(directory)) {
+            ControlledProviderStateTest.seed(store, ORIGIN);
+            try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN))) {
+                var nativeTransport = new Native(executor, storage); var now = new AtomicLong(1000); var exchange = new Exchange(executor, now, "serving");
+                nativeTransport.afterCommit = () -> { if (nativeTransport.commits == 1) nativeTransport.profileVersion++; };
+                var republishes = new AtomicInteger();
+                exchange.inspectBody = body -> { if (body.has("hostProfile") && nativeTransport.commits > 0) {
+                    assertFalse(nativeTransport.enabled, "Mismatched committed native profile remained enabled during publication"); republishes.incrementAndGet();
+                } };
+                app(storage, nativeTransport, executor, now).synchronize(exchange).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertEquals(1, republishes.get()); assertEquals(2, nativeTransport.commits); assertNotNull(exchange.applied);
+            }
+        } finally { executor.shutdownNow(); }
+    }
+    @Test void unknownRetainedEnabledAckCannotReplayOnRestart(@TempDir Path directory) throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        try (var store = new ProviderStateStore(directory)) {
+            ControlledProviderStateTest.seed(store, ORIGIN); var now = new AtomicLong(1000); byte[] original;
+            try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN))) {
+                var first = new Exchange(executor, now, "serving");
+                app(storage, new Native(executor, storage), executor, now).synchronize(first).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                original = first.bodies.get(2).toString().getBytes(StandardCharsets.UTF_8);
+            }
+            try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN))) {
+                var next = new Native(executor, storage); var exchange = new Exchange(executor, now, "serving"); exchange.retained = original;
+                var failure = assertThrows(ExecutionException.class, () -> app(storage, next, executor, now).synchronize(exchange).toCompletableFuture().get(3, TimeUnit.SECONDS));
+                assertInstanceOf(ControlClientIo.ReconciliationRequired.class, failure.getCause());
+                assertTrue(exchange.bodies.isEmpty()); assertFalse(next.enabled); assertNull(exchange.applied);
+                assertArrayEquals(original, exchange.retained);
+            }
+        } finally { executor.shutdownNow(); }
+    }
+    @Test void keyRequestSaveFailureAfterServingFencesNativeAndSignalsFatal(@TempDir Path directory) throws Exception {
+        var executor = Executors.newSingleThreadExecutor(); var reject = new AtomicBoolean();
+        try (var store = new ProviderStateStore(directory)) {
+            ControlledProviderStateTest.seed(store, ORIGIN);
+            try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN), value -> {
+                if (reject.get()) throw new IOException("injected key request fsync failure"); store.write(value);
+            })) {
+                var nativeTransport = new Native(executor, storage); var now = new AtomicLong(1000); var application = app(storage, nativeTransport, executor, now);
+                application.synchronize(new Exchange(executor, now, "serving")).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertTrue(nativeTransport.enabled); var fatal = new AtomicReference<Throwable>(); application.onFatal(fatal::set); reject.set(true);
+                assertThrows(ExecutionException.class, () -> CompletableFuture.runAsync(() -> {
+                    try { application.requestKey(); } catch (IOException failure) { throw new CompletionException(failure); }
+                }, executor).get(3, TimeUnit.SECONDS));
+                CompletableFuture.runAsync(() -> { }, executor).get(3, TimeUnit.SECONDS);
+                assertFalse(nativeTransport.enabled); assertInstanceOf(IOException.class, fatal.get()); assertFalse(application.due());
             }
         } finally { executor.shutdownNow(); }
     }

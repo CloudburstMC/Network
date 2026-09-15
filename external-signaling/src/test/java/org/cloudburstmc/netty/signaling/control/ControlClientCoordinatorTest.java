@@ -282,6 +282,13 @@ class ControlClientCoordinatorTest {
         }
     }
 
+    @Test void unsafeApplicationReplayRequiresExplicitReconciliation() throws Exception {
+        var h = new Harness(); h.client.start(); h.respondStatus(); h.respondPrepare(); h.links.get(0).challenge(); h.respondActivation(); h.respondAuthority();
+        int requests = h.bootstrapCalls;
+        h.synchronizations.get(0).completeExceptionally(new ControlClientIo.ReconciliationRequired("unknown old native claim"));
+        assertEquals(ControlClientCoordinator.State.UNRESOLVED, h.client.state()); assertFalse(h.client.ready());
+        h.time.advance(600000); assertEquals(requests, h.bootstrapCalls); assertTrue(h.operations.isEmpty());
+    }
     @Test void queuedApplicationFrameCannotApplyAfterItsOriginalAuthorityChanges() throws Exception {
         for (String change : List.of("deadline", "signing-key", "close", "socket-loss", "replacement", "resync", "refreshed-authority")) {
             var h = new Harness(); h.ready();

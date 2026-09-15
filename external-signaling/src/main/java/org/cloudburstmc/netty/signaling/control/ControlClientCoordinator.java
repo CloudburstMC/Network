@@ -580,6 +580,9 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 if (synchronizationIo == operationIdentity) synchronizationIo = null;
                 if (generation != attempt || synchronization != synchronizationVersion || state == State.CLOSED || state == State.UNRESOLVED) return;
                 cancel(synchronizationTimeout); synchronizationTimeout = null; synchronizationInFlight = false;
+                Throwable cause = failure;
+                while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) cause = cause.getCause();
+                if (cause instanceof ControlClientIo.ReconciliationRequired) { halt(); return; }
                 // Delivery has already been consumed. Only the installed inner authority/current trust applies here.
                 if (failure != null || result == null || !result.belongsTo(exchange, proof.response().state())
                         || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()
