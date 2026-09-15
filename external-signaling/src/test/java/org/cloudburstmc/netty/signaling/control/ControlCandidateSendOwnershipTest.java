@@ -114,4 +114,56 @@ class ControlCandidateSendOwnershipTest {
             h.client.close();
         }
     }
+
+    @Test void confirmedApplicationOwnershipIsRecheckedAtFinalCoordinatorReady() throws Exception {
+        for (String mode : List.of("https", "websocket")) for (boolean retire : List.of(false, true)) {
+            var h = new ControlClientCoordinatorTest.Harness(mode); var owned = new AtomicBoolean(true);
+            var delayed = new CompletableFuture<ControlSynchronizationResult>();
+            var confirmed = new CompletableFuture<ControlSynchronizationResult>();
+            Runnable guard = () -> { if (!owned.get()) throw new IllegalStateException("candidate snapshot changed after confirmation"); };
+            h.actualSynchronization = exchange -> {
+                exchange.applied(h.appliedBasis, guard).whenComplete((value, failure) -> {
+                    if (failure == null) confirmed.complete(value); else confirmed.completeExceptionally(failure);
+                });
+                return delayed;
+            };
+            h.client.start(); h.respondStatus(); ControlApplicationRecoveryTest.activate(h);
+            assertTrue(confirmed.isDone()); assertNotNull(confirmed.join()); assertFalse(h.client.ready());
+            owned.set(!retire); delayed.complete(confirmed.join());
+            assertEquals(!retire, h.client.ready(), mode + " retired=" + retire);
+            h.client.close();
+        }
+    }
+
+    @Test void finalApplicationGuardCannotReenterPastCurrentAuthorityDeadlineOrWriter() throws Exception {
+        for (String mode : List.of("https", "websocket")) for (String change : List.of("close", "key", "deadline", "writer")) {
+            var h = new ControlClientCoordinatorTest.Harness(mode);
+            var delayed = new CompletableFuture<ControlSynchronizationResult>();
+            var confirmed = new CompletableFuture<ControlSynchronizationResult>();
+            var callback = new java.util.concurrent.atomic.AtomicReference<Runnable>(() -> {});
+            h.actualSynchronization = exchange -> {
+                exchange.applied(h.appliedBasis, () -> callback.getAndSet(() -> {}).run()).whenComplete((value, failure) -> {
+                    if (failure == null) confirmed.complete(value); else confirmed.completeExceptionally(failure);
+                });
+                return delayed;
+            };
+            h.client.start(); h.respondStatus(); ControlApplicationRecoveryTest.activate(h);
+            assertTrue(confirmed.isDone()); assertNotNull(confirmed.join());
+            callback.set(() -> {
+                switch (change) {
+                    case "close" -> assertDoesNotThrow(h.client::close);
+                    case "key" -> h.keyAvailable = false;
+                    case "deadline" -> h.time.now = h.synchronizationExchanges.get(0).deadlineMillis();
+                    case "writer" -> { h.actualSynchronization = null; h.client.replaceTransport(mode, mode.equals("https") ? List.of("request-response") : ControlClientCoordinatorTest.CAPS); }
+                }
+            });
+            delayed.complete(confirmed.join()); assertFalse(h.client.ready(), mode + change);
+            if (change.equals("close")) assertEquals(ControlClientCoordinator.State.CLOSED, h.client.state());
+            if (change.equals("writer")) {
+                ControlApplicationRecoveryTest.activate(h); h.synchronizedReady();
+                assertTrue(h.client.ready(), "The retired callback must not clear replacement synchronization work");
+            }
+            h.client.close();
+        }
+    }
 }

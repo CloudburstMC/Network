@@ -794,8 +794,14 @@ public final class ControlClientCoordinator implements AutoCloseable {
             operation.whenComplete((result, failure) -> { synchronized (this) {
                 if (synchronizationIo == operationIdentity) synchronizationIo = null;
                 if (generation != attempt || synchronization != synchronizationVersion || state == State.CLOSED || state == State.UNRESOLVED) return;
-                cancel(synchronizationTimeout); synchronizationTimeout = null; synchronizationInFlight = false;
                 Throwable cause = failure;
+                if (cause == null) try {
+                    // Keep the original exchange live while checking its application capture.
+                    // The guard may itself retire authority, so check exact ownership afterward.
+                    exchange.requireCurrent(); exchange.confirmationApplicationGuard.run(); exchange.requireCurrent();
+                } catch (RuntimeException changed) { cause = changed; }
+                if (generation != attempt || synchronization != synchronizationVersion || state == State.CLOSED || state == State.UNRESOLVED) return;
+                cancel(synchronizationTimeout); synchronizationTimeout = null; synchronizationInFlight = false;
                 while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) cause = cause.getCause();
                 if (cause instanceof ControlClientIo.ReconciliationRequired) {
                     var pending = snapshot.pending();
@@ -805,7 +811,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     cancelBeforeSynchronization(); return;
                 }
                 // Delivery has already been consumed. Only the installed inner authority/current trust applies here.
-                if (failure != null || result == null || !result.belongsTo(exchange, proof.response().state())
+                if (cause != null || result == null || !result.belongsTo(exchange, proof.response().state())
                         || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()
                         || synchronizationExchange != exchange || !exchange.writer.equals(snapshot.writer()) || !exchange.grant.equals(snapshot.grant())
                         || snapshot.pending() != null && pendingSynchronization == exchange) { authorityUnavailable(); return; }
