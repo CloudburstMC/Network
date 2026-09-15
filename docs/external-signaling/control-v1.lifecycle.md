@@ -76,3 +76,13 @@ All signed audiences and trusted expected origins use the shared strict
 [control origin profile](control-v1.origins.md). IDN/xn-- and trailing-dot
 providers cannot advertise this optional profile; existing core origin handling
 remains available and unchanged. Never normalize input after signing.
+
+The operational HTTPS carrier sends the original operation bytes as the POST body
+with `Content-Type: application/json; charset=utf-8`. `Nxs-Control-Proof` carries
+canonical unpadded base64url of the original UTF-8 `ControlHttpRequest` JSON,
+bounded to 16384 decoded bytes. Upgrade uses the same header name on its separate
+GET route with its own bootstrap proof domain. The exact configured path, origin
+and original body digest remain authenticated; header data never selects trust.
+A successful operational HTTP response is status **200** with the normal result
+envelope. An underlying application's 202 does not change that carrier status.
+Redirects are never followed and result bodies remain bounded to 65536 bytes.
