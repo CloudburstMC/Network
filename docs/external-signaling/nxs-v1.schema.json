@@ -521,7 +521,8 @@
               "pattern": "^[0-9a-f]{32}$"
             }
           }
-        }
+        },
+        "version": false
       }
     },
     "heartbeat": {
@@ -853,6 +854,293 @@
         }
       },
       "description": "Actual players connected to this runtime, including still-connected draining players. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Absence means unknown. Never derive this value from public serverStatus, load, tickets or reservations."
+    },
+    "controlledHostProfile": {
+      "type": "object",
+      "required": [
+        "version",
+        "candidates",
+        "dtlsFingerprint",
+        "credentialKeyId",
+        "sctpPort",
+        "maxMessageSize",
+        "statelessAdmission"
+      ],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": [
+              "foundation",
+              "component",
+              "protocol",
+              "priority",
+              "address",
+              "port",
+              "type"
+            ],
+            "properties": {
+              "foundation": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,32}$"
+              },
+              "component": {
+                "const": 1
+              },
+              "protocol": {
+                "const": "udp"
+              },
+              "priority": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "address": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "type": {
+                "enum": [
+                  "host",
+                  "srflx"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "uniqueItems": true
+        },
+        "dtlsFingerprint": {
+          "type": "string",
+          "pattern": "^sha-256 [0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){31}$"
+        },
+        "credentialKeyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "sctpPort": {
+          "const": 5000
+        },
+        "maxMessageSize": {
+          "const": 262144
+        },
+        "statelessAdmission": {
+          "type": "object",
+          "required": [
+            "capability",
+            "incarnation"
+          ],
+          "properties": {
+            "capability": {
+              "const": "nethernet.stateless-admission.v1"
+            },
+            "incarnation": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "version": {
+          "const": 2
+        }
+      },
+      "additionalProperties": false,
+      "description": "Complete controlled endpoint replacement. Empty withdraws every advertised endpoint without replacing native admission identity. Only an authenticated controlled lifecycle may carry this profile. Reflexive publication additionally requires provider-supported bounded candidate leases."
+    },
+    "controlledHeartbeat": {
+      "type": "object",
+      "required": [
+        "healthy",
+        "acceptingPlayers",
+        "capacity",
+        "load",
+        "protocolVersion",
+        "clockUnixMillis",
+        "checkInVersion",
+        "state",
+        "appliedStateRevision",
+        "gameOutcomes"
+      ],
+      "properties": {
+        "healthy": {
+          "type": "boolean"
+        },
+        "capacity": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "load": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "protocolVersion": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clockUnixMillis": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "checkInVersion": {
+          "const": 1
+        },
+        "state": {
+          "$ref": "#/$defs/hostState"
+        },
+        "appliedStateRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "gameOutcomes": {
+          "enum": [
+            "available",
+            "unavailable"
+          ]
+        },
+        "build": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "serverStatus": {
+          "type": "object"
+        },
+        "hostProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/hostProfile"
+            },
+            {
+              "$ref": "#/$defs/controlledHostProfile"
+            }
+          ]
+        },
+        "hostProfileRevision": {
+          "type": "string",
+          "maxLength": 184
+        },
+        "installedKeyIds": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{4}$"
+          }
+        },
+        "keyRequestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        },
+        "playerCount": {
+          "$ref": "#/$defs/playerCount"
+        },
+        "acceptingPlayers": {
+          "type": "boolean",
+          "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "draining",
+                  "closed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "acceptingPlayers": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "hostProfile"
+            ],
+            "properties": {
+              "hostProfile": {
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "const": 2
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "hostProfileRevision"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "hostProfile"
+            ],
+            "properties": {
+              "hostProfile": {
+                "required": [
+                  "candidates"
+                ],
+                "properties": {
+                  "candidates": {
+                    "type": "array",
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "acceptingPlayers": {
+                "const": false
+              }
+            }
+          }
+        }
+      ],
+      "description": "Heartbeat body carried by the authenticated controlled lifecycle. Complete versioned profiles and revision references are mutually exclusive. A stored empty profile also requires acceptingPlayers:false on later reference-only or omitted-profile reports."
     }
   },
   "x-context-order": [
