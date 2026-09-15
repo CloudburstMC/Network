@@ -48,6 +48,7 @@ public final class JdkControlLink implements ControlClientIo.Link {
     @Override public CompletionStage<Void> opened() { return delegate.opened(); }
     @Override public CompletionStage<?> closed() { return delegate.closed(); }
     @Override public CompletionStage<Void> sendText(String wire) { return delegate.sendText(wire); }
+    @Override public CompletionStage<Void> sendText(String wire, Runnable requireCurrent) { return delegate.sendText(wire, requireCurrent); }
     @Override public void close() { delegate.close(); }
     @Override public void abort() { delegate.abort(); }
 }

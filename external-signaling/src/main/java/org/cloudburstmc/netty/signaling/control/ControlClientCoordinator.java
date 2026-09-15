@@ -215,7 +215,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 requireCurrent();
                 confirmationApplicationGuard.run();
                 connection.stateSend = sendIdentity; outgoingSequence = sequence;
-                var sending = Objects.requireNonNull(connection.link.sendText(wire), "Missing state.applied send");
+                var sending = Objects.requireNonNull(connection.link.sendText(wire, () -> { synchronized (ControlClientCoordinator.this) {
+                    requireCurrent(); confirmationApplicationGuard.run(); requireCurrent();
+                    if (active != connection || connection.stateSend != sendIdentity)
+                        throw new IllegalStateException("Application confirmation physical owner changed");
+                }}), "Missing state.applied send");
                 sending.whenComplete((ignored, failure) -> { synchronized (ControlClientCoordinator.this) {
                     if (connection.stateSend == sendIdentity) connection.stateSend = null;
                     if (failure != null) {
@@ -630,7 +634,10 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 String wire = ControlAuthorityCodec.encode(request);
                 if (!currentPending(pending) || clock.nowMillis() >= request.expiresAt()) { authorityUnavailable(); return; }
                 connection.authorityStarts.addLast(clock.nowMillis()); authorityIo = pending;
-                CompletionStage<Void> sending = Objects.requireNonNull(connection.link.sendText(wire), "Missing socket authority send");
+                CompletionStage<Void> sending = Objects.requireNonNull(connection.link.sendText(wire, () -> { synchronized (this) {
+                    if (!currentPending(pending) || clock.nowMillis() >= request.expiresAt())
+                        throw new IllegalStateException("Socket authority request superseded or expired");
+                }}), "Missing socket authority send");
                 pending.operation = sending;
                 sending.whenComplete((ignored, failure) -> { synchronized (this) {
                     if (authorityIo == pending) authorityIo = null;
@@ -1020,8 +1027,18 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 var signed = ControlFrameCodec.sign(frame, ControlFrameCodec.KeyFamily.MACHINE, snapshot.currentKey().keyPair().getPrivate());
                 // Local send completion is not a durable receipt. Keep the intent and the one-flight barrier.
                 String wire = ControlFrameCodec.encode(signed);
-                watch(() -> { applicationGuard.run(); return active.link.sendText(wire); }, frame.expiresAt(), ignored -> { });
-                long generation = attempt;
+                var connection = active; var originalAuthority = authority; var credential = snapshot.currentKey();
+                long generation = attempt; long version = synchronizationVersion; var phase = state;
+                var sendGuard = resultGuard(writer, grant, generation, frame.expiresAt(), null, pendingSynchronization);
+                Runnable requireSend = () -> { synchronized (this) {
+                    sendGuard.run();
+                    if (generation != attempt || clock.nowMillis() >= frame.expiresAt() || !writer.equals(snapshot.writer())
+                            || !grant.equals(snapshot.grant()) || !ownsActiveWriter() || active != connection || authority != originalAuthority || !hasAuthority() || state != phase
+                            || synchronizationVersion != version || !credential.equals(snapshot.currentKey())
+                            || snapshot.pending() == null || !pending.intent().equals(snapshot.pending().intent()))
+                        throw new IllegalStateException("Lifecycle send authority, phase or intent changed");
+                }};
+                watch(() -> { requireSend.run(); return connection.link.sendText(wire, requireSend); }, frame.expiresAt(), ignored -> { });
                 scheduler.schedule(() -> { synchronized (this) { if (attempt == generation && operationInFlight && snapshot.pending() != null && snapshot.pending().intent().equals(pending.intent())) recover(); }}, frame.expiresAt() - now);
             }
         } catch (GeneralSecurityException | RuntimeException failure) { fail(); }

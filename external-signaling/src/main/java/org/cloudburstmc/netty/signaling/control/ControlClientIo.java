@@ -20,6 +20,14 @@ public interface ControlClientIo {
         CompletionStage<Void> opened();
         CompletionStage<?> closed();
         CompletionStage<Void> sendText(String wire);
+        /**
+         * Check the original authority immediately before the actual socket handoff, including after
+         * queueing. A failed guard must fail the link and all queued sends: skipping a sequenced frame
+         * cannot preserve its physical sequence owner. Do not invoke guards under a transport lock.
+         */
+        default CompletionStage<Void> sendText(String wire, Runnable requireCurrent) {
+            throw new UnsupportedOperationException("Guarded control socket send unavailable");
+        }
         void close();
         void abort();
     }

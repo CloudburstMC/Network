@@ -176,9 +176,24 @@ class ControlClientCoordinatorTest {
             int readinessFrames;
             long nextProviderSequence = 1;
             CompletableFuture<Void> appliedSend, lifecycleSend, authoritySend;
+            boolean queueHandoffs; final java.util.ArrayDeque<Runnable> handoffs = new java.util.ArrayDeque<>();
             FakeLink(ControlSessionCodec.Request request, Consumer<String> receiver) { this.upgrade = request; this.receiver = receiver; }
             @Override public CompletionStage<Void> opened() { return opened; }
             @Override public CompletionStage<?> closed() { return closed; }
+            @Override public CompletionStage<Void> sendText(String wire, Runnable requireCurrent) {
+                if (!queueHandoffs) { requireCurrent.run(); return sendText(wire); }
+                var completion = new CompletableFuture<Void>();
+                handoffs.add(() -> {
+                    try {
+                        requireCurrent.run();
+                        if (closed.isDone()) throw new IllegalStateException("fixture link closed");
+                        sendText(wire).whenComplete((ignored, failure) -> {
+                            if (failure == null) completion.complete(null); else completion.completeExceptionally(failure);
+                        });
+                    } catch (RuntimeException invalid) { abort(); completion.completeExceptionally(invalid); }
+                });
+                return completion;
+            }
             @Override public CompletionStage<Void> sendText(String wire) {
                 if (ControlJson.parse(wire, ControlFrameCodec.MAX_FRAME_BYTES).has("kind")) {
                     var request = ControlAuthorityCodec.decodeRequest(wire); authorityWires.add(wire); authorityCalls++;

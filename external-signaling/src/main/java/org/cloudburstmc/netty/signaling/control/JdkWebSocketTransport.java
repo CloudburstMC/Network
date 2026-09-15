@@ -148,9 +148,15 @@ public final class JdkWebSocketTransport implements AutoCloseable {
 
     /** Sends one complete immutable message, failing immediately when capacity is exhausted. */
     public CompletionStage<Void> sendText(String text) {
+        return this.sendText(text, () -> { });
+    }
+
+    /** Carries the original nonblocking authority guard through the bounded send queue. */
+    public CompletionStage<Void> sendText(String text, Runnable requireCurrent) {
         Objects.requireNonNull(text, "text");
+        Objects.requireNonNull(requireCurrent, "requireCurrent");
         long bytes = utf8Bytes(text);
-        Send send = new Send(text, bytes);
+        Send send = new Send(text, bytes, requireCurrent);
         synchronized (this.lock) {
             if (this.terminal || this.closeRequest != null || !this.connected) {
                 return CompletableFuture.failedFuture(new IOException("WebSocket is not open"));
@@ -221,6 +227,12 @@ public final class JdkWebSocketTransport implements AutoCloseable {
                 }
             }
             if (send != null) {
+                // The coordinator may acquire its own monitor or reenter abort from this guard.
+                // Never invoke it under lock; check transport ownership again after it returns.
+                send.requireCurrent.run();
+                synchronized (this.lock) {
+                    if (this.terminal || this.activeSend != send || this.socket != webSocket) return;
+                }
                 webSocket.sendText(send.text, true).whenComplete((ignored, failure) -> {
                     if (failure != null) {
                         this.fail(failure);
@@ -369,11 +381,13 @@ public final class JdkWebSocketTransport implements AutoCloseable {
     private static final class Send {
         final String text;
         final long bytes;
+        final Runnable requireCurrent;
         final CompletableFuture<Void> result = new CompletableFuture<>();
 
-        Send(String text, long bytes) {
+        Send(String text, long bytes, Runnable requireCurrent) {
             this.text = text;
             this.bytes = bytes;
+            this.requireCurrent = requireCurrent;
         }
     }
 
