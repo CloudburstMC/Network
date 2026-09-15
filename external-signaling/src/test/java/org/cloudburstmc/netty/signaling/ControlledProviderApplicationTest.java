@@ -40,7 +40,7 @@ class ControlledProviderApplicationTest {
         final Executor executor; final AtomicLong now; final long deadline; final List<JsonObject> bodies = new ArrayList<>();
         java.util.function.Consumer<JsonObject> inspectBody = ignored -> { };
         byte[] retained;
-        final String target; ControlStateCodec.AppliedBasis applied; boolean current = true; long desiredRevision = 1; String profileRevision;
+        final String target; ControlStateCodec.AppliedBasis applied; boolean current = true, rejectApplied; long desiredRevision = 1; String profileRevision, acceptedBasisSha256;
         ControlStateCodec.TicketPolicy policy = new ControlStateCodec.TicketPolicy("A001", List.of(new ControlStateCodec.TicketEpoch("A001", 0, null)));
         Exchange(Executor executor, AtomicLong now, String target) { this.executor = executor; this.now = now; this.target = target; deadline = now.get() + 30000; }
         @Override public long deadlineMillis() { return deadline; }
@@ -59,9 +59,10 @@ class ControlledProviderApplicationTest {
                 else if (profileRevision != null) expected = new ControlStateCodec.AppliedBasis(1, desiredRevision, target, "enabled", profileRevision, ControlStateCodec.ticketPolicyDigest(policy));
                 application.add("expectedBasis", expected == null ? JsonNull.INSTANCE : JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(expected)));
                 application.add("expectedTicketPolicy", expected == null || !target.equals("serving") ? JsonNull.INSTANCE : JsonParser.parseString(ControlStateCodec.encodeTicketPolicy(policy)));
-                application.add("acceptedBasisSha256", body.has("applicationAck") && expected != null
-                        && body.getAsJsonObject("applicationAck").get("basis").equals(JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(expected)))
-                        ? new JsonPrimitive(ControlStateCodec.appliedBasisDigest(expected)) : JsonNull.INSTANCE);
+                if (body.has("applicationAck") && expected != null
+                        && body.getAsJsonObject("applicationAck").get("basis").equals(JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(expected))))
+                    acceptedBasisSha256 = ControlStateCodec.appliedBasisDigest(expected);
+                application.add("acceptedBasisSha256", acceptedBasisSha256 == null ? JsonNull.INSTANCE : new JsonPrimitive(acceptedBasisSha256));
                 result.add("application", application);
                 if (body.has("keyRequestId") && target.equals("serving") && profileRevision == null) {
                     var key = new JsonObject(); key.addProperty("keyId", "A001"); key.addProperty("secret", SECRET); result.add("ticketKey", key);
@@ -71,7 +72,9 @@ class ControlledProviderApplicationTest {
             }, executor);
         }
         @Override public CompletionStage<ControlSynchronizationResult> applied(ControlStateCodec.AppliedBasis value) {
-            requireCurrent(); applied = value; return CompletableFuture.completedFuture(ControlSynchronizationResult.awaitingSource());
+            requireCurrent(); applied = value;
+            if (rejectApplied) return CompletableFuture.failedFuture(new IOException("Socket replaced before application confirmation"));
+            return CompletableFuture.completedFuture(ControlSynchronizationResult.awaitingSource());
         }
     }
     @Test void sameExecutorNativeCompletionInstallsPersistsThenAcknowledgesWithoutProfileChurn(@TempDir Path directory) throws Exception {
@@ -89,6 +92,41 @@ class ControlledProviderApplicationTest {
                 var retry = new Exchange(executor, now, "serving");
                 application.synchronize(retry).toCompletableFuture().get(3, TimeUnit.SECONDS);
                 assertNotNull(retry.applied); assertTrue(retry.bodies.isEmpty(), "source-only retries perform no heartbeat"); assertEquals(1, nativeTransport.commits);
+            }
+        } finally { executor.shutdownNow(); }
+    }
+    @Test void replacementReportsCurrentNativeApplicationBeforeReadyDespiteRetainedAcceptedBasis(@TempDir Path directory) throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            for (String scenario : List.of("accepting", "not-accepting", "unhealthy", "draining")) try (var store = new ProviderStateStore(directory.resolve(scenario))) {
+                String target = scenario.equals("draining") ? "draining" : "serving";
+                boolean accepting = scenario.equals("accepting");
+                ControlledProviderStateTest.seed(store, ORIGIN);
+                try (var storage = ControlledProviderState.open(store, ControlledProviderStateTest.config(ORIGIN))) {
+                    var nativeTransport = new Native(executor, storage); var now = new AtomicLong(1000);
+                    var application = new ControlledProviderApplication(storage, nativeTransport, executor, now::get, () -> null,
+                            () -> new ProviderClient.Health(!scenario.equals("unhealthy"), accepting, 10, 0, "fixture", "fixture"), null);
+                    var initial = new Exchange(executor, now, target);
+                    application.synchronize(initial).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                    assertNotNull(initial.applied);
+                    var cancelled = new Exchange(executor, now, target);
+                    cancelled.profileRevision = initial.profileRevision; cancelled.acceptedBasisSha256 = initial.acceptedBasisSha256;
+                    cancelled.rejectApplied = true; application.request();
+                    assertThrows(ExecutionException.class, () -> application.synchronize(cancelled).toCompletableFuture().get(3, TimeUnit.SECONDS));
+                    assertFalse(nativeTransport.enabled, "Cancelled confirmation must finish conservative native cleanup");
+                    var replacement = new Exchange(executor, now, target);
+                    replacement.profileRevision = initial.profileRevision; replacement.acceptedBasisSha256 = initial.acceptedBasisSha256;
+                    application.synchronize(replacement).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                    assertEquals(initial.applied, replacement.applied);
+                    assertEquals(2, replacement.bodies.size(), "Historical provider acceptance cannot replace a heartbeat acknowledging the restored native application");
+                    assertFalse(replacement.bodies.get(0).has("applicationAck"));
+                    assertFalse(replacement.bodies.get(0).get("acceptingPlayers").getAsBoolean());
+                    var finalBody = replacement.bodies.get(1);
+                    assertEquals(JsonParser.parseString(ControlStateCodec.encodeAppliedBasis(replacement.applied)), finalBody.getAsJsonObject("applicationAck").get("basis"));
+                    assertEquals(accepting, finalBody.get("acceptingPlayers").getAsBoolean());
+                    assertEquals(!scenario.equals("unhealthy"), finalBody.get("healthy").getAsBoolean());
+                    assertEquals(target.equals("serving"), nativeTransport.enabled, "Health observations do not replace native desired state");
+                }
             }
         } finally { executor.shutdownNow(); }
     }
