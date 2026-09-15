@@ -346,7 +346,12 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     @Override
     public List<JsonObject> pollEvents() {
-        return channel.pollEvents().stream().map(event -> {
+        return pollEvents(256);
+    }
+
+    @Override
+    public List<JsonObject> pollEvents(int maximum) {
+        return channel.pollEvents(maximum).stream().map(event -> {
             JsonObject result = new JsonObject();
             result.addProperty("ticketId", event.ticketId());
             result.addProperty("stage", event.stage());

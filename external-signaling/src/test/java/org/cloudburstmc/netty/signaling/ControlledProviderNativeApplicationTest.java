@@ -48,6 +48,14 @@ class ControlledProviderNativeApplicationTest {
                         if (firstIncarnation == null) firstIncarnation = incarnation; else assertNotEquals(firstIncarnation, incarnation);
                         assertTrue(exchange.bodies.stream().anyMatch(body -> body.has("hostProfile")));
                         assertFalse(exchange.bodies.get(0).has("applicationAck"));
+                        // Queue fixture verifies the actual channel/adapter bounded drain, not UDP event production.
+                        var field = nativeTransport.channel().getClass().getDeclaredField("events"); field.setAccessible(true);
+                        @SuppressWarnings("unchecked") var queue = (java.util.concurrent.BlockingQueue<org.cloudburstmc.netty.signaling.admission.NativeAdmissionServerChannel.Event>) field.get(nativeTransport.channel());
+                        for (int index = 0; index < 256; index++) assertTrue(queue.offer(new org.cloudburstmc.netty.signaling.admission.NativeAdmissionServerChannel.Event("ticket-" + index, "ticket.data_channels_open", null, now.get(), 0)));
+                        assertTrue(nativeTransport.pollEvents(0).isEmpty()); assertEquals(256, queue.size());
+                        assertThrows(IllegalArgumentException.class, () -> nativeTransport.pollEvents(257)); assertEquals(256, queue.size());
+                        assertEquals(10, nativeTransport.pollEvents(10).size()); assertEquals(246, queue.size());
+                        assertEquals(101, nativeTransport.pollEvents(101).size()); assertEquals(145, nativeTransport.pollEvents(256).size()); assertTrue(queue.isEmpty());
                         // External native drain keeps profile metadata available but must withdraw fresh application claims.
                         nativeTransport.channel().drainAdmissions(); application.request();
                         var afterDrain = new ControlledProviderApplicationTest.Exchange(executor, now, "serving");

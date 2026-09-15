@@ -28,6 +28,7 @@ final class ControlledProviderRuntime {
     private volatile CompletableFuture<JsonObject> awaitingReady;
     private final CompletableFuture<Void> stoppedResult = new CompletableFuture<>();
     private boolean outcomesInFlight, synchronizationDemand = true;
+    private java.util.List<JsonObject> polledEvents = java.util.List.of();
     private long nextOutcomes;
     private long readinessDeadline;
     private ScheduledFuture<?> tick;
@@ -81,7 +82,9 @@ final class ControlledProviderRuntime {
         if (coordinator.ready() && !outcomesInFlight && coordinator.snapshot().pending() == null && clock.nowMillis() >= nextOutcomes) {
             nextOutcomes = clock.nowMillis() + 1000;
             try {
-                storage.appendEvents(transport.pollEvents()); var body = storage.outcomeBatch();
+                if (polledEvents.isEmpty()) polledEvents = java.util.List.copyOf(transport.pollEvents(storage.eventCapacity()));
+                // Retain a drained batch until its root write succeeds; a failed write cannot silently discard it.
+                storage.appendEvents(polledEvents); polledEvents = java.util.List.of(); var body = storage.outcomeBatch();
                 if (!body.getAsJsonArray("events").isEmpty()) {
                     outcomesInFlight = true;
                     coordinator.submit("outcomes", body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8), true).whenCompleteAsync((receipt, failure) -> {

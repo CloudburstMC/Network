@@ -65,6 +65,50 @@ class ControlledProviderStateTest {
             assertFalse(Files.exists(directory.resolve("control-session/provider-state.json")));
         }
     }
+    static JsonObject event(int id) {
+        var event = new JsonObject(); event.addProperty("stage", "ticket.data_channels_open"); event.addProperty("ticketId", "ticket-" + id); event.addProperty("occurredAt", "2026-09-15T00:00:00Z"); return event;
+    }
+    @Test void nativeBurstsSplitIntoWireBatchesWithoutDropping(@TempDir Path directory) throws Exception {
+        for (int count : List.of(101, 256)) try (var store = new ProviderStateStore(directory.resolve("batch-" + count))) {
+            seed(store, "https://provider.example");
+            try (var state = ControlledProviderState.open(store, config("https://provider.example"))) {
+                state.appendEvents(java.util.stream.IntStream.range(0, count).mapToObj(ControlledProviderStateTest::event).toList());
+                int consumed = 0;
+                while (!state.outcomeBatch().getAsJsonArray("events").isEmpty()) {
+                    var body = state.outcomeBatch(); int n = body.getAsJsonArray("events").size(); assertTrue(n <= 100);
+                    assertEquals("ticket-" + consumed, body.getAsJsonArray("events").get(0).getAsJsonObject().get("ticketId").getAsString());
+                    state.acknowledgeOutcomes(body); consumed += n;
+                }
+                assertEquals(count, consumed);
+            }
+        }
+    }
+    @Test void pollingCapacityRespectsCountAndRootBytes(@TempDir Path directory) throws Exception {
+        try (var store = new ProviderStateStore(directory)) {
+            seed(store, "https://provider.example");
+            try (var state = ControlledProviderState.open(store, config("https://provider.example"))) {
+                for (int base = 0; base < 990; base += 250) {
+                    int start = base, end = Math.min(990, base + 250);
+                    state.appendEvents(java.util.stream.IntStream.range(start, end).mapToObj(ControlledProviderStateTest::event).toList());
+                }
+                assertEquals(10, state.eventCapacity()); state.appendEvents(java.util.stream.IntStream.range(990, 1000).mapToObj(ControlledProviderStateTest::event).toList());
+                assertEquals(0, state.eventCapacity());
+            }
+        }
+        try (var store = new ProviderStateStore(directory.resolve("byte-bound"))) {
+            seed(store, "https://provider.example");
+            try (var state = ControlledProviderState.open(store, config("https://provider.example"))) {
+                int count = 0;
+                while (state.eventCapacity() > 0) {
+                    var batch = new ArrayList<JsonObject>();
+                    for (int i = 0; i < state.eventCapacity(); i++) { var e = event(count++); e.addProperty("reason", "r".repeat(850)); batch.add(e); }
+                    state.appendEvents(batch);
+                }
+                assertTrue(count < 1000); assertTrue(store.read().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 262144);
+                assertTrue(state.outcomeBatch().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= ControlLifecycleCodec.MAX_WS_BODY_BYTES);
+            }
+        }
+    }
     @Test void originalApplicationNumbersAndDuplicateFieldsAreStrict() {
         for (String number : List.of("1.5", "1e0", "18446744073709551616")) {
             var value = ControlledProviderJson.parse("{\"revision\":" + number + "}", 200);
