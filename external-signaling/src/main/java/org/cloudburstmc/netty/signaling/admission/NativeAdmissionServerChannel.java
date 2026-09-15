@@ -21,6 +21,8 @@ import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
+import org.cloudburstmc.netty.signaling.diagnostic.NativeDiagnosticHostGate;
 import io.netty.channel.*;
 import io.netty.util.NetUtil;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -79,6 +81,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private volatile InetSocketAddress address;
     private volatile IceUdpMuxListener mux;
     private EndpointConnectivityController connectivity;
+    private volatile NativeDiagnosticHostGate diagnostics;
     private ScheduledFuture<?> maintenance;
 
     public NativeAdmissionServerChannel(NativeHostIdentity identity, AdmissionValidator validator,
@@ -113,6 +116,19 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private CompletionStage<IceUdpMuxListener.Acceptance> admit(IceUdpMuxListener.Request request) throws Exception {
         if (!isOpen() || nativeCloseFailure.get() != null) {
             return CompletableFuture.completedFuture(null);
+        }
+
+        NativeDiagnosticHostGate diagnostic = diagnostics;
+        if (diagnostic != null) {
+            var players = gate.stats();
+            var checks = diagnostic.stats();
+            if (players.sessions() + checks.active() >= limits.sessions() || players.pending() + checks.pending() >= limits.pending()) {
+                return CompletableFuture.completedFuture(null);
+            }
+        }
+        // This purpose is quarantined even when disabled or malformed. It never falls through to a player validator.
+        if (request.localUfrag().startsWith("NXD1")) {
+            return CompletableFuture.completedFuture(diagnostic == null ? null : diagnostic.admit(request));
         }
 
         byte[] ip = NetUtil.createByteArrayFromIpAddressString(request.remoteAddress());
@@ -244,6 +260,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 close();
                 return;
             }
+            if (diagnostics != null) {
+                diagnostics.tick();
+                if (diagnostics.failure() != null) { nativeCloseFailure.compareAndSet(null, diagnostics.failure()); close(); return; }
+            }
 
             var warning = gate.pollPendingLimitWarning(System.nanoTime());
             if (warning != null) {
@@ -321,7 +341,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     }
 
     public int liveNativePeers() {
-        return liveNativePeers.get();
+        NativeDiagnosticHostGate diagnostic = diagnostics;
+        return liveNativePeers.get() + (diagnostic == null ? 0 : diagnostic.stats().liveNativePeers());
     }
 
     public long creationAttempts() {
@@ -389,6 +410,21 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         return identity;
     }
 
+    /** Explicit opt-in only. No provider field or externally advertised capability is changed. */
+    public CompletionStage<NativeDiagnosticHostGate> enableDiagnostics(DiagnosticHostPolicy policy) {
+        CompletableFuture<NativeDiagnosticHostGate> result = new CompletableFuture<>();
+        try {
+            eventLoop().execute(() -> {
+                try {
+                    if (!isActive() || diagnostics != null) throw new IllegalStateException("Diagnostic gate requires one active host listener");
+                    diagnostics = new NativeDiagnosticHostGate(identity, address, policy);
+                    result.complete(diagnostics);
+                } catch (RuntimeException failure) { result.completeExceptionally(failure); }
+            });
+        } catch (RuntimeException failure) { result.completeExceptionally(failure); }
+        return result.minimalCompletionStage();
+    }
+
     public CompletionStage<Void> termination() {
         return termination;
     }
@@ -404,6 +440,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         if (maintenance != null) {
             maintenance.cancel(false);
         }
+        if (diagnostics != null) diagnostics.close();
 
         if (connectivity != null) {
             try { connectivity.close(); }
@@ -423,6 +460,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         sessions.clear();
 
         List<CompletableFuture<Void>> outstanding = new ArrayList<>(nativeClosures);
+        if (diagnostics != null) outstanding.add(diagnostics.termination().toCompletableFuture());
         outstanding.addAll(admissions);
         CompletableFuture.allOf(outstanding.toArray(CompletableFuture[]::new)).whenComplete((ignored, error) -> {
             events.clear();
