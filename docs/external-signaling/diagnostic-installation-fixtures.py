@@ -67,11 +67,16 @@ def schema():
     install = closed({"version": {"const": 1}, "binding": {"$ref": "#/$defs/binding"}, "notBefore": integer(), "expiresAt": integer(1),
         "activeKeyId": key_id, "keys": array("epoch", 8, 1), "endpoints": array("endpoint", 32), "answerCatalog": {"$ref": "#/$defs/answerCatalog"}})
     ack = closed({"version": {"const": 1}, "binding": {"$ref": "#/$defs/binding"}})
+    def nullable(ref):
+        return {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/" + ref}]}
+    heartbeat_request = closed({"version": {"const": 1}, "installed": nullable("acknowledgement")})
+    heartbeat_response = closed({"version": {"const": 1}, "expected": nullable("installation"), "accepted": nullable("acknowledgement")})
     return {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "urn:nethernet:control-v1:diagnostic-installation",
         "$comment": "Structural schema only. The normative codec additionally checks canonical HTTPS origin/base64url, original duplicate-free integer bytes, sorted unique keys/endpoints/revisions, all parent/endpoint/key/catalog time relations, <=300000ms policy lifetime, digest consistency and encoded byte limits. Current trusted authority and actual native installation are separate checks.",
-        "oneOf": [{"$ref": "#/$defs/installation"}, {"$ref": "#/$defs/acknowledgement"}],
+        "oneOf": [{"$ref": "#/$defs/" + name} for name in ["installation", "acknowledgement", "heartbeatRequest", "heartbeatResponse"]],
         "$defs": {"binding": binding, "epoch": epoch, "endpoint": endpoint, "answerKey": answer_key,
-            "answerCatalog": catalog, "installation": install, "acknowledgement": ack}}
+            "answerCatalog": catalog, "installation": install, "acknowledgement": ack,
+            "heartbeatRequest": heartbeat_request, "heartbeatResponse": heartbeat_response}}
 
 def main():
     t = 1_800_000_000_000
@@ -115,8 +120,12 @@ def main():
         text = preimage(document)
         document["binding"]["installationSha256"] = digest(text)
         ack = {"version": 1, "binding": document["binding"]}
+        heartbeat_request = {"version": 1, "installed": ack}
+        heartbeat_response = {"version": 1, "expected": document, "accepted": ack}
         vectors.append({"name": name, "installation": document, "wire": wire(document), "preimageUtf8": text,
-            "sha256": digest(text), "acknowledgement": ack, "acknowledgementWire": wire(ack)})
+            "sha256": digest(text), "acknowledgement": ack, "acknowledgementWire": wire(ack),
+            "heartbeatRequest": heartbeat_request, "heartbeatRequestWire": wire(heartbeat_request),
+            "heartbeatResponse": heartbeat_response, "heartbeatResponseWire": wire(heartbeat_response)})
     result = {"format": "nethernet-control-diagnostic-installation-fixtures-v1", "scope": "Public test-only metadata; no installed authority or address ownership", "vectors": vectors}
     (HERE / "control-v1.diagnostic-installation.fixtures.json").write_text(json.dumps(result, indent=2) + "\n")
     (HERE / "control-v1.diagnostic-installation.schema.json").write_text(json.dumps(schema(), indent=2) + "\n")

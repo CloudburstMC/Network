@@ -8,6 +8,12 @@
     },
     {
       "$ref": "#/$defs/acknowledgement"
+    },
+    {
+      "$ref": "#/$defs/heartbeatRequest"
+    },
+    {
+      "$ref": "#/$defs/heartbeatResponse"
     }
   ],
   "$defs": {
@@ -318,6 +324,63 @@
         },
         "binding": {
           "$ref": "#/$defs/binding"
+        }
+      }
+    },
+    "heartbeatRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "installed"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "installed": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/acknowledgement"
+            }
+          ]
+        }
+      }
+    },
+    "heartbeatResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "expected",
+        "accepted"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "expected": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/installation"
+            }
+          ]
+        },
+        "accepted": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/acknowledgement"
+            }
+          ]
         }
       }
     }
