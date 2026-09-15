@@ -37,7 +37,8 @@ import java.util.regex.Pattern;
 public record ProviderRuntimeConfiguration(
     URI origin, Path stateDirectory, String authorizationToken, String region, String pool,
     Map<String, String> tags, String label, String bindAddress, int udpPort,
-    List<InetSocketAddress> advertisedEndpoints, int capacity, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission
+    List<InetSocketAddress> advertisedEndpoints, int capacity, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
+    boolean maintainedCandidates, List<InetSocketAddress> stunServers
 ) {
     /**
      * @param settings   What the host has configured for the provider
@@ -87,8 +88,19 @@ public record ProviderRuntimeConfiguration(
             throw new IOException("Invalid inherited routing capacity");
         }
 
+        var stun = new ArrayList<InetSocketAddress>();
+        var families = new HashSet<Integer>();
+        if (endpoints.isEmpty() && settings.stunServers().size() > 2) throw new IOException("At most one STUN server per family");
+        // Explicit advertised endpoints suppress STUN, including omitted address families.
+        if (endpoints.isEmpty()) for (String configured : settings.stunServers()) {
+            var server = endpoint(configured);
+            if (!families.add(server.getAddress().getAddress().length)) throw new IOException("One STUN server per family");
+            stun.add(server);
+        }
+        if (!settings.maintainedCandidates() && !stun.isEmpty()) throw new IOException("STUN servers require maintained candidates");
         var runtime = new ProviderRuntimeConfiguration(origin, state, token, region, pool, Map.copyOf(tags), label,
-            bind, port, List.copyOf(endpoints), capacity, settings.controlTransport(), settings.diagnosticAdmission());
+            bind, port, List.copyOf(endpoints), capacity, settings.controlTransport(), settings.diagnosticAdmission(),
+            settings.maintainedCandidates(), List.copyOf(stun));
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
@@ -109,8 +121,13 @@ public record ProviderRuntimeConfiguration(
      *                           anything else is a registration tag
      */
     public record Settings(String endpoint, String token, List<String> advertiseAddresses,
-                           Map<String, String> data, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission) {
-        public Settings { Objects.requireNonNull(controlTransport); }
+                           Map<String, String> data, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
+                           boolean maintainedCandidates, List<String> stunServers) {
+        public Settings { Objects.requireNonNull(controlTransport); stunServers = List.copyOf(stunServers); }
+        public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
+                        ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission) {
+            this(endpoint, token, advertiseAddresses, data, controlTransport, diagnosticAdmission, false, List.of());
+        }
         public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
                         ProviderClient.ControlTransport controlTransport) {
             this(endpoint, token, advertiseAddresses, data, controlTransport, false);
@@ -180,6 +197,25 @@ public record ProviderRuntimeConfiguration(
             values.add(value);
         }
         return values.toString();
+    }
+
+    /** Ordinary native factory options, with explicit endpoints suppressing discovery/STUN. */
+    public Map<String, String> nativeHostOptions() {
+        var options = new HashMap<String, String>();
+        options.put("stateDirectory", stateDirectory.toString());
+        options.put("advertisedEndpoints", encodedAdvertisedEndpoints());
+        options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
+        options.put("diagnosticAdmission", Boolean.toString(diagnosticAdmission));
+        if (maintainedCandidates) {
+            options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
+            var servers = new JsonArray();
+            for (var endpoint : stunServers) {
+                var item = new JsonObject(); item.addProperty("address", endpoint.getAddress().getHostAddress());
+                item.addProperty("port", endpoint.getPort()); servers.add(item);
+            }
+            options.put("stunServers", servers.toString());
+        }
+        return Map.copyOf(options);
     }
 
     @Override

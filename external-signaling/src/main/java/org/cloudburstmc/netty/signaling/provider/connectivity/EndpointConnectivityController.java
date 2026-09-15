@@ -125,6 +125,11 @@ public final class EndpointConnectivityController implements AutoCloseable {
         return beginDirectCheck(family, Duration.ofSeconds(30));
     }
 
+    synchronized boolean canAttemptStun(Family family) {
+        return !closed && !selection.configured() && selection.socketFamilies().contains(family)
+                && lanes.get(family).server != null;
+    }
+
     /** Bounds both request completion and the resulting report, measured from this call. */
     public synchronized DirectCheck beginDirectCheck(Family family, Duration validity) {
         requireOpen();
@@ -142,7 +147,16 @@ public final class EndpointConnectivityController implements AutoCloseable {
         Lane lane = lanes.get(check.family);
         if (closed || lane.pendingCheck != check) return false;
         lane.pendingCheck = null;
-        if (nanoTime.getAsLong() - check.expiresAtNanos >= 0) return false;
+        long now = nanoTime.getAsLong();
+        if (now - check.expiresAtNanos >= 0) return false;
+        if (lane.result == CheckOutcome.SUCCEEDED && now - lane.resultExpiresAtNanos < 0) {
+            // Regional observations can arrive out of order. A still-fresh success wins until
+            // its original deadline; only another success with a later original deadline extends it.
+            if (outcome != CheckOutcome.SUCCEEDED) return false;
+            if (check.expiresAtNanos - lane.resultExpiresAtNanos > 0)
+                lane.resultExpiresAtNanos = check.expiresAtNanos;
+            return true;
+        }
         lane.result = outcome;
         lane.resultExpiresAtNanos = check.expiresAtNanos;
         if (outcome == CheckOutcome.FAILED) lane.fallbackChosen = true;
@@ -152,6 +166,16 @@ public final class EndpointConnectivityController implements AutoCloseable {
             lane.failed = false;
         }
         return true;
+    }
+
+    /** A new native/candidate revision retires reports and outstanding checks, but keeps chosen STUN warm. */
+    synchronized void invalidateDirectChecks() {
+        requireOpen();
+        for (Lane lane : lanes.values()) {
+            lane.result = CheckOutcome.UNKNOWN;
+            lane.resultExpiresAtNanos = 0;
+            lane.pendingCheck = null;
+        }
     }
 
     /** Explicit bounded DNS/provider rotation seam. A replacement withdraws the old observation immediately. */

@@ -42,7 +42,7 @@ class NativeProviderHostFactoryTest {
         String both = "[{\"address\":\"1.1.1.1\",\"port\":3478},{\"address\":\"2606:4700:4700::1111\",\"port\":3478}]";
         assertEquals(1, NativeProviderHostFactory.stunServers(selection, Map.of("stunServers", both)).size());
         var direct = NativeProviderHostFactory.maintainedSelection(endpoint("8.8.8.8", 19133), strict("[]"));
-        assertTrue(NativeProviderHostFactory.stunServers(direct, Map.of("stunServers", both)).isEmpty());
+        assertEquals(1, NativeProviderHostFactory.stunServers(direct, Map.of("stunServers", both)).size(), "Direct family retains its dormant fallback server");
     }
     private static Map<String, String> strict(String endpoints) {
         return Map.of("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL, "advertisedEndpoints", endpoints);

@@ -1,6 +1,5 @@
 package org.cloudburstmc.netty.signaling.provider.connectivity;
 
-import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +15,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ObservationLeaseTrackerTest {
     private static final String INCARNATION = "0123456789abcdef0123456789abcdef";
-    private static final CandidateLeaseCodec.NativeOwner OWNER = new CandidateLeaseCodec.NativeOwner(5, INCARNATION, "candidate_owner_claim_01");
     private static final long WALL = 1789400000000L, START = 10000000000L, MILLIS = 1000000L, AGE = 300000 * MILLIS;
     private static final class Clock {
         long wall = WALL, nano = START;
@@ -47,14 +45,6 @@ class ObservationLeaseTrackerTest {
                 OptionalLong.empty(), List.of(), Optional.ofNullable(observation),
                 state == EndpointConnectivityController.State.STUN_FRESH ? Optional.of(observation.mapped()) : Optional.empty());
     }
-    private static CandidateLeaseCodec.Profile profile(List<CandidateLeaseCodec.Observation> observations, String key) {
-        var candidates = observations.stream().map(o -> new CandidateLeaseCodec.Candidate(
-                o.family().equals("ipv4") ? "8.8.8.8" : "2606:4700:4700::1001", o.port(), 1, o.family(),
-                2130706431, "udp", "srflx")).toList();
-        return new CandidateLeaseCodec.Profile(candidates, CandidateLeaseCodec.ADMISSION_CAPABILITY, INCARNATION, key,
-                "sha-256 " + String.join(":", java.util.Collections.nCopies(32, "AB")), 262144, 5000);
-    }
-
     @Test void repeatedSuccessAndFailedRefreshRetainIdenticalDatesAndOriginalDeadline() {
         Clock clock = new Clock(); var tracker = clock.tracker();
         var first = tracker.capture(snapshot(sample(clock, 1, START))); var original = first.observations().get(0);
@@ -69,16 +59,6 @@ class ObservationLeaseTrackerTest {
         clock.advance(1); assertThrows(IllegalStateException.class, first::requireCurrent);
         assertThrows(IllegalStateException.class, repeat::requireCurrent);
         assertTrue(tracker.capture(snapshot(sample(clock, 1, START))).observations().isEmpty());
-    }
-
-    @Test void profileAndKeyRebindingDoesNotChangeObservationIdentityOrExpiry() {
-        Clock clock = new Clock(); var tracker = clock.tracker(); var capture = tracker.capture(snapshot(sample(clock, 1, START)));
-        var initial = capture.bind(profile(capture.observations(), "A001"), OWNER);
-        clock.advance(1000);
-        var rebound = capture.bind(profile(capture.observations(), "B002"), OWNER);
-        assertEquals(initial.observations(), rebound.observations()); assertEquals(initial.expiresAt(), rebound.expiresAt());
-        assertNotEquals(initial.profileSha256(), rebound.profileSha256());
-        assertNotEquals(CandidateLeaseCodec.leasesDigest(initial), CandidateLeaseCodec.leasesDigest(rebound));
     }
 
     @Test void newerSuccessKeepsOlderCaptureLiveUntilItsOwnDeadline() {
@@ -156,7 +136,7 @@ class ObservationLeaseTrackerTest {
             var lanes = new EnumMap<Family, EndpointConnectivityController.FamilySnapshot>(Family.class);
             lanes.put(Family.IPV4, lane(v4, state)); lanes.put(Family.IPV6, lane(v6, EndpointConnectivityController.State.STUN_FRESH));
             var retained = tracker.capture(new EndpointConnectivityController.Snapshot(2, lanes));
-            assertEquals(List.of("ipv6"), retained.observations().stream().map(CandidateLeaseCodec.Observation::family).toList());
+            assertEquals(List.of("ipv6"), retained.observations().stream().map(ObservationLeaseTracker.Observation::family).toList());
             assertThrows(IllegalStateException.class, both::requireCurrent); retained.requireCurrent();
         }
     }
@@ -165,12 +145,12 @@ class ObservationLeaseTrackerTest {
         Clock clock = new Clock(); var tracker = clock.tracker(); var v4 = sample(clock, 1, START);
         clock.advance(15000); var v6 = sample(clock, Family.IPV6, 4, 2, 9, "2606:4700:4700::1001", 43001, clock.nano);
         var both = tracker.capture(snapshot(v6, v4));
-        assertEquals(List.of("ipv4", "ipv6"), both.observations().stream().map(CandidateLeaseCodec.Observation::family).toList());
-        var leases = both.bind(profile(both.observations(), "A001"), OWNER); assertEquals(WALL + 269999, leases.expiresAt());
+        assertEquals(List.of("ipv4", "ipv6"), both.observations().stream().map(ObservationLeaseTracker.Observation::family).toList());
+        assertEquals(WALL + 269999, both.observations().stream().mapToLong(ObservationLeaseTracker.Observation::expiresAt).min().orElseThrow());
         clock.advance(254999);
         assertThrows(IllegalStateException.class, both::requireCurrent);
         var remaining = tracker.capture(snapshot(v4, v6));
-        assertEquals(List.of("ipv6"), remaining.observations().stream().map(CandidateLeaseCodec.Observation::family).toList());
+        assertEquals(List.of("ipv6"), remaining.observations().stream().map(ObservationLeaseTracker.Observation::family).toList());
     }
 
     @Test void oneMillisecondReserveAndFloorDivisionNeverRoundObservationUp() {
@@ -262,13 +242,13 @@ class ObservationLeaseTrackerTest {
         Clock clock = new Clock(); var tracker = clock.tracker(); var original = sample(clock, 7, START);
         var old = tracker.capture(snapshot(original)); clock.wall += 30001;
         assertThrows(IllegalStateException.class, old::requireCurrent); clock.wall -= 30001;
-        tracker.recoverAfterSuccessfulControlSynchronization();
+        tracker.recoverClockForFutureObservations();
         assertTrue(tracker.clockValid()); assertTrue(tracker.capture(snapshot(original)).observations().isEmpty());
         assertThrows(IllegalStateException.class, old::requireCurrent);
         clock.advance(1); var fresh = tracker.capture(snapshot(sample(clock, 8, clock.nano))); fresh.requireCurrent();
         assertEquals(8, fresh.observations().get(0).observationSequence());
         assertThrows(IllegalStateException.class, old::requireCurrent);
-        assertThrows(IllegalStateException.class, tracker::recoverAfterSuccessfulControlSynchronization);
+        assertThrows(IllegalStateException.class, tracker::recoverClockForFutureObservations);
         assertThrows(IllegalArgumentException.class, () -> tracker.capture(snapshot(original)));
     }
 
@@ -298,7 +278,7 @@ class ObservationLeaseTrackerTest {
             Clock clock = new Clock(); clock.wall = wall; var tracker = clock.tracker();
             assertThrows(IllegalStateException.class, () -> tracker.capture(snapshot(sample(clock, 1, START))));
             assertFalse(tracker.clockValid());
-            clock.wall = WALL; tracker.recoverAfterSuccessfulControlSynchronization();
+            clock.wall = WALL; tracker.recoverClockForFutureObservations();
             assertTrue(tracker.capture(snapshot(sample(clock, 1, START))).observations().isEmpty());
             tracker.capture(snapshot(sample(clock, 2, START))).requireCurrent();
         }

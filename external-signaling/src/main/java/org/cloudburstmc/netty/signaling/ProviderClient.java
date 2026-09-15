@@ -198,6 +198,9 @@ public final class ProviderClient implements AutoCloseable {
     private PrivateKey privateKey;
     private String profileRevision;
     private JsonObject lastProfile;
+    private long publishedCandidateRevision, publishedCandidateVersion;
+    private long observedCandidateRevision, observedCandidateVersion, nextCandidateRefresh;
+
     /** A delivered epoch, kept out of the persisted state until the transport has accepted it. */
     private JsonObject pendingTicketKey;
     private long intervalMs = 10000;
@@ -287,7 +290,7 @@ public final class ProviderClient implements AutoCloseable {
                     return;
                 }
                 try {
-                    if (started && (System.nanoTime() >= nextHeartbeat || statusChanged())) {
+                    if (started && (System.nanoTime() >= nextHeartbeat || candidatesChanged() || statusChanged())) {
                         heartbeat();
                     }
                 } catch (Exception e) {
@@ -691,28 +694,50 @@ public final class ProviderClient implements AutoCloseable {
         return health.playerCount() == null ? null : health.playerCount().connectedPlayers();
     }
 
+    /** Sample the cheap local counter; material replacement bypasses freshness-only coalescing. */
+    private boolean candidatesChanged() throws Exception {
+        if (System.nanoTime() < nextStatusUpdate || !hostState.equals("serving")) return false;
+        long version = transport.candidatePublicationVersion();
+        if (version == 0 || version == publishedCandidateVersion) return false;
+        if (version != observedCandidateVersion) {
+            var snapshot = transport.captureHostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            snapshot.requireCurrent();
+            observedCandidateVersion = snapshot.publicationVersion();
+            observedCandidateRevision = snapshot.candidateRevision();
+        }
+        return observedCandidateRevision != publishedCandidateRevision || System.nanoTime() >= nextCandidateRefresh;
+    }
+
     private void heartbeat() throws Exception {
-        // Key delivery and application acknowledgements can need an immediate second exchange.
+        if (state.has("pendingWebSocketOperation")) {
+            // An ambiguous send may have outlived its native mapping. Recover the existing registration
+            // before issuing fresh state; do not replay expired profile bytes or stall until process restart.
+            disableDiagnosticAdmission();
+            if (websocket != null) websocket.close();
+            recoverExisting();
+            clearWebSocketPending();
+            configureWebSocket();
+            profileRevision = null;
+            lastProfile = null;
+            installKeys();
+        }
+        // Key delivery and local diagnostic installation can need an immediate second exchange.
         for (int exchange = 0; exchange < 3; exchange++) {
             JsonObject body = new JsonObject(), profile = null;
-            ProviderTransport.HostProfileSnapshot diagnosticSnapshot = null;
+            ProviderTransport.HostProfileSnapshot profileSnapshot = null, diagnosticSnapshot = null;
             if (installedKeyId != null && hostState.equals("serving")) {
-                if (config.diagnosticAdmission()) {
-                    if (!transport.supportsDiagnosticAdmission()) throw new IOException("Diagnostic transport unavailable");
-                    try {
-                        diagnosticSnapshot = transport.captureHostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
-                        profile = diagnosticSnapshot.profile();
-                        if (!directDiagnosticProfile(diagnosticSnapshot)) {
-                            disableDiagnosticAdmission();
-                            diagnosticSnapshot = null;
-                        }
-                    } catch (Exception unavailable) {
-                        disableDiagnosticAdmission();
-                        throw unavailable;
+                try {
+                    profileSnapshot = transport.captureHostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                    profileSnapshot.requireCurrent();
+                    profile = profileSnapshot.profile();
+                    if (config.diagnosticAdmission()) {
+                        if (!transport.supportsDiagnosticAdmission()) throw new IOException("Diagnostic transport unavailable");
+                        if (diagnosticProfile(profileSnapshot)) diagnosticSnapshot = profileSnapshot;
+                        else disableDiagnosticAdmission();
                     }
-                } else profile = transport.hostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
-                if (profile == null) {
-                    throw new IOException("Transport profile unavailable");
+                } catch (Exception unavailable) {
+                    disableDiagnosticAdmission();
+                    throw unavailable;
                 }
                 if (!profile.equals(lastProfile)) {
                     body.add("hostProfile", profile);
@@ -742,7 +767,9 @@ public final class ProviderClient implements AutoCloseable {
                 var data = new JsonObject();
                 data.addProperty("diagnostics", true);
                 data.addProperty("candidateRevision", diagnosticSnapshot.candidateRevision());
-                data.addProperty("method", config.connectivityMethod());
+                data.addProperty("method", profile.getAsJsonArray("candidates").asList().stream()
+                        .anyMatch(item -> "srflx".equals(item.getAsJsonObject().get("type").getAsString()))
+                        ? "warm_stun" : config.connectivityMethod());
                 var extension = new JsonObject();
                 extension.addProperty("version", 1);
                 extension.addProperty("critical", false);
@@ -776,9 +803,19 @@ public final class ProviderClient implements AutoCloseable {
                 diagnostics.accept("status_refresh_failed");
             }
             long requestStarted = System.nanoTime();
-            JsonObject response = signed("heartbeat", "POST", body);
+            var captured = profileSnapshot;
+            JsonObject response = signed("heartbeat", "POST", body, UUID.randomUUID().toString(),
+                    captured == null ? () -> { } : captured::requireCurrent);
             long diagnosticSuccessNanos = System.nanoTime(), diagnosticSuccessMillis = System.currentTimeMillis();
             ProtocolExtensions.validate(response);
+            if (profileSnapshot != null) {
+                try { profileSnapshot.requireCurrent(); }
+                catch (RuntimeException replaced) {
+                    lastProfile = null;
+                    disableDiagnosticAdmission();
+                    throw replaced;
+                }
+            }
             if (body.has("hostProfile")) {
                 if (!response.has("hostProfileRevision") || response.get("hostProfileRevision").isJsonNull()) {
                     throw new IOException("Profile acknowledgement missing");
@@ -850,10 +887,19 @@ public final class ProviderClient implements AutoCloseable {
             lastReportedStatus = status;
             lastReportedHealth = health;
             lastHeartbeat = response.deepCopy();
+            if (profileSnapshot != null) {
+                publishedCandidateRevision = profileSnapshot.candidateRevision();
+                publishedCandidateVersion = profileSnapshot.publicationVersion();
+                nextCandidateRefresh = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            }
             if (diagnosticSnapshot != null) {
                 configureDiagnosticAdmission(diagnosticSnapshot, response, diagnosticSuccessMillis, diagnosticSuccessNanos);
                 if (!diagnosticsAdvertised) again = true;
+                long remaining = Math.max(0, diagnosticInstalledDeadline - System.nanoTime());
+                long lead = Math.min(TimeUnit.SECONDS.toNanos(60), remaining / 5);
+                nextHeartbeat = Math.min(nextHeartbeat, Math.max(nextStatusUpdate, diagnosticInstalledDeadline - lead));
             }
+            if (profileSnapshot != null) reportConnectivityFeedback(profileSnapshot, response);
             // Serving state belongs to this host. Provider routing decisions never command its listener.
             if (!again) {
                 return;
@@ -862,16 +908,52 @@ public final class ProviderClient implements AutoCloseable {
         nextHeartbeat = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
     }
 
-    private static boolean directDiagnosticProfile(ProviderTransport.HostProfileSnapshot snapshot) {
+    private static boolean diagnosticProfile(ProviderTransport.HostProfileSnapshot snapshot) {
         JsonObject profile = snapshot.profile();
         if (snapshot.candidateRevision() < 1 || !profile.has("statelessAdmission") || !profile.has("candidates")) return false;
         JsonArray candidates = profile.getAsJsonArray("candidates");
         if (candidates.isEmpty() || candidates.size() > 32) return false;
         for (JsonElement item : candidates) {
             JsonObject candidate = item.getAsJsonObject();
-            if (!"host".equals(candidate.get("type").getAsString()) || !"udp".equals(candidate.get("protocol").getAsString())) return false;
+            String type = candidate.get("type").getAsString();
+            if (!"udp".equals(candidate.get("protocol").getAsString()) || !Set.of("host", "srflx").contains(type)) return false;
+            if (type.equals("srflx") && (!candidate.has("expiresAt")
+                    || candidate.get("expiresAt").getAsBigDecimal().longValueExact() <= System.currentTimeMillis())) return false;
         }
         return true;
+    }
+
+    private void reportConnectivityFeedback(ProviderTransport.HostProfileSnapshot snapshot, JsonObject response) {
+        if (snapshot.candidateRevision() < 1 || !response.has("extensions")) return;
+        try {
+            JsonObject extensions = response.getAsJsonObject("extensions");
+            if (!extensions.has(CONNECTIVITY_EXTENSION)) return;
+            JsonObject extension = extensions.getAsJsonObject(CONNECTIVITY_EXTENSION);
+            if (extension.get("version").getAsInt() != 1) return;
+            JsonObject data = extension.getAsJsonObject("data");
+            if (!data.has("checks") || data.get("candidateRevision").getAsBigDecimal().longValueExact() != snapshot.candidateRevision()) return;
+            JsonArray checks = data.getAsJsonArray("checks");
+            if (checks.size() > 6) throw new IllegalArgumentException("Connectivity feedback bound");
+            var parsed = new ArrayList<ProviderTransport.ConnectivityCheck>();
+            long now = System.currentTimeMillis();
+            for (JsonElement item : checks) {
+                var check = item.getAsJsonObject();
+                var outcome = switch (check.get("outcome").getAsString()) {
+                    case "established" -> ProviderTransport.ConnectivityOutcome.ESTABLISHED;
+                    case "not-established" -> ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED;
+                    case "unknown" -> ProviderTransport.ConnectivityOutcome.UNKNOWN;
+                    default -> throw new IllegalArgumentException("Unknown connectivity outcome");
+                };
+                var value = new ProviderTransport.ConnectivityCheck(check.get("family").getAsBigDecimal().intValueExact(), outcome,
+                        check.get("checkedAt").getAsBigDecimal().longValueExact(), check.get("expiresAt").getAsBigDecimal().longValueExact());
+                if (value.checkedAt() <= now && value.expiresAt() > now) parsed.add(value);
+            }
+            snapshot.requireCurrent();
+            transport.reportConnectivityChecks(snapshot.candidateRevision(), parsed).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        } catch (Exception unavailable) {
+            // Optional observations must not undo a successful ordinary heartbeat or change host serving state.
+            diagnostics.accept("provider_connectivity_feedback_unavailable");
+        }
     }
 
     private boolean diagnosticInstallationCurrent(ProviderTransport.HostProfileSnapshot snapshot) {
@@ -909,16 +991,20 @@ public final class ProviderClient implements AutoCloseable {
                     profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString(), state.get("generation").getAsLong());
             var keys = installedTicketKeys.stream().map(key -> new DiagnosticAdmissionCodec.Key(key.keyId(), key.secret(),
                     key.notBefore(), Math.min(key.retireAfter(), 9007199254740991L))).toList();
-            var endpoints = new HashSet<DiagnosticHostPolicy.Endpoint>();
+            var endpointExpiries = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
             for (JsonElement item : profile.getAsJsonArray("candidates")) {
                 JsonObject candidate = item.getAsJsonObject();
                 var address = org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(candidate.get("address").getAsString());
                 int family = address instanceof java.net.Inet6Address ? 6 : 4;
-                endpoints.add(new DiagnosticHostPolicy.Endpoint(family, DiagnosticAdmissionCodec.address(family, address.getHostAddress()),
-                        candidate.get("port").getAsBigDecimal().intValueExact(), snapshot.candidateRevision()));
+                var endpoint = new DiagnosticHostPolicy.Endpoint(family, DiagnosticAdmissionCodec.address(family, address.getHostAddress()),
+                        candidate.get("port").getAsBigDecimal().intValueExact(), snapshot.candidateRevision());
+                long endpointExpiry = "srflx".equals(candidate.get("type").getAsString())
+                        ? Math.min(expiresAt, candidate.get("expiresAt").getAsBigDecimal().longValueExact()) : expiresAt;
+                if (endpointExpiry <= System.currentTimeMillis()) throw new IOException("Diagnostic endpoint expired");
+                endpointExpiries.merge(endpoint, endpointExpiry, Math::min);
             }
             snapshot.requireCurrent();
-            transport.configureDiagnostics(new DiagnosticHostPolicy(context, keys, endpoints, expiresAt), deadline)
+            transport.configureDiagnostics(new DiagnosticHostPolicy(context, keys, endpointExpiries.keySet(), expiresAt, endpointExpiries), deadline)
                     .toCompletableFuture().get(10, TimeUnit.SECONDS);
             snapshot.requireCurrent();
             if (closing.get() || closed || deadline - System.nanoTime() <= 0) throw new IOException("Diagnostic installation expired");
@@ -1112,13 +1198,17 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private JsonObject signed(String op, String method, JsonObject body, String intent) throws Exception {
+        return signed(op, method, body, intent, () -> { });
+    }
+
+    private JsonObject signed(String op, String method, JsonObject body, String intent, Runnable requireCurrent) throws Exception {
         requireResolvedOperation();
         long sequence = state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1;
         state.addProperty("sequence", sequence);
         save();
         URI uri = operation(op);
         return exchange(uri, method, body == null ? null : JSON.toJson(body), true, intent, null,
-                op.equals("outcomes") ? 3 : 15, op.equals("outcomes") ? 1 : 3);
+                op.equals("outcomes") ? 3 : 15, op.equals("outcomes") ? 1 : 3, requireCurrent);
     }
 
     private URI operation(String op) throws IOException {
@@ -1144,11 +1234,17 @@ public final class ProviderClient implements AutoCloseable {
 
     private JsonObject exchange(URI uri, String method, String body, boolean signed, String intent, String bearerToken,
                                 int timeoutSeconds, int attempts) throws Exception {
+        return exchange(uri, method, body, signed, intent, bearerToken, timeoutSeconds, attempts, () -> { });
+    }
+
+    private JsonObject exchange(URI uri, String method, String body, boolean signed, String intent, String bearerToken,
+                                int timeoutSeconds, int attempts, Runnable requireCurrent) throws Exception {
         trusted(uri);
         if (signed) requireResolvedOperation();
         String raw = body == null ? "" : body;
         boolean ambiguous = false;
         for (int attempt = 0; attempt < attempts; attempt++) {
+            requireCurrent.run();
             HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("accept", "application/json").method(method,
                             body == null ? HttpRequest.BodyPublishers.noBody() :
@@ -1182,9 +1278,15 @@ public final class ProviderClient implements AutoCloseable {
                 try {
                     response = websocket.exchange(wsOperation, request, raw, websocketUpgradeHeaders(), timeoutSeconds,
                             () -> {
+                                requireCurrent.run();
                                 state.addProperty("pendingWebSocketOperation", intent);
                                 try { save(); } catch (IOException failure) { throw new UncheckedIOException(failure); }
-                            });
+                                try { requireCurrent.run(); }
+                                catch (RuntimeException replaced) {
+                                    clearWebSocketPending(); // Callback failed before handing any frame to the carrier.
+                                    throw replaced;
+                                }
+                            }, requireCurrent);
                 } catch (IOException | ExecutionException | TimeoutException failure) {
                     // Retry the SAME signed operation over HTTPS; neither intent nor body is replaced.
                     ambiguous |= state.has("pendingWebSocketOperation");
@@ -1195,6 +1297,7 @@ public final class ProviderClient implements AutoCloseable {
             CompletableFuture<HttpResponse<byte[]>> responseFuture = null;
             try {
                 if (response == null) {
+                    requireCurrent.run();
                     responseFuture = http.sendAsync(request, info -> new LimitedBodySubscriber(65536));
                     HttpResponse<byte[]> httpResponse = responseFuture.get(timeoutSeconds + 1, TimeUnit.SECONDS);
                     response = new ProviderWebSocket.Reply(httpResponse.statusCode(), httpResponse.headers(),

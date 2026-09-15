@@ -105,8 +105,8 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
                     throw new IllegalArgumentException("One numeric unicast STUN server per family required");
             } catch (java.net.UnknownHostException invalid) { throw new IllegalArgumentException("STUN server must be numeric", invalid); }
         }
-        // Unknown direct reachability does not authorize fallback or monitor creation.
-        servers.keySet().removeIf(family -> !selection.socketFamilies().contains(family) || !selection.candidates(family).isEmpty());
+        // Keep possible fallback servers; the controller waits for a fresh direct failure per family.
+        servers.keySet().removeIf(family -> !selection.socketFamilies().contains(family));
         return Map.copyOf(servers);
     }
 
@@ -130,18 +130,17 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
                 throw new IllegalArgumentException("Provider stateDirectory required");
             }
 
-            String mode = options.get("controlMode");
-            if (mode != null && !mode.equals("nethernet-control-v1")) throw new IllegalArgumentException("Unknown provider control mode");
+            if (options.containsKey("controlMode")) throw new IllegalArgumentException("Obsolete provider control mode");
             String publication = options.get("candidatePublication");
             String diagnostic = options.get("diagnosticAdmission");
             if (diagnostic != null && !Set.of("true", "false").contains(diagnostic))
                 throw new IllegalArgumentException("diagnosticAdmission must be a boolean");
             if (publication != null) {
-                if (!MAINTAINED_V1.equals(publication) || mode == null) throw new IllegalArgumentException("Maintained publication requires controlled mode");
+                if (!MAINTAINED_V1.equals(publication)) throw new IllegalArgumentException("Unknown candidate publication mode");
                 var selected = maintainedSelection(udpBind, options);
                 var servers = stunServers(selected, options);
                 var identity = ProviderHostIdentity.ensure(Path.of(directory));
-                return NativeProviderTransport.openControlledMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                return NativeProviderTransport.openMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
                         .thenApply(transport -> new Host(transport, transport.channel(), List.of()));
             }
             EndpointSource endpoints = endpointSource(udpBind, options);
@@ -152,9 +151,7 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
                 try { return endpoints.get().advertised(); }
                 catch (IOException unavailable) { throw new UncheckedIOException(unavailable); }
             };
-            var opened = mode == null
-                    ? NativeProviderTransport.open(bootstrap, endpoint.bind(), candidates, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
-                    : NativeProviderTransport.openControlled(bootstrap, endpoint.bind(), candidates, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults());
+            var opened = NativeProviderTransport.open(bootstrap, endpoint.bind(), candidates, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults());
             return opened.thenApply(transport -> new Host(transport, transport.channel(), endpoint.warnings()));
         } catch (Exception invalid) {
             return CompletableFuture.failedFuture(invalid);
