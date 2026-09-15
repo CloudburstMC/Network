@@ -94,9 +94,14 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
      */
     public NativeAdmissionServerChannel(NativeHostIdentity identity, AdmissionValidator validator,
                                         AdmissionGate.Limits limits, boolean allowWildcardBind) {
+        this(identity, validator, limits, allowWildcardBind, true);
+    }
+
+    NativeAdmissionServerChannel(NativeHostIdentity identity, AdmissionValidator validator,
+                                 AdmissionGate.Limits limits, boolean allowWildcardBind, boolean initiallyEnabled) {
         this.identity = Objects.requireNonNull(identity);
         this.limits = Objects.requireNonNull(limits);
-        gate = new AdmissionGate(limits, validator);
+        gate = new AdmissionGate(limits, validator, initiallyEnabled);
         this.allowWildcardBind = allowWildcardBind;
     }
 
@@ -144,6 +149,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         }
 
         VerifiedAdmission a = gate.admission(reservation);
+        if (a == null) {
+            gate.finish(reservation);
+            return CompletableFuture.completedFuture(null);
+        }
         CompletableFuture<Void> settled = new CompletableFuture<>();
         admissions.add(settled);
         request.completion().whenComplete((peer, failure) -> {
@@ -431,6 +440,18 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
 
     public void drainAdmissions() {
         gate.drain();
+    }
+
+    AdmissionGate.Staging stageAdmissions() { return gate.stage(); }
+
+    void disableAdmissions() { gate.disable(); }
+
+    boolean currentAdmissionUpdate(AdmissionGate.Staging update) {
+        return isActive() && nativeCloseFailure.get() == null && gate.current(update);
+    }
+
+    boolean enableAdmissions(AdmissionGate.Staging update) {
+        return currentAdmissionUpdate(update) && gate.enable(update);
     }
 
     public boolean isServing() {

@@ -84,14 +84,24 @@ public final class AdmissionGate {
     private final Map<InetSocketAddress, Reservation> tuples = new HashMap<>();
     private int pending;
     private boolean draining, closed;
+    private boolean enabled;
+    private Staging staging;
+
+    /** Identity-only capability; no caller can recreate an earlier transition. */
+    static final class Staging { private Staging() { } }
     private long invalid, replayRejected, capacityRejected, accepted;
     private long pendingLimitRejected, lastPendingWarningNanos;
     private int pendingAtRejection;
     private boolean pendingWarningEmitted;
 
     public AdmissionGate(Limits limits, AdmissionValidator validator) {
+        this(limits, validator, true);
+    }
+
+    AdmissionGate(Limits limits, AdmissionValidator validator, boolean initiallyEnabled) {
         this.limits = Objects.requireNonNull(limits);
         this.validator = Objects.requireNonNull(validator);
+        this.enabled = initiallyEnabled;
     }
 
     /**
@@ -99,6 +109,10 @@ public final class AdmissionGate {
      */
     public synchronized Reservation reserve(AdmissionRequest request, long nowMillis, long nowNanos) {
         if (closed) {
+            return null;
+        }
+        if (!enabled) {
+            capacityRejected++;
             return null;
         }
 
@@ -217,15 +231,43 @@ public final class AdmissionGate {
 
     public synchronized void drain() {
         draining = true;
+        staging = null;
+    }
+
+    synchronized Staging stage() {
+        disable();
+        if (closed || draining) throw new IllegalStateException("Admission endpoint unavailable");
+        return staging = new Staging();
+    }
+
+    synchronized void disable() {
+        enabled = false;
+        staging = null;
+        // Prepared native work may finish later, but cannot publish a newly admitted child.
+        for (Reservation reservation : tuples.values()) {
+            if (!reservation.ready) reservation.closing = true;
+        }
+    }
+
+    synchronized boolean current(Staging expected) {
+        return expected != null && expected == staging && !closed && !draining && !enabled;
+    }
+
+    synchronized boolean enable(Staging expected) {
+        if (!current(expected)) return false;
+        staging = null;
+        enabled = true;
+        return true;
     }
 
     /** Admission policy state only; capacity and installed credentials are checked separately. */
     public synchronized boolean isServing() {
-        return !closed && !draining;
+        return !closed && !draining && enabled;
     }
 
     public synchronized List<Reservation> close() {
         closed = true;
+        staging = null;
 
         List<Reservation> active = new ArrayList<>(tuples.values());
         for (Reservation reservation : active) {
