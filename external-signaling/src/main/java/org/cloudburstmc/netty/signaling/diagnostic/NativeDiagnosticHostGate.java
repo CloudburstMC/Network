@@ -17,7 +17,8 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     public record Result(Context context, String keyId, String attemptId, String offerDigestHex, String clientFingerprintHex, long expiresAt,
                          DiagnosticHostPolicy.Endpoint target, boolean success, String reason,
                          InetSocketAddress selectedLocal, InetSocketAddress selectedRemote, UdpSendStats udp,
-                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, String completionDigestHex, long completedAt) { }
+                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, String completionDigestHex, long completedAt,
+                         DiagnosticAdmission.Binding installation, boolean cleanupComplete) { }
     public record Stats(int active, int pending, int retainedAttempts, int liveNativePeers, long rejected, long droppedResults) { }
     private record Incoming(int channel, byte[] bytes) { }
     private static final class Session {
@@ -25,6 +26,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         final Key key;
         final InetSocketAddress remote;
         final long deadlineNanos, handshakeDeadlineNanos, nativeDeadline;
+        final DiagnosticAdmission.Binding installation;
         final ArrayBlockingQueue<DataChannel> channels = new ArrayBlockingQueue<>(2);
         final ArrayBlockingQueue<Incoming> messages = new ArrayBlockingQueue<>(MAX_FRAMES);
         final AtomicBoolean failed = new AtomicBoolean(), protocolFailed = new AtomicBoolean(), connected = new AtomicBoolean();
@@ -41,9 +43,11 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         long completeNanos;
         UdpSendStats stats;
         InetSocketAddress selectedLocal, selectedRemote;
-        Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos, long nativeDeadline) {
+        Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos, long nativeDeadline,
+                DiagnosticAdmission.Binding installation) {
             this.admission = admission; this.key = key; this.remote = remote; this.deadlineNanos = deadlineNanos;
             this.handshakeDeadlineNanos = handshakeDeadlineNanos; this.nativeDeadline = nativeDeadline;
+            this.installation = installation;
         }
     }
     private final NativeHostIdentity identity;
@@ -80,7 +84,19 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         return new Stats(sessions.size(), pending, used.size(), nativePeers, rejected, droppedResults);
     }
     public synchronized Throwable failure() { return closeFailure; }
-    public List<Result> pollResults() { List<Result> out = new ArrayList<>(32); results.drainTo(out); return List.copyOf(out); }
+    public List<Result> pollResults() { return pollResults(32); }
+    public List<Result> pollResults(int maximum) {
+        if (maximum < 0 || maximum > 32) throw new IllegalArgumentException("Diagnostic result poll bound");
+        List<Result> out = new ArrayList<>(maximum); results.drainTo(out, maximum); return List.copyOf(out);
+    }
+    /** Remove only endpoints that ceased to belong to this listener's advertised snapshot. Preserve replay history. */
+    public synchronized void retainEndpoints(Set<DiagnosticHostPolicy.Endpoint> retained) {
+        Objects.requireNonNull(retained);
+        var deadlines = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
+        policy.endpointExpiries().forEach((endpoint, expiry) -> { if (retained.contains(endpoint)) deadlines.put(endpoint, expiry); });
+        policy = new DiagnosticHostPolicy(policy.context(), policy.keys(), deadlines.keySet(), policy.expiresAt(), deadlines, policy.installation());
+        for (Session session : new ArrayList<>(sessions.values())) if (!authorized(session, observe())) stop(session, "authority_changed");
+    }
     public CompletionStage<Void> termination() { return termination.minimalCompletionStage(); }
 
     /** Same-listener hook. Native code verifies the first STUN integrity before this acceptance creates a peer. */
@@ -99,12 +115,12 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             Claims claims = admission.claims();
             InetSocketAddress remote = new InetSocketAddress(EndpointAddress.parse(request.remoteAddress()), request.remotePort());
             int family = remote.getAddress() instanceof Inet6Address ? 6 : 4;
-            if (family != claims.family() || !policy.endpoints().contains(DiagnosticHostPolicy.Endpoint.from(claims)) ||
+            if (family != claims.family() || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims)) ||
                     used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote)) || !admission.usable()) throw invalid();
             long remaining = claims.expiresAt() - now;
             if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS || nativeStart > Long.MAX_VALUE - remaining) throw invalid();
             Session session = new Session(admission, key, remote, nanos + remaining * 1_000_000L,
-                nanos + Math.min(remaining, MAX_HANDSHAKE_MILLIS) * 1_000_000L, nativeStart + remaining);
+                nanos + Math.min(remaining, MAX_HANDSHAKE_MILLIS) * 1_000_000L, nativeStart + remaining, policy.installation());
             sessions.put(claims.attemptIdHex(), session); used.put(claims.attemptIdHex(), claims.expiresAt());
             request.completion().whenComplete((peer, failure) -> settled(session, failure));
             return IceUdpMuxListener.Acceptance.builder(remoteDescription(admission, remote), admission.credentials().icePwd())
@@ -137,7 +153,11 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         Claims claims = session.admission.claims();
         return !closed && closeFailure == null && !clockFailed && session.admission.context().equals(policy.context()) && now < claims.expiresAt() && now < policy.expiresAt() && lastNanos - session.deadlineNanos < 0 &&
             keyEquals(session.key, policy.key(session.key.keyId())) && now >= session.key.notBefore() && now < session.key.retireAt() &&
-            policy.endpoints().contains(DiagnosticHostPolicy.Endpoint.from(claims));
+            sameOwner(session.installation, policy.installation()) && now < policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims));
+    }
+    private static boolean sameOwner(DiagnosticAdmission.Binding first, DiagnosticAdmission.Binding second) {
+        return first == null ? second == null : second != null && first.nativeOwnerEpoch() == second.nativeOwnerEpoch()
+            && first.authorityIncarnation().equals(second.authorityIncarnation());
     }
     private static boolean keyEquals(Key first, Key second) { return second != null && first.equals(second); }
     /** Called by the existing host maintenance loop; never schedules unbounded per-packet work. */
@@ -252,7 +272,8 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             Result result = new Result(session.admission.context(), session.key.keyId(), claims.attemptIdHex(), claims.offerDigestHex(), claims.clientFingerprintHex(), claims.expiresAt(), DiagnosticHostPolicy.Endpoint.from(claims), success,
                 failure != null ? "native_cleanup_failed" : session.complete && !success ? "completion_invalidated" : session.reason,
                 session.selectedLocal, session.selectedRemote, session.stats, exchange == null ? 0 : exchange.sentFrames(), exchange == null ? 0 : exchange.sentBytes(),
-                session.receivedFrames.get(), session.receivedBytes.get(), success ? exchange.completionDigestHex() : null, now);
+                session.receivedFrames.get(), session.receivedBytes.get(), success ? exchange.completionDigestHex() : null, now,
+                session.installation, failure == null);
             if (!results.offer(result)) droppedResults++;
         }
         completeTermination();
