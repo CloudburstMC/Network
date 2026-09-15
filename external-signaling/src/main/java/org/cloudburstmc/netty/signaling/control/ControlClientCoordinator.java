@@ -80,11 +80,30 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private boolean operationInFlight, synchronizationInFlight;
     private CompletableFuture<ControlOperationResult> pendingResult;
     private SynchronizationExchange synchronizationExchange, pendingSynchronization;
+    private OutcomeReplay outcomeReplay;
     private boolean forceHttp, cancellationInFlight, cancellationWriterSelected;
     private String cancellationIntentDigest;
 
     private record PendingApplicationFrame(ControlFrameCodec.Frame frame, ControlFrameCodec.VerificationKey key,
             ControlAuthorityCodec.Verified proof, long attempt, long synchronization) { }
+
+    /** One retained report may settle before native synchronization; this is never application readiness. */
+    private final class OutcomeReplay {
+        final ControlLifecycleCodec.Intent intent;
+        final ControlAuthorityCodec.Verified proof;
+        final ControlWriterFence writer = snapshot.writer();
+        final ControlClientJournal.Grant grant = snapshot.grant();
+        final long generation = attempt, deadline;
+        OutcomeReplay(ControlLifecycleCodec.Intent intent, ControlAuthorityCodec.Verified proof) {
+            this.intent = intent; this.proof = proof;
+            deadline = Math.min(clock.nowMillis() + config.proofMillis(), proof.response().authorityExpiresAt());
+        }
+        boolean current() {
+            return outcomeReplay == this && generation == attempt && state == State.SYNCHRONIZING
+                    && synchronizationInFlight && clock.nowMillis() < deadline && writer.equals(snapshot.writer())
+                    && grant.equals(snapshot.grant()) && authority == proof && hasAuthority();
+        }
+    }
 
     private static final class Candidate {
         ControlClientIo.Link link;
@@ -550,7 +569,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (cancelBeforeSynchronization()) return;
         if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED || pendingAuthority != null || synchronizationInFlight) return;
         // Deadline expiry fences consumers; it does not make unabortable underlying work disappear.
-        if (authorityIo != null || synchronizationIo != null) { authorityUnavailable(); return; }
+        if (authorityIo != null || synchronizationIo != null || outcomeAcknowledgementIo != null) { authorityUnavailable(); return; }
         cancel(authorityRetry); authorityRetry = null;
         var grant = snapshot.grant(); long now = clock.nowMillis();
         if (grant == null || now >= grant.sessionExpiresAt()) { state = State.AUTHORITY_EXPIRED; return; }
@@ -591,7 +610,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                         // An already consumed application frame lost its original scope. Recover ordered delivery.
                         replaceAfterFrameGap(); return;
                     }
-                    applySynchronizedState(proof);
+                    synchronizeAfterOutcomes(proof);
                 } catch (RuntimeException invalid) { if (currentPending(pending)) authorityUnavailable(); }
             }});
         } catch (GeneralSecurityException | RuntimeException failure) {
@@ -627,7 +646,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private void authorityUnavailable() {
         if (state == State.CLOSED || state == State.UNRESOLVED || state == State.DEREGISTERED) return;
         if (pendingAuthority != null) cancel(pendingAuthority.timeout);
-        pendingAuthority = null; authority = null; authorityKey = null; synchronizationInFlight = false; synchronizationVersion++;
+        pendingAuthority = null; authority = null; authorityKey = null; synchronizationInFlight = false; synchronizationVersion++; outcomeReplay = null;
         var invalidated = synchronizationExchange; synchronizationExchange = null; pendingSynchronization = null;
         cancel(synchronizationTimeout); synchronizationTimeout = null; state = State.AUTHORITY_EXPIRED;
         cancel(authorityRetry);
@@ -643,10 +662,43 @@ public final class ControlClientCoordinator implements AutoCloseable {
         // No transition work follows callbacks: they may close or replace this coordinator.
         if (invalidated != null) invalidated.cancelConfirmation();
     }
+    private void synchronizeAfterOutcomes(ControlAuthorityCodec.Verified proof) {
+        var pending = snapshot.pending();
+        if (pending == null || !pending.intent().operation().equals("outcomes")) { applySynchronizedState(proof); return; }
+        if (pending.candidate() != null || pending.receipt() != null && !pending.receipt().disposition().equals("unknown")) {
+            authorityUnavailable(); return;
+        }
+        // Preserve the original intent/body/sequence. Fresh cached status authority permits only this
+        // report before the actual application adapter can obtain its heartbeat synchronization lane.
+        var replay = new OutcomeReplay(pending.intent(), proof); outcomeReplay = replay;
+        synchronizationInFlight = true;
+        synchronizationTimeout = scheduler.schedule(() -> { synchronized (this) {
+            if (outcomeReplay == replay) authorityUnavailable();
+        }}, Math.max(0, replay.deadline - clock.nowMillis()));
+        try {
+            deliverPending();
+            if (replay.current()) flushQuarantinedFrame();
+        } catch (RuntimeException failure) {
+            if (outcomeReplay == replay) authorityUnavailable();
+        }
+    }
+    private void resumeAfterOutcomes(ControlLifecycleCodec.Intent intent) {
+        var replay = outcomeReplay;
+        if (replay == null || !replay.intent.equals(intent)) return;
+        if (!replay.current()) { authorityUnavailable(); return; }
+        // Public completion can close, replace or submit another report. Never confer native authority
+        // on that callback's behalf or bypass a newly retained lifecycle barrier.
+        var next = snapshot.pending();
+        if (next != null && !next.intent().operation().equals("heartbeat")) { authorityUnavailable(); return; }
+        cancel(synchronizationTimeout); synchronizationTimeout = null; outcomeReplay = null; synchronizationInFlight = false;
+        applySynchronizedState(replay.proof, replay.deadline);
+    }
     private void applySynchronizedState(ControlAuthorityCodec.Verified proof) {
+        applySynchronizedState(proof, Math.min(clock.nowMillis() + config.proofMillis(), proof.response().authorityExpiresAt()));
+    }
+    private void applySynchronizedState(ControlAuthorityCodec.Verified proof, long deadline) {
         synchronizationInFlight = true; state = State.SYNCHRONIZING;
         long generation = attempt, synchronization = ++synchronizationVersion;
-        long deadline = Math.min(clock.nowMillis() + config.proofMillis(), proof.response().authorityExpiresAt());
         var exchange = new SynchronizationExchange(proof, deadline); synchronizationExchange = exchange;
         synchronizationTimeout = scheduler.schedule(() -> { synchronized (this) {
             if (generation == attempt && synchronization == synchronizationVersion && synchronizationInFlight) authorityUnavailable();
@@ -700,7 +752,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         pendingAuthority = null; cancel(authorityRetry); authorityRetry = null;
         cancel(synchronizationTimeout); synchronizationTimeout = null;
         var invalidated = synchronizationExchange;
-        synchronizationInFlight = false; synchronizationVersion++; synchronizationExchange = null; pendingSynchronization = null;
+        synchronizationInFlight = false; synchronizationVersion++; synchronizationExchange = null; pendingSynchronization = null; outcomeReplay = null;
         long version = synchronizationVersion;
         quarantinedFrame = null; quarantinedGap = false; pendingApplicationFrame = null;
         if (invalidated != null) invalidated.cancelConfirmation();
@@ -841,7 +893,8 @@ public final class ControlClientCoordinator implements AutoCloseable {
         var pending = snapshot.pending(); var grant = snapshot.grant();
         boolean initialHeartbeat = pendingSynchronization != null && pendingSynchronization.current()
                 && pending != null && pending.intent().operation().equals("heartbeat");
-        if (pending == null || operationInFlight || outcomeAcknowledgementIo != null || grant == null || state != State.READY && state != State.AUTHORITY_EXPIRED && !initialHeartbeat
+        boolean replayingOutcomes = outcomeReplay != null && outcomeReplay.current() && pending != null && outcomeReplay.intent.equals(pending.intent());
+        if (pending == null || operationInFlight || outcomeAcknowledgementIo != null || grant == null || state != State.READY && state != State.AUTHORITY_EXPIRED && !initialHeartbeat && !replayingOutcomes
                 || pending.receipt() != null && !pending.receipt().disposition().equals("unknown") || clock.nowMillis() >= grant.sessionExpiresAt()) return;
         if (state == State.AUTHORITY_EXPIRED && !forceHttp && !snapshot.writer().transport().equals("https")) {
             if (pendingAuthority == null && !synchronizationInFlight && authorityRetry == null) beginAuthorityRefresh();
@@ -850,10 +903,11 @@ public final class ControlClientCoordinator implements AutoCloseable {
         operationInFlight = true;
         try {
             var writer = snapshot.writer(); long now = clock.nowMillis();
-            boolean useHttp = forceHttp || writer.transport().equals("https") || state != State.READY && !initialHeartbeat
+            boolean useHttp = forceHttp || writer.transport().equals("https") || state != State.READY && !initialHeartbeat && !replayingOutcomes
                     || pending.bodyBytes().length > ControlLifecycleCodec.MAX_WS_BODY_BYTES;
             long operationExpiresAt = Math.min(now + config.proofMillis(), grant.sessionExpiresAt());
             if (initialHeartbeat) operationExpiresAt = Math.min(operationExpiresAt, pendingSynchronization.deadline);
+            if (replayingOutcomes) operationExpiresAt = Math.min(operationExpiresAt, outcomeReplay.deadline);
             if (useHttp) {
                 URI endpoint = config.operations().get(pending.intent().operation());
                 var proof = new ControlHttpCodec.Request(1, config.audience(), "POST", target(endpoint), now, operationExpiresAt, pending.intent(),
@@ -904,6 +958,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
             persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
             pendingSynchronization = null;
             completeResult(ControlOperationResult.reconciled(receipt));
+            resumeAfterOutcomes(pending.intent());
             return; // Completion can synchronously close, replace, or submit.
         }
         if (!receipt.disposition().equals("committed")) { persistPendingReceipt(receipt); return; }
@@ -913,7 +968,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (pending.candidate() != null) { persistPendingReceipt(receipt); recover(); return; }
         if (outcomeAcknowledgement(pending)) {
             if (pending.receipt() != null && pending.receipt().disposition().equals("committed") && !pending.receipt().equals(receipt)) throw ControlJson.invalid("committed outcome receipt changed");
-            persistPendingReceipt(receipt); acknowledgeOutcome(receipt, () -> { }); return;
+            persistPendingReceipt(receipt); acknowledgeOutcome(receipt, () -> resumeAfterOutcomes(pending.intent())); return;
         }
         long generation = attempt;
         persist(new ControlClientJournal.Snapshot(snapshot.subject(), snapshot.currentKey(), snapshot.writer(), snapshot.lastSequence(), null, snapshot.pendingBootstrap(), snapshot.grant(), snapshot.authorityFloor()));
@@ -926,6 +981,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
             return;
         }
         completeResult(ControlOperationResult.delivered(result, bodyGuard));
+        resumeAfterOutcomes(pending.intent());
     }
 
     private boolean outcomeAcknowledgement(ControlClientJournal.Pending pending) {

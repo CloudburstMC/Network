@@ -18,6 +18,7 @@ class ControlApplicationRecoveryTest {
             @Override public void commit(Snapshot value) throws IOException { application.journal().commit(value); h.journal.commit(value); }
             @Override public void close() { }
         });
+        h.journal.value = h.client.snapshot();
         h.actualSynchronization = application::synchronize;
         h.durableOutcomes = true; h.actualOutcomeAck = application::acknowledge;
         return h;
