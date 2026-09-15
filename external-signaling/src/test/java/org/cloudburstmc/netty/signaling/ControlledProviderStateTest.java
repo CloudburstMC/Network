@@ -66,7 +66,7 @@ class ControlledProviderStateTest {
         }
     }
     static JsonObject event(int id) {
-        var event = new JsonObject(); event.addProperty("stage", "ticket.data_channels_open"); event.addProperty("ticketId", "ticket-" + id); event.addProperty("occurredAt", "2026-09-15T00:00:00Z"); return event;
+        var event = new JsonObject(); event.addProperty("reason", (String) null); event.addProperty("stage", "ticket.data_channels_open"); event.addProperty("ticketId", "ticket-" + id); event.addProperty("occurredAt", "2026-09-15T00:00:00Z"); return event;
     }
     @Test void nativeBurstsSplitIntoWireBatchesWithoutDropping(@TempDir Path directory) throws Exception {
         for (int count : List.of(101, 256)) try (var store = new ProviderStateStore(directory.resolve("batch-" + count))) {
@@ -77,7 +77,7 @@ class ControlledProviderStateTest {
                 while (!state.outcomeBatch().getAsJsonArray("events").isEmpty()) {
                     var body = state.outcomeBatch(); int n = body.getAsJsonArray("events").size(); assertTrue(n <= 100);
                     assertEquals("ticket-" + consumed, body.getAsJsonArray("events").get(0).getAsJsonObject().get("ticketId").getAsString());
-                    state.acknowledgeOutcomes(body); consumed += n;
+                    acknowledge(state, body, 18 + consumed); consumed += n;
                 }
                 assertEquals(count, consumed);
             }
@@ -106,6 +106,33 @@ class ControlledProviderStateTest {
                 }
                 assertTrue(count < 1000); assertTrue(store.read().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 262144);
                 assertTrue(state.outcomeBatch().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= ControlLifecycleCodec.MAX_WS_BODY_BYTES);
+            }
+        }
+    }
+    static void acknowledge(ControlledProviderState state, JsonObject body, long sequence) throws IOException {
+        byte[] bytes = body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var intent = ControlLifecycleCodec.intent(state.initial.subject().audience(), "outcomes", state.initial.subject().instanceId(), 1, sequence, "outcome_fixture_id_" + sequence, bytes);
+        var receipt = new ControlLifecycleCodec.Receipt(1, ControlLifecycleCodec.intentDigest(intent), "outcomes", intent.instanceId(), 1, sequence, intent.idempotencyKey(), "committed", 1000L, 1L, null);
+        state.acknowledgeOutcomes(intent, bytes, receipt);
+    }
+    @Test void outcomeRootAcknowledgementIsAtomicAndIdempotentAcrossRestart(@TempDir Path directory) throws Exception {
+        var reject = new java.util.concurrent.atomic.AtomicBoolean();
+        try (var store = new ProviderStateStore(directory)) {
+            seed(store, "https://provider.example"); JsonObject original;
+            try (var state = ControlledProviderState.open(store, config("https://provider.example"), value -> {
+                if (reject.get()) throw new IOException("injected outcome root fsync failure"); store.write(value);
+            })) {
+                state.appendEvents(List.of(event(1), event(2))); original = state.outcomeBatch();
+                reject.set(true); assertThrows(IOException.class, () -> acknowledge(state, original, 18));
+                assertEquals(original, state.outcomeBatch()); assertFalse(store.read().has("controlOutcomeAcknowledgement"));
+                reject.set(false); acknowledge(state, original, 18); assertTrue(state.outcomeBatch().getAsJsonArray("events").isEmpty());
+                state.appendEvents(List.of(event(3))); acknowledge(state, original, 18);
+                assertEquals(1, state.outcomeBatch().getAsJsonArray("events").size());
+            }
+            try (var state = ControlledProviderState.open(store, config("https://provider.example"))) {
+                acknowledge(state, original, 18); assertEquals("ticket-3", state.outcomeBatch().getAsJsonArray("events").get(0).getAsJsonObject().get("ticketId").getAsString());
+                assertThrows(IOException.class, () -> acknowledge(state, state.outcomeBatch(), 18));
+                acknowledge(state, state.outcomeBatch(), 19); assertTrue(state.outcomeBatch().getAsJsonArray("events").isEmpty());
             }
         }
     }

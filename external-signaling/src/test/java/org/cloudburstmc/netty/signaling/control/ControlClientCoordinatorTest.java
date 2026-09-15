@@ -70,6 +70,8 @@ class ControlClientCoordinatorTest {
         Supplier<String> identifierSupplier = () -> "client_identifier_" + String.format("%016d", ids.incrementAndGet());
         ControlClientCoordinator client; ControlWriterFence writer; ControlClientJournal.Grant grant;
         boolean writerEnabled, absentSynchronization, keyAvailable = true; int bootstrapCalls, applicationFrames, authorityCalls;
+        boolean durableOutcomes; final List<CompletableFuture<Void>> outcomeAcks = new ArrayList<>();
+        Runnable onOutcomeAck;
         boolean autoReady = true, nullSynchronizationResult, failApplicationDispatch;
         ControlStateCodec.AppliedBasis appliedBasis;
         ControlStateCodec.Summary sourceState;
@@ -94,7 +96,7 @@ class ControlClientCoordinatorTest {
         void newClient(ControlClientJournal store) throws Exception {
             var config = new ControlClientCoordinator.Config(ORIGIN, URI.create(ORIGIN + "/control/prepare"), URI.create(ORIGIN + "/control/activate"),
                     URI.create(ORIGIN + "/control/status"), URI.create("wss://provider.example/control/upgrade"), URI.create(ORIGIN + "/control/authority"),
-                    Map.of("heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate"),
+                    Map.of("outcomes", URI.create(ORIGIN + "/signal/outcomes"), "heartbeat", URI.create(ORIGIN + "/signal/heartbeat"), "rotate", URI.create(ORIGIN + "/signal/rotate"),
                             "deregister", URI.create(ORIGIN + "/signal/deregister")),
                     initialTransport, initialTransport.equals("https") ? List.of("request-response") : CAPS, 21_600_000, 30_000, 200, 30_000);
             client = new ControlClientCoordinator(store, initial, config, this, time, time, () -> 0.5,
@@ -112,6 +114,14 @@ class ControlClientCoordinatorTest {
             assertNotNull(journal.value.pending()); assertEquals(journal.value.pending().intent(), request.intent());
             assertArrayEquals(journal.value.pending().bodyBytes(), body);
             var reply = new CompletableFuture<HttpReply>(); operations.add(new Operation(endpoint, request, body.clone(), reply)); return reply;
+        }
+        @Override public boolean requiresOutcomeAcknowledgement() { return durableOutcomes; }
+        @Override public CompletionStage<Void> acknowledgeCommittedOutcomes(ControlLifecycleCodec.Intent intent, byte[] body, ControlLifecycleCodec.Receipt receipt) {
+            assertEquals("committed", journal.value.pending().receipt().disposition());
+            assertEquals(intent, journal.value.pending().intent()); assertArrayEquals(body, journal.value.pending().bodyBytes());
+            var work = new CompletableFuture<Void>(); outcomeAcks.add(work);
+            if (onOutcomeAck != null) onOutcomeAck.run();
+            return work;
         }
         @Override public Link openWebSocket(URI endpoint, ControlSessionCodec.Request proof, Consumer<String> received) {
             var link = new FakeLink(proof, received); links.add(link); return link;

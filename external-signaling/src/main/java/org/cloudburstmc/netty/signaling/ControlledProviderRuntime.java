@@ -90,8 +90,8 @@ final class ControlledProviderRuntime {
                     coordinator.submit("outcomes", body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8), true).whenCompleteAsync((receipt, failure) -> {
                         outcomesInFlight = false;
                         if (failure != null) { diagnostics.accept("controlled_outcomes_unavailable"); return; }
-                        try { committed(receipt); storage.acknowledgeOutcomes(body); }
-                        catch (IOException | RuntimeException invalid) { diagnostics.accept("controlled_outcomes_retained"); }
+                        try { committed(receipt); }
+                        catch (RuntimeException invalid) { diagnostics.accept("controlled_outcomes_retained"); }
                     }, applicationExecutor);
                 }
             } catch (IOException | RuntimeException unavailable) { outcomesInFlight = false; diagnostics.accept("controlled_outcomes_unavailable"); }

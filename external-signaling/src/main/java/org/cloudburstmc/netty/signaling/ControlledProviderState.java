@@ -102,7 +102,7 @@ final class ControlledProviderState implements AutoCloseable {
         if (pending.size() + events.size() > 1000) throw new IOException("Controlled outcome queue exceeds limit");
         for (var event : events) {
             var safe = new JsonObject();
-            for (String name : List.of("stage", "ticketId", "occurredAt", "reason")) if (event.has(name)) safe.addProperty(name, ControlledProviderJson.string(event, name));
+            for (String name : List.of("stage", "ticketId", "occurredAt", "reason")) if (event.has(name) && !event.get(name).isJsonNull()) safe.addProperty(name, ControlledProviderJson.string(event, name));
             if (!safe.has("stage") || !safe.has("ticketId") || !safe.has("occurredAt")) throw new IOException("Invalid native outcome");
             pending.add(ControlledProviderJson.parse(safe.toString(), 1024));
         }
@@ -121,11 +121,25 @@ final class ControlledProviderState implements AutoCloseable {
         }
         body.add("events", batch); return body;
     }
-    void acknowledgeOutcomes(JsonObject body) throws IOException {
+    void acknowledgeOutcomes(ControlLifecycleCodec.Intent intent, byte[] originalBody, ControlLifecycleCodec.Receipt receipt) throws IOException {
+        ControlLifecycleCodec.verifyReceipt(receipt, intent);
+        if (!intent.operation().equals("outcomes") || !receipt.disposition().equals("committed")
+                || !intent.audience().equals(initial.subject().audience()) || !intent.instanceId().equals(initial.subject().instanceId())
+                || intent.generation() != initial.subject().generation() || !intent.payloadSha256().equals(ControlFrameCodec.payloadDigest(originalBody))) throw new IOException("Unowned outcome acknowledgement");
+        var marker = new JsonObject(); marker.addProperty("intentDigest", ControlLifecycleCodec.intentDigest(intent));
+        marker.addProperty("receiptDigest", ControlFrameCodec.payloadDigest(ControlLifecycleCodec.encodeReceipt(receipt).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        marker.addProperty("batchDigest", intent.payloadSha256()); marker.addProperty("sequence", intent.sequence());
+        var prior = root.getAsJsonObject("controlOutcomeAcknowledgement");
+        if (prior != null) {
+            if (prior.equals(marker)) return;
+            if (ControlledProviderJson.number(prior, "sequence") >= intent.sequence()) throw new IOException("Outcome acknowledgement rollback or mismatch");
+        }
+        var body = ControlledProviderJson.parse(new String(originalBody, java.nio.charset.StandardCharsets.UTF_8), ControlLifecycleCodec.MAX_HTTP_BODY_BYTES);
         var expected = body.getAsJsonArray("events"); var next = root.deepCopy(); var pending = next.getAsJsonArray("pendingEvents");
-        if (pending == null || pending.size() < expected.size()) throw new IOException("Controlled outcome queue changed");
+        if (expected == null || expected.isEmpty() || expected.size() > 100 || pending == null || pending.size() < expected.size()) throw new IOException("Controlled outcome queue changed");
         for (int index = 0; index < expected.size(); index++) if (!pending.get(index).equals(expected.get(index))) throw new IOException("Controlled outcome batch changed");
-        for (int index = 0; index < expected.size(); index++) pending.remove(0); writeRoot(next);
+        for (int index = 0; index < expected.size(); index++) pending.remove(0);
+        next.add("controlOutcomeAcknowledgement", marker); writeRoot(next);
     }
     private void writeRoot(JsonObject next) throws IOException {
         if (next.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 262144) throw new IOException("Controlled storage exceeds limit");
