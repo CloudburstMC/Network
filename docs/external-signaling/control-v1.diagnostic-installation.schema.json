@@ -1,0 +1,325 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nethernet:control-v1:diagnostic-installation",
+  "$comment": "Structural schema only. The normative codec additionally checks canonical HTTPS origin/base64url, original duplicate-free integer bytes, sorted unique keys/endpoints/revisions, all parent/endpoint/key/catalog time relations, <=300000ms policy lifetime, digest consistency and encoded byte limits. Current trusted authority and actual native installation are separate checks.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/installation"
+    },
+    {
+      "$ref": "#/$defs/acknowledgement"
+    }
+  ],
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerOrigin",
+        "hostId",
+        "authorityIncarnation",
+        "generation",
+        "nativeOwnerEpoch",
+        "nativeIncarnation",
+        "hostProfileRevision",
+        "hostProfileSha256",
+        "hostFingerprintHex",
+        "policyRevision",
+        "installationSha256"
+      ],
+      "properties": {
+        "providerOrigin": {
+          "type": "string",
+          "pattern": "^https://",
+          "maxLength": 256
+        },
+        "hostId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "authorityIncarnation": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "nativeOwnerEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "nativeIncarnation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "hostProfileRevision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "hostProfileSha256": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "hostFingerprintHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "policyRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "installationSha256": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "epoch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keyId",
+        "secret",
+        "notBefore",
+        "retireAt"
+      ],
+      "properties": {
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "secret": {
+          "type": "string",
+          "pattern": "^[\\x21-\\x7e]{32,256}$"
+        },
+        "notBefore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retireAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "addressHex",
+        "port",
+        "candidateRevision",
+        "candidateType",
+        "expiresAt"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            4,
+            6
+          ]
+        },
+        "addressHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "candidateRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "candidateType": {
+          "enum": [
+            "host",
+            "srflx"
+          ]
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": 4
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "addressHex": {
+                "type": "string",
+                "pattern": "^000000000000000000000000[0-9a-f]{8}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "addressHex": {
+                "not": {
+                  "pattern": "^00000000000000000000ffff"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "answerKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "keyId",
+        "publicPointHex",
+        "validFrom",
+        "validUntil"
+      ],
+      "properties": {
+        "family": {
+          "const": "provider-diagnostic"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "publicPointHex": {
+          "type": "string",
+          "pattern": "^04[0-9a-f]{192}$"
+        },
+        "validFrom": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "validUntil": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "answerCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerOrigin",
+        "notBefore",
+        "expiresAt",
+        "keys"
+      ],
+      "properties": {
+        "providerOrigin": {
+          "type": "string",
+          "pattern": "^https://",
+          "maxLength": 256
+        },
+        "notBefore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/answerKey"
+          }
+        }
+      }
+    },
+    "installation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "binding",
+        "notBefore",
+        "expiresAt",
+        "activeKeyId",
+        "keys",
+        "endpoints",
+        "answerCatalog"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "notBefore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "activeKeyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/epoch"
+          }
+        },
+        "endpoints": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/endpoint"
+          }
+        },
+        "answerCatalog": {
+          "$ref": "#/$defs/answerCatalog"
+        }
+      }
+    },
+    "acknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "binding"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        }
+      }
+    }
+  }
+}
