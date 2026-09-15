@@ -89,8 +89,14 @@ final class ControlledProviderState implements AutoCloseable {
         if (ControlledProviderJson.number(application, "appliedRevision") < ControlledProviderJson.number(old, "appliedRevision")) throw new IOException("Application revision rollback");
         var next = root.deepCopy(); next.add("controlApplication", application); writeRoot(next);
     }
+    int eventCapacity() {
+        int count = root.has("pendingEvents") ? root.getAsJsonArray("pendingEvents").size() : 0;
+        int bytes = root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        // Each sanitized event is at most 1024 bytes plus its comma. Reserve metadata growth/ACK marker space.
+        return Math.max(0, Math.min(256, Math.min(1000 - count, (262144 - 4096 - bytes) / 1025)));
+    }
     void appendEvents(List<JsonObject> events) throws IOException {
-        if (events.size() > 100) throw new IOException("Native outcome batch exceeds limit");
+        if (events.size() > 256) throw new IOException("Native outcome batch exceeds limit");
         if (events.isEmpty()) return;
         var next = root.deepCopy(); var pending = next.has("pendingEvents") ? next.getAsJsonArray("pendingEvents") : new JsonArray();
         if (pending.size() + events.size() > 1000) throw new IOException("Controlled outcome queue exceeds limit");
@@ -106,7 +112,12 @@ final class ControlledProviderState implements AutoCloseable {
         var body = new JsonObject(); var batch = new JsonArray();
         if (root.has("pendingEvents")) {
             var pending = root.getAsJsonArray("pendingEvents");
-            for (int index = 0; index < Math.min(100, pending.size()); index++) batch.add(pending.get(index).deepCopy());
+            int bytes = 16;
+            for (int index = 0; index < Math.min(100, pending.size()); index++) {
+                int size = pending.get(index).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length + 1;
+                if (bytes + size > ControlLifecycleCodec.MAX_WS_BODY_BYTES) break;
+                batch.add(pending.get(index).deepCopy()); bytes += size;
+            }
         }
         body.add("events", batch); return body;
     }

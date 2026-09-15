@@ -83,6 +83,13 @@ public interface ProviderTransport {
      */
     List<JsonObject> pollEvents();
 
+    /** Drain at most the caller's available retained capacity; unsupported transports must not drain anything. */
+    default List<JsonObject> pollEvents(int maximum) {
+        if (maximum < 0 || maximum > 256) throw new IllegalArgumentException("Invalid outcome poll bound");
+        if (maximum == 0) return List.of();
+        throw new UnsupportedOperationException("Bounded outcome polling is required for controlled mode");
+    }
+
     CompletionStage<Void> drain();
 
     CompletionStage<Void> close();

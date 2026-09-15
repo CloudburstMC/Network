@@ -340,8 +340,13 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     }
 
     public List<Event> pollEvents() {
-        List<Event> result = new ArrayList<>(256);
-        events.drainTo(result);
+        return pollEvents(256);
+    }
+
+    public List<Event> pollEvents(int maximum) {
+        if (maximum < 0 || maximum > 256) throw new IllegalArgumentException("Invalid outcome poll bound");
+        List<Event> result = new ArrayList<>(maximum);
+        events.drainTo(result, maximum);
         return result;
     }
 
