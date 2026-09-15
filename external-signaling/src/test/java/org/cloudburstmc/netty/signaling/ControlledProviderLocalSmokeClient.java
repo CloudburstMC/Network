@@ -20,7 +20,7 @@ import java.util.concurrent.*;
 /** Private localhost fixture using the actual ProviderClient and native controlled listener. Never a gameplay test. */
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
-    private final boolean runtimeCheck, rotationCheck;
+    private final boolean runtimeCheck, rotationCheck, candidateCheck;
     private final long deadline;
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
@@ -28,7 +28,9 @@ public final class ControlledProviderLocalSmokeClient {
     private Path trustStore;
     private final class Host {
         final String id, mode; final Path directory; final NativeProviderTransport nativeTransport; final ProviderClient client;
+        final NativeCandidateSnapshot originalCandidates;
         final CompletableFuture<JsonObject> started; String writerSeen, basisSeen; boolean ready;
+        CompletableFuture<JsonObject> candidateReadiness; int candidateStage;
         CompletableFuture<Long> runtimeReadiness; boolean runtimeReady; long allReadyAtNanos, initialSessionEpoch, nextRuntimeReadinessAtNanos;
         int runtimeRefreshAttempts;
         Host(JsonObject value) throws Exception {
@@ -49,9 +51,14 @@ public final class ControlledProviderLocalSmokeClient {
             var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
                 @Override protected void initChannel(AdmittedNetherNetChildChannel channel) { channel.close(); }
             });
-            nativeTransport = NativeProviderTransport.openControlled(bootstrap, new InetSocketAddress(InetAddress.getByName(address), port),
-                    () -> address.equals("::") ? List.of(new InetSocketAddress("127.0.0.1", port), new InetSocketAddress("::1", port)) : List.of(new InetSocketAddress(address, port)),
-                    Path.of(string(nativeConfig, "certificate")), Path.of(string(nativeConfig, "privateKey")), AdmissionGate.Limits.defaults())
+            originalCandidates = NativeCandidateSnapshot.hosts(address.equals("::")
+                    ? List.of(new InetSocketAddress("127.0.0.1", port), new InetSocketAddress("::1", port)) : List.of(new InetSocketAddress(address, port)));
+            var bind = new InetSocketAddress(InetAddress.getByName(address), port);
+            var certificate = Path.of(string(nativeConfig, "certificate")); var privateKey = Path.of(string(nativeConfig, "privateKey"));
+            nativeTransport = (candidateCheck
+                    ? NativeProviderTransport.openControlledVersion2(bootstrap, bind, originalCandidates, certificate, privateKey, AdmissionGate.Limits.defaults())
+                    : NativeProviderTransport.openControlled(bootstrap, bind, () -> originalCandidates.candidates().stream().map(NativeCandidateSnapshot.Candidate::endpoint).toList(),
+                        certificate, privateKey, AdmissionGate.Limits.defaults()))
                     .toCompletableFuture().get(8, TimeUnit.SECONDS);
             ProviderStateStore store = null;
             try {
@@ -94,6 +101,16 @@ public final class ControlledProviderLocalSmokeClient {
                 var event = readyFields("startup"); initialSessionEpoch = number(event, "sessionEpoch");
                 emit("ready", id, mode, event); ready = true;
             }
+            if (candidateReadiness != null && candidateReadiness.isDone()) {
+                candidateReadiness.getNow(null); // A failed refresh is fatal, not a successful phase observation.
+                var event = readyFields("candidate replacement");
+                int expected = candidateStage == 1 ? 0 : originalCandidates.candidates().size();
+                if (number(event, "candidateCount") != expected || number(event, "profileVersion") != 2
+                        || number(event, "sessionEpoch") != initialSessionEpoch)
+                    throw new IllegalStateException("Candidate readiness did not retain the expected profile and writer");
+                emit(candidateStage == 1 ? "withdrawn_ready" : "restored_ready", id, mode, event);
+                candidateStage++; candidateReadiness = null;
+            }
             if (!runtimeReady && runtimeReadiness != null && runtimeReadiness.isDone()) {
                 // Observe the actual returned result without stalling journal/native observation while it is pending.
                 long completedEpoch = runtimeReadiness.getNow(null);
@@ -110,6 +127,14 @@ public final class ControlledProviderLocalSmokeClient {
                 if (rotationCheck) event.addProperty("runtimeRefreshAttempts", runtimeRefreshAttempts);
                 emit("runtime_ready", id, mode, event); runtimeReady = true;
             }
+        }
+        void changeCandidates(boolean withdraw) {
+            if (!candidateCheck || !ready || candidateReadiness != null || candidateStage != (withdraw ? 0 : 2))
+                throw new IllegalStateException("Unexpected candidate transition command");
+            if (!nativeTransport.replaceCandidates(withdraw ? NativeCandidateSnapshot.hosts(List.of()) : originalCandidates))
+                throw new IllegalStateException("Candidate transition did not change material");
+            candidateStage++;
+            candidateReadiness = client.readiness();
         }
         void startRuntimeReadiness() {
             runtimeRefreshAttempts++;
@@ -137,7 +162,9 @@ public final class ControlledProviderLocalSmokeClient {
             boolean profileMatches = basis.state().equals("serving") && actual.equals(applied.getAsJsonObject("profile"));
             if (!serving || !profileMatches) throw new IllegalStateException("Actual native application did not match completed ProviderClient " + phase);
             var event = new JsonObject(); event.addProperty("nativeServing", true); event.addProperty("nativeProfileMatches", true); event.addProperty("gameplay", false);
-            event.addProperty("basisSha256", ControlStateCodec.appliedBasisDigest(basis)); event.addProperty("sessionEpoch", sessionEpoch()); return event;
+            event.addProperty("basisSha256", ControlStateCodec.appliedBasisDigest(basis)); event.addProperty("sessionEpoch", sessionEpoch());
+            event.addProperty("candidateCount", actual.getAsJsonArray("candidates").size());
+            event.addProperty("profileVersion", actual.has("version") ? number(actual, "version") : 0); return event;
         }
         void stop() throws Exception {
             client.stop().toCompletableFuture().get(12, TimeUnit.SECONDS);
@@ -161,6 +188,11 @@ public final class ControlledProviderLocalSmokeClient {
             throw new IllegalArgumentException("rotationCheck must be a boolean");
         rotationCheck = requestedRotationCheck != null && requestedRotationCheck.getAsBoolean();
         runtimeCheck = rotationCheck || requestedRuntimeCheck != null && requestedRuntimeCheck.getAsBoolean();
+        var requestedCandidateCheck = config.get("candidateCheck");
+        if (requestedCandidateCheck != null && (!requestedCandidateCheck.isJsonPrimitive() || !requestedCandidateCheck.getAsJsonPrimitive().isBoolean()))
+            throw new IllegalArgumentException("candidateCheck must be a boolean");
+        candidateCheck = requestedCandidateCheck != null && requestedCandidateCheck.getAsBoolean();
+        if (candidateCheck && runtimeCheck) throw new IllegalArgumentException("Candidate and timed rotation scenarios are separate");
         if (!string(config, "origin").matches("https://127\\.0\\.0\\.1:[1-9][0-9]{0,4}")) throw new IllegalArgumentException("Explicit local HTTPS fixture required");
         var trust = KeyStore.getInstance("PKCS12"); trust.load(null, null);
         try (var certificate = Files.newInputStream(Path.of(string(config, "caCertificate")))) { trust.setCertificateEntry("fixture", CertificateFactory.getInstance("X.509").generateCertificate(certificate)); }
@@ -173,7 +205,8 @@ public final class ControlledProviderLocalSmokeClient {
     private void run() throws Exception {
         var values = config.getAsJsonArray("hosts"); if (values.isEmpty() || values.size() > 2) throw new IllegalArgumentException("One or two controlled fixture hosts required");
         for (var value : values) hosts.add(new Host(value.getAsJsonObject()));
-        var stop = reader.submit(() -> new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)).readLine());
+        var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
+        var command = reader.submit(input::readLine);
         Long allReadyAt = null; boolean runtimeCheckStarted = false;
         while (System.nanoTime() < deadline) {
             for (var host : hosts) host.observe();
@@ -196,7 +229,18 @@ public final class ControlledProviderLocalSmokeClient {
                         host.startRuntimeReadiness();
                 }
             }
-            if (stop.isDone()) { if (!"stop".equals(stop.get())) throw new IllegalStateException("Expected explicit local stop command"); return; }
+            if (command.isDone()) {
+                String value = command.get();
+                if ("stop".equals(value)) {
+                    if (candidateCheck && hosts.stream().anyMatch(host -> host.candidateStage != 4))
+                        throw new IllegalStateException("Candidate scenario stopped before restoration");
+                    return;
+                }
+                if (!candidateCheck || !("withdraw".equals(value) || "restore".equals(value)))
+                    throw new IllegalStateException("Expected explicit local transition or stop command");
+                for (var host : hosts) host.changeCandidates(value.equals("withdraw"));
+                command = reader.submit(input::readLine);
+            }
             TimeUnit.MILLISECONDS.sleep(100);
         }
         throw new TimeoutException("Controlled native smoke exceeded its fixed deadline");

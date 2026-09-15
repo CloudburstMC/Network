@@ -1,0 +1,279 @@
+{
+  "version": 1,
+  "description": "Controlled version2 host profile representations. A typed reflexive profile still requires provider-supported candidate leases before publication.",
+  "valid": [
+    {
+      "id": "empty",
+      "profile": {
+        "version": 2,
+        "candidates": [],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      },
+      "wardenPublicationStatus": 202
+    },
+    {
+      "id": "ipv4",
+      "profile": {
+        "version": 2,
+        "candidates": [
+          {
+            "address": "8.8.8.8",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "host"
+          }
+        ],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      },
+      "wardenPublicationStatus": 202
+    },
+    {
+      "id": "ipv6",
+      "profile": {
+        "version": 2,
+        "candidates": [
+          {
+            "address": "2001:4860:4860::8888",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "host"
+          }
+        ],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      },
+      "wardenPublicationStatus": 202
+    },
+    {
+      "id": "dual",
+      "profile": {
+        "version": 2,
+        "candidates": [
+          {
+            "address": "8.8.8.8",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "host"
+          },
+          {
+            "address": "2001:4860:4860::8888",
+            "port": 19133,
+            "component": 1,
+            "foundation": "2",
+            "priority": 2130706175,
+            "protocol": "udp",
+            "type": "host"
+          }
+        ],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      },
+      "wardenPublicationStatus": 202
+    },
+    {
+      "id": "typed-reflexive-requires-lease",
+      "profile": {
+        "version": 2,
+        "candidates": [
+          {
+            "address": "8.8.8.8",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "srflx"
+          }
+        ],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      },
+      "wardenPublicationStatus": 422
+    }
+  ],
+  "invalid": [
+    {
+      "id": "unknown-version",
+      "profile": {
+        "version": 3,
+        "candidates": [],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      }
+    },
+    {
+      "id": "null-candidates",
+      "profile": {
+        "version": 2,
+        "candidates": null,
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      }
+    },
+    {
+      "id": "extra-field",
+      "profile": {
+        "version": 2,
+        "candidates": [],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        },
+        "unowned": true
+      }
+    },
+    {
+      "id": "null-identity",
+      "profile": {
+        "version": 2,
+        "candidates": [],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": null
+      }
+    },
+    {
+      "id": "duplicate-endpoint",
+      "profile": {
+        "version": 2,
+        "candidates": [
+          {
+            "address": "8.8.8.8",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "host"
+          },
+          {
+            "address": "8.8.8.8",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "host"
+          }
+        ],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      }
+    },
+    {
+      "id": "dns-address",
+      "profile": {
+        "version": 2,
+        "candidates": [
+          {
+            "address": "dns.example",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "host"
+          }
+        ],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      }
+    },
+    {
+      "id": "relay",
+      "profile": {
+        "version": 2,
+        "candidates": [
+          {
+            "address": "8.8.8.8",
+            "port": 19133,
+            "component": 1,
+            "foundation": "1",
+            "priority": 2130706431,
+            "protocol": "udp",
+            "type": "relay"
+          }
+        ],
+        "credentialKeyId": "A001",
+        "dtlsFingerprint": "sha-256 aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB:aB",
+        "sctpPort": 5000,
+        "maxMessageSize": 262144,
+        "statelessAdmission": {
+          "capability": "nethernet.stateless-admission.v1",
+          "incarnation": "abababababababababababababababab"
+        }
+      }
+    }
+  ]
+}
