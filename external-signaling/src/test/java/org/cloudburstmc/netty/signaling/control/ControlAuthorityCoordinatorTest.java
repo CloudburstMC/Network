@@ -19,8 +19,12 @@ class ControlAuthorityCoordinatorTest {
         exchange.reply().complete(new ControlClientIo.HttpReply(exchange.endpoint(), "POST", exchange.endpoint(), 503, "unavailable"));
     }
     private static String frame(ControlClientCoordinatorTest.Harness h, long sentAt, long expiresAt, boolean validSignature) throws Exception {
+        return frame(h, sentAt, expiresAt, validSignature, 1, "connectivity.report");
+    }
+    private static String frame(ControlClientCoordinatorTest.Harness h, long sentAt, long expiresAt, boolean validSignature,
+                                long sequence, String type) throws Exception {
         var writer = h.writer; byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
-        var value = new ControlFrameCodec.Frame(1, "connectivity.report", "provider_frame_0000001", 1,
+        var value = new ControlFrameCodec.Frame(1, type, "provider_frame_0000001", sequence,
                 ControlFrameCodec.Direction.PROVIDER_TO_HOST, ControlClientCoordinatorTest.ORIGIN, h.initial.subject().instanceId(), h.initial.subject().generation(),
                 writer.sessionId(), writer.sessionEpoch(), writer.connectionId(), h.grant.capabilities(), sentAt, expiresAt,
                 ProviderCrypto.base64(body), ControlFrameCodec.payloadDigest(body),
@@ -183,5 +187,52 @@ class ControlAuthorityCoordinatorTest {
         h.synchronizedReady(); assertEquals(bootstrap, h.bootstrapCalls); assertEquals(0, h.applicationFrames);
         h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true));
         assertEquals(1, h.applicationFrames); // untrusted frame did not consume sequence 1
+    }
+
+    @Test void secondAuthenticatedFrameDuringSourceLagRecordsGapUntilPositiveProof() throws Exception {
+        var h = activated(); h.synchronizedReady(); h.time.advance(300000); int bootstrap = h.bootstrapCalls;
+        String first = frame(h, h.time.now, h.time.now + 30000, true, 1, "connectivity.report");
+        h.links.get(0).receiver.accept(first);
+        h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true, 2, "connectivity.report"));
+        assertEquals(bootstrap, h.bootstrapCalls); assertEquals(0, h.applicationFrames);
+        h.respondAuthority();
+        assertEquals(ControlClientCoordinator.State.PREPARING, h.client.state());
+        assertEquals(bootstrap + 1, h.bootstrapCalls); assertEquals(0, h.applicationFrames);
+    }
+
+    @Test void applicationFrameCannotSilentlyHideLaterSynchronizationFrame() throws Exception {
+        var h = activated(); h.respondAuthority(); int bootstrap = h.bootstrapCalls;
+        h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true, 1, "connectivity.report"));
+        h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, true, 2, "session.ready"));
+        assertEquals(ControlClientCoordinator.State.PREPARING, h.client.state());
+        assertEquals(bootstrap + 1, h.bootstrapCalls); assertEquals(0, h.applicationFrames);
+    }
+
+    @Test void unauthenticatedSecondFrameAndExactDuplicateDoNotDisplaceRetainedFrame() throws Exception {
+        var h = activated(); h.synchronizedReady(); h.time.advance(300000); int bootstrap = h.bootstrapCalls;
+        String first = frame(h, h.time.now, h.time.now + 30000, true);
+        h.links.get(0).receiver.accept(first); h.links.get(0).receiver.accept(first);
+        h.links.get(0).receiver.accept(frame(h, h.time.now, h.time.now + 30000, false, 2, "connectivity.report"));
+        h.synchronizedReady(); assertTrue(h.client.ready()); assertEquals(1, h.applicationFrames); assertEquals(bootstrap, h.bootstrapCalls);
+    }
+
+    @Test void repeatedStateApplicationFailureKeepsBackoffUntilFullReadiness() throws Exception {
+        var h = activated(); int bootstrap = h.bootstrapCalls; long previousDelay = 0;
+        for (int i = 0; i < 4; i++) {
+            h.respondAuthority();
+            h.synchronizations.get(h.synchronizations.size() - 1).completeExceptionally(new IllegalStateException("state unavailable"));
+            long delay = h.time.nextDelay(); assertEquals(150L << i, delay); assertTrue(delay > previousDelay); previousDelay = delay;
+            h.time.advance(delay);
+        }
+        assertEquals(bootstrap, h.bootstrapCalls); assertEquals(0, h.links.get(0).abortCalls);
+        h.synchronizedReady(); h.client.synchronize(); unavailable(h); assertEquals(150, h.time.nextDelay());
+    }
+
+    @Test void strongRecoveryBackoffIncrementsOncePerFailure() throws Exception {
+        var h = new ControlClientCoordinatorTest.Harness(); h.client.start();
+        for (int i = 0; i < 4; i++) {
+            h.requests.remove().reply().completeExceptionally(new java.io.IOException("bootstrap unavailable"));
+            assertEquals(150L << i, h.time.nextDelay()); h.time.advance(h.time.nextDelay());
+        }
     }
 }

@@ -65,6 +65,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
     private int authorityFailures;
     private long synchronizationVersion;
     private String quarantinedFrame;
+    private boolean quarantinedGap;
     private long outgoingSequence, incomingSequence = 1;
     private boolean operationInFlight, synchronizationInFlight;
     private CompletableFuture<ControlLifecycleCodec.Receipt> pendingResult;
@@ -384,7 +385,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                     if (!currentPending(pending)) return;
                     if (!currentKey(key)) { authorityUnavailable(); return; }
                     proof.requireFreshDelivery(clock.nowMillis(), authorityFloor());
-                    cancel(pending.timeout); pendingAuthority = null; authority = proof; authorityKey = key; authorityFailures = 0;
+                    cancel(pending.timeout); pendingAuthority = null; authority = proof; authorityKey = key;
                     applySynchronizedState(proof);
                 } catch (RuntimeException invalid) { if (currentPending(pending)) authorityUnavailable(); }
             }});
@@ -425,8 +426,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
         cancel(synchronizationTimeout); synchronizationTimeout = null; state = State.AUTHORITY_EXPIRED;
         cancel(authorityRetry);
         var grant = snapshot.grant(); if (grant == null || clock.nowMillis() >= grant.sessionExpiresAt()) return;
-        long bound = config.baseBackoffMillis();
-        for (int i = 0; i < Math.min(authorityFailures++, 30) && bound < config.maxBackoffMillis(); i++) bound = Math.min(bound * 2, config.maxBackoffMillis());
+        long bound = backoffBound(authorityFailures); authorityFailures = Math.min(authorityFailures + 1, 30);
         double random = jitter.getAsDouble(); if (!Double.isFinite(random) || random < 0 || random >= 1) { halt(); return; }
         long generation = attempt;
         authorityRetry = scheduler.schedule(() -> { synchronized (this) {
@@ -449,7 +449,7 @@ public final class ControlClientCoordinator implements AutoCloseable {
                 cancel(synchronizationTimeout); synchronizationTimeout = null; synchronizationInFlight = false;
                 // Delivery has already been consumed. Only the installed inner authority/current trust applies here.
                 if (failure != null || clock.nowMillis() >= deadline || authority != proof || !hasAuthority()) { authorityUnavailable(); return; }
-                state = State.READY; failures = 0; cancel(authorityTimer);
+                state = State.READY; failures = 0; authorityFailures = 0; cancel(authorityTimer);
                 authorityTimer = scheduler.schedule(() -> { synchronized (this) { if (generation == attempt) expireAuthority(); }}, proof.response().authorityExpiresAt() - clock.nowMillis());
                 flushQuarantinedFrame();
                 if (generation == attempt && state == State.READY && authority == proof && hasAuthority()) deliverPending();
@@ -464,25 +464,22 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (pendingAuthority != null) cancel(pendingAuthority.timeout);
         pendingAuthority = null; cancel(authorityRetry); authorityRetry = null;
         cancel(synchronizationTimeout); synchronizationTimeout = null;
-        synchronizationInFlight = false; synchronizationVersion++; quarantinedFrame = null;
+        synchronizationInFlight = false; synchronizationVersion++; quarantinedFrame = null; quarantinedGap = false;
     }
 
     private void activeFrame(String wire) {
         expireAuthority();
         if (!hasAuthority()) {
-            // Hold one bounded frame without accepting its sequence or payload. Source lag never invokes strong recovery.
-            if (quarantinedFrame == null) {
-                try { ControlFrameCodec.decode(wire); quarantinedFrame = wire; }
-                catch (RuntimeException malformed) { return; }
-            }
+            // Authenticate only bounded gap evidence here; do not accept sequence, dispatch or replace during source lag.
+            retainQuarantinedFrame(wire);
             if (pendingAuthority == null && !synchronizationInFlight && authorityRetry == null) beginAuthorityRefresh();
             return;
         }
         var raw = ControlFrameCodec.decode(wire);
         // Applying required state is a separate gate. Preserve ordering instead of accepting then dropping application work.
-        if (quarantinedFrame != null) return;
+        if (quarantinedFrame != null) { retainQuarantinedFrame(wire); flushQuarantinedFrame(); return; }
         if (state == State.SYNCHRONIZING && !List.of("session.ready", "session.resync", "state.desired", "lifecycle.receipt").contains(raw.type())) {
-            quarantinedFrame = wire; return;
+            retainQuarantinedFrame(wire); flushQuarantinedFrame(); return;
         }
         var writer = snapshot.writer(); var grant = snapshot.grant();
         var context = new ControlFrameCodec.Context(ControlFrameCodec.Direction.PROVIDER_TO_HOST, config.audience(), snapshot.subject().instanceId(), snapshot.subject().generation(),
@@ -502,31 +499,52 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (quarantinedFrame == null || !hasAuthority()) return;
         String wire = quarantinedFrame;
         var frame = ControlFrameCodec.decode(wire);
-        if (frame.sequence() < incomingSequence) { quarantinedFrame = null; return; }
-        if (frame.expiresAt() <= clock.nowMillis() || frame.sequence() != incomingSequence) {
-            quarantinedFrame = null;
+        if (frame.sequence() < incomingSequence) { quarantinedFrame = null; quarantinedGap = false; return; }
+        if (quarantinedGap || frame.expiresAt() <= clock.nowMillis() || frame.sequence() != incomingSequence) {
+            quarantinedFrame = null; quarantinedGap = false;
             // An expired signature is evidence of a lost ordered frame only, never permission to dispatch it.
             // Wait for positive fresh source authority first; unverified traffic cannot cause a replacement CAS.
-            if (authenticatedGap(frame)) { discardedGapConnection = active; replaceTransport(desiredTransport, desiredCapabilities); }
+            if (authenticatedControlEvidence(frame) && hasAuthority()) { discardedGapConnection = active; replaceTransport(desiredTransport, desiredCapabilities); }
             return;
         }
         if (state != State.READY && !List.of("session.ready", "session.resync", "state.desired", "lifecycle.receipt").contains(frame.type())) return;
-        quarantinedFrame = null;
+        quarantinedFrame = null; quarantinedGap = false;
         activeFrame(wire);
     }
 
-    private boolean authenticatedGap(ControlFrameCodec.Frame frame) {
-        var writer = snapshot.writer(); var subject = snapshot.subject(); var key = keys.resolve(frame.authentication().keyId());
+    private void retainQuarantinedFrame(String wire) {
+        try {
+            if (wire.equals(quarantinedFrame)) return;
+            var frame = ControlFrameCodec.decode(wire);
+            if (frame.sequence() < incomingSequence || !authenticatedControlEvidence(frame)) return;
+            if (quarantinedFrame != null) {
+                var previous = ControlFrameCodec.decode(quarantinedFrame);
+                if (previous.equals(frame)) return;
+                // One retained body is the hard bound. A second authenticated frame proves information was lost.
+                quarantinedGap = true;
+                if (frame.sequence() < previous.sequence()) return;
+            }
+            quarantinedFrame = wire;
+        } catch (RuntimeException invalid) { /* Unauthenticated traffic cannot displace a retained frame or record a gap. */ }
+    }
+
+    /** Signature/physical-session evidence only. This deliberately does not authorize dispatch or a replacement CAS. */
+    private boolean authenticatedControlEvidence(ControlFrameCodec.Frame frame) {
+        var writer = snapshot.writer(); var subject = snapshot.subject(); var grant = snapshot.grant();
+        long generation = attempt;
+        var key = keys.resolve(frame.authentication().keyId());
         long now = clock.nowMillis();
-        if (!hasAuthority() || !currentKey(key) || frame.direction() != ControlFrameCodec.Direction.PROVIDER_TO_HOST
+        if (grant == null || now >= grant.sessionExpiresAt() || !ownsActiveWriter() || !currentKey(key) || frame.direction() != ControlFrameCodec.Direction.PROVIDER_TO_HOST
                 || !frame.audience().equals(subject.audience()) || !frame.instanceId().equals(subject.instanceId()) || frame.generation() != subject.generation()
                 || !frame.sessionId().equals(writer.sessionId()) || frame.sessionEpoch() != writer.sessionEpoch() || !frame.connectionId().equals(writer.connectionId())
-                || !frame.capabilities().equals(snapshot.grant().capabilities()) || frame.sentAt() > now + 30000 || frame.sentAt() < key.validFrom()
-                || frame.expiresAt() > key.validUntil() || frame.expiresAt() > authority.response().authorityExpiresAt()) return false;
+                || !frame.capabilities().equals(grant.capabilities()) || frame.sentAt() > now + 30000 || frame.sentAt() < key.validFrom()
+                || frame.sentAt() < grant.activatedAt() - 30000 || frame.expiresAt() > key.validUntil() || frame.expiresAt() > grant.sessionExpiresAt()) return false;
         try {
             var verifier = java.security.Signature.getInstance("SHA384withECDSAinP1363Format");
             verifier.initVerify(key.key()); verifier.update(ControlFrameCodec.signingBytes(frame));
-            return verifier.verify(ControlJson.base64(frame.authentication().signature(), 96, false));
+            return verifier.verify(ControlJson.base64(frame.authentication().signature(), 96, false)) && currentKey(key)
+                    && generation == attempt && snapshot.writer().equals(writer) && snapshot.subject().equals(subject)
+                    && snapshot.grant().equals(grant) && ownsActiveWriter() && state != State.CLOSED && state != State.UNRESOLVED;
         } catch (GeneralSecurityException failure) { return false; }
     }
 
@@ -647,10 +665,15 @@ public final class ControlClientCoordinator implements AutoCloseable {
         if (oldCandidate != null && oldCandidate.link != null) oldCandidate.link.abort();
         if (oldActive != null && oldActive != oldCandidate && oldActive.link != null) oldActive.link.abort();
         cancel(retry); cancel(authorityTimer); cancel(rotationTimer);
-        long bound = config.baseBackoffMillis(); for (int i = 0; i < Math.min(failures++, 30) && bound < config.maxBackoffMillis(); i++) bound = Math.min(bound * 2, config.maxBackoffMillis());
+        long bound = backoffBound(failures); failures = Math.min(failures + 1, 30);
         double random = jitter.getAsDouble(); if (!Double.isFinite(random) || random < 0 || random >= 1) { halt(); return; }
         long delay = Math.max(50, (long) (bound * (0.5 + random * 0.5))), generation = attempt;
         retry = scheduler.schedule(() -> { synchronized (this) { if (generation == attempt && state == State.BACKOFF) recover(); }}, delay);
+    }
+    private long backoffBound(int previousFailures) {
+        long bound = config.baseBackoffMillis();
+        for (int i = 0; i < previousFailures && bound < config.maxBackoffMillis(); i++) bound = Math.min(bound * 2, config.maxBackoffMillis());
+        return bound;
     }
     private void scheduleRotation() {
         cancel(rotationTimer);
