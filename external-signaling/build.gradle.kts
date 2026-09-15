@@ -90,7 +90,7 @@ tasks.processResources {
 tasks.processTestResources {
     from(rootProject.file("docs/external-signaling/nxs-v1.fixtures.json"))
     from(rootProject.file("docs/external-signaling")) {
-        include("stateless-admission-v1.fixtures.json", "cloudburst-protocol-vectors.v1.json", "provenance.json")
+        include("diagnostic-v1.fixtures.json", "stateless-admission-v1.fixtures.json", "cloudburst-protocol-vectors.v1.json", "provenance.json")
         into("nxs")
     }
 }
