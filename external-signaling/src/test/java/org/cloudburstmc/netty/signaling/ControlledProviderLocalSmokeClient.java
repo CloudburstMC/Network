@@ -21,7 +21,7 @@ import java.util.concurrent.*;
 public final class ControlledProviderLocalSmokeClient {
     private final JsonObject config;
     private final boolean runtimeCheck;
-    private final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
+    private final long deadline;
     private final List<Host> hosts = new ArrayList<>();
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(2);
     private final ExecutorService reader = Executors.newSingleThreadExecutor(r -> { var thread = new Thread(r, "controlled-smoke-stop"); thread.setDaemon(true); return thread; });
@@ -121,6 +121,9 @@ public final class ControlledProviderLocalSmokeClient {
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) > 65536
                 || !Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE).containsAll(Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS))) throw new IllegalArgumentException("Private fixture config required");
         config = ControlledProviderJson.parse(Files.readString(path), 65536);
+        long executionMillis = config.has("executionMillis") ? number(config, "executionMillis") : 180_000;
+        if (executionMillis < 180_000 || executionMillis > 420_000) throw new IllegalArgumentException("Invalid private fixture execution bound");
+        deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(executionMillis);
         var requestedRuntimeCheck = config.get("runtimeCheck");
         if (requestedRuntimeCheck != null && (!requestedRuntimeCheck.isJsonPrimitive() || !requestedRuntimeCheck.getAsJsonPrimitive().isBoolean()))
             throw new IllegalArgumentException("runtimeCheck must be a boolean");
