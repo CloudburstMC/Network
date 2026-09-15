@@ -16,6 +16,7 @@ import java.util.Objects;
  * authorization, native ownership, reachability or acceptance by a provider. No publication occurs.
  */
 public final class CandidateLeaseCodec {
+    public static final long MAX_SAFE_INTEGER = ControlJson.MAX_SAFE_INTEGER;
     public static final int MAX_PROFILE_BYTES = 16384, MAX_LEASE_BYTES = 4096, MAX_RECEIPT_BYTES = 1024;
     public static final long MAX_OBSERVATION_AGE_MILLIS = 300000, CLOCK_SKEW_MILLIS = 30000;
     public static final long MAX_LEASE_MILLIS = MAX_OBSERVATION_AGE_MILLIS - CLOCK_SKEW_MILLIS;
@@ -90,7 +91,7 @@ public final class CandidateLeaseCodec {
     public record NativeOwnerClaim(long expectedEpoch, String claimId) {
         public NativeOwnerClaim {
             ControlJson.safe(expectedEpoch, false); ControlJson.opaque(claimId);
-            if (expectedEpoch == ControlFrameCodec.MAX_SAFE_INTEGER) throw ControlJson.invalid("native owner epoch exhausted");
+            if (expectedEpoch == MAX_SAFE_INTEGER) throw ControlJson.invalid("native owner epoch exhausted");
         }
     }
 
@@ -227,24 +228,42 @@ public final class CandidateLeaseCodec {
     }
 
     public static byte[] profilePreimage(Profile profile) {
-        return ControlProof.array("nethernet-control-host-profile-v2", 2,
+        return canonicalArray("nethernet-control-host-profile-v2", 2,
                 profile.candidates().stream().map(c -> List.of(c.address(), c.port(), c.component(), c.foundation(), c.priority(), c.protocol(), c.type())).toList(),
                 List.of(profile.capability(), profile.nativeIncarnation()), profile.credentialKeyId(), profile.dtlsFingerprint(),
                 profile.maxMessageSize(), profile.sctpPort());
     }
-    public static String profileDigest(Profile profile) { return ControlFrameCodec.payloadDigest(profilePreimage(profile)); }
+    private static byte[] canonicalArray(Object... values) {
+        java.util.StringJoiner result = new java.util.StringJoiner(",", "[", "]");
+        for (Object value : values) {
+            if (value instanceof String text) result.add(org.cloudburstmc.netty.signaling.ProviderCrypto.quote(text));
+            else if (value instanceof List<?> list) result.add(new String(canonicalArray(list.toArray()), java.nio.charset.StandardCharsets.UTF_8));
+            else result.add(String.valueOf(value));
+        }
+        return result.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static String payloadDigest(byte[] payload) {
+        try {
+            return org.cloudburstmc.netty.signaling.ProviderCrypto.base64(java.security.MessageDigest.getInstance("SHA-256").digest(payload));
+        } catch (java.security.GeneralSecurityException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    public static String profileDigest(Profile profile) { return payloadDigest(profilePreimage(profile)); }
     public static byte[] observationPreimage(long nativeOwnerEpoch, String nativeIncarnation, Observation observation) {
         ControlJson.safe(nativeOwnerEpoch, true); incarnation(nativeIncarnation);
-        return ControlProof.array("nethernet-control-candidate-observation-v1", 1, nativeOwnerEpoch, nativeIncarnation, observationValues(observation));
+        return canonicalArray("nethernet-control-candidate-observation-v1", 1, nativeOwnerEpoch, nativeIncarnation, observationValues(observation));
     }
     public static String observationDigest(long nativeOwnerEpoch, String nativeIncarnation, Observation observation) {
-        return ControlFrameCodec.payloadDigest(observationPreimage(nativeOwnerEpoch, nativeIncarnation, observation));
+        return payloadDigest(observationPreimage(nativeOwnerEpoch, nativeIncarnation, observation));
     }
     public static byte[] leasesPreimage(Leases leases) {
-        return ControlProof.array("nethernet-control-candidate-leases-v1", 1, leases.profileSha256(), leases.nativeOwnerEpoch(), leases.nativeIncarnation(),
+        return canonicalArray("nethernet-control-candidate-leases-v1", 1, leases.profileSha256(), leases.nativeOwnerEpoch(), leases.nativeIncarnation(),
                 leases.observations().stream().map(CandidateLeaseCodec::observationValues).toList());
     }
-    public static String leasesDigest(Leases leases) { return ControlFrameCodec.payloadDigest(leasesPreimage(leases)); }
+    public static String leasesDigest(Leases leases) { return payloadDigest(leasesPreimage(leases)); }
     private static List<Object> observationValues(Observation o) {
         return List.of(o.family(), o.addressHex(), o.port(), o.monitorEpoch(), o.mappingRevision(), o.observationSequence(), o.observedAt(), o.expiresAt());
     }

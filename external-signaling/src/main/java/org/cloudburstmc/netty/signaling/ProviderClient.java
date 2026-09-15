@@ -40,10 +40,14 @@ public final class ProviderClient implements AutoCloseable {
     public static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work";
     public static final String BEARER_TOKEN = "bearer-token";
 
+    public enum ControlTransport { HTTP, AUTO }
+
     public record Configuration(URI provider, String profile, String label, String registrationMode,
                                 String authorizationScheme,
-                                String authorizationToken, String region, String pool, Map<String, String> tags) {
+                                String authorizationToken, String region, String pool, Map<String, String> tags,
+                                ControlTransport controlTransport) {
         public Configuration {
+            Objects.requireNonNull(controlTransport);
             Objects.requireNonNull(provider);
             Objects.requireNonNull(profile);
             Objects.requireNonNull(registrationMode);
@@ -92,6 +96,13 @@ public final class ProviderClient implements AutoCloseable {
                             || e.getValue().codePoints().anyMatch(c -> c < 32 || c == 127))) {
                 throw new IllegalArgumentException("Invalid provider placement tags");
             }
+        }
+
+        public Configuration(URI provider, String profile, String label, String registrationMode,
+                             String authorizationScheme, String authorizationToken, String region, String pool,
+                             Map<String, String> tags) {
+            this(provider, profile, label, registrationMode, authorizationScheme, authorizationToken,
+                    region, pool, tags, ControlTransport.HTTP);
         }
 
         public Configuration(URI provider, String profile, String label) {
@@ -186,7 +197,9 @@ public final class ProviderClient implements AutoCloseable {
     private long nextOutcomes;
     private long nextStatusUpdate;
     private long minUpdateIntervalMs = 1000;
-    private long appliedStateRevision;
+    private URI websocketEndpoint;
+    private ProviderWebSocket websocket;
+    private volatile String lastControlCarrier = "none";
     private String hostState = "serving";
     private String installedKeyId;
     private JsonObject lastHeartbeat = new JsonObject();
@@ -208,6 +221,9 @@ public final class ProviderClient implements AutoCloseable {
         this.origin = ProviderCrypto.origin(config.provider());
     }
 
+    /** Carrier of the last successful signed operation, independent of advertised configuration. */
+    public String lastControlCarrier() { return lastControlCarrier; }
+
     public CompletableFuture<JsonObject> start() {
         return submit(() -> {
             if (store.read().has("controlMode") || java.nio.file.Files.exists(store.directory().resolve("control-session/provider-state.json")))
@@ -218,6 +234,7 @@ public final class ProviderClient implements AutoCloseable {
             discovery = exchange(URI.create(origin + "/.well-known/nethernet-external-signaling"), "GET", null, false,
                     null, null);
             validateDiscovery();
+            configureWebSocket();
             state = store.read();
             if (state.has("provider") && !origin.equals(state.get("provider").getAsString())) {
                 throw new IOException("State belongs to another provider; use a separate directory");
@@ -245,6 +262,7 @@ public final class ProviderClient implements AutoCloseable {
             state.addProperty("sequence", 0);
             state.remove("cursor");
             state.remove("pendingAdmissions");
+            state.remove("pendingWebSocketOperation");
             save();
             installKeys();
             started = true;
@@ -699,7 +717,6 @@ public final class ProviderClient implements AutoCloseable {
             body.addProperty("clockUnixMillis", snapshotClock);
             body.addProperty("checkInVersion", 1);
             body.addProperty("state", hostState);
-            body.addProperty("appliedStateRevision", appliedStateRevision);
             body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
             ServerStatus status = null;
             try {
@@ -877,6 +894,7 @@ public final class ProviderClient implements AutoCloseable {
                 throw new IOException("Extension operation unavailable");
             }
             URI uri = trusted(URI.create(operations.get(operation).getAsString()));
+            requireResolvedOperation();
             long sequence = state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1;
             state.addProperty("sequence", sequence);
             save();
@@ -891,6 +909,7 @@ public final class ProviderClient implements AutoCloseable {
     public CompletableFuture<Void> deregister() {
         return submit(() -> {
             signed("deregister", "POST", new JsonObject());
+            if (websocket != null) websocket.close();
             transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
             started = false;
             return null;
@@ -899,6 +918,7 @@ public final class ProviderClient implements AutoCloseable {
 
     public CompletableFuture<JsonObject> rotateTicketKey() {
         return submit(() -> {
+            requireResolvedOperation();
             installKeys();
             if (state.getAsJsonArray("ticketKeys").size() >= 8) {
                 throw new IOException("Wait for retiring admission epochs before rotating again");
@@ -912,6 +932,7 @@ public final class ProviderClient implements AutoCloseable {
 
     public CompletableFuture<JsonObject> rotateMachineKey() {
         return submit(() -> {
+            requireResolvedOperation();
             KeyPair replacement = ProviderCrypto.generate();
             JsonObject jwk = ProviderCrypto.publicJwk(replacement.getPublic());
             state.addProperty("pendingPrivateKey", ProviderCrypto.base64(replacement.getPrivate().getEncoded()));
@@ -966,6 +987,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private JsonObject signed(String op, String method, JsonObject body, String intent) throws Exception {
+        requireResolvedOperation();
         long sequence = state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1;
         state.addProperty("sequence", sequence);
         save();
@@ -998,7 +1020,9 @@ public final class ProviderClient implements AutoCloseable {
     private JsonObject exchange(URI uri, String method, String body, boolean signed, String intent, String bearerToken,
                                 int timeoutSeconds, int attempts) throws Exception {
         trusted(uri);
+        if (signed) requireResolvedOperation();
         String raw = body == null ? "" : body;
+        boolean ambiguous = false;
         for (int attempt = 0; attempt < attempts; attempt++) {
             HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("accept", "application/json").method(method,
@@ -1026,20 +1050,57 @@ public final class ProviderClient implements AutoCloseable {
                                 ProviderCrypto.request(origin, method, path, now, registration("instanceId"),
                                         registration("keyId"), intent, generation, sequence, raw)));
             }
-            HttpResponse<byte[]> response;
-            var responseFuture = http.sendAsync(b.build(), info -> new LimitedBodySubscriber(65536));
+            HttpRequest request = b.build();
+            ProviderWebSocket.Reply response = null;
+            String wsOperation = signed ? websocketOperation(uri) : null;
+            if (wsOperation != null) {
+                try {
+                    response = websocket.exchange(wsOperation, request, raw, websocketUpgradeHeaders(), timeoutSeconds,
+                            () -> {
+                                state.addProperty("pendingWebSocketOperation", intent);
+                                try { save(); } catch (IOException failure) { throw new UncheckedIOException(failure); }
+                            });
+                } catch (IOException | ExecutionException | TimeoutException failure) {
+                    // Retry the SAME signed operation over HTTPS; neither intent nor body is replaced.
+                    ambiguous |= state.has("pendingWebSocketOperation");
+                    diagnostics.accept("provider_websocket_unavailable");
+                }
+            }
+            boolean usedWebSocket = response != null;
+            CompletableFuture<HttpResponse<byte[]>> responseFuture = null;
             try {
-                response = responseFuture.get(timeoutSeconds + 1, TimeUnit.SECONDS);
+                if (response == null) {
+                    responseFuture = http.sendAsync(request, info -> new LimitedBodySubscriber(65536));
+                    HttpResponse<byte[]> httpResponse = responseFuture.get(timeoutSeconds + 1, TimeUnit.SECONDS);
+                    response = new ProviderWebSocket.Reply(httpResponse.statusCode(), httpResponse.headers(),
+                            new String(httpResponse.body(), StandardCharsets.UTF_8));
+                }
             } catch (ExecutionException | TimeoutException failure) {
-                responseFuture.cancel(true);
+                if (responseFuture != null) responseFuture.cancel(true);
+                ambiguous = true;
                 if (attempt == attempts - 1) {
                     throw new IOException("Provider transport unavailable", failure);
                 }
                 Thread.sleep((250L << attempt) + ThreadLocalRandom.current().nextLong(100));
                 continue;
             }
-            String text = new String(response.body(), StandardCharsets.UTF_8);
-            int status = response.statusCode();
+            String text = response.body();
+            int status = response.status();
+            String code = "request_rejected";
+            if (status / 100 != 2) {
+                try {
+                    JsonObject error = JsonParser.parseString(text).getAsJsonObject();
+                    if (error.has("code") && error.get("code").getAsString().matches("[a-z0-9_]{1,80}"))
+                        code = error.get("code").getAsString();
+                } catch (RuntimeException ignored) { }
+            }
+            // These responses reject before mutation. A previous ambiguous attempt still needs recovery.
+            if (!ambiguous && (status == 429 || (status / 100 == 4
+                    && Set.of("check_in_profile_required", "profile_key_not_installed", "invalid_heartbeat",
+                    "invalid_host_profile", "placement_forbidden", "invalid_host_location",
+                    "stateless_profile_required").contains(code))))
+                clearWebSocketPending();
+            if (status >= 500) ambiguous = true;
             if ((status == 429 || status == 503 || status == 502 || status == 504) && attempt < attempts - 1) {
                 long delay = 250L << attempt;
                 try {
@@ -1053,19 +1114,83 @@ public final class ProviderClient implements AutoCloseable {
                 continue;
             }
             if (status / 100 != 2) {
-                String code = "request_rejected";
-                try {
-                    JsonObject error = JsonParser.parseString(text).getAsJsonObject();
-                    if (error.has("code") && error.get("code").getAsString().matches("[a-z0-9_]{1,80}")) {
-                        code = error.get("code").getAsString();
-                    }
-                } catch (RuntimeException ignored) {
-                }
                 throw new ProviderException(status, code);
             }
-            return JsonParser.parseString(text).getAsJsonObject();
+            JsonObject result = JsonParser.parseString(text).getAsJsonObject();
+            if (signed) lastControlCarrier = usedWebSocket ? "websocket" : "http";
+            if (signed) clearWebSocketPending();
+            return result;
         }
         throw new IOException("Provider retry limit exceeded");
+    }
+
+    private void requireResolvedOperation() throws IOException {
+        if (state.has("pendingWebSocketOperation"))
+            throw new IOException("Unresolved provider operation; ordinary registration recovery required");
+    }
+
+    private void clearWebSocketPending() throws IOException {
+        if (state == null || !state.has("pendingWebSocketOperation")) return;
+        JsonElement pending = state.remove("pendingWebSocketOperation");
+        try { save(); } catch (IOException failure) {
+            state.add("pendingWebSocketOperation", pending);
+            throw failure;
+        }
+    }
+
+    private void configureWebSocket() throws IOException {
+        if (websocket != null) websocket.close();
+        websocket = null;
+        websocketEndpoint = null;
+        if (config.controlTransport() != ControlTransport.AUTO || !discovery.has("extensions")) return;
+        JsonObject extensions = discovery.getAsJsonObject("extensions");
+        if (!extensions.has("org.nethernet.websocket")) return;
+        JsonObject extension = extensions.getAsJsonObject("org.nethernet.websocket");
+        if (extension.get("version").getAsInt() != 1) return;
+        JsonObject data = extension.getAsJsonObject("data");
+        try {
+            URI endpoint = URI.create(data.get("url").getAsString());
+            String scheme = origin.startsWith("https:") ? "wss" : "ws";
+            URI httpEndpoint = URI.create((scheme.equals("wss") ? "https" : "http") + "://" + endpoint.getRawAuthority()
+                    + endpoint.getRawPath());
+            if (!scheme.equals(endpoint.getScheme()) || endpoint.getRawQuery() != null
+                    || endpoint.getFragment() != null || !"/v1/nxs/control".equals(endpoint.getRawPath())
+                    || !ProviderCrypto.PROTOCOL.equals(data.get("subprotocol").getAsString()))
+                throw new IOException("Unsupported provider WebSocket capability");
+            trusted(httpEndpoint);
+            websocketEndpoint = endpoint;
+            websocket = new ProviderWebSocket(http, endpoint);
+        } catch (IllegalArgumentException | NullPointerException failure) {
+            throw new IOException("Invalid provider WebSocket capability", failure);
+        }
+    }
+
+    private String websocketOperation(URI uri) throws IOException {
+        if (websocket == null) return null;
+        for (String name : List.of("heartbeat", "outcomes", "rotate", "retire", "deregister")) {
+            // This capability carries the standard endpoints, never silently rewrites a signature target.
+            if (uri.equals(operation(name)) && uri.getRawQuery() == null
+                    && uri.getRawPath().equals("/v1/nxs/" + name)) return name;
+        }
+        return null;
+    }
+
+    private Map<String, String> websocketUpgradeHeaders() throws GeneralSecurityException {
+        long now = System.currentTimeMillis(), generation = state.get("generation").getAsLong(),
+                sequence = state.get("sequence").getAsLong();
+        String intent = UUID.randomUUID().toString();
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("nxs-instance-id", registration("instanceId"));
+        headers.put("nxs-key-id", registration("keyId"));
+        headers.put("nxs-timestamp", Long.toString(now));
+        headers.put("nxs-signature-version", ProviderCrypto.SIGNATURE);
+        headers.put("nxs-generation", Long.toString(generation));
+        headers.put("nxs-sequence", Long.toString(sequence));
+        headers.put("idempotency-key", intent);
+        headers.put("nxs-signature", ProviderCrypto.sign(privateKey, ProviderCrypto.request(origin, "GET",
+                websocketEndpoint.getRawPath(), now, registration("instanceId"), registration("keyId"), intent,
+                generation, sequence, "")));
+        return headers;
     }
 
     private String registration(String field) {
@@ -1125,6 +1250,7 @@ public final class ProviderClient implements AutoCloseable {
             } finally {
                 closed = true;
                 started = false;
+                if (websocket != null) websocket.close();
                 if (timer != null) {
                     timer.cancel(false);
                 }

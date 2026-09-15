@@ -50,7 +50,7 @@ public final class SignedDiagnosticBrowserHost {
         out.put("completedAt", result.completedAt()); out.put("family", result.target().family());
         out.put("candidateRevision", result.target().candidateRevision());
         out.put("sentFrames", result.sentFrames()); out.put("sentBytes", result.sentBytes());
-        out.put("completionDigestHex", result.completionDigestHex());
+        out.put("authenticated", result.authenticated());
         out.put("receivedFrames", result.receivedFrames()); out.put("receivedBytes", result.receivedBytes());
         if (result.selectedLocal() != null) {
             out.put("selectedLocalAddress", result.selectedLocal().getAddress().getHostAddress()); out.put("selectedLocalPort", result.selectedLocal().getPort());

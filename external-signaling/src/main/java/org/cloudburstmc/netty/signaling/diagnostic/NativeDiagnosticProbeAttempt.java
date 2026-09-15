@@ -19,7 +19,10 @@ import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCod
 public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     /** Trusted local job input, NOT signed-job or target-ownership evidence. Expiry/attempt must never be reissued. */
     public record Job(Context context, String attemptIdHex, DiagnosticHostPolicy.Endpoint target,
-                      String hostFingerprintHex, long expiresAt) {
+                      String hostFingerprintHex, long expiresAt, boolean ping) {
+        public Job(Context context, String attemptIdHex, DiagnosticHostPolicy.Endpoint target, String hostFingerprintHex, long expiresAt) {
+            this(context, attemptIdHex, target, hostFingerprintHex, expiresAt, false);
+        }
         public Job {
             Objects.requireNonNull(context); Objects.requireNonNull(target); unhex(attemptIdHex,16); unhex(hostFingerprintHex,32);
             integer(expiresAt,1000,0xffffffffL * 1000); if (expiresAt % 1000 != 0) throw invalid();
@@ -35,12 +38,13 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     /** Must return promptly, with a bounded HTTP body; may not perform blocking IO on the calling worker. */
     @FunctionalInterface public interface Signaling { CompletionStage<String> exchange(Request request); }
     public enum Reason { COMPLETE, CANCELLED, EXPIRED, WITHDRAWN, GATHERING, SIGNALING, ANSWER, TRANSPORT, PROTOCOL, SELECTED_PATH, NATIVE_BUDGET, CLEANUP }
-    /** UDP counters are owned pre-destruction snapshots, not final totals or delivery evidence. */
-    public record Result(Job job, boolean success, Reason reason, boolean answerVerified, boolean transportConnected,
-                         boolean authSent, boolean exchangeComplete, boolean cleanupComplete,
+    /** Local evidence only. Without ping, authSent does not prove host AUTH verification.
+     * UDP counters are owned pre-destruction snapshots, not final totals or delivery evidence. */
+    public record Result(Job job, boolean success, Reason reason, boolean answerVerified, boolean transportEstablished,
+                         boolean authSent, boolean pingVerified, boolean cleanupComplete,
                          String offerDigestHex, String clientFingerprintHex, InetSocketAddress selectedLocal,
                          InetSocketAddress selectedRemote, UdpSendStats udp, int sentFrames, int sentBytes,
-                         int receivedFrames, int receivedBytes, String completionDigestHex,
+                         int receivedFrames, int receivedBytes,
                          long nativeDeadlineMonotonicMillis, long completedAt) { }
     private record Incoming(int channel, byte[] bytes) { }
     private static final class Failed extends RuntimeException {
@@ -88,8 +92,8 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         if (!started.compareAndSet(false,true)) throw new IllegalStateException("Diagnostic attempt already used");
         Reason reason = Reason.GATHERING; DiagnosticExchange exchange = null; UdpSendStats udp = null;
         InetSocketAddress selectedLocal = null, selectedRemote = null;
-        boolean answerVerified = false, authSent = false, complete = false, cleanup = false;
-        String offerHash = null, fingerprint = null, completion = null;
+        boolean answerVerified = false, transportEstablished = false, authSent = false, complete = false, cleanup = false;
+        String offerHash = null, fingerprint = null;
         long nativeDeadline = 0; CompletableFuture<String> pending = null;
         try {
             anchorWall = clock.wallMillis().getAsLong(); anchorNanos = clock.nanoTime().getAsLong();
@@ -150,19 +154,14 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             answerVerified = true; reason = Reason.TRANSPORT;
             await(() -> connected.get() && channels[0].isOpen() && channels[1].isOpen(), true);
             for (int i = 0; i < 2; i++) validateChannel(channels[i],i);
+            transportEstablished = true;
             reason = Reason.PROTOCOL;
             byte[] auth = DiagnosticAssertionCodec.encodeAuth(job.attemptIdHex,assertion);
             try { checkHandshake(); send(0,auth); authSent = true; } finally { Arrays.fill(auth,(byte)0); }
-            // Reliable host challenge confirms AUTH before the prober sends on the independent unordered channel.
-            await(() -> incoming.stream().anyMatch(message -> message.channel == 0), true);
-            Incoming first = incoming.stream().filter(message -> message.channel == 0).findFirst().orElseThrow();
-            if (!incoming.remove(first) || !MessageDigest.isEqual(first.bytes, DiagnosticExchange.encode(job.attemptIdHex,
-                    DiagnosticExchange.CHALLENGE,0,Arrays.copyOfRange(first.bytes,24,56)))) throw new Failed(Reason.PROTOCOL);
-            checkHandshake(); exchange = new DiagnosticExchange(job.attemptIdHex,false,this::send); exchange.start(currentNanos);
-            exchange.receive(0,first.bytes);
-            while (!exchange.complete()) { drain(exchange); exchange.tick(currentNanos); if (!exchange.complete()) pause(false); }
-            long completed = currentNanos;
-            while (currentNanos - completed < 250_000_000L) { drain(exchange); Thread.sleep(5); }
+            if (job.ping()) {
+                checkHandshake(); exchange = new DiagnosticExchange(job.attemptIdHex,false,this::send); exchange.start();
+                while (!exchange.complete()) { drain(exchange); if (!exchange.complete()) pause(false); }
+            }
             check(); reason = Reason.SELECTED_PATH;
             CandidatePair pair = nativePeer.selectedCandidatePair();
             selectedLocal = numeric(pair.local().getHostString(),pair.local().getPort());
@@ -171,7 +170,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                     || family(selectedRemote.getAddress()) != job.target.family()
                     || pair.localCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP
                     || pair.remoteCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP) throw new Failed(Reason.SELECTED_PATH);
-            udp = stats(nativePeer,true); check(); complete = exchange.complete(); completion = exchange.completionDigestHex(); reason = Reason.COMPLETE;
+            udp = stats(nativePeer,true); check(); complete = !job.ping() || exchange.complete(); reason = Reason.COMPLETE;
         } catch (Failed failure) { reason = failure.reason; }
         catch (InterruptedException interrupted) { cancelled.set(true); reason = Reason.CANCELLED; Thread.currentThread().interrupt(); }
         catch (GeneralSecurityException | RuntimeException failure) { /* Reason identifies the failing bounded stage; never include secret payloads. */ }
@@ -193,9 +192,9 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         if (complete && cleanup) { try { check(); } catch (RuntimeException withdrawn) { complete = false; reason = withdrawn instanceof Failed failure ? failure.reason : Reason.WITHDRAWN; } }
         boolean success = complete && cleanup && !protocolFailed.get() && udp != null && udp.rejectedDatagrams() == 0;
         if (!success && reason == Reason.COMPLETE) reason = Reason.PROTOCOL;
-        return new Result(job,success,reason,answerVerified,connected.get(),authSent,exchange != null && exchange.complete(),cleanup,
+        return new Result(job,success,reason,answerVerified,transportEstablished,authSent,exchange != null && exchange.complete(),cleanup,
             offerHash,fingerprint,selectedLocal,selectedRemote,udp,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
-            success ? completion : null,nativeDeadline,currentWall);
+            nativeDeadline,currentWall);
     }
     private void installChannels(PeerConnection value) {
         for (int i = 0; i < 2; i++) {

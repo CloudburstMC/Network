@@ -4,12 +4,11 @@ package org.cloudburstmc.netty.signaling.diagnostic;
 import java.util.*;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
-/** Trusted installed host authority. Incoming permits cannot select their own allowed target or revision. */
+/** Trusted local host configuration. Incoming permits cannot select their own allowed target or revision. */
 public record DiagnosticHostPolicy(Context context, List<Key> keys, Set<Endpoint> endpoints, long expiresAt,
-                                   Map<Endpoint, Long> endpointExpiries, DiagnosticAdmission.Binding installation) {
-    /** Explicit low-level installation; it cannot produce a production installation acknowledgement. */
+                                   Map<Endpoint, Long> endpointExpiries) {
     public DiagnosticHostPolicy(Context context, List<Key> keys, Set<Endpoint> endpoints, long expiresAt) {
-        this(context, keys, endpoints, expiresAt, deadlines(endpoints, expiresAt), null);
+        this(context, keys, endpoints, expiresAt, deadlines(endpoints, expiresAt));
     }
     private static Map<Endpoint, Long> deadlines(Set<Endpoint> endpoints, long expiresAt) {
         var result = new HashMap<Endpoint, Long>(); endpoints.forEach(endpoint -> result.put(endpoint, expiresAt)); return result;
@@ -26,7 +25,7 @@ public record DiagnosticHostPolicy(Context context, List<Key> keys, Set<Endpoint
         Objects.requireNonNull(context);
         if (keys.size() > 8 || endpoints.size() > 32 || expiresAt < 1 || expiresAt > SAFE) throw invalid();
         keys = List.copyOf(keys); endpoints = Set.copyOf(endpoints); endpointExpiries = Map.copyOf(endpointExpiries);
-        if (!endpoints.equals(endpointExpiries.keySet()) || installation != null && !context.equals(installation.context())) throw invalid();
+        if (!endpoints.equals(endpointExpiries.keySet())) throw invalid();
         for (long expiry : endpointExpiries.values()) if (expiry < 1 || expiry > expiresAt) throw invalid();
         Set<String> ids = new HashSet<>();
         for (Key key : keys) if (!ids.add(key.keyId())) throw invalid();

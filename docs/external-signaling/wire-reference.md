@@ -217,7 +217,7 @@ endpoint alongside the runtime.
 ## `heartbeat`
 
 Required fields: `healthy,acceptingPlayers,capacity,load,protocolVersion,clockUnixMillis,
-checkInVersion,state,appliedStateRevision,gameOutcomes`.
+checkInVersion,state,gameOutcomes`.
 Optional fields: `build,region,serverStatus,hostProfile,hostProfileRevision,
 installedKeyIds,keyRequestId,extensions`.
 
@@ -227,10 +227,10 @@ installedKeyIds,keyRequestId,extensions`.
   serving in the same generation; a fresh endpoint requires recovery/completion.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
   rejection, otherwise `unavailable`.
-- `appliedStateRevision` is a nonnegative integer. A response carries
-  `desiredState: {revision,state}`. Reject unknown states or regressing revisions;
-  acknowledge only state that finished applying. Pending application triggers
-  a bounded earlier heartbeat. Receipt alone is not acknowledgement.
+- Serving state is reported by the game server. The provider may stop routing
+  players to it, but never returns a desired serving state or requests an
+  application acknowledgement. Only assisted player joins can be unsolicited,
+  and those require WebSocket transport.
 - `clockUnixMillis` is an increasing snapshot clock within the generation and
   must be within 30000 milliseconds of provider time.
 - `region` cannot change authorized placement. `serverStatus` contains

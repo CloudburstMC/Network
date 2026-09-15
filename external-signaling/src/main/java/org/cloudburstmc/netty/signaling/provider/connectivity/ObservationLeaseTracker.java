@@ -1,7 +1,6 @@
 package org.cloudburstmc.netty.signaling.provider.connectivity;
 
 import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
-import org.cloudburstmc.netty.signaling.control.ControlFrameCodec;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 
 import java.net.InetSocketAddress;
@@ -206,8 +205,8 @@ public final class ObservationLeaseTracker implements AutoCloseable {
                     Math.floorDiv(Math.subtractExact(successLower, clock.monotonicAnchor), NANOS_PER_MILLI));
             long expiresAt = Math.addExact(observedAt, CandidateLeaseCodec.MAX_LEASE_MILLIS);
             long leaseEnd = Math.addExact(successLower, LEASE_NANOS);
-            if (observedAt < 0 || observedAt > ControlFrameCodec.MAX_SAFE_INTEGER
-                    || expiresAt < 0 || expiresAt > ControlFrameCodec.MAX_SAFE_INTEGER)
+            if (observedAt < 0 || observedAt > CandidateLeaseCodec.MAX_SAFE_INTEGER
+                    || expiresAt < 0 || expiresAt > CandidateLeaseCodec.MAX_SAFE_INTEGER)
                 throw new ArithmeticException("Derived lease time is not a nonnegative safe integer");
             var observation = new CandidateLeaseCodec.Observation(family == Family.IPV4 ? "ipv4" : "ipv6", hex(sample.mapped()),
                     sample.mapped().getPort(), sample.monitorEpoch(), sample.mappingRevision(), sample.successfulResponses(), observedAt, expiresAt);
@@ -281,7 +280,7 @@ public final class ObservationLeaseTracker implements AutoCloseable {
 
     private void requireOpen() { if (closed) throw new IllegalStateException("Candidate lease tracker closed"); }
     private static void safe(long value, boolean positive) {
-        if (value < (positive ? 1 : 0) || value > ControlFrameCodec.MAX_SAFE_INTEGER)
+        if (value < (positive ? 1 : 0) || value > CandidateLeaseCodec.MAX_SAFE_INTEGER)
             throw new IllegalArgumentException("Invalid observation safe integer");
     }
     private static String hex(InetSocketAddress endpoint) { return HexFormat.of().formatHex(endpoint.getAddress().getAddress()); }

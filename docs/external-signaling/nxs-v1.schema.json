@@ -536,7 +536,6 @@
         "clockUnixMillis",
         "checkInVersion",
         "state",
-        "appliedStateRevision",
         "gameOutcomes"
       ],
       "properties": {
@@ -567,11 +566,6 @@
         },
         "state": {
           "$ref": "#/$defs/hostState"
-        },
-        "appliedStateRevision": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
         },
         "gameOutcomes": {
           "enum": [
@@ -690,7 +684,6 @@
         "activeKeyId",
         "leaseGeneration",
         "readiness",
-        "desiredState",
         "retirements"
       ],
       "properties": {
@@ -722,23 +715,6 @@
         },
         "readiness": {
           "$ref": "#/$defs/readiness"
-        },
-        "desiredState": {
-          "type": "object",
-          "required": [
-            "revision",
-            "state"
-          ],
-          "properties": {
-            "revision": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 9007199254740991
-            },
-            "state": {
-              "$ref": "#/$defs/hostState"
-            }
-          }
         },
         "checkIn": {
           "$ref": "#/$defs/checkIn"
@@ -976,7 +952,6 @@
         "clockUnixMillis",
         "checkInVersion",
         "state",
-        "appliedStateRevision",
         "gameOutcomes"
       ],
       "properties": {
@@ -1007,11 +982,6 @@
         },
         "state": {
           "$ref": "#/$defs/hostState"
-        },
-        "appliedStateRevision": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
         },
         "gameOutcomes": {
           "enum": [

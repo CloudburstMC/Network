@@ -102,15 +102,11 @@ class NativeDiagnosticHostTest {
         void start(boolean wrongAuth) throws Exception {
             await(()->channels[0].isOpen()&&channels[1].isOpen());
             byte[] frame=auth.clone();if(wrongAuth)frame[150]^=1;send(0,frame);
+            if(!wrongAuth){exchange=new DiagnosticExchange(claims.attemptIdHex(),false,this::send);exchange.start();}
         }
         void tick() {
-            // Host challenge is the in-band confirmation that AUTH was verified. Do not race AUTH with unordered data.
-            if(exchange==null) {
-                if(reliable.isEmpty())return;
-                exchange=new DiagnosticExchange(claims.attemptIdHex(),false,this::send);exchange.start(System.nanoTime());
-            }
+            if(exchange==null)return;
             for(int channel=0;channel<2;channel++) {byte[] bytes;while((bytes=(channel==0?reliable:unreliable).poll())!=null)exchange.receive(channel,bytes);}
-            exchange.tick(System.nanoTime());
         }
         public void close() {assertTrue(peer.closeAndAwait(Duration.ofSeconds(5)));}
     }
@@ -134,13 +130,13 @@ class NativeDiagnosticHostTest {
                     await(()->{client.tick();reports.addAll(gate.pollResults());return !reports.isEmpty();});
                     assertEquals(1,reports.size());var report=reports.get(0);
                     assertTrue(report.success(),report.toString());assertTrue(client.exchange.complete());
-                    assertEquals(client.exchange.completionDigestHex(), report.completionDigestHex());assertNull(client.failure.get());
+                    assertTrue(report.authenticated());assertNull(client.failure.get());
                     assertEquals(0,gate.stats().liveNativePeers());assertEquals(0,gate.stats().active());assertEquals(1,gate.stats().retainedAttempts());
                     assertEquals(0,playerValidations.get());assertEquals(0,playerChildren.get());assertEquals(0,endpoint.creationAttempts());assertTrue(endpoint.pollEvents().isEmpty());
                     assertEquals(family,report.selectedLocal().getAddress() instanceof Inet6Address?6:4);assertTrue(report.udp().sentDatagrams()>2);assertEquals(0,report.udp().rejectedDatagrams());
                     assertEquals(context,report.context());assertEquals(key.keyId(),report.keyId());assertEquals(client.claims.offerDigestHex(),report.offerDigestHex());
                     assertEquals(client.claims.clientFingerprintHex(),report.clientFingerprintHex());assertEquals(expiry,report.expiresAt());assertEquals(port,report.selectedLocal().getPort());
-                    assertEquals(5,report.sentFrames());assertEquals(6,report.receivedFrames());
+                    assertEquals(1,report.sentFrames());assertEquals(2,report.receivedFrames());
                     byte[] replay=StatelessAdmissionValidatorTest.binding(client.credentials.localUfrag()+":"+client.ufrag,client.credentials.icePwd());
                     try(DatagramSocket socket=new DatagramSocket(new InetSocketAddress(bind,0))) {socket.send(new DatagramPacket(replay,replay.length,bind,port));await(()->gate.stats().rejected()>0);}
                     assertEquals(0,gate.stats().active());assertEquals(0,playerValidations.get());
@@ -180,7 +176,7 @@ class NativeDiagnosticHostTest {
                     }
                     var reports=new ArrayList<NativeDiagnosticHostGate.Result>();
                     await(()->{reports.addAll(gate.pollResults());return !reports.isEmpty();});
-                    assertEquals(1,reports.size(),mode);assertFalse(reports.get(0).success(),mode);assertNull(reports.get(0).completionDigestHex(),mode);assertEquals(0,reports.get(0).sentFrames(),mode);
+                    assertEquals(1,reports.size(),mode);assertFalse(reports.get(0).success(),mode);assertEquals(0,reports.get(0).sentFrames(),mode);
                     assertEquals(0,gate.stats().liveNativePeers(),mode);assertEquals(1,gate.stats().retainedAttempts(),mode);
                     assertEquals(0,playerValidations.get(),mode);assertEquals(0,endpoint.creationAttempts(),mode);assertTrue(endpoint.pollEvents().isEmpty(),mode);
                     if(mode.startsWith("empty-")) {

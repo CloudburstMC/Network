@@ -15,7 +15,8 @@ import java.util.concurrent.*;
  */
 public final class IndependentProviderStub implements AutoCloseable {
     final HttpServer server;
-    final String origin;
+    String origin;
+    String operationPrefix = "/example/";
     final Map<String, JsonObject> challenges = new HashMap<>(), keys = new HashMap<>(), placements = new HashMap<>();
     JsonObject registration;
     volatile JsonObject lastHeartbeat;
@@ -74,6 +75,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     private JsonObject dispatch(HttpExchange e) throws Exception {
         String path = e.getRequestURI().getPath(), raw =
                 new String(e.getRequestBody().readNBytes(65537), StandardCharsets.UTF_8);
+        if (path.startsWith(operationPrefix)) path = "/example/" + path.substring(operationPrefix.length());
         if (raw.length() > 65536) {
             throw new Failure(400, "payload_limit");
         }
@@ -89,7 +91,7 @@ public final class IndependentProviderStub implements AutoCloseable {
             JsonObject operations = new JsonObject();
             for (String op : List.of("register", "complete", "heartbeat", "outcomes", "rotate", "retire",
                     "deregister")) {
-                operations.addProperty(op, origin + "/example/" + op);
+                operations.addProperty(op, origin + operationPrefix + op);
             }
             if (extensionMetadata != null) {
                 d.add("extensions", extensionMetadata.deepCopy());
@@ -307,11 +309,6 @@ public final class IndependentProviderStub implements AutoCloseable {
                     ok.add("keyRequest", request);
                 }
                 draining = !body.get("state").getAsString().equals("serving");
-                long applied = body.get("appliedStateRevision").getAsLong();
-                if (applied > appliedRevision) {
-                    appliedRevision = applied;
-                    acknowledgements++;
-                }
                 JsonObject desired = new JsonObject();
                 desired.addProperty("revision", desiredRevision);
                 desired.addProperty("state", desiredState);

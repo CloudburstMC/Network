@@ -18,7 +18,7 @@ package org.cloudburstmc.netty.signaling;
 
 import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.signaling.control.CandidateLeaseCodec;
-import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 
 import java.util.List;
 import java.util.Objects;
@@ -123,22 +123,13 @@ public interface ProviderTransport {
     /** Explicit recovery boundary after a fresh successful control synchronization. */
     default void candidateControlSynchronized() { }
 
-    /** Explicit diagnostic policy installation is separate from player admission and application readiness. */
+    /** Local opt-in, independent of player serving state. Incoming probes cannot configure their own authority. */
     default boolean supportsDiagnosticAdmission() { return false; }
-    default CompletionStage<DiagnosticAdmission.Installation> installDiagnosticPolicy(DiagnosticAdmission.Policy policy, Runnable requireCurrent) {
+    default CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy) {
         throw new UnsupportedOperationException("Diagnostic admission unavailable");
     }
-    /** Compare-and-withdraw this exact installation. An old cleanup must not withdraw its replacement. */
-    default CompletionStage<Boolean> withdrawDiagnosticPolicy(DiagnosticAdmission.Installation expected) {
+    default CompletionStage<Void> disableDiagnostics() {
         throw new UnsupportedOperationException("Diagnostic admission unavailable");
-    }
-    default java.util.Optional<DiagnosticAdmission.Installation> captureDiagnosticInstallation() { return java.util.Optional.empty(); }
-    /** Cumulative overflow count for the current native result queue; absent means unavailable, not zero loss. */
-    default java.util.OptionalLong diagnosticDroppedResultCount() { return java.util.OptionalLong.empty(); }
-
-    default List<DiagnosticAdmission.Completion> pollDiagnosticResults(int maximum) {
-        if (maximum < 0 || maximum > 32) throw new IllegalArgumentException("Diagnostic result poll bound");
-        return List.of();
     }
 
     /**

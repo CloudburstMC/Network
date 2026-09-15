@@ -325,20 +325,17 @@ class JdkWebSocketTransportTest {
     }
 
     @Test
-    void queuedDiagnosticAckCannotOutliveItsInstallationOrOriginalDeadline() throws Exception {
+    void queuedMessageCannotOutliveItsLocalGuardOrOriginalDeadline() throws Exception {
         for (String invalidation : List.of("withdrawal", "deadline")) {
             FakeSocket socket = new FakeSocket();
             var transport = fake(socket, limits(), this.receiverExecutor, text -> CompletableFuture.completedFuture(null));
             var now = new java.util.concurrent.atomic.AtomicLong(1000);
             var installed = new java.util.concurrent.atomic.AtomicBoolean(true);
-            var binding = new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission.Binding(
-                    new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.Context("https://provider.example", "host", "01".repeat(16), 1),
-                    "authority:1", 1, "hpr:1", "A".repeat(43), 1, "A".repeat(43), "ab".repeat(32));
-            var installation = new org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmission.Installation(binding, () -> {
+            Runnable requireCurrent = () -> {
                 if (!installed.get() || now.get() >= 2000) throw new IllegalStateException("installation unavailable");
-            });
+            };
             var first = transport.sendText("earlier frame awaiting actual send completion");
-            var ack = transport.sendText("diagnostic ACK for original binding", installation::requireCurrent);
+            var ack = transport.sendText("diagnostic ACK for original binding", requireCurrent);
             var later = transport.sendText("later sequence");
             assertEquals(1, socket.sent.size()); assertFalse(ack.toCompletableFuture().isDone());
             if (invalidation.equals("withdrawal")) installed.set(false); else now.set(2000);
@@ -349,11 +346,11 @@ class JdkWebSocketTransportTest {
             assertTrue(socket.pending.isEmpty()); assertTrue(scheduler.getQueue().isEmpty());
             // Restoring a fixture token cannot revive the failed physical sequence owner.
             installed.set(true); now.set(1000);
-            assertNotNull(failure(transport.sendText("late ACK", installation::requireCurrent)));
+            assertNotNull(failure(transport.sendText("late ACK", requireCurrent)));
             assertEquals(1, socket.sent.size());
             var replacementSocket = new FakeSocket();
             var replacement = fake(replacementSocket, limits(), receiverExecutor, text -> CompletableFuture.completedFuture(null));
-            var fresh = replacement.sendText("fresh writer", installation::requireCurrent);
+            var fresh = replacement.sendText("fresh writer", requireCurrent);
             replacementSocket.finishSend(); await(fresh); replacement.abort();
         }
     }
