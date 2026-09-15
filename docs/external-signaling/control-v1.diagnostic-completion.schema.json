@@ -1,0 +1,428 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nethernet:control-v1:diagnostic-completion",
+  "$comment": "Structural schema only. Normative codec checks duplicate-free original integer bytes, canonical control binding/base64url/origin, <=4096 UTF8 bytes/report, <=16384 bytes/batch, tuple family equality, counter relations, success before original expiry, and <=300000ms failure grace. Decoding provides no authentication, native listener attestation or current authority.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/completion"
+    },
+    {
+      "$ref": "#/$defs/batch"
+    }
+  ],
+  "$defs": {
+    "tuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "addressHex",
+        "port"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            4,
+            6
+          ]
+        },
+        "addressHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": 4
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "addressHex": {
+                "pattern": "^000000000000000000000000[0-9a-f]{8}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "addressHex": {
+                "not": {
+                  "pattern": "^00000000000000000000ffff"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "addressHex",
+        "port",
+        "candidateRevision"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            4,
+            6
+          ]
+        },
+        "addressHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "candidateRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": 4
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "addressHex": {
+                "pattern": "^000000000000000000000000[0-9a-f]{8}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "addressHex": {
+                "not": {
+                  "pattern": "^00000000000000000000ffff"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "installation",
+        "keyId",
+        "attemptIdHex",
+        "offerDigestHex",
+        "clientFingerprintHex",
+        "expiresAt",
+        "target",
+        "success",
+        "reason",
+        "completedAt",
+        "cleanupComplete",
+        "completionDigestHex",
+        "selectedLocal",
+        "selectedRemote",
+        "frames",
+        "udp"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "installation": {
+          "$ref": "urn:nethernet:control-v1:diagnostic-installation#/$defs/binding"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "attemptIdHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "offerDigestHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "clientFingerprintHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295000,
+          "multipleOf": 1000
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "reason": {
+          "enum": [
+            "complete",
+            "incomplete",
+            "authority_changed",
+            "native_acceptance_failed",
+            "expired_or_withdrawn",
+            "invalid_diagnostic_protocol",
+            "transport_failed",
+            "handshake_timeout",
+            "invalid_channels",
+            "invalid_authentication",
+            "invalid_exchange",
+            "invalid_selected_path",
+            "native_stats_unavailable",
+            "native_cleanup_failed",
+            "completion_invalidated",
+            "host_closed"
+          ]
+        },
+        "completedAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "cleanupComplete": {
+          "type": "boolean"
+        },
+        "completionDigestHex": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          ]
+        },
+        "selectedLocal": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/tuple"
+            }
+          ]
+        },
+        "selectedRemote": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/tuple"
+            }
+          ]
+        },
+        "frames": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sent",
+            "sentBytes",
+            "received",
+            "receivedBytes"
+          ],
+          "properties": {
+            "sent": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "sentBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "received": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "receivedBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          }
+        },
+        "udp": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "reserved",
+                "sent",
+                "sentBytes",
+                "rejected"
+              ],
+              "properties": {
+                "reserved": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "sent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "sentBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "rejected": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "success": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "const": "complete"
+              },
+              "cleanupComplete": {
+                "const": true
+              },
+              "completionDigestHex": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "selectedLocal": {
+                "$ref": "#/$defs/tuple"
+              },
+              "selectedRemote": {
+                "$ref": "#/$defs/tuple"
+              },
+              "frames": {
+                "properties": {
+                  "sent": {
+                    "minimum": 5,
+                    "maximum": 12
+                  },
+                  "sentBytes": {
+                    "minimum": 280,
+                    "maximum": 1024
+                  },
+                  "received": {
+                    "minimum": 6,
+                    "maximum": 12
+                  },
+                  "receivedBytes": {
+                    "minimum": 497,
+                    "maximum": 1024
+                  }
+                }
+              },
+              "udp": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reserved",
+                  "sent",
+                  "sentBytes",
+                  "rejected"
+                ],
+                "properties": {
+                  "reserved": {
+                    "minimum": 1,
+                    "maximum": 256
+                  },
+                  "sent": {
+                    "minimum": 1,
+                    "maximum": 256
+                  },
+                  "sentBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "rejected": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "completionDigestHex": {
+                "type": "null"
+              },
+              "reason": {
+                "not": {
+                  "const": "complete"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "completions"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "completions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/completion"
+          }
+        }
+      }
+    }
+  }
+}
