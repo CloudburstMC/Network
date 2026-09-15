@@ -901,7 +901,28 @@
             "type": "null"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "cancelled"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "operation": {
+                "const": "heartbeat"
+              },
+              "code": {
+                "const": "native-application-replaced"
+              }
+            }
+          }
+        }
+      ]
     },
     "operation": {
       "enum": [
@@ -1193,7 +1214,12 @@
       ],
       "properties": {
         "intent": {
-          "$ref": "control-v1.lifecycle.schema.json#/$defs/intent"
+          "$ref": "control-v1.lifecycle.schema.json#/$defs/intent",
+          "properties": {
+            "operation": {
+              "const": "heartbeat"
+            }
+          }
         },
         "expectedWriter": {
           "$ref": "#/$defs/activeWriter"
@@ -1215,7 +1241,19 @@
           "$ref": "#/$defs/digest"
         },
         "receipt": {
-          "$ref": "control-v1.lifecycle.schema.json#/$defs/receipt"
+          "$ref": "control-v1.lifecycle.schema.json#/$defs/receipt",
+          "properties": {
+            "operation": {
+              "const": "heartbeat"
+            },
+            "disposition": {
+              "enum": [
+                "committed",
+                "rejected",
+                "cancelled"
+              ]
+            }
+          }
         }
       }
     }

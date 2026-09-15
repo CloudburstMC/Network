@@ -212,7 +212,28 @@
             "type": "null"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "cancelled"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "operation": {
+                "const": "heartbeat"
+              },
+              "code": {
+                "const": "native-application-replaced"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }
