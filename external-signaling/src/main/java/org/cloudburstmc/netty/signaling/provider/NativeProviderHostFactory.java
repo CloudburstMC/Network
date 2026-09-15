@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.provider;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.signaling.admission.AdmissionGate;
 import io.netty.bootstrap.ServerBootstrap;
@@ -49,11 +50,14 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
     static EndpointSource endpointSource(InetSocketAddress bind, Map<String, String> options) {
         String policy = options.get("endpointPolicy");
         if (policy != null && !policy.equals(EXPLICIT_OR_PUBLIC_LOCAL)) throw new IllegalArgumentException("Unknown provider endpoint policy");
+        var encoded = JsonParser.parseString(options.getOrDefault("advertisedEndpoints", "[]")).getAsJsonArray();
+        if (policy != null && encoded.size() > 32) throw new IllegalArgumentException("At most 32 configured endpoints");
         List<InetSocketAddress> parsed = new ArrayList<>();
-        for (var value : JsonParser.parseString(options.getOrDefault("advertisedEndpoints", "[]")).getAsJsonArray()) {
+        for (var value : encoded) {
             var address = value.getAsJsonObject();
             try {
-                parsed.add(new InetSocketAddress(EndpointAddress.parse(address.get("address").getAsString()), address.get("port").getAsInt()));
+                int port = policy == null ? address.get("port").getAsInt() : strictPort(address.get("port"));
+                parsed.add(new InetSocketAddress(EndpointAddress.parse(address.get("address").getAsString()), port));
             } catch (java.net.UnknownHostException invalid) {
                 throw new IllegalArgumentException("Advertised endpoint must be a numeric IP address", invalid);
             }
@@ -65,9 +69,21 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             // A configured set never invokes interface discovery, even for an omitted family.
             var selected = external.isEmpty() ? EndpointSelection.discover(bind, external, List.of())
                     : EndpointSelection.select(bind, external, List.of());
-            if (selected.candidates().isEmpty()) throw new IOException("No public local UDP endpoints; configure nxs.advertise-addresses for external forwarding");
+            if (selected.candidates().isEmpty()) throw new IOException("No public local UDP endpoints; configure explicit advertised endpoints for external forwarding");
             return new ProviderEndpoint(selected.bind(), selected.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
         };
+    }
+
+    private static int strictPort(JsonElement value) {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber())
+            throw new IllegalArgumentException("Advertised port must be an integer between 1 and 65535");
+        try {
+            int port = value.getAsBigDecimal().intValueExact();
+            if (port < 1 || port > 65535) throw new ArithmeticException();
+            return port;
+        } catch (ArithmeticException invalid) {
+            throw new IllegalArgumentException("Advertised port must be an integer between 1 and 65535", invalid);
+        }
     }
 
     @Override

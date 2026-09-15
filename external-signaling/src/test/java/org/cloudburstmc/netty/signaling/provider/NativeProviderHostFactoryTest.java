@@ -62,6 +62,17 @@ class NativeProviderHostFactoryTest {
         }
     }
 
+    @Test void strictPortsAndConfiguredCountAreValidatedBeforeFallback(@TempDir Path directory) {
+        for (String port : List.of("1.5", "\"1.5\"", "2147483648", "4294967297", "0", "65536", "-1", "\"19133\"")) {
+            var options = new HashMap<>(strict("[{\"address\":\"8.8.8.8\",\"port\":" + port + "}]"));
+            var identity = directory.resolve("identity"); options.put("stateDirectory", identity.toString());
+            var failure = assertThrows(CompletionException.class, () -> new NativeProviderHostFactory().open(new ServerBootstrap(), endpoint("1.1.1.1", 19133), options).toCompletableFuture().join());
+            assertInstanceOf(IllegalArgumentException.class, failure.getCause()); assertFalse(Files.exists(identity));
+        }
+        String tooMany = "[" + String.join(",", java.util.Collections.nCopies(33, "{\"address\":\"8.8.8.8\",\"port\":19133}")) + "]";
+        assertThrows(IllegalArgumentException.class, () -> NativeProviderHostFactory.endpointSource(endpoint("1.1.1.1", 19133), strict(tooMany)));
+    }
+
     @Test void rejectsUnknownPolicyBeforeIdentityOrNativeOpening(@TempDir Path directory) {
         for (String policy : List.of("", "automatic", "explicit-or-public-loca")) {
             var identity = directory.resolve("identity");
