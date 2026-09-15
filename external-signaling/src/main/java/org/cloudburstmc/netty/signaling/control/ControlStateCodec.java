@@ -101,6 +101,9 @@ public final class ControlStateCodec {
                 basis.desiredRevision(), basis.state(), basis.admission(), basis.hostProfileRevision(), basis.ticketPolicySha256()));
     }
     public static Summary readSummary(JsonObject object) {
+        // This public helper also accepts objects created outside ControlJson's strict wire parser.
+        // Own and bound the input before getAsLong can truncate fractions or wrap a larger integer.
+        object = ControlJson.parse(object == null ? null : object.toString(), MAX_STATE_BYTES);
         ControlJson.fields(object, "desiredRevision", "desiredState", "appliedBasisSha256");
         return new Summary(ControlJson.number(object, "desiredRevision"), ControlJson.string(object, "desiredState"),
                 nullableString(object, "appliedBasisSha256"));

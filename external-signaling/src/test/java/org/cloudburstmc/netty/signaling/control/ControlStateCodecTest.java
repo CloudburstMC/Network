@@ -10,6 +10,19 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ControlStateCodecTest {
+    @Test void genericObjectSummaryRejectsNumericCoercionAndOwnsItsInput() {
+        for (String number : List.of("1.9", "1e0", "18446744073709551616", "9007199254740992", "-0", "\"1\"")) {
+            var object = JsonParser.parseString("{\"desiredRevision\":" + number
+                    + ",\"desiredState\":\"serving\",\"appliedBasisSha256\":null}").getAsJsonObject();
+            assertThrows(IllegalArgumentException.class, () -> ControlStateCodec.readSummary(object), number);
+        }
+        var object = JsonParser.parseString("{\"desiredRevision\":9007199254740991,\"desiredState\":\"serving\",\"appliedBasisSha256\":null}").getAsJsonObject();
+        var summary = ControlStateCodec.readSummary(object);
+        object.addProperty("desiredRevision", 0);
+        assertEquals(9007199254740991L, summary.desiredRevision());
+        object.addProperty("desiredState", "x".repeat(2049));
+        assertThrows(IllegalArgumentException.class, () -> ControlStateCodec.readSummary(object));
+    }
     static JsonObject fixtures() throws Exception {
         Path path = Path.of("docs/external-signaling/control-v1.state.fixtures.json");
         if (!Files.exists(path)) path = Path.of("..").resolve(path);
