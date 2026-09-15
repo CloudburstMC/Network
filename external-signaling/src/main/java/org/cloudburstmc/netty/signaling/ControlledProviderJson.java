@@ -47,6 +47,51 @@ final class ControlledProviderJson {
                 || !value.toString().matches("0|[1-9][0-9]{0,15}")) throw invalid();
         long number = Long.parseLong(value.toString()); if (number > 9007199254740991L) throw invalid(); return number;
     }
+    /** Extract the original root-property bytes after full syntax and duplicate validation. */
+    static String rootProperty(String wire, String property, int maximum) {
+        parse(wire, maximum);
+        int depth = 0;
+        for (int index = 0; index < wire.length(); index++) {
+            char token = wire.charAt(index);
+            if (token == '{' || token == '[') depth++;
+            else if (token == '}' || token == ']') depth--;
+            else if (token == '"') {
+                int start = index, end = stringEnd(wire, index);
+                String key = depth == 1 ? JsonParser.parseString(wire.substring(start, end + 1)).getAsString() : null;
+                index = end;
+                int colon = whitespace(wire, end + 1);
+                if (depth != 1 || !property.equals(key) || colon >= wire.length() || wire.charAt(colon) != ':') continue;
+                start = whitespace(wire, colon + 1);
+                char first = wire.charAt(start);
+                if (first == '"') return wire.substring(start, stringEnd(wire, start) + 1);
+                if (first != '{' && first != '[') {
+                    end = start;
+                    while (end < wire.length() && wire.charAt(end) != ',' && wire.charAt(end) != '}') end++;
+                    return wire.substring(start, end);
+                }
+                int nested = 0;
+                for (end = start; end < wire.length(); end++) {
+                    char current = wire.charAt(end);
+                    if (current == '"') end = stringEnd(wire, end);
+                    else if (current == '{' || current == '[') nested++;
+                    else if ((current == '}' || current == ']') && --nested == 0) return wire.substring(start, end + 1);
+                }
+                throw invalid();
+            }
+        }
+        return null;
+    }
+    private static int stringEnd(String wire, int start) {
+        for (int index = start + 1; index < wire.length(); index++) {
+            if (wire.charAt(index) == '\\') index++;
+            else if (wire.charAt(index) == '"') return index;
+        }
+        throw invalid();
+    }
+    private static int whitespace(String wire, int start) {
+        while (start < wire.length() && " \t\r\n".indexOf(wire.charAt(start)) >= 0) start++;
+        return start;
+    }
     static String string(JsonObject object, String name) {
         var value = object.get(name); if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) throw invalid();
         return value.getAsString();

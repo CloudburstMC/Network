@@ -40,6 +40,8 @@ final class ControlledProviderRuntime {
             throw new IOException("Issued ownership requires an explicit controlled v2 native identity capture");
         if ((config.control().candidatePublication() == ProviderControlConfiguration.CandidatePublication.MAINTAINED) != transport.supportsMaintainedCandidateLeases())
             throw new IOException("Maintained candidate publication requires matching explicit application and transport configuration");
+        if (config.control().diagnostics() == ProviderControlConfiguration.Diagnostics.ENABLED && !transport.supportsDiagnosticAdmission())
+            throw new IOException("Diagnostic installation requires an explicitly controlled v2 diagnostic transport");
         this.applicationExecutor = command -> {
             if (queued.incrementAndGet() > 64) { queued.decrementAndGet(); throw new RejectedExecutionException("Controlled application queue full"); }
             try { executor.execute(() -> { try { command.run(); } finally { queued.decrementAndGet(); } }); }
@@ -48,6 +50,7 @@ final class ControlledProviderRuntime {
         this.transport = transport; this.diagnostics = diagnostics;
         storage = ControlledProviderState.open(store, config.control());
         application = new ControlledProviderApplication(storage, transport, applicationExecutor, clock, status, health, config.region());
+        application.onDiagnostic(diagnostics);
         var client = HttpClient.newBuilder().executor(ioExecutor).followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofSeconds(10)).build();
         io = new JdkProviderControlIo(client, timer, receiver, clock, application, this::notice);
         try {

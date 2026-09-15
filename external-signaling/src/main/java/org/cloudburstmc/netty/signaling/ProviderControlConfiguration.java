@@ -15,10 +15,16 @@ import java.util.Set;
  */
 public record ProviderControlConfiguration(ControlClientCoordinator.Config routes,
         List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed, NativeOwnership nativeOwnership,
-        CandidatePublication candidatePublication) {
+        CandidatePublication candidatePublication, Diagnostics diagnostics) {
     /** Issued ownership alone does not enable candidate leases or STUN publication. */
     public enum NativeOwnership { DISABLED, ISSUED }
     public enum CandidatePublication { DISABLED, MAINTAINED }
+    public enum Diagnostics { DISABLED, ENABLED }
+    public ProviderControlConfiguration(ControlClientCoordinator.Config routes,
+            List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed, NativeOwnership nativeOwnership,
+            CandidatePublication candidatePublication) {
+        this(routes, providerKeys, migrationSeed, nativeOwnership, candidatePublication, Diagnostics.DISABLED);
+    }
     public ProviderControlConfiguration(ControlClientCoordinator.Config routes,
             List<ControlFrameCodec.VerificationKey> providerKeys, ReportingSeed migrationSeed, NativeOwnership nativeOwnership) {
         this(routes, providerKeys, migrationSeed, nativeOwnership, CandidatePublication.DISABLED);
@@ -39,9 +45,11 @@ public record ProviderControlConfiguration(ControlClientCoordinator.Config route
     }
     public ProviderControlConfiguration {
         Objects.requireNonNull(routes); Objects.requireNonNull(migrationSeed); Objects.requireNonNull(nativeOwnership);
-        Objects.requireNonNull(candidatePublication);
+        Objects.requireNonNull(candidatePublication); Objects.requireNonNull(diagnostics);
         if (candidatePublication == CandidatePublication.MAINTAINED && nativeOwnership != NativeOwnership.ISSUED)
             throw new IllegalArgumentException("Maintained candidate publication requires issued native ownership");
+        if (diagnostics == Diagnostics.ENABLED && nativeOwnership != NativeOwnership.ISSUED)
+            throw new IllegalArgumentException("Diagnostic installation requires issued native ownership");
         providerKeys = List.copyOf(providerKeys);
         if (providerKeys.isEmpty() || providerKeys.size() > 8
                 || !routes.operations().keySet().containsAll(Set.of("heartbeat", "outcomes", "rotate", "retire", "deregister"))) {

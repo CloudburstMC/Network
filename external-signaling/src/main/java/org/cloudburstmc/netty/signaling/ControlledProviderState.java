@@ -60,6 +60,8 @@ final class ControlledProviderState implements AutoCloseable {
                 application.addProperty("nativeOwnership", ControlledNativeOwner.MODE);
             if (config.candidatePublication() == ProviderControlConfiguration.CandidatePublication.MAINTAINED)
                 application.addProperty("candidatePublication", "maintained-v1");
+            if (config.diagnostics() == ProviderControlConfiguration.Diagnostics.ENABLED)
+                application.addProperty("diagnosticAdmission", "install-v1");
             var keys = new JsonArray();
             if (root.has("ticketKeys")) for (var value : root.getAsJsonArray("ticketKeys")) {
                 var previous = value.getAsJsonObject(); var item = new JsonObject();
@@ -101,15 +103,34 @@ final class ControlledProviderState implements AutoCloseable {
             root = root.deepCopy(); root.getAsJsonObject("controlApplication").addProperty("candidatePublication", "maintained-v1");
             save.write(root.deepCopy());
         }
+        boolean diagnostics = config.diagnostics() == ProviderControlConfiguration.Diagnostics.ENABLED;
+        boolean retainedDiagnostics = root.getAsJsonObject("controlApplication").has("diagnosticAdmission");
+        if (retainedDiagnostics && !diagnostics) throw new IOException("Persisted diagnostic installation requires its explicit configuration");
+        if (diagnostics && !retainedDiagnostics) {
+            root = root.deepCopy(); root.getAsJsonObject("controlApplication").addProperty("diagnosticAdmission", "install-v1");
+            save.write(root.deepCopy());
+        }
         return root;
     }
     JsonObject application() { return root.getAsJsonObject("controlApplication").deepCopy(); }
     void saveApplication(JsonObject application) throws IOException {
-        application = ControlledProviderJson.parse(application.toString(), 32768); validate(application, initial.subject().generation());
+        application = ControlledProviderJson.parse(application.toString(), 65536); validate(application, initial.subject().generation());
         var old = root.getAsJsonObject("controlApplication");
         if (ControlledProviderJson.number(application, "appliedRevision") < ControlledProviderJson.number(old, "appliedRevision")) throw new IOException("Application revision rollback");
         if (old.has("nativeOwnership") && !old.get("nativeOwnership").equals(application.get("nativeOwnership"))) throw new IOException("Native ownership mode rollback");
         if (old.has("candidatePublication") && !old.get("candidatePublication").equals(application.get("candidatePublication"))) throw new IOException("Candidate publication mode rollback");
+        if (old.has("diagnosticAdmission") && !old.get("diagnosticAdmission").equals(application.get("diagnosticAdmission"))) throw new IOException("Diagnostic installation mode rollback");
+        if (old.has("diagnosticInstallation")) {
+            if (!application.has("diagnosticInstallation")) throw new IOException("Diagnostic installation floor removed");
+            var prior = ControlDiagnosticInstallationCodec.decodeInstallation(old.get("diagnosticInstallation").toString());
+            var next = ControlDiagnosticInstallationCodec.decodeInstallation(application.get("diagnosticInstallation").toString());
+            var before = prior.binding(); var after = next.binding();
+            if (!before.providerOrigin().equals(after.providerOrigin()) || !before.hostId().equals(after.hostId())
+                    || !before.authorityIncarnation().equals(after.authorityIncarnation()) || after.generation() != before.generation()
+                    || after.nativeOwnerEpoch() < before.nativeOwnerEpoch() || after.policyRevision() < before.policyRevision()
+                    || after.policyRevision() == before.policyRevision() && !prior.equals(next))
+                throw new IOException("Diagnostic installation rollback or revision conflict");
+        }
         if (old.has("nativeOwnerReceipt")) {
             var prior = old.getAsJsonObject("nativeOwnerReceipt"); var nextReceipt = application.getAsJsonObject("nativeOwnerReceipt");
             if (nextReceipt == null || ControlledProviderJson.number(nextReceipt, "sequence") < ControlledProviderJson.number(prior, "sequence")
@@ -131,7 +152,8 @@ final class ControlledProviderState implements AutoCloseable {
         int count = root.has("pendingEvents") ? root.getAsJsonArray("pendingEvents").size() : 0;
         int bytes = root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         // Each sanitized event is at most 1024 bytes plus its comma. Reserve metadata growth/ACK marker space.
-        return Math.max(0, Math.min(256, Math.min(1000 - count, (262144 - 4096 - bytes) / 1025)));
+        int reserve = root.getAsJsonObject("controlApplication").has("diagnosticAdmission") ? 32768 : 4096;
+        return Math.max(0, Math.min(256, Math.min(1000 - count, (262144 - reserve - bytes) / 1025)));
     }
     void appendEvents(List<JsonObject> events) throws IOException {
         if (events.size() > 256) throw new IOException("Native outcome batch exceeds limit");
@@ -208,6 +230,11 @@ final class ControlledProviderState implements AutoCloseable {
         if (application.has("policy")) ControlStateCodec.decodeTicketPolicy(ControlledProviderJson.string(application, "policy"));
         if (application.has("nativeOwnership") && !ControlledNativeOwner.MODE.equals(ControlledProviderJson.string(application, "nativeOwnership"))) throw ControlledProviderJson.invalid();
         if (application.has("candidatePublication") && (!application.has("nativeOwnership") || !"maintained-v1".equals(ControlledProviderJson.string(application, "candidatePublication")))) throw ControlledProviderJson.invalid();
+        if (application.has("diagnosticAdmission") && (!application.has("nativeOwnership") || !"install-v1".equals(ControlledProviderJson.string(application, "diagnosticAdmission")))) throw ControlledProviderJson.invalid();
+        if (application.has("diagnosticInstallation")) {
+            var document = ControlDiagnosticInstallationCodec.verifyInstallation(ControlDiagnosticInstallationCodec.decodeInstallation(application.get("diagnosticInstallation").toString()));
+            if (!application.has("diagnosticAdmission") || document.binding().generation() != generation) throw ControlledProviderJson.invalid();
+        }
         if (application.has("candidateLeaseReceipt")) {
             if (!application.has("candidatePublication")) throw ControlledProviderJson.invalid();
             var receipt = CandidateLeaseCodec.decodeReceipt(application.get("candidateLeaseReceipt").toString());
