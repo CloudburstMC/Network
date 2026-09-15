@@ -67,6 +67,8 @@ public final class DiagnosticExchange {
         }
     }
     public synchronized boolean complete() { return !failed && completionSent && completionReceived && roundTripsDone(); }
+    /** Public correlation digest only after all four round trips and the peer completion have verified. */
+    public synchronized String completionDigestHex() { return complete() ? java.util.HexFormat.of().formatHex(completionHash()) : null; }
     public synchronized int sentFrames() { return sentFrames; }
     public synchronized int sentBytes() { return sentBytes; }
     public synchronized int receivedFrames() { return receivedFrames; }

@@ -127,7 +127,8 @@ class NativeDiagnosticHostTest {
                     var reports=new ArrayList<NativeDiagnosticHostGate.Result>();
                     await(()->{client.tick();reports.addAll(gate.pollResults());return !reports.isEmpty();});
                     assertEquals(1,reports.size());var report=reports.get(0);
-                    assertTrue(report.success(),report.toString());assertTrue(client.exchange.complete());assertNull(client.failure.get());
+                    assertTrue(report.success(),report.toString());assertTrue(client.exchange.complete());
+                    assertEquals(client.exchange.completionDigestHex(), report.completionDigestHex());assertNull(client.failure.get());
                     assertEquals(0,gate.stats().liveNativePeers());assertEquals(0,gate.stats().active());assertEquals(1,gate.stats().retainedAttempts());
                     assertEquals(0,playerValidations.get());assertEquals(0,playerChildren.get());assertEquals(0,endpoint.creationAttempts());assertTrue(endpoint.pollEvents().isEmpty());
                     assertEquals(family,report.selectedLocal().getAddress() instanceof Inet6Address?6:4);assertTrue(report.udp().sentDatagrams()>2);assertEquals(0,report.udp().rejectedDatagrams());
@@ -173,7 +174,7 @@ class NativeDiagnosticHostTest {
                     }
                     var reports=new ArrayList<NativeDiagnosticHostGate.Result>();
                     await(()->{reports.addAll(gate.pollResults());return !reports.isEmpty();});
-                    assertEquals(1,reports.size(),mode);assertFalse(reports.get(0).success(),mode);assertEquals(0,reports.get(0).sentFrames(),mode);
+                    assertEquals(1,reports.size(),mode);assertFalse(reports.get(0).success(),mode);assertNull(reports.get(0).completionDigestHex(),mode);assertEquals(0,reports.get(0).sentFrames(),mode);
                     assertEquals(0,gate.stats().liveNativePeers(),mode);assertEquals(1,gate.stats().retainedAttempts(),mode);
                     assertEquals(0,playerValidations.get(),mode);assertEquals(0,endpoint.creationAttempts(),mode);assertTrue(endpoint.pollEvents().isEmpty(),mode);
                     if(mode.startsWith("empty-")) {

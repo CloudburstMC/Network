@@ -98,7 +98,9 @@ The host captures actual selected numeric local/remote family and candidate
 transport plus native UDP counters before destruction. The local selected port
 and any specific bind address must match the existing gameplay listener. Each
 result retains its original context, key ID, attempt, full offer digest, client
-fingerprint, endpoint revision and expiry for stale-result correlation. It allows
+fingerprint, endpoint revision and expiry for stale-result correlation. A successful
+result also includes the four-nonce completion digest for independent peer
+comparison; incomplete or failed results expose no completion digest or nonce. It allows
 250 ms bounded
 completion flush time within the original deadline, then awaits actual native
 cleanup before emitting a successful result. Missing selected-pair/statistics,
