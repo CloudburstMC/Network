@@ -229,11 +229,16 @@ public final class NativeProviderTransport implements ProviderTransport {
     public boolean supportsAdmissionStaging() { return controlled; }
 
     @Override
-    public synchronized AdmissionUpdate beginAdmissionUpdate() {
+    public AdmissionUpdate beginAdmissionUpdate(long deadlineNanos) {
         if (!controlled) throw new UnsupportedOperationException("Listener was not opened controlled");
-        if (closed || draining || !channel.isActive()) throw new IllegalStateException("Native endpoint unavailable");
-        update = new Update(channel.stageAdmissions());
-        return update;
+        // Validate the caller's fixed bound before lock contention; never create a new relative deadline here.
+        long remaining = deadlineNanos - System.nanoTime();
+        if (remaining <= 0 || remaining > 300_000_000_000L) throw new IllegalArgumentException("Admission deadline");
+        synchronized (this) {
+            if (closed || draining || !channel.isActive()) throw new IllegalStateException("Native endpoint unavailable");
+            update = new Update(channel.stageAdmissions(deadlineNanos));
+            return update;
+        }
     }
 
     @Override
@@ -254,6 +259,10 @@ public final class NativeProviderTransport implements ProviderTransport {
     public CompletionStage<ApplyResult> commitAdmissionUpdate(AdmissionUpdate expected, Runnable requireCurrent) {
         synchronized (this) {
             if (!current(expected) || update.committing) return CompletableFuture.completedFuture(ApplyResult.REJECTED);
+            if (!update.installed) {
+                invalidateUpdate();
+                return CompletableFuture.completedFuture(ApplyResult.REJECTED);
+            }
             // Freeze the staged contents before invoking application code outside the lock.
             update.committing = true;
         }

@@ -33,12 +33,16 @@ public interface ProviderTransport {
     /** Controlled transports start with new player admission disabled, before binding. */
     default boolean supportsAdmissionStaging() { return false; }
 
-    /** Disable new player admission synchronously; existing peers survive. */
-    default AdmissionUpdate beginAdmissionUpdate() {
+    /**
+     * Disable new player admission synchronously; existing peers survive. Supply an absolute System.nanoTime
+     * deadline at most 300 seconds ahead. Capture nanoTime before reading the remaining authority lifetime;
+     * add that bounded remaining duration to the captured value so a pause cannot extend the deadline.
+     */
+    default AdmissionUpdate beginAdmissionUpdate(long deadlineNanos) {
         throw new UnsupportedOperationException("Admission staging unavailable");
     }
 
-    /** Install one owned key snapshot while this update remains disabled. */
+    /** Install one owned key snapshot while this update remains disabled; required even when keys are unchanged. */
     default CompletionStage<Void> installTicketKeys(AdmissionUpdate update, List<TicketKey> keys) {
         throw new UnsupportedOperationException("Admission staging unavailable");
     }

@@ -442,7 +442,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         gate.drain();
     }
 
-    AdmissionGate.Staging stageAdmissions() { return gate.stage(); }
+    AdmissionGate.Staging stageAdmissions(long deadlineNanos) { return gate.stage(deadlineNanos); }
 
     void disableAdmissions() { gate.disable(); }
 
