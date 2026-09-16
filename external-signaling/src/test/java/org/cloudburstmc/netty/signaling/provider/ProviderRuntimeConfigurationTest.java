@@ -6,6 +6,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import org.cloudburstmc.netty.signaling.ProviderClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -162,4 +166,49 @@ class ProviderRuntimeConfigurationTest {
         assertTrue(runtime(dir, configured).stunServers().isEmpty());
         assertEquals("[]", runtime(dir, configured).nativeHostOptions().get("stunServers"));
     }
+    @Test
+    void resolvesBothFamiliesWithoutDependingOnDnsOrder(@TempDir Path dir) throws Exception {
+        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+                ProviderClient.ControlTransport.HTTP, true, true, List.of("stun.example:3478"));
+        var calls = new ArrayList<String>();
+        var warnings = new ArrayList<String>();
+        var result = ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40, "Host", name -> {
+            calls.add(name);
+            return new InetAddress[] { InetAddress.getByName("2606:4700:4700::1111"),
+                    InetAddress.getByName("1.1.1.1"), InetAddress.getByName("8.8.8.8") };
+        }, warnings::add);
+        assertEquals(List.of("stun.example"), calls);
+        assertTrue(warnings.isEmpty());
+        assertEquals(2, result.stunServers().size());
+        assertEquals("1.1.1.1", result.stunServers().get(1).getAddress().getHostAddress());
+        assertTrue(result.stunServers().stream().noneMatch(java.net.InetSocketAddress::isUnresolved));
+        assertFalse(result.nativeHostOptions().get("stunServers").contains("stun.example"));
+    }
+
+    @Test
+    void dnsFailurePreservesDirectStartupAndOtherStunFamily(@TempDir Path dir) throws Exception {
+        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+                ProviderClient.ControlTransport.HTTP, true, true, List.of("stun.invalid:3478", "[2606:4700:4700::1111]:3478"));
+        var warnings = new ArrayList<String>();
+        var result = ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40, "Host",
+                name -> { throw new UnknownHostException(name); }, warnings::add);
+        assertEquals(1, warnings.size());
+        assertEquals(1, result.stunServers().size());
+        assertEquals(16, result.stunServers().get(0).getAddress().getAddress().length);
+        assertTrue(result.maintainedCandidates());
+        assertEquals("discovered", result.clientConfiguration().connectivityMethod());
+    }
+
+    @Test
+    void explicitEndpointsOrDisabledMaintenanceNeverResolveStun(@TempDir Path dir) throws Exception {
+        for (boolean enabled : List.of(false, true)) {
+            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "",
+                    enabled ? List.of("1.1.1.1:19133") : List.of(), Map.of(), ProviderClient.ControlTransport.HTTP,
+                    true, enabled, List.of("stun.example:3478"));
+            var result = ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40, "Host",
+                    name -> { throw new AssertionError("Unexpected DNS lookup"); }, message -> { throw new AssertionError(message); });
+            assertTrue(result.stunServers().isEmpty());
+        }
+    }
+
 }
