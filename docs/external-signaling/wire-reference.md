@@ -558,3 +558,13 @@ The client publishes replacements and withdrawals promptly and coalesces
 freshness-only updates; it does not introduce a lease document, owner claim,
 receipt, or additional control operation. Ordinary registration recovery resolves
 an ambiguous WebSocket operation before fresh state is sent.
+
+The embedding runtime accepts up to two STUN `host:port` settings and resolves
+hostnames with the JDK at startup, selecting the first usable address per family.
+Explicit advertised endpoints and disabled maintenance skip DNS and STUN entirely.
+A DNS failure is logged and leaves direct candidates and other resolved servers
+available. The native controller receives numeric endpoints and still waits for
+a failed direct check before opening STUN for that family. Embedders choose the
+service; Geyser defaults to [Cloudflare STUN](https://developers.cloudflare.com/realtime/turn/)
+at `stun.cloudflare.com:3478`, with maintained candidates and authenticated checks
+enabled. An empty STUN list disables mapping discovery.
