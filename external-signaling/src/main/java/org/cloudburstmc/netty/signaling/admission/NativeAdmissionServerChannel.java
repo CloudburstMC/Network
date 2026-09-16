@@ -18,6 +18,11 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
+import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
+import org.cloudburstmc.netty.signaling.diagnostic.NativeDiagnosticHostGate;
 import io.netty.channel.*;
 import io.netty.util.NetUtil;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -75,6 +80,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private volatile boolean open = true;
     private volatile InetSocketAddress address;
     private volatile IceUdpMuxListener mux;
+    private EndpointConnectivityController connectivity;
+    private volatile NativeDiagnosticHostGate diagnostics;
     private ScheduledFuture<?> maintenance;
 
     public NativeAdmissionServerChannel(NativeHostIdentity identity, AdmissionValidator validator,
@@ -87,9 +94,14 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
      */
     public NativeAdmissionServerChannel(NativeHostIdentity identity, AdmissionValidator validator,
                                         AdmissionGate.Limits limits, boolean allowWildcardBind) {
+        this(identity, validator, limits, allowWildcardBind, true);
+    }
+
+    NativeAdmissionServerChannel(NativeHostIdentity identity, AdmissionValidator validator,
+                                 AdmissionGate.Limits limits, boolean allowWildcardBind, boolean initiallyEnabled) {
         this.identity = Objects.requireNonNull(identity);
         this.limits = Objects.requireNonNull(limits);
-        gate = new AdmissionGate(limits, validator);
+        gate = new AdmissionGate(limits, validator, initiallyEnabled);
         this.allowWildcardBind = allowWildcardBind;
     }
 
@@ -111,6 +123,19 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             return CompletableFuture.completedFuture(null);
         }
 
+        NativeDiagnosticHostGate diagnostic = diagnostics;
+        if (diagnostic != null) {
+            var players = gate.stats();
+            var checks = diagnostic.stats();
+            if (players.sessions() + checks.active() >= limits.sessions() || players.pending() + checks.pending() >= limits.pending()) {
+                return CompletableFuture.completedFuture(null);
+            }
+        }
+        // This purpose is quarantined even when disabled or malformed. It never falls through to a player validator.
+        if (request.localUfrag().startsWith("NXD1")) {
+            return CompletableFuture.completedFuture(diagnostic == null ? null : diagnostic.admit(request));
+        }
+
         byte[] ip = NetUtil.createByteArrayFromIpAddressString(request.remoteAddress());
         if (ip == null) {
             return CompletableFuture.completedFuture(null);
@@ -124,6 +149,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         }
 
         VerifiedAdmission a = gate.admission(reservation);
+        if (a == null) {
+            gate.finish(reservation);
+            return CompletableFuture.completedFuture(null);
+        }
         CompletableFuture<Void> settled = new CompletableFuture<>();
         admissions.add(settled);
         request.completion().whenComplete((peer, failure) -> {
@@ -240,6 +269,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 close();
                 return;
             }
+            if (diagnostics != null) {
+                diagnostics.tick();
+                if (diagnostics.failure() != null) { nativeCloseFailure.compareAndSet(null, diagnostics.failure()); close(); return; }
+            }
 
             var warning = gate.pollPendingLimitWarning(System.nanoTime());
             if (warning != null) {
@@ -307,8 +340,13 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     }
 
     public List<Event> pollEvents() {
-        List<Event> result = new ArrayList<>(256);
-        events.drainTo(result);
+        return pollEvents(256);
+    }
+
+    public List<Event> pollEvents(int maximum) {
+        if (maximum < 0 || maximum > 256) throw new IllegalArgumentException("Invalid outcome poll bound");
+        List<Event> result = new ArrayList<>(maximum);
+        events.drainTo(result, maximum);
         return result;
     }
 
@@ -317,7 +355,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     }
 
     public int liveNativePeers() {
-        return liveNativePeers.get();
+        NativeDiagnosticHostGate diagnostic = diagnostics;
+        return liveNativePeers.get() + (diagnostic == null ? 0 : diagnostic.stats().liveNativePeers());
     }
 
     public long creationAttempts() {
@@ -336,8 +375,77 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         return listener.stats();
     }
 
+    /**
+     * Explicit opt-in after binding. Observations never mutate the provider profile or admission
+     * incarnation. The controller polls on demand; native code independently maintains STUN.
+     * Closing this channel closes its monitors before releasing the gameplay listener.
+     */
+    public CompletionStage<EndpointConnectivityController> enableConnectivity(EndpointSelection selection,
+            Map<EndpointSelection.Family, InetSocketAddress> numericStunServers, Duration maxObservationAge) {
+        // Own caller collections before crossing the event-loop boundary.
+        Map<EndpointSelection.Family, InetSocketAddress> servers = Map.copyOf(numericStunServers);
+        CompletableFuture<EndpointConnectivityController> result = new CompletableFuture<>();
+        try {
+            eventLoop().execute(() -> {
+                try {
+                    if (!isActive() || connectivity != null || !selection.bind().equals(address)) {
+                        throw new IllegalStateException("Connectivity requires the same active mux and one controller");
+                    }
+                    IceUdpMuxListener listener = mux;
+                    connectivity = new EndpointConnectivityController(selection, servers, maxObservationAge, server -> {
+                        StunUdpMuxMonitor monitor = listener.monitorStun(server.getAddress().getHostAddress(), server.getPort());
+                        return new EndpointConnectivityController.Monitor() {
+                            @Override public Optional<EndpointConnectivityController.Sample> read() {
+                                return monitor.binding(0).map(binding -> {
+                                    try {
+                                        var mapped = binding.mappedPort() == 0 ? null : new InetSocketAddress(
+                                                EndpointAddress.parse(binding.mappedAddress()), binding.mappedPort());
+                                        return new EndpointConnectivityController.Sample(new InetSocketAddress(
+                                                EndpointAddress.parse(binding.serverAddress()), binding.serverPort()), mapped,
+                                                EndpointConnectivityController.TransactionState.valueOf(binding.state().name()),
+                                                binding.successfulResponses(), binding.failedTransactions(), binding.mappingRevision(),
+                                                binding.lastSuccessAge());
+                                    } catch (UnknownHostException invalid) {
+                                        throw new IllegalStateException("Native STUN observation is not numeric", invalid);
+                                    }
+                                });
+                            }
+                            @Override public void close() { monitor.close(); }
+                        };
+                    });
+                    result.complete(connectivity);
+                } catch (Exception failure) { result.completeExceptionally(failure); }
+            });
+        } catch (RuntimeException unavailable) { result.completeExceptionally(unavailable); }
+        return result;
+    }
+
     public NativeHostIdentity identity() {
         return identity;
+    }
+
+    /** Explicit opt-in only. No provider field or externally advertised capability is changed. */
+    public CompletionStage<NativeDiagnosticHostGate> enableDiagnostics(DiagnosticHostPolicy policy) {
+        CompletableFuture<NativeDiagnosticHostGate> result = new CompletableFuture<>();
+        try {
+            eventLoop().execute(() -> {
+                try {
+                    if (!isActive() || diagnostics != null) throw new IllegalStateException("Diagnostic gate requires one active host listener");
+                    diagnostics = new NativeDiagnosticHostGate(identity, address, policy);
+                    result.complete(diagnostics);
+                } catch (RuntimeException failure) { result.completeExceptionally(failure); }
+            });
+        } catch (RuntimeException failure) { result.completeExceptionally(failure); }
+        return result.minimalCompletionStage();
+    }
+
+    /** Local configuration of the same gate retains replay and result history across replacement/withdrawal. */
+    NativeDiagnosticHostGate installDiagnostics(DiagnosticHostPolicy policy, NativeDiagnosticHostGate expected) {
+        if (!eventLoop().inEventLoop() || !isActive() || diagnostics != expected)
+            throw new IllegalStateException("Diagnostic gate owner changed");
+        if (diagnostics == null) diagnostics = new NativeDiagnosticHostGate(identity, address, policy);
+        else diagnostics.replacePolicy(policy);
+        return diagnostics;
     }
 
     public CompletionStage<Void> termination() {
@@ -348,12 +456,34 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         gate.drain();
     }
 
+    AdmissionGate.Staging stageAdmissions(long deadlineNanos) { return gate.stage(deadlineNanos); }
+
+    void disableAdmissions() { gate.disable(); }
+
+    boolean currentAdmissionUpdate(AdmissionGate.Staging update) {
+        return isActive() && nativeCloseFailure.get() == null && gate.current(update);
+    }
+
+    boolean enableAdmissions(AdmissionGate.Staging update) {
+        return currentAdmissionUpdate(update) && gate.enable(update);
+    }
+
+    public boolean isServing() {
+        return isActive() && gate.isServing();
+    }
+
     @Override
     protected void doClose() {
         open = false;
         gate.close();
         if (maintenance != null) {
             maintenance.cancel(false);
+        }
+        if (diagnostics != null) diagnostics.close();
+
+        if (connectivity != null) {
+            try { connectivity.close(); }
+            catch (RuntimeException failure) { nativeCloseFailure.compareAndSet(null, failure); }
         }
 
         IceUdpMuxListener listener = mux;
@@ -369,6 +499,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         sessions.clear();
 
         List<CompletableFuture<Void>> outstanding = new ArrayList<>(nativeClosures);
+        if (diagnostics != null) outstanding.add(diagnostics.termination().toCompletableFuture());
         outstanding.addAll(admissions);
         CompletableFuture.allOf(outstanding.toArray(CompletableFuture[]::new)).whenComplete((ignored, error) -> {
             events.clear();

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nxs:diagnostic-answer-v1:draft",
+  "title": "Draft canonical provider diagnostic answer",
+  "description": "Schema describes fields; runtime additionally requires canonical order/byte equality, fixed request deadline, trusted key catalog, exact SDP/profile, signature and delivery freshness. No route is advertised.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "kind",
+    "keyId",
+    "expiresAt",
+    "requestDigestHex",
+    "answerSdpBase64",
+    "answerDigestHex",
+    "signatureBase64"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "diagnostic-answer"
+    },
+    "keyId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "expiresAt": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 4294967295000,
+      "multipleOf": 1000
+    },
+    "requestDigestHex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "answerSdpBase64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 21846,
+      "pattern": "^[A-Za-z0-9+/]+$"
+    },
+    "answerDigestHex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signatureBase64": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{128}$"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "experimental": true,
+  "warning": "Public fixture keys and credentials only. Never deploy.",
+  "now": 1788484800000,
+  "catalog": {
+    "providerOrigin": "https://provider.example",
+    "notBefore": 1788484799000,
+    "expiresAt": 1788484860000,
+    "keys": [
+      {
+        "family": "provider-diagnostic",
+        "keyId": "diag-provider:2026-09",
+        "publicPointHex": "04607cc0f782fc4f2a8d91807887a49a96d765a22a7845b270f068b937b831e4bc671da5e6c51e73363610c5daf9add893e14378099fcd3cf4b2db7b4a99b1c12b69c522c4cd12cc360c6e36d0fb76a6ade9007a5c59e09f5369477e598975f379",
+        "validFrom": 1788484799000,
+        "validUntil": 1788484920000
+      }
+    ]
+  },
+  "privateKeyPkcs8Hex": "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b02010104307a600930dbb3402e0bdc5ead0441953a28f2760ce20a3f9ee4e8b853835ead78bb01f5535924bffa37e84d0b5e42f232a16403620004607cc0f782fc4f2a8d91807887a49a96d765a22a7845b270f068b937b831e4bc671da5e6c51e73363610c5daf9add893e14378099fcd3cf4b2db7b4a99b1c12b69c522c4cd12cc360c6e36d0fb76a6ade9007a5c59e09f5369477e598975f379",
+  "vectors": [
+    {
+      "name": "v4-host",
+      "expected": {
+        "context": {
+          "providerOrigin": "https://provider.example",
+          "hostId": "host_01",
+          "incarnation": "0123456789abcdef0123456789abcdef",
+          "generation": 7
+        },
+        "claims": {
+          "expiresAt": 1788484830000,
+          "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+          "attemptIdHex": "04040404040404040404040404040418",
+          "offerDigestHex": "813e5becb79fe36140fb2458f690d88aa56ec6aef3f287acbd5a68233c245d92",
+          "candidateRevision": 9,
+          "family": 4,
+          "targetAddressHex": "000000000000000000000000cb007108",
+          "targetPort": 19132,
+          "profile": 1
+        },
+        "remoteUfrag": "abcD",
+        "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      },
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXD1D001GBkaGxwdHh8gISIj4pUPqSo47jct1iOLkJ6NCbrPybgSpohdePjCwtVczspa8YWiRhMkEdBja5Z3rClnURnS5Q2qQZ64VMqTCRpVpGSgEOAVEIiyzxyTd9au6ny/hq8/NJXwOmTnupYlahcpY5xKKC7i94iQEIoBYZsuyaAvwHUzewGWe0ZO3IqBkL7tjc/ZKJ9/LWD7wkiTE3QsYrm7Yn+8JYAaNSFUm1lGal1h8sSS2XVU\r\na=ice-pwd:sO0InAJIY9tkS9485oXjBdymw153KY5z\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 203.0.113.8 19132 typ host\r\na=end-of-candidates\r\n",
+      "wire": "{\"version\":1,\"kind\":\"diagnostic-answer\",\"keyId\":\"diag-provider:2026-09\",\"expiresAt\":1788484830000,\"requestDigestHex\":\"a0e6e8ca719cd3c38824a0b25f0c78a52a3a16bc37ee3605a4038173e97e0052\",\"answerSdpBase64\":\"dj0wDQpvPS0gMSAyIElOIElQNCAxMjcuMC4wLjENCnM9LQ0KdD0wIDANCmE9Z3JvdXA6QlVORExFIDANCm09YXBwbGljYXRpb24gOSBVRFAvRFRMUy9TQ1RQIHdlYnJ0Yy1kYXRhY2hhbm5lbA0KYz1JTiBJUDQgMC4wLjAuMA0KYT1pY2UtdWZyYWc6TlhEMUQwMDFHQmthR3h3ZEhoOGdJU0lqNHBVUHFTbzQ3amN0MWlPTGtKNk5DYnJQeWJnU3BvaGRlUGpDd3RWY3pzcGE4WVdpUmhNa0VkQmphNVozckNsblVSblM1UTJxUVo2NFZNcVRDUnBWcEdTZ0VPQVZFSWl5enh5VGQ5YXU2bnkvaHE4L05KWHdPbVRudXBZbGFoY3BZNXhLS0M3aTk0aVFFSW9CWVpzdXlhQXZ3SFV6ZXdHV2UwWk8zSXFCa0w3dGpjL1pLSjkvTFdEN3draVRFM1FzWXJtN1luKzhKWUFhTlNGVW0xbEdhbDFoOHNTUzJYVlUNCmE9aWNlLXB3ZDpzTzBJbkFKSVk5dGtTOTQ4NW9YakJkeW13MTUzS1k1eg0KYT1maW5nZXJwcmludDpzaGEtMjU2IEZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwDQphPXNldHVwOmFjdGl2ZQ0KYT1taWQ6MA0KYT1zY3RwLXBvcnQ6NTAwMA0KYT1tYXgtbWVzc2FnZS1zaXplOjI2MjE0NA0KYT1jYW5kaWRhdGU6MSAxIFVEUCAyMTMwNzA2NDMxIDIwMy4wLjExMy44IDE5MTMyIHR5cCBob3N0DQphPWVuZC1vZi1jYW5kaWRhdGVzDQo\",\"answerDigestHex\":\"9726eab8c4d7f288b5b895913533c21f7f4896966f799615383afff76327af12\",\"signatureBase64\":\"5N/uefP+rbO2Tgp2+QAyEItq+KlOvB8l+AuQhBifPVe/SPwOiI9jftwtW/iQ6aoRFuu9LtS9prUPwwph8Cqif5xN/t6sc7RGj4fpdyua2APZCAptFMGrNC5FWBlDUb0H\"}",
+      "transcriptHex": "6e78732d646961676e6f737469632d616e737765722d7631000015646961672d70726f76696465723a323032362d3039000001a06a00c330a0e6e8ca719cd3c38824a0b25f0c78a52a3a16bc37ee3605a4038173e97e00529726eab8c4d7f288b5b895913533c21f7f4896966f799615383afff76327af12000002c0"
+    },
+    {
+      "name": "v4-srflx",
+      "expected": {
+        "context": {
+          "providerOrigin": "https://provider.example",
+          "hostId": "host_01",
+          "incarnation": "0123456789abcdef0123456789abcdef",
+          "generation": 7
+        },
+        "claims": {
+          "expiresAt": 1788484830000,
+          "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+          "attemptIdHex": "04040404040404040404040404040418",
+          "offerDigestHex": "813e5becb79fe36140fb2458f690d88aa56ec6aef3f287acbd5a68233c245d92",
+          "candidateRevision": 9,
+          "family": 4,
+          "targetAddressHex": "000000000000000000000000cb007108",
+          "targetPort": 19132,
+          "profile": 1
+        },
+        "remoteUfrag": "abcD",
+        "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      },
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXD1D001GBkaGxwdHh8gISIj4pUPqSo47jct1iOLkJ6NCbrPybgSpohdePjCwtVczspa8YWiRhMkEdBja5Z3rClnURnS5Q2qQZ64VMqTCRpVpGSgEOAVEIiyzxyTd9au6ny/hq8/NJXwOmTnupYlahcpY5xKKC7i94iQEIoBYZsuyaAvwHUzewGWe0ZO3IqBkL7tjc/ZKJ9/LWD7wkiTE3QsYrm7Yn+8JYAaNSFUm1lGal1h8sSS2XVU\r\na=ice-pwd:sO0InAJIY9tkS9485oXjBdymw153KY5z\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 203.0.113.8 19132 typ srflx raddr 0.0.0.0 rport 0\r\na=end-of-candidates\r\n",
+      "wire": "{\"version\":1,\"kind\":\"diagnostic-answer\",\"keyId\":\"diag-provider:2026-09\",\"expiresAt\":1788484830000,\"requestDigestHex\":\"a0e6e8ca719cd3c38824a0b25f0c78a52a3a16bc37ee3605a4038173e97e0052\",\"answerSdpBase64\":\"dj0wDQpvPS0gMSAyIElOIElQNCAxMjcuMC4wLjENCnM9LQ0KdD0wIDANCmE9Z3JvdXA6QlVORExFIDANCm09YXBwbGljYXRpb24gOSBVRFAvRFRMUy9TQ1RQIHdlYnJ0Yy1kYXRhY2hhbm5lbA0KYz1JTiBJUDQgMC4wLjAuMA0KYT1pY2UtdWZyYWc6TlhEMUQwMDFHQmthR3h3ZEhoOGdJU0lqNHBVUHFTbzQ3amN0MWlPTGtKNk5DYnJQeWJnU3BvaGRlUGpDd3RWY3pzcGE4WVdpUmhNa0VkQmphNVozckNsblVSblM1UTJxUVo2NFZNcVRDUnBWcEdTZ0VPQVZFSWl5enh5VGQ5YXU2bnkvaHE4L05KWHdPbVRudXBZbGFoY3BZNXhLS0M3aTk0aVFFSW9CWVpzdXlhQXZ3SFV6ZXdHV2UwWk8zSXFCa0w3dGpjL1pLSjkvTFdEN3draVRFM1FzWXJtN1luKzhKWUFhTlNGVW0xbEdhbDFoOHNTUzJYVlUNCmE9aWNlLXB3ZDpzTzBJbkFKSVk5dGtTOTQ4NW9YakJkeW13MTUzS1k1eg0KYT1maW5nZXJwcmludDpzaGEtMjU2IEZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwDQphPXNldHVwOmFjdGl2ZQ0KYT1taWQ6MA0KYT1zY3RwLXBvcnQ6NTAwMA0KYT1tYXgtbWVzc2FnZS1zaXplOjI2MjE0NA0KYT1jYW5kaWRhdGU6MSAxIFVEUCAyMTMwNzA2NDMxIDIwMy4wLjExMy44IDE5MTMyIHR5cCBzcmZseCByYWRkciAwLjAuMC4wIHJwb3J0IDANCmE9ZW5kLW9mLWNhbmRpZGF0ZXMNCg\",\"answerDigestHex\":\"e217cac3d13bdf7da759767abcc5539638046752cd9dbf0728a53b6b7db10890\",\"signatureBase64\":\"UA2cuRMglQykg103m+mMc4lv/dhNGo+wpAKTSVQIpGtCSD6yW44x5S70+tTwO0Uxl/VKkPHBbjo3k4ystMCLiczroeBMYMa1v3zB7t1n6N7nJN/yVIKyI8PfyYTV4KW/\"}",
+      "transcriptHex": "6e78732d646961676e6f737469632d616e737765722d7631000015646961672d70726f76696465723a323032362d3039000001a06a00c330a0e6e8ca719cd3c38824a0b25f0c78a52a3a16bc37ee3605a4038173e97e0052e217cac3d13bdf7da759767abcc5539638046752cd9dbf0728a53b6b7db10890000002d7"
+    },
+    {
+      "name": "v6-host",
+      "expected": {
+        "context": {
+          "providerOrigin": "https://provider.example",
+          "hostId": "host_01",
+          "incarnation": "0123456789abcdef0123456789abcdef",
+          "generation": 7
+        },
+        "claims": {
+          "expiresAt": 1788484830000,
+          "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+          "attemptIdHex": "06060606060606060606060606060618",
+          "offerDigestHex": "61e448065f1b5d461fc095ba08f1e8718b4b28fc4fc7002839d4055db255d4e7",
+          "candidateRevision": 9,
+          "family": 6,
+          "targetAddressHex": "20010db8000100000000000000000008",
+          "targetPort": 19132,
+          "profile": 1
+        },
+        "remoteUfrag": "abcD",
+        "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      },
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXD1D001LC0uLzAxMjM0NTY33z55I603Mw64nEsKfAY9lPd45K8em7cbN9ccARLT1XUEYWAyzTGuofgPIp+dR85LcyCXtNbSDiLg4Eb/XsbVTufRac9fhxQOz+7QbH2/nKgujmtT2y9TLUwVPEGBHIgD0dfbCN8seBw/9LpixyfOBrpSoPYkbMYjFhKJPwX7lsLjFMwb/OyULeKe5s9ZEwwlxiS2iWH1qJFMlHvulBvWJa2i1McN4fyE\r\na=ice-pwd:Q3ubGg9IpsTF3rNohT+M794A6JS/Whh3\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 2001:db8:1::8 19132 typ host\r\na=end-of-candidates\r\n",
+      "wire": "{\"version\":1,\"kind\":\"diagnostic-answer\",\"keyId\":\"diag-provider:2026-09\",\"expiresAt\":1788484830000,\"requestDigestHex\":\"b54578d55696f5cd3a995951fe85ea6b6214386a5b1278d1ab081ee21a779ac2\",\"answerSdpBase64\":\"dj0wDQpvPS0gMSAyIElOIElQNCAxMjcuMC4wLjENCnM9LQ0KdD0wIDANCmE9Z3JvdXA6QlVORExFIDANCm09YXBwbGljYXRpb24gOSBVRFAvRFRMUy9TQ1RQIHdlYnJ0Yy1kYXRhY2hhbm5lbA0KYz1JTiBJUDQgMC4wLjAuMA0KYT1pY2UtdWZyYWc6TlhEMUQwMDFMQzB1THpBeE1qTTBOVFkzM3o1NUk2MDNNdzY0bkVzS2ZBWTlsUGQ0NUs4ZW03Y2JOOWNjQVJMVDFYVUVZV0F5elRHdW9mZ1BJcCtkUjg1TGN5Q1h0TmJTRGlMZzRFYi9Yc2JWVHVmUmFjOWZoeFFPeis3UWJIMi9uS2d1am10VDJ5OVRMVXdWUEVHQkhJZ0QwZGZiQ044c2VCdy85THBpeHlmT0JycFNvUFlrYk1ZakZoS0pQd1g3bHNMakZNd2IvT3lVTGVLZTVzOVpFd3dseGlTMmlXSDFxSkZNbEh2dWxCdldKYTJpMU1jTjRmeUUNCmE9aWNlLXB3ZDpRM3ViR2c5SXBzVEYzck5vaFQrTTc5NEE2SlMvV2hoMw0KYT1maW5nZXJwcmludDpzaGEtMjU2IEZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwDQphPXNldHVwOmFjdGl2ZQ0KYT1taWQ6MA0KYT1zY3RwLXBvcnQ6NTAwMA0KYT1tYXgtbWVzc2FnZS1zaXplOjI2MjE0NA0KYT1jYW5kaWRhdGU6MSAxIFVEUCAyMTMwNzA2NDMxIDIwMDE6ZGI4OjE6OjggMTkxMzIgdHlwIGhvc3QNCmE9ZW5kLW9mLWNhbmRpZGF0ZXMNCg\",\"answerDigestHex\":\"998d5d60b644139d15ea52a5435ae8962ffef7d71d86af71b9288c6e0c5d832a\",\"signatureBase64\":\"4NpJ3ZtR/BpbtgAChZzo9lBLb8XbiDPex3TFyZ8gFGDhXvxADfroAsdosWfPQgAla02/ToKJuAwkQgj/2vQYXBhPjJqgJhwNKs2x1JSBHFnSrajnAWwryAQiKkkfuY5C\"}",
+      "transcriptHex": "6e78732d646961676e6f737469632d616e737765722d7631000015646961672d70726f76696465723a323032362d3039000001a06a00c330b54578d55696f5cd3a995951fe85ea6b6214386a5b1278d1ab081ee21a779ac2998d5d60b644139d15ea52a5435ae8962ffef7d71d86af71b9288c6e0c5d832a000002c2"
+    },
+    {
+      "name": "v6-srflx",
+      "expected": {
+        "context": {
+          "providerOrigin": "https://provider.example",
+          "hostId": "host_01",
+          "incarnation": "0123456789abcdef0123456789abcdef",
+          "generation": 7
+        },
+        "claims": {
+          "expiresAt": 1788484830000,
+          "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+          "attemptIdHex": "06060606060606060606060606060618",
+          "offerDigestHex": "61e448065f1b5d461fc095ba08f1e8718b4b28fc4fc7002839d4055db255d4e7",
+          "candidateRevision": 9,
+          "family": 6,
+          "targetAddressHex": "20010db8000100000000000000000008",
+          "targetPort": 19132,
+          "profile": 1
+        },
+        "remoteUfrag": "abcD",
+        "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      },
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXD1D001LC0uLzAxMjM0NTY33z55I603Mw64nEsKfAY9lPd45K8em7cbN9ccARLT1XUEYWAyzTGuofgPIp+dR85LcyCXtNbSDiLg4Eb/XsbVTufRac9fhxQOz+7QbH2/nKgujmtT2y9TLUwVPEGBHIgD0dfbCN8seBw/9LpixyfOBrpSoPYkbMYjFhKJPwX7lsLjFMwb/OyULeKe5s9ZEwwlxiS2iWH1qJFMlHvulBvWJa2i1McN4fyE\r\na=ice-pwd:Q3ubGg9IpsTF3rNohT+M794A6JS/Whh3\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 2001:db8:1::8 19132 typ srflx raddr :: rport 0\r\na=end-of-candidates\r\n",
+      "wire": "{\"version\":1,\"kind\":\"diagnostic-answer\",\"keyId\":\"diag-provider:2026-09\",\"expiresAt\":1788484830000,\"requestDigestHex\":\"b54578d55696f5cd3a995951fe85ea6b6214386a5b1278d1ab081ee21a779ac2\",\"answerSdpBase64\":\"dj0wDQpvPS0gMSAyIElOIElQNCAxMjcuMC4wLjENCnM9LQ0KdD0wIDANCmE9Z3JvdXA6QlVORExFIDANCm09YXBwbGljYXRpb24gOSBVRFAvRFRMUy9TQ1RQIHdlYnJ0Yy1kYXRhY2hhbm5lbA0KYz1JTiBJUDQgMC4wLjAuMA0KYT1pY2UtdWZyYWc6TlhEMUQwMDFMQzB1THpBeE1qTTBOVFkzM3o1NUk2MDNNdzY0bkVzS2ZBWTlsUGQ0NUs4ZW03Y2JOOWNjQVJMVDFYVUVZV0F5elRHdW9mZ1BJcCtkUjg1TGN5Q1h0TmJTRGlMZzRFYi9Yc2JWVHVmUmFjOWZoeFFPeis3UWJIMi9uS2d1am10VDJ5OVRMVXdWUEVHQkhJZ0QwZGZiQ044c2VCdy85THBpeHlmT0JycFNvUFlrYk1ZakZoS0pQd1g3bHNMakZNd2IvT3lVTGVLZTVzOVpFd3dseGlTMmlXSDFxSkZNbEh2dWxCdldKYTJpMU1jTjRmeUUNCmE9aWNlLXB3ZDpRM3ViR2c5SXBzVEYzck5vaFQrTTc5NEE2SlMvV2hoMw0KYT1maW5nZXJwcmludDpzaGEtMjU2IEZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwOkZFOkRDOkJBOjk4Ojc2OjU0OjMyOjEwDQphPXNldHVwOmFjdGl2ZQ0KYT1taWQ6MA0KYT1zY3RwLXBvcnQ6NTAwMA0KYT1tYXgtbWVzc2FnZS1zaXplOjI2MjE0NA0KYT1jYW5kaWRhdGU6MSAxIFVEUCAyMTMwNzA2NDMxIDIwMDE6ZGI4OjE6OjggMTkxMzIgdHlwIHNyZmx4IHJhZGRyIDo6IHJwb3J0IDANCmE9ZW5kLW9mLWNhbmRpZGF0ZXMNCg\",\"answerDigestHex\":\"1807f7e03e118eed8db8ba16367a900fdd342987c55fc08fcace6d7a4ec66e48\",\"signatureBase64\":\"10Mzzc+TIHrGkTGtUzSe2yD9iwLt+r4aFk68PBzro9HL3N9KqW4XfndGR3+ejmrn37W1UvHBYk4GO5NGSJzNHhOS08l8FQxdxqSEEt1DhA5qnJRK0MQABX2qDpT9Pevd\"}",
+      "transcriptHex": "6e78732d646961676e6f737469632d616e737765722d7631000015646961672d70726f76696465723a323032362d3039000001a06a00c330b54578d55696f5cd3a995951fe85ea6b6214386a5b1278d1ab081ee21a779ac21807f7e03e118eed8db8ba16367a900fdd342987c55fc08fcace6d7a4ec66e48000002d4"
+    }
+  ]
+}

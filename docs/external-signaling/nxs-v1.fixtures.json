@@ -104,7 +104,6 @@
       "clockUnixMillis": 1788799970100,
       "checkInVersion": 1,
       "state": "serving",
-      "appliedStateRevision": 1,
       "gameOutcomes": "unavailable",
       "playerCount": {
         "connectedPlayers": 3,

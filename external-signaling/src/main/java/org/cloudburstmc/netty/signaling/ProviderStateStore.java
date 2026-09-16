@@ -43,6 +43,7 @@ public final class ProviderStateStore implements AutoCloseable {
     private final Path directory, stateFile;
     private final FileChannel lockChannel;
     private final FileLock lock;
+    private boolean closed;
 
     public ProviderStateStore(Path directory) throws IOException {
         this.directory = directory.toAbsolutePath();
@@ -73,7 +74,8 @@ public final class ProviderStateStore implements AutoCloseable {
         lock = acquired;
     }
 
-    public JsonObject read() throws IOException {
+    public synchronized JsonObject read() throws IOException {
+        requireOwnership();
         if (!Files.exists(stateFile)) {
             return new JsonObject();
         }
@@ -86,7 +88,10 @@ public final class ProviderStateStore implements AutoCloseable {
         return JsonParser.parseString(Files.readString(stateFile)).getAsJsonObject();
     }
 
-    public void write(JsonObject state) throws IOException {
+    Path directory() { return directory; }
+
+    public synchronized void write(JsonObject state) throws IOException {
+        requireOwnership();
         Path tmp = Files.createTempFile(directory, "provider-state-", ".tmp", OWNER_ONLY_FILE);
         try {
             byte[] bytes = new GsonBuilder().disableHtmlEscaping().create().toJson(state)
@@ -110,8 +115,16 @@ public final class ProviderStateStore implements AutoCloseable {
         }
     }
 
+    private void requireOwnership() throws IOException {
+        if (closed || !lock.isValid()) throw new IOException("Provider state ownership is closed");
+    }
+
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
+        if (closed) return;
+        // Queued callbacks may drain after client shutdown. Serialize the entire IO operation with
+        // lock release so they can never read or replace a successor owner's state file.
+        closed = true;
         try {
             lock.release();
         } finally {

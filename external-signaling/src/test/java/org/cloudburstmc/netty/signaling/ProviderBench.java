@@ -86,7 +86,8 @@ public final class ProviderBench {
         String pool = System.getProperty("providerPool",
                 registrationMode.equals(ProviderClient.ATTACH_INSTANCE) ? "proxy" : null);
         var config = new ProviderClient.Configuration(provider, "nxs-admission-v1", "Java conformance backend",
-                registrationMode, authorization, token, region, pool, tags);
+                registrationMode, authorization, token, region, pool, tags,
+                ProviderClient.ControlTransport.valueOf(System.getProperty("providerControlTransport", "HTTP").toUpperCase(Locale.ROOT)));
         var client = new ProviderClient(config, new ProviderStateStore(state), transport,
                 () -> new ServerStatus("Java bench", 1234, "fixture-only", "Fixture", 2, 50, 0),
                 () -> new ProviderClient.Health(true, true, 100, 0.02, "nethernet", "java-conformance"), System.err::println);
@@ -100,6 +101,7 @@ public final class ProviderBench {
                     registration.has("serviceId") ? registration.get("serviceId").getAsString() : "unassigned"));
             JsonObject readiness = client.readiness().get(10, TimeUnit.SECONDS);
             readiness.remove("extensions");
+            readiness.addProperty("controlCarrier", client.lastControlCarrier());
             System.out.println(readiness);
             long hold = Long.parseLong(System.getProperty("providerHoldSeconds", "0"));
             String stopFile = System.getProperty("providerStopFile");

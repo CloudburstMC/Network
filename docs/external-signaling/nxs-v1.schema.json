@@ -392,7 +392,12 @@
           }
         }
       },
-      "x-max-utf8-bytes": 16384
+      "x-max-utf8-bytes": 16384,
+      "properties": {
+        "org.nethernet.connectivity": {
+          "$ref": "#/$defs/connectivityObservation"
+        }
+      }
     },
     "recovery": {
       "type": "object",
@@ -444,7 +449,7 @@
       "properties": {
         "candidates": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 32,
           "items": {
             "type": "object",
@@ -488,8 +493,40 @@
                   "srflx",
                   "relay"
                 ]
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991,
+                "description": "Original native STUN observation expiry in Unix milliseconds; required only for srflx. Retries and heartbeat/profile renewal must not extend it."
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "srflx"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "expiresAt"
+                  ]
+                },
+                "else": {
+                  "not": {
+                    "required": [
+                      "expiresAt"
+                    ]
+                  }
+                }
+              }
+            ]
           }
         },
         "dtlsFingerprint": {
@@ -521,7 +558,8 @@
               "pattern": "^[0-9a-f]{32}$"
             }
           }
-        }
+        },
+        "version": false
       }
     },
     "heartbeat": {
@@ -535,7 +573,6 @@
         "clockUnixMillis",
         "checkInVersion",
         "state",
-        "appliedStateRevision",
         "gameOutcomes"
       ],
       "properties": {
@@ -566,11 +603,6 @@
         },
         "state": {
           "$ref": "#/$defs/hostState"
-        },
-        "appliedStateRevision": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
         },
         "gameOutcomes": {
           "enum": [
@@ -618,7 +650,9 @@
         "acceptingPlayers": {
           "type": "boolean",
           "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
-        }
+        },
+        "candidateLeases": false,
+        "nativeOwnerClaim": false
       },
       "allOf": [
         {
@@ -687,7 +721,6 @@
         "activeKeyId",
         "leaseGeneration",
         "readiness",
-        "desiredState",
         "retirements"
       ],
       "properties": {
@@ -719,23 +752,6 @@
         },
         "readiness": {
           "$ref": "#/$defs/readiness"
-        },
-        "desiredState": {
-          "type": "object",
-          "required": [
-            "revision",
-            "state"
-          ],
-          "properties": {
-            "revision": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 9007199254740991
-            },
-            "state": {
-              "$ref": "#/$defs/hostState"
-            }
-          }
         },
         "checkIn": {
           "$ref": "#/$defs/checkIn"
@@ -853,6 +869,122 @@
         }
       },
       "description": "Actual players connected to this runtime, including still-connected draining players. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Absence means unknown. Never derive this value from public serverStatus, load, tickets or reservations."
+    },
+    "connectivityObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "critical",
+        "data"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "critical": {
+          "const": false
+        },
+        "data": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "diagnostics",
+                "candidateRevision",
+                "method"
+              ],
+              "properties": {
+                "diagnostics": {
+                  "type": "boolean"
+                },
+                "candidateRevision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "method": {
+                  "enum": [
+                    "defined",
+                    "discovered",
+                    "warm_stun"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "method",
+                "candidateRevision",
+                "checks"
+              ],
+              "properties": {
+                "method": {
+                  "enum": [
+                    "defined",
+                    "discovered",
+                    "warm_stun"
+                  ]
+                },
+                "candidateRevision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "checks": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "region",
+                      "family",
+                      "outcome",
+                      "checkedAt",
+                      "expiresAt"
+                    ],
+                    "properties": {
+                      "region": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[A-Za-z0-9_-]+$"
+                      },
+                      "family": {
+                        "enum": [
+                          4,
+                          6
+                        ]
+                      },
+                      "outcome": {
+                        "enum": [
+                          "established",
+                          "not-established",
+                          "unknown"
+                        ]
+                      },
+                      "checkedAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "expiresAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     }
   },
   "x-context-order": [

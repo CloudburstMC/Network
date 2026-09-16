@@ -217,7 +217,7 @@ endpoint alongside the runtime.
 ## `heartbeat`
 
 Required fields: `healthy,acceptingPlayers,capacity,load,protocolVersion,clockUnixMillis,
-checkInVersion,state,appliedStateRevision,gameOutcomes`.
+checkInVersion,state,gameOutcomes`.
 Optional fields: `build,region,serverStatus,hostProfile,hostProfileRevision,
 installedKeyIds,keyRequestId,extensions`.
 
@@ -227,10 +227,10 @@ installedKeyIds,keyRequestId,extensions`.
   serving in the same generation; a fresh endpoint requires recovery/completion.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
   rejection, otherwise `unavailable`.
-- `appliedStateRevision` is a nonnegative integer. A response carries
-  `desiredState: {revision,state}`. Reject unknown states or regressing revisions;
-  acknowledge only state that finished applying. Pending application triggers
-  a bounded earlier heartbeat. Receipt alone is not acknowledgement.
+- Serving state is reported by the game server. The provider may stop routing
+  players to it, but never returns a desired serving state or requests an
+  application acknowledgement. Only assisted player joins can be unsolicited,
+  and those require WebSocket transport.
 - `clockUnixMillis` is an increasing snapshot clock within the generation and
   must be within 30000 milliseconds of provider time.
 - `region` cannot change authorized placement. `serverStatus` contains
@@ -270,9 +270,16 @@ each bound native endpoint. The fingerprint is `sha-256 ` followed by the
 certificate's digest bytes in colon-separated uppercase hex.
 
 Each candidate contains `foundation,component,protocol,priority,address,port,type`.
-Publish 1–32 candidates. Foundations match `[A-Za-z0-9._:-]{1,32}`; component is
+Publish 0–32 candidates. An empty array withdraws advertised routes without draining the listener or established peers. Foundations match `[A-Za-z0-9._:-]{1,32}`; component is
 1, protocol is `udp`, priority is 1–2147483647, port is 1–65535, and type is
 `host`, `srflx` or `relay`. Addresses are IP literals.
+A `srflx` candidate additionally requires `expiresAt`, the original same-mux STUN
+observation's expiry in Unix milliseconds, at most five minutes ahead. Other
+candidate types omit it. Reusing a profile, retrying a heartbeat, rotating a key,
+or refreshing provider caches cannot extend that expiry; only a genuinely newer
+native observation can. Providers exclude expired candidates whenever selecting
+or releasing a join answer, including candidates loaded from a cache. Delayed
+retries may retain expired metadata, but cannot make it routable again.
 Publish only reachable UDP candidates that are explicitly chosen for advertisement.
 The bind address and the advertised address serve different purposes. A host can
 bind to all interfaces, but it cannot advertise wildcard `0.0.0.0` or `::`.
@@ -522,3 +529,42 @@ admission fixtures. The Java tests consume the same schema/fixtures and exercise
 an independent provider with no product accounts. Native tests separately cover
 local admission and real UDP/ICE/DTLS/SCTP. Report stock-client gameplay separately
 from these checks.
+
+### Optional connectivity observation
+
+An opted-in host may include `org.nethernet.connectivity` in the ordinary authenticated heartbeat extensions:
+
+```json
+{"version":1,"critical":false,"data":{"diagnostics":true,"candidateRevision":1,"method":"defined"}}
+```
+
+`method` is `defined` when local configuration supplies advertised endpoints, `discovered` when they are derived locally, or `warm_stun` when the published profile includes a fresh maintained STUN endpoint. It does not assert successful traversal. Incarnation, DTLS fingerprint and candidate endpoints remain in the existing `hostProfile`; unchanged profiles retain their existing revision association. The positive `candidateRevision` belongs to that native listener and advances when endpoint material changes, including a change back to an earlier endpoint. It does not advance for an ordinary heartbeat or key renewal.
+
+The Network runtime defaults diagnostic admission off. Opt-in supports direct `host` candidates and maintained `srflx` candidates carrying their original expiry; each reflexive diagnostic endpoint is capped to that expiry. After a successful heartbeat, the host configures the same-mux diagnostic gate from its actual installed admission keys and authenticated registration generation, with a fixed maximum five-minute lifetime (also bounded by any shorter check-in lease). Queueing, retries and a failed heartbeat cannot extend that lifetime. The ordinary heartbeat schedule brings renewal forward while respecting minimum update spacing. If that spacing exceeds the remaining lifetime, diagnostics expire until a successful refresh; there is no second polling lifecycle. Draining/closing disables diagnostics without giving the provider control of player serving state.
+
+The first successful heartbeat installs the local policy; a subsequent ordinary heartbeat advertises this observation only while that installed native snapshot and fixed deadline remain current. This is local opt-in, not a new installation acknowledgement protocol or proof of reachability. The provider must bind diagnostic jobs to the current authenticated profile, incarnation, candidate revision and bounded lease; a probe can still race a later local withdrawal. No secret appears in the extension, and existing signed diagnostic admission/answer formats remain unchanged.
+
+The host may explicitly withdraw this opt-in with `diagnostics:false`, retaining its method and candidate revision. Provider heartbeat feedback uses the same optional extension envelope with data `{method,candidateRevision,checks}`; each of at most six checks contains `{region,family,outcome,checkedAt,expiresAt}`. Outcomes are `established`, `not-established` or `unknown`, with separate IPv4/IPv6 observations. The provider excludes stale checks. Feedback describes connectivity observations, does not command serving state or assert routing eligibility, and contains no raw internal probe report.
+
+
+Maintained candidates use this same heartbeat/profile path. Configured external
+endpoints suppress discovery and STUN for all families, including omitted ones.
+Otherwise direct candidates are tried first per family; a fresh matching negative
+connectivity observation permits STUN fallback for that family. A still-valid
+established observation wins over negative or unknown feedback. With no usable
+direct candidate, same-mux STUN discovery can start immediately. Native refresh,
+expiry and material replacement continue independently of slow control requests.
+The client publishes replacements and withdrawals promptly and coalesces
+freshness-only updates; it does not introduce a lease document, owner claim,
+receipt, or additional control operation. Ordinary registration recovery resolves
+an ambiguous WebSocket operation before fresh state is sent.
+
+The embedding runtime accepts up to two STUN `host:port` settings and resolves
+hostnames with the JDK at startup, selecting the first usable address per family.
+Explicit advertised endpoints and disabled maintenance skip DNS and STUN entirely.
+A DNS failure is logged and leaves direct candidates and other resolved servers
+available. The native controller receives numeric endpoints and still waits for
+a failed direct check before opening STUN for that family. Embedders choose the
+service; Geyser defaults to [Cloudflare STUN](https://developers.cloudflare.com/realtime/turn/)
+at `stun.cloudflare.com:3478`, with maintained candidates and authenticated checks
+enabled. An empty STUN list disables mapping discovery.

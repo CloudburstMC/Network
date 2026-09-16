@@ -1,0 +1,278 @@
+/* Copyright 2026 CloudburstMC. Licensed under the Apache License, Version 2.0. */
+package org.cloudburstmc.netty.signaling.diagnostic;
+
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import tel.schich.libdatachannel.*;
+import java.net.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.*;
+import java.security.spec.ECGenParameterSpec;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
+
+/** One caller-authorized diagnostic attempt; no workload authentication, retry scheduler or game protocol. */
+public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
+    /** Trusted local job input, NOT signed-job or target-ownership evidence. Expiry/attempt must never be reissued. */
+    public record Job(Context context, String attemptIdHex, DiagnosticHostPolicy.Endpoint target,
+                      String hostFingerprintHex, long expiresAt, boolean ping) {
+        public Job(Context context, String attemptIdHex, DiagnosticHostPolicy.Endpoint target, String hostFingerprintHex, long expiresAt) {
+            this(context, attemptIdHex, target, hostFingerprintHex, expiresAt, false);
+        }
+        public Job {
+            Objects.requireNonNull(context); Objects.requireNonNull(target); unhex(attemptIdHex,16); unhex(hostFingerprintHex,32);
+            integer(expiresAt,1000,0xffffffffL * 1000); if (expiresAt % 1000 != 0) throw invalid();
+        }
+    }
+    /** Owned exact fully gathered offer. Sensitive ICE credentials/assertion must not be logged or persisted. */
+    public record Request(Context context, Claims claims, String ufrag, byte[] offer, DiagnosticAssertionCodec.Assertion assertion) {
+        public Request { Objects.requireNonNull(context); Objects.requireNonNull(claims); DiagnosticAdmissionCodec.ufrag(ufrag);
+            if (offer.length < 1 || offer.length > DiagnosticAnswerCodec.MAX_SDP_BYTES) throw invalid(); offer = offer.clone(); Objects.requireNonNull(assertion); }
+        @Override public byte[] offer() { return offer.clone(); }
+        @Override public String toString() { return "NativeDiagnosticProbeRequest[redacted]"; }
+    }
+    /** Must return promptly, with a bounded HTTP body; may not perform blocking IO on the calling worker. */
+    @FunctionalInterface public interface Signaling { CompletionStage<String> exchange(Request request); }
+    public enum Reason { COMPLETE, CANCELLED, EXPIRED, WITHDRAWN, GATHERING, SIGNALING, ANSWER, TRANSPORT, PROTOCOL, SELECTED_PATH, NATIVE_BUDGET, CLEANUP }
+    /** Local evidence only. Without ping, authSent does not prove host AUTH verification.
+     * UDP counters are owned pre-destruction snapshots, not final totals or delivery evidence. */
+    public record Result(Job job, boolean success, Reason reason, boolean answerVerified, boolean transportEstablished,
+                         boolean authSent, boolean pingVerified, boolean cleanupComplete,
+                         String offerDigestHex, String clientFingerprintHex, InetSocketAddress selectedLocal,
+                         InetSocketAddress selectedRemote, UdpSendStats udp, int sentFrames, int sentBytes,
+                         int receivedFrames, int receivedBytes,
+                         long nativeDeadlineMonotonicMillis, long completedAt) { }
+    private record Incoming(int channel, byte[] bytes) { }
+    private static final class Failed extends RuntimeException {
+        final Reason reason; Failed(Reason reason) { super(reason.name()); this.reason = reason; }
+    }
+    private final Job job;
+    private final InetSocketAddress bind, target;
+    private final Supplier<DiagnosticAnswerCodec.Catalog> catalogReader;
+    private final BooleanSupplier authorized;
+    private final Clock clock;
+    private final AtomicBoolean closeObserved = new AtomicBoolean();
+    private final AtomicBoolean started = new AtomicBoolean(), cancelled = new AtomicBoolean(), failed = new AtomicBoolean(), connected = new AtomicBoolean(), gathered = new AtomicBoolean(), protocolFailed = new AtomicBoolean();
+    private final AtomicInteger receivedFrames = new AtomicInteger(), receivedBytes = new AtomicInteger();
+    private final ArrayBlockingQueue<Incoming> incoming = new ArrayBlockingQueue<>(MAX_FRAMES);
+    private final DataChannel[] channels = new DataChannel[2];
+    private final AtomicReference<PeerConnection> peer = new AtomicReference<>();
+    private final CompletableFuture<Void> termination = new CompletableFuture<>();
+    private DiagnosticAnswerCodec.Catalog catalog;
+    private long anchorWall, anchorNanos, previousNanos, deadlineNanos, handshakeDeadlineNanos, currentNanos, currentWall;
+    private int sentFrames, sentBytes;
+
+    public NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, Supplier<DiagnosticAnswerCodec.Catalog> catalog,
+                                        BooleanSupplier authorized) {
+        this(job, bind, catalog, authorized, Clock.system(), false);
+    }
+    /** Local native tests only: the exception permits loopback, never private/unknown targets or DNS. */
+    NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, Supplier<DiagnosticAnswerCodec.Catalog> catalog,
+                                BooleanSupplier authorized, Clock clock, boolean loopbackTest) {
+        this.job = Objects.requireNonNull(job); this.catalogReader = Objects.requireNonNull(catalog);
+        this.authorized = Objects.requireNonNull(authorized); this.clock = Objects.requireNonNull(clock);
+        try {
+            byte[] address = unhex(job.target.addressHex(),16);
+            this.target = new InetSocketAddress(InetAddress.getByAddress(job.target.family() == 4 ? Arrays.copyOfRange(address,12,16) : address), job.target.port());
+            EndpointAddress.Scope scope = EndpointAddress.scope(target.getAddress());
+            if (scope != EndpointAddress.Scope.PUBLIC && !(loopbackTest && scope == EndpointAddress.Scope.LOOPBACK)) throw invalid();
+            if (bind.isUnresolved() || bind.getPort() < 1 || bind.getAddress().isAnyLocalAddress() || bind.getAddress().isMulticastAddress()
+                    || family(bind.getAddress()) != job.target.family() || bind.getAddress() instanceof Inet6Address v6 && v6.getScopeId() != 0) throw invalid();
+            this.bind = new InetSocketAddress(InetAddress.getByAddress(bind.getAddress().getAddress()), bind.getPort());
+        } catch (UnknownHostException e) { throw invalid(); }
+    }
+    public CompletionStage<Void> termination() { return termination.minimalCompletionStage(); }
+    /** Runs on one caller-owned bounded worker, never a native callback/event-loop thread. One invocation only. */
+    public Result run(Signaling signaling) {
+        Objects.requireNonNull(signaling);
+        if (!started.compareAndSet(false,true)) throw new IllegalStateException("Diagnostic attempt already used");
+        Reason reason = Reason.GATHERING; DiagnosticExchange exchange = null; UdpSendStats udp = null;
+        InetSocketAddress selectedLocal = null, selectedRemote = null;
+        boolean answerVerified = false, transportEstablished = false, authSent = false, complete = false, cleanup = false;
+        String offerHash = null, fingerprint = null;
+        long nativeDeadline = 0; CompletableFuture<String> pending = null;
+        try {
+            anchorWall = clock.wallMillis().getAsLong(); anchorNanos = clock.nanoTime().getAsLong();
+            previousNanos = currentNanos = anchorNanos; currentWall = anchorWall;
+            integer(anchorWall,0,SAFE);
+            long remaining = job.expiresAt - anchorWall;
+            if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS) throw new Failed(Reason.EXPIRED);
+            deadlineNanos = anchorNanos + remaining * 1_000_000L;
+            handshakeDeadlineNanos = anchorNanos + Math.min(remaining,MAX_HANDSHAKE_MILLIS) * 1_000_000L;
+            check(); catalog = Objects.requireNonNull(catalogReader.get()); check();
+            long nativeStart = UdpSendLimits.monotonicTimeMillis(); check(); remaining = job.expiresAt - currentWall;
+            if (nativeStart > Long.MAX_VALUE - remaining) throw new Failed(Reason.EXPIRED);
+            nativeDeadline = nativeStart + remaining;
+            var configuration = PeerConnectionConfiguration.DEFAULT.withIceServers(List.of()).withEnableIceTcp(false)
+                .withBindAddress(bind.getAddress()).withPortRangeBegin(bind.getPort()).withPortRangeEnd(bind.getPort())
+                .withEnableIceUdpMux(true).withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE);
+            PeerConnection nativePeer = PeerConnection.createPeerWithUdpLimits(configuration, Runnable::run, null,
+                new UdpSendLimits(MAX_UDP_SENDS, MAX_UDP_PAYLOAD_BYTES, nativeDeadline, target));
+            peer.set(nativePeer); check();
+            nativePeer.onStateChange.register((p,state) -> {
+                if (state == PeerState.RTC_CONNECTED) connected.set(true);
+                if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) failed.set(true);
+            });
+            nativePeer.onGatheringStateChange.register((p,state) -> { if (state == GatheringState.RTC_GATHERING_COMPLETE) gathered.set(true); });
+            nativePeer.onDataChannel.register((p,channel) -> protocolFailed.set(true)); // Exactly our two locally created channels.
+            installChannels(nativePeer);
+            String ufrag = random(18), password = random(18);
+            checkHandshake(); nativePeer.setLocalDescription("offer",ufrag,password);
+            await(gathered::get, true);
+            // Creation installs the guard before ICE initialization; counters exist only once gathering creates its agent.
+            udp = stats(nativePeer,false);
+            if (udp.reservedDatagrams() != 0 || udp.rejectedDatagrams() != 0) throw new Failed(Reason.NATIVE_BUDGET);
+            String offerText = nativePeer.localDescription();
+            if (offerText.length() > DiagnosticAnswerCodec.MAX_SDP_BYTES) throw new Failed(Reason.GATHERING);
+            byte[] offer = utf8(offerText); offerHash = hex(digest(offer));
+            String fp = field(offerText,"a=fingerprint:");
+            if (!fp.startsWith("sha-256 ")) throw new Failed(Reason.GATHERING);
+            fingerprint = fp.substring(8).replace(":", "").toLowerCase(Locale.ROOT);
+            var claims = new Claims(job.expiresAt,fingerprint,password,job.attemptIdHex,offerHash,job.target.candidateRevision(),
+                job.target.family(),job.target.addressHex(),job.target.port(),PROFILE);
+            DiagnosticAssertionCodec.validateOffer(offer,claims,ufrag);
+            String[] candidate = field(offerText,"a=candidate:").split(" ");
+            if (!numeric(candidate[4],Integer.parseInt(candidate[5])).equals(bind)) throw new Failed(Reason.GATHERING);
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("EC"); generator.initialize(new ECGenParameterSpec("secp384r1"));
+            var assertion = DiagnosticAssertionCodec.sign(job.context,claims,ufrag,generator.generateKeyPair());
+            checkHandshake(); reason = Reason.SIGNALING;
+            pending = Objects.requireNonNull(signaling.exchange(new Request(job.context,claims,ufrag,offer,assertion))).toCompletableFuture();
+            await(pending::isDone, true); String wire = pending.join(); pending = null; check(); reason = Reason.ANSWER;
+            if (wire == null || wire.length() > DiagnosticAnswerCodec.MAX_WIRE_BYTES) throw new Failed(Reason.ANSWER);
+            var expected = new DiagnosticAnswerCodec.Expected(job.context,claims,ufrag,job.hostFingerprintHex);
+            try (var verified = DiagnosticAnswerCodec.verify(expected,wire,this::currentCatalog,
+                    new DiagnosticAnswerCodec.Options(clock,cancelled::get))) {
+                if (verified == null) throw new Failed(Reason.ANSWER);
+                byte[] answer = verified.takeSdp();
+                try { checkHandshake(); nativePeer.setRemoteDescription(new String(answer,StandardCharsets.UTF_8),SessionDescriptionType.ANSWER); }
+                finally { Arrays.fill(answer,(byte)0); }
+            }
+            answerVerified = true; reason = Reason.TRANSPORT;
+            await(() -> connected.get() && channels[0].isOpen() && channels[1].isOpen(), true);
+            for (int i = 0; i < 2; i++) validateChannel(channels[i],i);
+            transportEstablished = true;
+            reason = Reason.PROTOCOL;
+            byte[] auth = DiagnosticAssertionCodec.encodeAuth(job.attemptIdHex,assertion);
+            try { checkHandshake(); send(0,auth); authSent = true; } finally { Arrays.fill(auth,(byte)0); }
+            if (job.ping()) {
+                checkHandshake(); exchange = new DiagnosticExchange(job.attemptIdHex,false,this::send); exchange.start();
+                while (!exchange.complete()) { drain(exchange); if (!exchange.complete()) pause(false); }
+            }
+            check(); reason = Reason.SELECTED_PATH;
+            CandidatePair pair = nativePeer.selectedCandidatePair();
+            selectedLocal = numeric(pair.local().getHostString(),pair.local().getPort());
+            selectedRemote = numeric(pair.remote().getHostString(),pair.remote().getPort());
+            if (!selectedLocal.equals(bind) || !selectedRemote.equals(target) || family(selectedLocal.getAddress()) != job.target.family()
+                    || family(selectedRemote.getAddress()) != job.target.family()
+                    || pair.localCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP
+                    || pair.remoteCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP) throw new Failed(Reason.SELECTED_PATH);
+            udp = stats(nativePeer,true); check(); complete = !job.ping() || exchange.complete(); reason = Reason.COMPLETE;
+        } catch (Failed failure) { reason = failure.reason; }
+        catch (InterruptedException interrupted) { cancelled.set(true); reason = Reason.CANCELLED; Thread.currentThread().interrupt(); }
+        catch (GeneralSecurityException | RuntimeException failure) { /* Reason identifies the failing bounded stage; never include secret payloads. */ }
+        finally {
+            if (pending != null) pending.cancel(false);
+            PeerConnection value = peer.get();
+            if (value == null) { cleanup = true; termination.complete(null); }
+            else {
+                try { udp = stats(value,complete); } catch (RuntimeException unavailable) { udp = null; if (complete) reason = Reason.NATIVE_BUDGET; complete = false; }
+                boolean interrupted = Thread.interrupted();
+                try {
+                    closePeer(value).toCompletableFuture().get(5,TimeUnit.SECONDS); cleanup = true; peer.compareAndSet(value,null);
+                } catch (InterruptedException stop) { interrupted = true; reason = Reason.CLEANUP; }
+                catch (ExecutionException | TimeoutException | RuntimeException failure) { reason = Reason.CLEANUP; }
+                finally { if (interrupted) Thread.currentThread().interrupt(); }
+            }
+            incoming.clear(); Arrays.fill(channels,null);
+        }
+        if (complete && cleanup) { try { check(); } catch (RuntimeException withdrawn) { complete = false; reason = withdrawn instanceof Failed failure ? failure.reason : Reason.WITHDRAWN; } }
+        boolean success = complete && cleanup && !protocolFailed.get() && udp != null && udp.rejectedDatagrams() == 0;
+        if (!success && reason == Reason.COMPLETE) reason = Reason.PROTOCOL;
+        return new Result(job,success,reason,answerVerified,transportEstablished,authSent,exchange != null && exchange.complete(),cleanup,
+            offerHash,fingerprint,selectedLocal,selectedRemote,udp,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
+            nativeDeadline,currentWall);
+    }
+    private void installChannels(PeerConnection value) {
+        for (int i = 0; i < 2; i++) {
+            int index = i;
+            channels[i] = value.createDataChannel(i == 0 ? "ReliableDataChannel" : "UnreliableDataChannel", DataChannelInitSettings.DEFAULT
+                .withReliability(DataChannelReliability.DEFAULT.withUnordered(i == 1).withUnreliable(i == 1).withMaxRetransmits(0)));
+            channels[i].onClosed.register(channel -> failed.set(true)); channels[i].onError.register((channel,error) -> failed.set(true));
+            channels[i].onMessage.register(new DataChannelCallback.Message() {
+                public void onText(DataChannel channel,String text) { protocolFailed.set(true); }
+                public void onBinary(DataChannel channel,ByteBuffer bytes) {
+                    int size = bytes.remaining();
+                    if (cancelled.get() || protocolFailed.get() || size != DiagnosticExchange.FRAME_BYTES || receivedFrames.incrementAndGet() > MAX_FRAMES
+                            || receivedBytes.addAndGet(size) > MAX_APPLICATION_SEND_BYTES) { protocolFailed.set(true); return; }
+                    byte[] owned = new byte[size]; bytes.get(owned);
+                    if (!incoming.offer(new Incoming(index,owned))) protocolFailed.set(true);
+                }
+            });
+        }
+    }
+    private void validateChannel(DataChannel dc,int index) {
+        DataChannelReliability r = dc.reliability();
+        if (!dc.label().equals(index == 0 ? "ReliableDataChannel" : "UnreliableDataChannel") || !dc.protocol().isEmpty()
+                || r.isUnordered() != (index == 1) || r.isUnreliable() != (index == 1) || r.maxRetransmits() != 0 || !r.maxPacketLifeTime().isZero()) throw new Failed(Reason.PROTOCOL);
+    }
+    private void send(int channel,byte[] bytes) {
+        check(); if (protocolFailed.get() || bytes.length > MAX_FRAME_BYTES || ++sentFrames > MAX_FRAMES || (sentBytes += bytes.length) > MAX_APPLICATION_SEND_BYTES) throw new Failed(Reason.PROTOCOL);
+        channels[channel].sendMessage(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip());
+    }
+    private void drain(DiagnosticExchange exchange) {
+        check(); if (protocolFailed.get()) throw new Failed(Reason.PROTOCOL);
+        Incoming message; while ((message = incoming.poll()) != null) exchange.receive(message.channel,message.bytes);
+    }
+    private void await(BooleanSupplier condition,boolean handshake) throws InterruptedException {
+        while (!condition.getAsBoolean()) pause(handshake);
+        if (handshake) checkHandshake(); else check();
+    }
+    private void checkHandshake() { check(); if (currentNanos - handshakeDeadlineNanos >= 0) throw new Failed(Reason.EXPIRED); }
+    private void pause(boolean handshake) throws InterruptedException {
+        check(); if (protocolFailed.get()) throw new Failed(Reason.PROTOCOL);
+        if (failed.get()) throw new Failed(Reason.TRANSPORT);
+        if (handshake && currentNanos - handshakeDeadlineNanos >= 0) throw new Failed(Reason.EXPIRED);
+        Thread.sleep(5);
+    }
+    private DiagnosticAnswerCodec.Catalog currentCatalog() { check(); return catalog; }
+    private void check() {
+        if (cancelled.get() || Thread.currentThread().isInterrupted()) throw new Failed(Reason.CANCELLED);
+        long nanos = clock.nanoTime().getAsLong(), wall = clock.wallMillis().getAsLong(); integer(wall,0,SAFE);
+        if (nanos - previousNanos < 0) throw new Failed(Reason.EXPIRED); previousNanos = currentNanos = nanos;
+        long progressed = anchorWall + (nanos - anchorNanos) / 1_000_000L;
+        currentWall = Math.max(wall,progressed); anchorWall = currentWall; anchorNanos = nanos;
+        if (nanos - deadlineNanos >= 0 || currentWall >= job.expiresAt) throw new Failed(Reason.EXPIRED);
+        if (!authorized.getAsBoolean()) throw new Failed(Reason.WITHDRAWN);
+        if (catalog != null && (!catalog.equals(catalogReader.get()) || !catalog.providerOrigin().equals(job.context.providerOrigin())
+                || currentWall < catalog.notBefore() || job.expiresAt > catalog.expiresAt())) throw new Failed(Reason.WITHDRAWN);
+    }
+    private static UdpSendStats stats(PeerConnection peer,boolean qualifying) {
+        UdpSendStats value = peer.udpSendStats().orElseThrow(() -> new Failed(Reason.NATIVE_BUDGET));
+        if (value.reservedDatagrams() < 0 || value.reservedDatagrams() > MAX_UDP_SENDS || value.sentDatagrams() < 0
+                || value.sentDatagrams() > value.reservedDatagrams() || value.sentBytes() < value.sentDatagrams()
+                || value.sentBytes() > value.sentDatagrams() * MAX_UDP_PAYLOAD_BYTES || qualifying && (value.sentDatagrams() == 0 || value.rejectedDatagrams() != 0)) throw new Failed(Reason.NATIVE_BUDGET);
+        return value;
+    }
+    private static InetSocketAddress numeric(String value,int port) { try { return new InetSocketAddress(EndpointAddress.parse(value),port); } catch (UnknownHostException e) { throw invalid(); } }
+    private static int family(InetAddress address) { return address instanceof Inet6Address ? 6 : 4; }
+    private static String random(int bytes) { byte[] value = new byte[bytes]; new SecureRandom().nextBytes(value); return base64(value); }
+    private static String field(String text,String prefix) { List<String> values = text.lines().filter(line -> line.startsWith(prefix)).toList(); if (values.size() != 1) throw invalid(); return values.get(0).substring(prefix.length()); }
+    private CompletionStage<Void> closePeer(PeerConnection value) {
+        CompletionStage<Void> closing;
+        try { closing = value.closeAsync(); }
+        catch (RuntimeException failure) { termination.completeExceptionally(failure); return CompletableFuture.<Void>failedFuture(failure).minimalCompletionStage(); }
+        if (closeObserved.compareAndSet(false,true)) closing.whenComplete((ignored,failure) -> {
+            if (failure == null) termination.complete(null); else termination.completeExceptionally(failure);
+        });
+        return closing;
+    }
+    /** Native termination is observable even if the trusted signaling callback blocks before returning its stage. */
+    @Override public void close() {
+        cancelled.set(true); PeerConnection value = peer.get();
+        if (value != null) closePeer(value); else if (!started.get()) termination.complete(null);
+    }
+}

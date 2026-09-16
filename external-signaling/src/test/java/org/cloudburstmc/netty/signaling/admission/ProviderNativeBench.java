@@ -63,11 +63,24 @@ public final class ProviderNativeBench {
         NativeProviderTransport nativeHost = null;
         ProviderClient provider = null;
         try {
-            nativeHost = NativeProviderTransport.open(bootstrap, new InetSocketAddress("127.0.0.1", port),
+            String advertisedAddress = System.getProperty("providerAdvertisedAddress");
+            var bindAddress = org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(
+                    System.getProperty("providerBindAddress", "127.0.0.1"));
+            if (!bindAddress.isLoopbackAddress()) {
+                throw new IllegalArgumentException("Loopback bench bind only");
+            }
+            var bind = new InetSocketAddress(bindAddress, port);
+            var advertised = advertisedAddress == null ? bind : new InetSocketAddress(
+                    org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(advertisedAddress), port);
+            nativeHost = NativeProviderTransport.open(bootstrap, bind, advertised,
                     state.resolve("host-cert.pem"), state.resolve("host-key.pem"),
                     new AdmissionGate.Limits(4, 8, 2, 10_000)).toCompletableFuture().get(10, TimeUnit.SECONDS);
             provider = new ProviderClient(
-                    new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration"),
+                    new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration",
+                            ProviderClient.NEW_SERVICE, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null,
+                            null, null, Map.of(), ProviderClient.ControlTransport.HTTP,
+                            Boolean.getBoolean("providerDiagnosticAdmission"),
+                            advertisedAddress == null ? "discovered" : "defined"),
                     new ProviderStateStore(state), nativeHost,
                     () -> new ServerStatus("Automatic native server", 1234, "fixture-only", "Integration", 0, 4, 0),
                     () -> new ProviderClient.Health(true, true, 4, 0, "nethernet", "provider-native-bench"),
@@ -99,6 +112,18 @@ public final class ProviderNativeBench {
                                     1));
                     updated = true;
                 }
+                if (Files.deleteIfExists(state.resolve("check-connectivity"))) {
+                    JsonObject refreshed = provider.readiness().get(10, TimeUnit.SECONDS);
+                    JsonObject feedback = new JsonObject();
+                    if (refreshed.has("extensions")) {
+                        JsonObject extensions = refreshed.getAsJsonObject("extensions");
+                        if (extensions.has("org.nethernet.connectivity")) {
+                            feedback = extensions.getAsJsonObject("org.nethernet.connectivity")
+                                    .getAsJsonObject("data");
+                        }
+                    }
+                    emit("connectivity", feedback);
+                }
                 var endpoint = nativeHost.channel();
                 emit("stats", Map.of("admission", endpoint.admissionStats(), "native", endpoint.nativeStats(),
                         "nativeCreationAttempts", NativeDiagnostics.creationAttempts().orElse(-1), "hostCreations",
@@ -107,7 +132,7 @@ public final class ProviderNativeBench {
             }
             provider.stop().toCompletableFuture().get(20, TimeUnit.SECONDS);
             provider = null;
-            try (var reuse = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
+            try (var reuse = new DatagramSocket(bind)) {
                 emit("closed", Map.of("udpReleased", reuse.getLocalPort() == port));
             }
         } finally {
