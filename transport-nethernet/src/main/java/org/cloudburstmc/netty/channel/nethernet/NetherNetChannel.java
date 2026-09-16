@@ -12,16 +12,15 @@ import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import tel.schich.libdatachannel.CandidatePair;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelCallback;
 import tel.schich.libdatachannel.PeerConnection;
 
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
-import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -83,9 +82,11 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * The ICE candidate pair traffic currently flows over, or {@code null} until the peer connection
      * is connected. The pair can change after connection, so callers should not cache it.
      * <p>
-     * Candidate types come from the descriptions rather than the native selected pair, whose Java
-     * binding only carries addresses. A {@code relay} type on either side means the traffic passes
-     * through a TURN server.
+     * Types are what ICE reports for the pair. The remote side is where traffic actually arrives
+     * from, which behind a NAT is usually a peer reflexive candidate the offer never carried. For a
+     * pair that is not relayed, libjuice sends from one socket and does not track which local
+     * candidate it used, so the local side is the first one it gathered. A {@code relay} type on
+     * either side means the traffic passes through a TURN server.
      */
     public Path selectedPath() {
         PeerConnection peer = this.peerConnection;
@@ -93,10 +94,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return null;
         }
         try {
-            InetSocketAddress local = peer.localAddress();
-            InetSocketAddress remote = peer.remoteAddress();
-            return new Path(local, candidateType(peer.localDescription(), local),
-                    remote, candidateType(peer.remoteDescription(), remote));
+            CandidatePair pair = peer.selectedCandidatePair();
+            return new Path(pair.local(), pair.localType(), pair.remote(), pair.remoteType());
         } catch (Exception notConnected) {
             return null;
         }
@@ -116,36 +115,6 @@ public abstract class NetherNetChannel extends AbstractChannel {
         } catch (Exception notConnected) {
             return 0;
         }
-    }
-
-    /**
-     * Finds the {@code typ} of the candidate line in an SDP that names the given address, or
-     * {@code null} when none does, which happens for a peer reflexive pair discovered mid check.
-     */
-    static String candidateType(String sdp, InetSocketAddress address) {
-        if (sdp == null || address == null) {
-            return null;
-        }
-        InetAddress ip = address.getAddress();
-        for (String line : sdp.split("\\r?\\n")) {
-            if (!line.startsWith("a=candidate:")) {
-                continue;
-            }
-            // a=candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> ...
-            String[] parts = line.split(" ");
-            if (parts.length < 8 || !"typ".equals(parts[6])) {
-                continue;
-            }
-            try {
-                if (Integer.parseInt(parts[5]) == address.getPort()
-                        && InetAddress.getByName(parts[4]).equals(ip)) {
-                    return parts[7].toLowerCase(Locale.ROOT);
-                }
-            } catch (Exception malformed) {
-                // A line this parser does not understand is not the one we are looking for
-            }
-        }
-        return null;
     }
 
     /**
