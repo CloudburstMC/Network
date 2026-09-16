@@ -17,6 +17,8 @@ dependencies {
 
     testImplementation(libs.bundles.junit)
     testRuntimeOnly(libs.junit.platform.launcher)
+    // The selected pair test talks to a real peer, so it needs the native library
+    testRuntimeOnly(variantOf(libs.libdatachannel.java) { classifier("x86_64") })
 }
 
 configure<JavaPluginExtension> {
