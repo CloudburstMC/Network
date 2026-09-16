@@ -103,12 +103,12 @@ class NativeAdmissionStagingTest {
             packet = binding(answer.token() + ":" + ufrag, answer.password());
         }
         void blocked(Host host) throws Exception {
-            long nativeCreations = PeerConnection.nativeCreationAttempts();
+            var nativeCreations = NativeDiagnostics.creationAttempts();
             long children = host.transport.channel().creationAttempts();
             socket.setSoTimeout(250);
             socket.send(new DatagramPacket(packet, packet.length, target));
             assertThrows(SocketTimeoutException.class, () -> socket.receive(new DatagramPacket(new byte[2048], 2048)));
-            assertEquals(nativeCreations, PeerConnection.nativeCreationAttempts(), "valid first STUN cannot allocate while staged");
+            NativeDiagnostics.assertCreations(nativeCreations, 0);
             assertEquals(children, host.transport.channel().creationAttempts());
         }
         void accepted() throws Exception {

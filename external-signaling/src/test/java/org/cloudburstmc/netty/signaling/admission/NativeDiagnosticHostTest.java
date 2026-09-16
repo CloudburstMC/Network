@@ -204,8 +204,8 @@ class NativeDiagnosticHostTest {
             assertEquals(0,playerValidations.get());assertEquals(0,endpoint.liveNativePeers());
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,8)),expiry+10000)).toCompletableFuture().get();
             try(Client client=new Client(bind,port,expiry)) {
-                long before=PeerConnection.nativeCreationAttempts();client.connect(identity,context,key,4,"127.0.0.1",port,false);
-                await(()->gate.stats().rejected()>0);assertEquals(before,PeerConnection.nativeCreationAttempts());assertEquals(0,gate.stats().active());assertEquals(0,gate.stats().retainedAttempts());assertEquals(0,playerValidations.get());
+                var before=NativeDiagnostics.creationAttempts();client.connect(identity,context,key,4,"127.0.0.1",port,false);
+                await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(before,0);assertEquals(0,gate.stats().active());assertEquals(0,gate.stats().retainedAttempts());assertEquals(0,playerValidations.get());
             }
         } finally {endpoint.close().awaitUninterruptibly();endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
     }
@@ -231,8 +231,8 @@ class NativeDiagnosticHostTest {
             try(Client diagnostic=new Client(bind,port,expiry)) {
                 diagnostic.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->diagnostic.channels[0].isOpen()&&diagnostic.channels[1].isOpen());assertEquals(2,endpoint.liveNativePeers());
                 try(Client extra=new Client(bind,port,expiry)) {
-                    long created=PeerConnection.nativeCreationAttempts(),received=endpoint.nativeStats()[0];extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->endpoint.nativeStats()[0]>received);
-                    Thread.sleep(200);assertEquals(created,PeerConnection.nativeCreationAttempts());assertEquals(2,endpoint.liveNativePeers());assertEquals(1,gate.stats().active());
+                    var created=NativeDiagnostics.creationAttempts();long received=endpoint.nativeStats()[0];extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->endpoint.nativeStats()[0]>received);
+                    Thread.sleep(200);NativeDiagnostics.assertCreations(created,0);assertEquals(2,endpoint.liveNativePeers());assertEquals(1,gate.stats().active());
                 }
                 diagnostic.start(false);var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{diagnostic.tick();reports.addAll(gate.pollResults());return !reports.isEmpty();});assertTrue(reports.get(0).success(),reports.toString());
                 assertEquals(1,endpoint.liveNativePeers());assertEquals(1,children.get());assertEquals(1,endpoint.creationAttempts());assertTrue(endpoint.pollEvents().isEmpty());
@@ -252,12 +252,12 @@ class NativeDiagnosticHostTest {
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,7)),expiry+10000)).toCompletableFuture().get();
             for(int i=0;i<4;i++) {Client client=new Client(bind,port,expiry);clients.add(client);client.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->client.channels[0].isOpen()&&client.channels[1].isOpen());}
             assertEquals(4,gate.stats().active());assertEquals(4,gate.stats().pending());
-            try(Client extra=new Client(bind,port,expiry)) {long before=PeerConnection.nativeCreationAttempts();extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);assertEquals(before,PeerConnection.nativeCreationAttempts());}
+            try(Client extra=new Client(bind,port,expiry)) {var before=NativeDiagnostics.creationAttempts();extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(before,0);}
             var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{reports.addAll(gate.pollResults());return reports.size()==4&&gate.stats().active()==0&&gate.stats().retainedAttempts()==0;});
             assertTrue(reports.stream().noneMatch(NativeDiagnosticHostGate.Result::success));assertEquals(0,gate.stats().liveNativePeers());
-            Client original=clients.get(0);byte[] replay=StatelessAdmissionValidatorTest.binding(original.credentials.localUfrag()+":"+original.ufrag,original.credentials.icePwd());long rejected=gate.stats().rejected(),created=PeerConnection.nativeCreationAttempts();
+            Client original=clients.get(0);byte[] replay=StatelessAdmissionValidatorTest.binding(original.credentials.localUfrag()+":"+original.ufrag,original.credentials.icePwd());long rejected=gate.stats().rejected();var created=NativeDiagnostics.creationAttempts();
             try(DatagramSocket socket=new DatagramSocket(new InetSocketAddress(bind,0))) {socket.send(new DatagramPacket(replay,replay.length,bind,port));await(()->gate.stats().rejected()>rejected);}
-            assertEquals(created,PeerConnection.nativeCreationAttempts());assertEquals(0,gate.stats().retainedAttempts());
+            NativeDiagnostics.assertCreations(created,0);assertEquals(0,gate.stats().retainedAttempts());
         } finally {for(Client client:clients)client.close();endpoint.close().awaitUninterruptibly();endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
     }
 
@@ -272,7 +272,7 @@ class NativeDiagnosticHostTest {
                 client.connect(identity,context,key,4,"127.0.0.1",port,false);client.start(true);var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{reports.addAll(gate.pollResults());return !reports.isEmpty();});
                 assertFalse(reports.get(0).success());assertEquals(0,gate.stats().active());assertEquals(i+1,gate.stats().retainedAttempts());
             }
-            try(Client client=new Client(bind,port,expiry)) {long created=PeerConnection.nativeCreationAttempts();client.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);assertEquals(created,PeerConnection.nativeCreationAttempts());assertEquals(16,gate.stats().retainedAttempts());}
+            try(Client client=new Client(bind,port,expiry)) {var created=NativeDiagnostics.creationAttempts();client.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(created,0);assertEquals(16,gate.stats().retainedAttempts());}
         } finally {endpoint.close().awaitUninterruptibly();endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
     }
 }
