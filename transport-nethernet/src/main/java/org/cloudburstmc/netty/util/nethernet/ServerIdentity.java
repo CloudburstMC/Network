@@ -175,7 +175,9 @@ public class ServerIdentity {
         boolean posix = Files.getFileStore(directory).supportsFileAttributeView(PosixFileAttributeView.class);
 
         if (Files.exists(path)) {
-            if (posix) {
+            // Tighten only when it is actually too wide, because the key may sit on a
+            // read-only mount, such as a Kubernetes secret volume, where the chmod fails.
+            if (posix && !OWNER_ONLY.containsAll(Files.getPosixFilePermissions(path))) {
                 Files.setPosixFilePermissions(path, OWNER_ONLY);
             }
             return fromPem(pem, domain);
