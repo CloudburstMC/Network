@@ -30,6 +30,17 @@ public abstract class NetherNetChannel extends AbstractChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
     protected static final ChannelMetadata METADATA = new ChannelMetadata(false);
 
+    /**
+     * One side of the selected pair carries the address the socket uses and the candidate type it
+     * was gathered as: {@code host}, {@code srflx}, {@code prflx} or {@code relay}. A type is
+     * {@code null} when the description names no candidate at that address.
+     */
+    public record Path(InetSocketAddress local, String localType, InetSocketAddress remote, String remoteType) {
+    }
+
+    private record DataChannels(DataChannel reliable, DataChannel unreliable) {
+    }
+
     protected DefaultNetherChannelConfig config;
     protected volatile PeerConnection peerConnection;
     protected volatile SocketAddress remoteAddress;
@@ -44,6 +55,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
     private volatile NetherNetMessageAssembler unreliableAssembler;
 
     protected volatile boolean open = true;
+
+    private volatile DataChannels pending;
+    private boolean activeFired;
 
     protected NetherNetChannel(Channel parent, InetSocketAddress remote, InetSocketAddress local) {
         super(parent);
@@ -135,11 +149,33 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     /**
-     * One side of the selected pair carries the address the socket uses and the candidate type it
-     * was gathered as: {@code host}, {@code srflx}, {@code prflx} or {@code relay}. A type is
-     * {@code null} when the description names no candidate at that address.
+     * Hands this channel the data channels it carries, activating it once they are in place.
+     * Idempotent, and safe to call from a libdatachannel callback.
+     *
+     * @param reliable   The reliable data channel, which this channel sends over
+     * @param unreliable The unreliable data channel, or {@code null} when the peer opened none
      */
-    public record Path(InetSocketAddress local, String localType, InetSocketAddress remote, String remoteType) {
+    public void activate(DataChannel reliable, DataChannel unreliable) {
+        this.pending = new DataChannels(reliable, unreliable);
+        if (isRegistered()) {
+            eventLoop().execute(this::activate0);
+        }
+        // Before registration there is no event loop to queue on, so doRegister queues it instead
+    }
+
+    /**
+     * Activates the channel, always as a queued task so that it is still inactive while registration
+     * decides whether to fire {@code channelActive} itself. That leaves the firing here, once.
+     */
+    private void activate0() {
+        DataChannels channels = this.pending;
+        if (activeFired || channels == null || !open) {
+            return;
+        }
+        activeFired = true;
+
+        setDataChannels(channels.reliable(), channels.unreliable());
+        pipeline().fireChannelActive();
     }
 
     public void setDataChannels(DataChannel reliable, DataChannel unreliable) {
@@ -290,6 +326,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     @Override
     protected void doRegister() throws Exception {
+        eventLoop().execute(this::activate0);
     }
 
     @Override
@@ -322,6 +359,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
      */
     protected void closeWebRTC() {
         closeMessageAssemblers();
+        this.pending = null;
         if (reliableChannel != null) {
             deregisterAll(reliableChannel);
             reliableChannel.close();
