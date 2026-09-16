@@ -36,6 +36,10 @@ public final class ProviderNativeBench {
         }
         Path state = Path.of(args[1]), stop = Path.of(args[3]);
         int port = Integer.parseInt(args[2]);
+        boolean assisted = Boolean.getBoolean("providerAssistedJoins");
+        var identityVerified = new java.util.concurrent.atomic.AtomicBoolean();
+        var expectedCpk = assisted ? java.security.KeyFactory.getInstance("EC").generatePublic(
+                new java.security.spec.X509EncodedKeySpec(Base64.getDecoder().decode(System.getProperty("providerExpectedCpk")))) : null;
         var group = new DefaultEventLoopGroup(2);
         AtomicInteger delivered = new AtomicInteger();
         ServerBootstrap bootstrap = new ServerBootstrap().group(group)
@@ -54,6 +58,11 @@ public final class ProviderNativeBench {
 
                             @Override
                             protected void channelRead0(ChannelHandlerContext ctx, ByteBuf data) {
+                                if (assisted && !identityVerified.get()) {
+                                    String mismatch = org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding.mismatch(child, expectedCpk);
+                                    if (mismatch != null) throw new IllegalStateException(mismatch);
+                                    identityVerified.set(true);
+                                }
                                 delivered.getAndUpdate(mask -> mask | (reliable ? 1 : 2));
                                 ctx.writeAndFlush(new NetherNetPacket(data.retainedDuplicate(), reliable));
                             }
@@ -72,15 +81,18 @@ public final class ProviderNativeBench {
             var bind = new InetSocketAddress(bindAddress, port);
             var advertised = advertisedAddress == null ? bind : new InetSocketAddress(
                     org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(advertisedAddress), port);
-            nativeHost = NativeProviderTransport.open(bootstrap, bind, advertised,
+            nativeHost = (assisted ? NativeProviderTransport.openMaintained(bootstrap,
+                    org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection.select(bind,List.of(),List.of()), Map.of(),
+                    state.resolve("host-cert.pem"),state.resolve("host-key.pem"),new AdmissionGate.Limits(4,8,2,15_000))
+                    : NativeProviderTransport.open(bootstrap, bind, advertised,
                     state.resolve("host-cert.pem"), state.resolve("host-key.pem"),
-                    new AdmissionGate.Limits(4, 8, 2, 10_000)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+                    new AdmissionGate.Limits(4, 8, 2, 10_000))).toCompletableFuture().get(10, TimeUnit.SECONDS);
             provider = new ProviderClient(
                     new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration",
                             ProviderClient.NEW_SERVICE, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null,
-                            null, null, Map.of(), ProviderClient.ControlTransport.HTTP,
+                            null, null, Map.of(), assisted ? ProviderClient.ControlTransport.AUTO : ProviderClient.ControlTransport.HTTP,
                             Boolean.getBoolean("providerDiagnosticAdmission"),
-                            advertisedAddress == null ? "discovered" : "defined"),
+                            advertisedAddress == null ? "discovered" : "defined", assisted),
                     new ProviderStateStore(state), nativeHost,
                     () -> new ServerStatus("Automatic native server", 1234, "fixture-only", "Integration", 0, 4, 0),
                     () -> new ProviderClient.Health(true, true, 4, 0, "nethernet", "provider-native-bench"),
@@ -127,7 +139,8 @@ public final class ProviderNativeBench {
                 var endpoint = nativeHost.channel();
                 emit("stats", Map.of("admission", endpoint.admissionStats(), "native", endpoint.nativeStats(),
                         "nativeCreationAttempts", NativeDiagnostics.creationAttempts().orElse(-1), "hostCreations",
-                        endpoint.creationAttempts(), "deliveredChannels", delivered.get()));
+                        endpoint.creationAttempts(), "deliveredChannels", delivered.get(), "controlCarrier", provider.lastControlCarrier(),
+                        "identityVerified", identityVerified.get()));
                 Thread.sleep(100);
             }
             provider.stop().toCompletableFuture().get(20, TimeUnit.SECONDS);

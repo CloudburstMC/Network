@@ -165,14 +165,20 @@ public final class NativeAdmissionBench {
                     }
                 });
             }
-            peer.setLocalDescription("offer", "nativeBenchClient", "p".repeat(32));
+            boolean assisted = Boolean.getBoolean("providerAssistedJoins");
+            CountDownLatch gathered = new CountDownLatch(1);
+            if (assisted) peer.onGatheringStateChange.register((p, state) -> {
+                if (state == GatheringState.RTC_GATHERING_COMPLETE) gathered.countDown();
+            });
+            peer.setLocalDescription("offer", "nativeBenchClient", "p".repeat(assisted ? 128 : 32));
+            if (assisted && !gathered.await(5,TimeUnit.SECONDS)) throw new IllegalStateException("Client ICE gather timeout");
             emit("offer", Map.of("sdp", peer.localDescription()));
             JsonObject answer = JsonParser.parseString(input.readLine()).getAsJsonObject();
             peer.setRemoteDescription(answer.get("sdp").getAsString(), SessionDescriptionType.ANSWER);
             if (!echoes.await(15, TimeUnit.SECONDS) || failure.get() != null) {
                 throw new IllegalStateException("Both channel echoes required", failure.get());
             }
-            emit("connected", Map.of("reliableBytes", 20013, "unreliableBytes", 7));
+            emit("connected", Map.of("reliableBytes", 20013, "unreliableBytes", 7, "selectedRemotePort", peer.selectedCandidatePair().remote().getPort()));
             if (!"stop".equals(input.readLine())) {
                 throw new IllegalStateException("Expected bench stop");
             }
