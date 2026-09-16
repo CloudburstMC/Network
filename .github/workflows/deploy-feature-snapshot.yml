@@ -4,14 +4,21 @@ on:
   push:
     branches:
       - 'feature-snapshot/**'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a source-qualified temporary fork snapshot to GitHub Packages
+        type: boolean
+        default: false
 
 jobs:
   version:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       publish-version: ${{ steps.version.outputs.publish-version }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Compute feature snapshot version
         id: version
         shell: bash
@@ -49,3 +56,41 @@ jobs:
       DEPLOY_PASSWORD: ${{ secrets.OPENCOLLAB_PASSWORD }}
       PGP_SECRET: ${{ secrets.MAVEN_CENTRAL_SECRET }}
       PGP_PASSPHRASE: ${{ secrets.MAVEN_CENTRAL_PASSPHRASE }}
+
+  fork-snapshot:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ziaxzulu/Network'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GITHUB_PACKAGES_USERNAME: ${{ github.actor }}
+      GITHUB_PACKAGES_TOKEN: ${{ github.token }}
+      MAVEN_DEPLOY_URL: https://maven.pkg.github.com/ziaxzulu/network
+      MAVEN_DEPLOY_USERNAME: ${{ github.actor }}
+      MAVEN_DEPLOY_PASSWORD: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Select source-qualified snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          base_version="$(sed -n 's/^version=//p' gradle.properties)"
+          test "$base_version" = '2.0.0.CR3-SNAPSHOT'
+          native_version="$(sed -n 's/^libdatachannel = "\([^"]*\)"/\1/p' gradle/libs.versions.toml)"
+          test "$native_version" = '0.24.5.0-teamziax-connectivity-8d2d2c0f7f07-SNAPSHOT'
+          echo "NETWORK_PUBLISH_VERSION=${base_version%-SNAPSHOT}-teamziax-connectivity-${GITHUB_SHA:0:12}-SNAPSHOT" >> "$GITHUB_ENV"
+      - name: Build temporary package
+        if: ${{ !inputs.publish }}
+        run: ./gradlew --max-workers=2 assemble
+      - name: Publish temporary package
+        if: inputs.publish
+        run: ./gradlew --max-workers=2 publish
