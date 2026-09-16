@@ -228,6 +228,10 @@ class ProviderWebSocketTest {
                     () -> null, () -> new ProviderClient.Health(true,true,10,0,"nethernet","test"), message -> {});
             try {
                 client.start().get(20,TimeUnit.SECONDS);
+                var scheduled = ProviderClient.class.getDeclaredField("nextHeartbeat"); scheduled.setAccessible(true);
+                long untilNext = scheduled.getLong(client) - System.nanoTime();
+                assertTrue(untilNext > 0 && untilNext <= TimeUnit.MINUTES.toNanos(4),
+                        "A 15-minute idle provider schedule must renew the original five-minute assisted authority early");
                 JsonObject profile = provider.stub.lastHeartbeat.getAsJsonObject("hostProfile");
                 assertEquals("nethernet.websocket-assisted.v1",profile.getAsJsonObject("statelessAdmission").get("assisted").getAsString());
                 var generator = java.security.KeyPairGenerator.getInstance("EC"); generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));

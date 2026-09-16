@@ -924,6 +924,12 @@ public final class ProviderClient implements AutoCloseable {
                 long lead = Math.min(TimeUnit.SECONDS.toNanos(60), remaining / 5);
                 nextHeartbeat = Math.min(nextHeartbeat, Math.max(nextStatusUpdate, diagnosticInstalledDeadline - lead));
             }
+            var ownedAssistance = assistedAuthority;
+            if (ownedAssistance != null) {
+                long remaining = Math.max(0, ownedAssistance.deadlineNanos() - System.nanoTime());
+                long lead = Math.min(TimeUnit.SECONDS.toNanos(60), remaining / 5);
+                nextHeartbeat = Math.min(nextHeartbeat, Math.max(System.nanoTime(), ownedAssistance.deadlineNanos() - lead));
+            }
             if (profileSnapshot != null) {
                 reportConnectivityFeedback(profileSnapshot, response);
                 if (config.assistedJoins()) {
