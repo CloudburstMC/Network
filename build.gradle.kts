@@ -40,6 +40,21 @@ subprojects {
     version = networkVersion
 
     repositories {
+        exclusiveContent {
+            forRepository {
+                maven("https://maven.pkg.github.com/teamziax/libdatachannel-java") {
+                    name = "connectivityNative"
+                    credentials {
+                        username = System.getenv("GITHUB_PACKAGES_USERNAME")
+                        password = System.getenv("GITHUB_PACKAGES_TOKEN")
+                    }
+                }
+            }
+            filter {
+                includeModule("dev.opencollab", "libdatachannel-java")
+                includeModule("dev.opencollab", "libdatachannel-java-arch-detect")
+            }
+        }
         mavenLocal()
         mavenCentral()
         maven("https://repo.opencollab.dev/main")
