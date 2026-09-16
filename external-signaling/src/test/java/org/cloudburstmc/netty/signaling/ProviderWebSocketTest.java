@@ -191,6 +191,68 @@ class ProviderWebSocketTest {
         }
     }
 
+    @Test
+    void assistedFallbackRequiresFinishedDiscoveryAndFreshNegativePublicEvidence() throws Exception {
+        JsonObject profile = new ProviderClientTest.FakeTransport().hostProfile().toCompletableFuture().get();
+        assertFalse(ProviderClient.assistedFallbackNeeded(profile, Set.of(), List.of(), 1000));
+        assertTrue(ProviderClient.assistedFallbackNeeded(profile, Set.of(4), List.of(), 1000));
+        profile.getAsJsonArray("candidates").get(0).getAsJsonObject().addProperty("address","8.8.8.8");
+        var failed = new ProviderTransport.ConnectivityCheck(4,ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED,900,2000);
+        var positive = new ProviderTransport.ConnectivityCheck(4,ProviderTransport.ConnectivityOutcome.ESTABLISHED,950,2000);
+        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(),1000));
+        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(),List.of(failed),1000));
+        assertTrue(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(failed),1000));
+        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(failed,positive),1000));
+        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(failed),2000));
+        var candidate=profile.getAsJsonArray("candidates").get(0).getAsJsonObject();
+        candidate.addProperty("type","srflx");candidate.addProperty("expiresAt",2000);
+        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(),1000));
+        assertTrue(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(),2000));
+    }
+
+    @Test
+    void assistedPushUsesOwnedNativeCaptureAndSuppressesLatePreparedAnswer(@TempDir Path directory) throws Exception {
+        try (Provider provider = new Provider()) {
+            var started = new LinkedBlockingQueue<org.cloudburstmc.netty.signaling.control.AssistedJoin>();
+            var nativeResult = new AtomicReference<CompletableFuture<String>>();
+            var transport = new ProviderClientTest.FakeTransport() {
+                @Override public boolean supportsAssistedJoins() { return true; }
+                @Override public Set<Integer> assistedFallbackReadyFamilies() { return Set.of(4); }
+                @Override public CompletionStage<String> assistedJoin(org.cloudburstmc.netty.signaling.control.AssistedJoin join, Runnable guard) {
+                    guard.run(); var result = new CompletableFuture<String>(); nativeResult.set(result); started.add(join); return result;
+                }
+            };
+            ProviderClient client = new ProviderClient(new ProviderClient.Configuration(URI.create(provider.stub.origin), "nxs-admission-v1",
+                    "assisted", ProviderClient.NEW_SERVICE, ProviderClient.BEARER_TOKEN, "independent-provider-token", null, null,
+                    Map.of(), ProviderClient.ControlTransport.AUTO, false, "discovered", true), new ProviderStateStore(directory), transport,
+                    () -> null, () -> new ProviderClient.Health(true,true,10,0,"nethernet","test"), message -> {});
+            try {
+                client.start().get(20,TimeUnit.SECONDS);
+                JsonObject profile = provider.stub.lastHeartbeat.getAsJsonObject("hostProfile");
+                assertEquals("nethernet.websocket-assisted.v1",profile.getAsJsonObject("statelessAdmission").get("assisted").getAsString());
+                var generator = java.security.KeyPairGenerator.getInstance("EC"); generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
+                JsonObject join = new JsonObject(); join.addProperty("kind","assisted-join"); join.addProperty("version",1); join.addProperty("id","ab".repeat(16));
+                join.add("instanceId",provider.stub.registration.get("instanceId")); join.addProperty("generation",1);
+                join.add("incarnation",profile.getAsJsonObject("statelessAdmission").get("incarnation"));
+                join.add("keyId",profile.get("credentialKeyId")); join.add("hostFingerprint",profile.get("dtlsFingerprint"));
+                join.addProperty("expiresAt",System.currentTimeMillis()+14000); join.addProperty("networkId","1234");
+                join.addProperty("cpk",Base64.getEncoder().encodeToString(generator.generateKeyPair().getPublic().getEncoded()));
+                join.addProperty("localUfrag","assistedHost"); join.addProperty("localPassword","h".repeat(32));
+                join.addProperty("offer","v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=setup:actpass\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=ice-ufrag:assistedClient\r\na=ice-pwd:"+"c".repeat(128)+"\r\na=fingerprint:sha-256 "+String.join(":",Collections.nCopies(32,"AA"))+"\r\na=candidate:1 1 UDP 123 127.0.0.1 19132 typ host\r\n");
+                provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
+                assertNotNull(started.poll(5,TimeUnit.SECONDS)); nativeResult.get().complete("actual-prepared-answer");
+                JsonObject reply = provider.assistedReplies.poll(5,TimeUnit.SECONDS); assertNotNull(reply);
+                assertTrue(reply.get("accepted").getAsBoolean()); assertEquals("actual-prepared-answer",reply.get("answer").getAsString());
+                join.addProperty("id","cd".repeat(16));
+                provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
+                assertNotNull(started.poll(5,TimeUnit.SECONDS));
+                client.stop().toCompletableFuture().get(10,TimeUnit.SECONDS);
+                nativeResult.get().complete("late-after-close");
+                assertNull(provider.assistedReplies.poll(200,TimeUnit.MILLISECONDS));
+            } finally { client.stop().toCompletableFuture().get(10,TimeUnit.SECONDS); }
+        }
+    }
+
     private static ProviderClient client(Provider provider, Path path, ProviderClient.ControlTransport mode,
                                          ProviderClientTest.FakeTransport transport) throws Exception {
         return client(provider, path, mode, transport,
@@ -221,6 +283,7 @@ class ProviderWebSocketTest {
         volatile Result rejectNext, rejectAfterDrop;
         volatile boolean refuseAfterDrop, rejectUpgrade;
         volatile Channel socket;
+        final LinkedBlockingQueue<JsonObject> assistedReplies = new LinkedBlockingQueue<>();
         volatile Map<String, String> droppedHeaders;
         volatile String droppedBody;
         final CompletableFuture<Throwable> failure = new CompletableFuture<>();
@@ -280,6 +343,9 @@ class ProviderWebSocketTest {
                                                 } else if (message instanceof TextWebSocketFrame text) {
                                                     if (text.text().equals("ping")) { pings.incrementAndGet(); ctx.writeAndFlush(new TextWebSocketFrame("pong")); return; }
                                                     JsonObject envelope = JsonParser.parseString(text.text()).getAsJsonObject();
+                                                    if (envelope.has("kind") && envelope.get("kind").getAsString().equals("assisted-join-result")) {
+                                                        assistedReplies.add(envelope); return;
+                                                    }
                                                     assertEquals(Set.of("operation", "headers", "body"), envelope.keySet());
                                                     String op = envelope.get("operation").getAsString(), body = envelope.get("body").getAsString();
                                                     Map<String, String> headers = new HashMap<>();

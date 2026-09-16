@@ -27,6 +27,7 @@ final class ProviderWebSocket implements AutoCloseable {
             MAX_FRAME_BYTES, 1024, 4, MAX_FRAME_BYTES + 64, TIMEOUT, TIMEOUT, TIMEOUT, Duration.ofSeconds(2));
 
     record Reply(int status, HttpHeaders headers, String body) { }
+    record AssistedAnswer(String sdp, Runnable requireCurrent) { }
     @FunctionalInterface interface BeforeSend { void persist() throws IOException; }
 
     private final HttpClient http;
@@ -37,6 +38,8 @@ final class ProviderWebSocket implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    private final java.util.function.Function<org.cloudburstmc.netty.signaling.control.AssistedJoin, CompletionStage<AssistedAnswer>> assisted;
+    private int assistedInFlight;
     private Connection current;
     private long retryAt;
     private int failures;
@@ -51,7 +54,10 @@ final class ProviderWebSocket implements AutoCloseable {
         Connection(String binding) { this.binding = binding; }
     }
 
-    ProviderWebSocket(HttpClient http, URI endpoint) {
+    ProviderWebSocket(HttpClient http, URI endpoint) { this(http, endpoint, null); }
+    ProviderWebSocket(HttpClient http, URI endpoint,
+                      java.util.function.Function<org.cloudburstmc.netty.signaling.control.AssistedJoin, CompletionStage<AssistedAnswer>> assisted) {
+        this.assisted = assisted;
         this.http = http;
         this.endpoint = endpoint;
         io.setRemoveOnCancelPolicy(true);
@@ -117,6 +123,33 @@ final class ProviderWebSocket implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         try {
+            if (text.startsWith("{\"kind\":\"assisted-join\",")) {
+                if (assisted == null || assistedInFlight >= 32) throw new IOException("Assisted joins unavailable");
+                var join = org.cloudburstmc.netty.signaling.control.AssistedJoin.decode(text);
+                if (!connection.binding.equals(join.instanceId() + ":" + join.generation())) throw new IOException("Assisted owner mismatch");
+                long remaining = join.expiresAt() - System.currentTimeMillis();
+                if (remaining <= 0 || remaining > 30_000) throw new IOException("Assisted deadline");
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining);
+                assistedInFlight++;
+                CompletionStage<AssistedAnswer> work;
+                try { work = assisted.apply(join); }
+                catch (Throwable failure) { work = CompletableFuture.failedFuture(failure); }
+                work.handle((guard, failure) -> {
+                    JsonObject reply = new JsonObject(); reply.addProperty("kind", "assisted-join-result");
+                    reply.addProperty("id",join.id()); reply.addProperty("accepted",failure == null);
+                    if (failure == null) reply.addProperty("answer", guard.sdp());
+                    return connection.transport.sendText(JSON.toJson(reply), () -> {
+                        synchronized (ProviderWebSocket.this) {
+                            if (closed || current != connection || System.nanoTime() >= deadline || System.currentTimeMillis() >= join.expiresAt())
+                                throw new IllegalStateException("Assisted socket expired");
+                            if (failure == null) guard.requireCurrent().run();
+                        }
+                    });
+                }).thenCompose(stage -> stage).whenComplete((ignored,failure) -> {
+                    synchronized (ProviderWebSocket.this) { assistedInFlight--; }
+                });
+                return CompletableFuture.completedFuture(null);
+            }
             Parsed parsed = parse(text);
             if (connection.pending == null || !parsed.id.equals(connection.id))
                 throw new IOException("Unexpected provider response");

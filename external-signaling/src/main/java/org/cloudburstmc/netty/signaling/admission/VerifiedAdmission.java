@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
 public record VerifiedAdmission(String tokenId, String localUfrag, String localPassword,
                                 String remoteUfrag, String remotePassword, String remoteFingerprint,
                                 int remoteSctpPort, int remoteMaxMessageSize, long expiresAt,
-                                String networkId, String identityBindingHex, String keyId, IdentityKeyVerifier identityVerifier) {
+                                String networkId, String identityBindingHex, String keyId, IdentityKeyVerifier identityVerifier) implements AdmissionContext {
     /**
      * The envelope bounds the client password: 186 bytes less a 12 byte nonce, a 16 byte tag and
      * the 67 byte fixed prefix leaves 91. Narrower than the 256 ICE itself permits.

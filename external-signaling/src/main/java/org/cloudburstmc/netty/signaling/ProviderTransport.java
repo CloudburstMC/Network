@@ -63,6 +63,13 @@ public interface ProviderTransport {
      */
     CompletionStage<JsonObject> hostProfile();
 
+    default boolean supportsAssistedJoins() { return false; }
+    /** Families whose existing discovery/STUN phase has settled; an in-flight monitor is never ready. */
+    default java.util.Set<Integer> assistedFallbackReadyFamilies() { return java.util.Set.of(); }
+    default CompletionStage<String> assistedJoin(org.cloudburstmc.netty.signaling.control.AssistedJoin join, Runnable requireCurrent) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Assisted joins unavailable"));
+    }
+
     /**
      * Immutable profile bytes plus an endpoint-material ownership guard. The guard throws IllegalStateException
      * after semantic replacement or native retirement; it must never wait, acquire a monitor or perform I/O.

@@ -56,6 +56,30 @@ class MaintainedCandidatePublisherTest {
         }
         @Override public void close() { publisher.close(); }
     }
+    @Test void assistedFallbackWaitsForActualStunAttemptAndKeepsFamiliesIndependent() {
+        try (var h = new Harness(List.of())) {
+            h.publisher.refresh();
+            assertEquals(Set.of(), h.publisher.assistedFallbackReadyFamilies());
+            h.monitors.get(Family.IPV4).failed++;
+            h.publisher.refresh();
+            assertEquals(Set.of(4), h.publisher.assistedFallbackReadyFamilies());
+            h.monitors.get(Family.IPV6).success("2606:4700:4700::1001", 43001);
+            h.publisher.refresh();
+            assertEquals(Set.of(4,6), h.publisher.assistedFallbackReadyFamilies());
+        }
+        var direct = new EndpointSelection.Candidate(endpoint("8.8.8.8",19132), EndpointSelection.Provenance.LOCAL_INTERFACE);
+        try (var h = new Harness(List.of(direct))) {
+            h.publisher.refresh();
+            assertFalse(h.publisher.assistedFallbackReadyFamilies().contains(4));
+            h.publisher.reportDirectChecks(List.of(new ConnectivityCheck(4,ConnectivityOutcome.NOT_ESTABLISHED,h.wall,h.wall+30000)),h.wall);
+            assertTrue(h.publisher.refresh().candidates().candidates().isEmpty());
+            assertFalse(h.publisher.assistedFallbackReadyFamilies().contains(4));
+            h.monitors.get(Family.IPV4).failed++;
+            h.publisher.refresh();
+            assertTrue(h.publisher.assistedFallbackReadyFamilies().contains(4));
+        }
+    }
+
     @Test void pendingHasNoReflexiveCandidateButFreshNativeObservationNeedsNoOwnerProtocol() {
         try (var h = new Harness(List.of())) {
             assertTrue(h.publisher.refresh().candidates().candidates().isEmpty());

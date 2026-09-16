@@ -27,6 +27,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class ProviderRuntimeConfigurationTest {
 
+    @Test void assistedOptInUsesExistingAdapterAndRequiresAuto(@TempDir Path directory) throws Exception {
+        var settings = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "", List.of(), Map.of(),
+                ProviderClient.ControlTransport.AUTO, false, true, List.of(), true);
+        assertTrue(ProviderRuntimeConfiguration.resolve(settings,directory,"0.0.0.0",19132,10,"test").clientConfiguration().assistedJoins());
+        var disabled = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "",List.of(),Map.of());
+        assertFalse(ProviderRuntimeConfiguration.resolve(disabled,directory,"0.0.0.0",19132,10,"test").clientConfiguration().assistedJoins());
+        var http = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "", List.of(), Map.of(),
+                ProviderClient.ControlTransport.HTTP, false, true, List.of(), true);
+        assertTrue(assertThrows(IOException.class, () -> ProviderRuntimeConfiguration.resolve(http,directory,"0.0.0.0",19132,10,"test")).getMessage().contains("control-transport=auto"));
+    }
+
     private static final String PROVIDER = "https://signal.example.net";
 
     private static ProviderRuntimeConfiguration.Settings settings(String endpoint, String token,

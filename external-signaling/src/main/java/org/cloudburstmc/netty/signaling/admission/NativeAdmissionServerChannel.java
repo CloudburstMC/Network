@@ -18,6 +18,10 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
+import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
+import org.cloudburstmc.netty.signaling.control.AssistedJoin;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController;
@@ -73,6 +77,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private final Set<CompletableFuture<Void>> nativeClosures = ConcurrentHashMap.newKeySet();
     private final Set<CompletableFuture<Void>> admissions = ConcurrentHashMap.newKeySet();
     private final Map<AdmissionGate.Reservation, Session> sessions = new HashMap<>();
+    private record AssistedPeer(PeerConnection peer, AdmissionGate.Reservation reservation, long deadlineNanos, Runnable requireCurrent) { }
+    private final Map<String, AssistedPeer> assisted = new HashMap<>();
     private final ArrayBlockingQueue<Event> events = new ArrayBlockingQueue<>(256);
     private final AtomicLong droppedEvents = new AtomicLong();
     private final AtomicLong creations = new AtomicLong();
@@ -123,6 +129,17 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             return CompletableFuture.completedFuture(null);
         }
 
+        AssistedPeer known = assisted.get(request.localUfrag());
+        if (known != null) {
+            AdmissionContext admission = gate.admission(known.reservation());
+            try {
+                known.requireCurrent().run();
+                if (admission == null || System.nanoTime() >= known.deadlineNanos()
+                        || System.currentTimeMillis() >= admission.expiresAt()
+                        || !admission.remoteUfrag().equals(request.remoteUfrag())) return CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(IceUdpMuxListener.Acceptance.reuse(known.peer(), Instant.ofEpochMilli(admission.expiresAt())));
+            } catch (RuntimeException stale) { return CompletableFuture.completedFuture(null); }
+        }
         NativeDiagnosticHostGate diagnostic = diagnostics;
         if (diagnostic != null) {
             var players = gate.stats();
@@ -148,7 +165,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             return CompletableFuture.completedFuture(null);
         }
 
-        VerifiedAdmission a = gate.admission(reservation);
+        AdmissionContext a = gate.admission(reservation);
         if (a == null) {
             gate.finish(reservation);
             return CompletableFuture.completedFuture(null);
@@ -184,10 +201,72 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 Runnable::run, peer -> initialize(reservation, a, peer), Instant.ofEpochMilli(a.expiresAt())));
     }
 
-    /**
-     * Called by the listener on this channel's event loop, before the first request resumes.
-     */
-    private void initialize(AdmissionGate.Reservation reservation, VerifiedAdmission a, PeerConnection peer) {
+    /** Precreate a peer and start outbound ICE, without waiting for any incoming player packet. */
+    CompletionStage<String> assist(AssistedJoin join, Runnable requireCurrent) {
+        long remaining = join.expiresAt() - System.currentTimeMillis();
+        if (remaining <= 0 || remaining > 30_000) return CompletableFuture.failedFuture(new IllegalArgumentException("Assisted deadline"));
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining);
+        CompletableFuture<String> result = new CompletableFuture<>();
+        eventLoop().execute(() -> {
+            AdmissionGate.Reservation reservation = null;
+            PeerConnection peer = null;
+            try {
+                requireCurrent.run();
+                if (!isServing() || System.nanoTime() >= deadline || !identity.fingerprint().equalsIgnoreCase(join.hostFingerprint())
+                        || assisted.size() >= 32 || assisted.containsKey(join.localUfrag())) throw new IllegalStateException("Assisted admission unavailable");
+                var offer = AssistedJoin.parseOffer(join.offer());
+                byte[] cpk = AssistedJoin.canonicalCpk(join.cpk());
+                String identityHash = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(cpk));
+                IdentityKeyVerifier verifier = new IdentityKeyVerifier() {
+                    protected boolean usable() {
+                        try { requireCurrent.run(); return System.nanoTime() < deadline && System.currentTimeMillis() < join.expiresAt(); }
+                        catch (RuntimeException stale) { return false; }
+                    }
+                    protected boolean matches(byte[] actual) { return MessageDigest.isEqual(cpk, actual); }
+                    protected void release() { Arrays.fill(cpk, (byte)0); }
+                };
+                AdmissionContext admission = new AdmissionContext() {
+                    public String tokenId() { return join.id(); }
+                    public String localUfrag() { return join.localUfrag(); }
+                    public String localPassword() { return join.localPassword(); }
+                    public String remoteUfrag() { return offer.ufrag(); }
+                    public String remoteDescription() { return join.offer(); }
+                    public long expiresAt() { return join.expiresAt(); }
+                    public String networkId() { return join.networkId(); }
+                    public String identityBindingHex() { return identityHash; }
+                    public String keyId() { return join.keyId(); }
+                    public IdentityKeyVerifier identityVerifier() { return verifier; }
+                };
+                reservation = gate.reserveAuthenticated(admission, offer.candidates().get(0), System.currentTimeMillis(), System.nanoTime());
+                if (reservation == null) throw new IllegalStateException("Assisted capacity or duplicate join");
+                peer = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(address.getAddress())
+                        .withEnableIceUdpMux(true).withPortRangeBegin(address.getPort()).withPortRangeEnd(address.getPort())
+                        .withDisableAutoNegotiation(true).withMaxMessageSize(NetherNetFrameDecoder.MESSAGE_LIMIT), Runnable::run,
+                        new tel.schich.libdatachannel.DtlsIdentity(identity.certificate(), identity.privateKey()));
+                assisted.put(join.localUfrag(), new AssistedPeer(peer, reservation, deadline, requireCurrent));
+                peer.setRemoteDescription(join.offer(), tel.schich.libdatachannel.SessionDescriptionType.OFFER);
+                peer.setLocalDescription("answer", join.localUfrag(), join.localPassword());
+                initialize(reservation, admission, peer);
+                requireCurrent.run();
+                if (System.nanoTime() >= deadline || System.currentTimeMillis() >= join.expiresAt()) throw new IllegalStateException("Assisted deadline");
+                result.complete(peer.localDescription());
+            } catch (Throwable failure) {
+                AssistedPeer owned = assisted.get(join.localUfrag());
+                if (owned != null && owned.peer() == peer) assisted.remove(join.localUfrag());
+                if (reservation != null) {
+                    if (sessions.containsKey(reservation)) finish(reservation, "assisted_failed");
+                    else {
+                        if (peer != null && !peer.closeAndAwait(Duration.ofSeconds(5))) nativeCloseFailure.compareAndSet(null, failure);
+                        gate.finish(reservation);
+                    }
+                }
+                result.completeExceptionally(failure);
+            }
+        });
+        return result.minimalCompletionStage();
+    }
+
+    private void initialize(AdmissionGate.Reservation reservation, AdmissionContext a, PeerConnection peer) {
         var child = new AdmittedNetherNetChildChannel(this, peer, reservation.tuple(), address);
         var session = new Session(reservation, child);
         creations.incrementAndGet();
@@ -248,7 +327,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
 
         pipeline().fireChannelRead(child);
         pipeline().fireChannelReadComplete();
-        emit(reservation, "ticket.ice_seen", "token_and_stun_validated", session.creationNanos);
+        if (a instanceof VerifiedAdmission) emit(reservation, "ticket.ice_seen", "token_and_stun_validated", session.creationNanos);
     }
 
     /**
@@ -291,6 +370,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 }
 
                 if (!session.reported && session.child.isActive()) {
+                    if (assisted.values().removeIf(p -> p.reservation() == session.reservation))
+                        emit(session.reservation, "ticket.ice_seen", "assisted_ice_dtls_established", session.creationNanos);
                     session.reported = true;
                     gate.connected(session.reservation);
                     emit(session.reservation, "ticket.data_channels_open", "both_channels_open", session.creationNanos);
@@ -497,6 +578,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         }
 
         sessions.clear();
+        assisted.clear();
 
         List<CompletableFuture<Void>> outstanding = new ArrayList<>(nativeClosures);
         if (diagnostics != null) outstanding.add(diagnostics.termination().toCompletableFuture());

@@ -38,13 +38,13 @@ public final class AdmissionGate {
     }
 
     public static final class Reservation {
-        private VerifiedAdmission admission;
+        private AdmissionContext admission;
         private final String tokenId;
         private final InetSocketAddress tuple;
         private final long expiresAt, acceptedNanos, loginDeadlineNanos;
         private boolean ready, connected, closing, closed;
 
-        private Reservation(VerifiedAdmission admission, InetSocketAddress tuple, long millis, long nanos) {
+        private Reservation(AdmissionContext admission, InetSocketAddress tuple, long millis, long nanos) {
             this.admission = admission;
             this.tokenId = admission.tokenId();
             this.tuple = tuple;
@@ -132,7 +132,16 @@ public final class AdmissionGate {
             return null;
         }
 
-        if (claims.containsKey(verifiedAdmission.tokenId()) || tuples.containsKey(request.address())) {
+        return reserveAuthenticated(verifiedAdmission, request.address(), nowMillis, nowNanos);
+    }
+
+    synchronized Reservation reserveAuthenticated(AdmissionContext verifiedAdmission, InetSocketAddress address,
+                                                   long nowMillis, long nowNanos) {
+        if (closed || !enabled || verifiedAdmission.expiresAt() <= nowMillis) {
+            verifiedAdmission.identityVerifier().close();
+            return null;
+        }
+        if (claims.containsKey(verifiedAdmission.tokenId()) || tuples.containsKey(address)) {
             replayRejected++;
             verifiedAdmission.identityVerifier().close();
             return null;
@@ -158,14 +167,14 @@ public final class AdmissionGate {
             return null;
         }
 
-        Reservation reservation = new Reservation(verifiedAdmission, request.address(), nowMillis, nowNanos);
+        Reservation reservation = new Reservation(verifiedAdmission, address, nowMillis, nowNanos);
         claims.put(reservation.tokenId, reservation);
         tuples.put(reservation.tuple, reservation);
         pending++;
         return reservation;
     }
 
-    public synchronized VerifiedAdmission admission(Reservation reservation) {
+    synchronized AdmissionContext admission(Reservation reservation) {
         return current(reservation) && !reservation.closing ? reservation.admission : null;
     }
 

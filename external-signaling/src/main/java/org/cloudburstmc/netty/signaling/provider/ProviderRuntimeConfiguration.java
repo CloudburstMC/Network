@@ -40,7 +40,7 @@ public record ProviderRuntimeConfiguration(
     URI origin, Path stateDirectory, String authorizationToken, String region, String pool,
     Map<String, String> tags, String label, String bindAddress, int udpPort,
     List<InetSocketAddress> advertisedEndpoints, int capacity, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
-    boolean maintainedCandidates, List<InetSocketAddress> stunServers
+    boolean maintainedCandidates, List<InetSocketAddress> stunServers, boolean assistedJoins
 ) {
     /**
      * @param settings   What the host has configured for the provider
@@ -63,6 +63,8 @@ public record ProviderRuntimeConfiguration(
     // DNS is resolved during host startup, never from the gameplay event loop or heartbeat.
     static ProviderRuntimeConfiguration resolve(Settings settings, Path directory, String bindAddress,
             int udpPort, int maxPlayers, String label, AddressResolver resolver, Consumer<String> warning) throws IOException {
+        if (settings.assistedJoins() && settings.controlTransport() != ProviderClient.ControlTransport.AUTO)
+            throw new IOException("nxs.assisted-joins requires nxs.control-transport=auto");
         URI origin;
         try {
             origin = URI.create(settings.endpoint());
@@ -105,7 +107,7 @@ public record ProviderRuntimeConfiguration(
                 ? resolveStunServers(settings.stunServers(), resolver, warning) : List.<InetSocketAddress>of();
         var runtime = new ProviderRuntimeConfiguration(origin, state, token, region, pool, Map.copyOf(tags), label,
             bind, port, List.copyOf(endpoints), capacity, settings.controlTransport(), settings.diagnosticAdmission(),
-            settings.maintainedCandidates(), List.copyOf(stun));
+            settings.maintainedCandidates(), List.copyOf(stun), settings.assistedJoins());
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
@@ -127,8 +129,13 @@ public record ProviderRuntimeConfiguration(
      */
     public record Settings(String endpoint, String token, List<String> advertiseAddresses,
                            Map<String, String> data, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
-                           boolean maintainedCandidates, List<String> stunServers) {
+                           boolean maintainedCandidates, List<String> stunServers, boolean assistedJoins) {
         public Settings { Objects.requireNonNull(controlTransport); stunServers = List.copyOf(stunServers); }
+        public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
+                        ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
+                        boolean maintainedCandidates, List<String> stunServers) {
+            this(endpoint, token, advertiseAddresses, data, controlTransport, diagnosticAdmission, maintainedCandidates, stunServers, false);
+        }
         public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
                         ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission) {
             this(endpoint, token, advertiseAddresses, data, controlTransport, diagnosticAdmission, false, List.of());
@@ -149,7 +156,7 @@ public record ProviderRuntimeConfiguration(
     public ProviderClient.Configuration clientConfiguration() {
         return new ProviderClient.Configuration(origin, profile(), label, ProviderClient.AUTOMATIC,
             authorizationToken == null ? ProviderClient.ANONYMOUS_PROOF_OF_WORK : ProviderClient.BEARER_TOKEN,
-            authorizationToken, region, pool, tags, controlTransport, diagnosticAdmission, advertisedEndpoints.isEmpty() ? "discovered" : "defined");
+            authorizationToken, region, pool, tags, controlTransport, diagnosticAdmission, advertisedEndpoints.isEmpty() ? "discovered" : "defined", assistedJoins);
     }
 
     private static List<InetSocketAddress> resolveStunServers(List<String> configured, AddressResolver resolver,

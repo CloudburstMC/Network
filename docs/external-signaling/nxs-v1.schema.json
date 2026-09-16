@@ -553,6 +553,9 @@
             "capability": {
               "const": "nethernet.stateless-admission.v1"
             },
+            "assisted": {
+              "const": "nethernet.websocket-assisted.v1"
+            },
             "incarnation": {
               "type": "string",
               "pattern": "^[0-9a-f]{32}$"
@@ -908,7 +911,8 @@
                   "enum": [
                     "defined",
                     "discovered",
-                    "warm_stun"
+                    "warm_stun",
+                    "per_join"
                   ]
                 }
               }
@@ -926,7 +930,8 @@
                   "enum": [
                     "defined",
                     "discovered",
-                    "warm_stun"
+                    "warm_stun",
+                    "per_join"
                   ]
                 },
                 "candidateRevision": {

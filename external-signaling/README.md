@@ -77,3 +77,34 @@ not depend on a client retry. Established transport packets stay native. The opt
 selected by the `libdatachannel` version in `gradle/libs.versions.toml`. Its native
 classifier resolves at that same version, so headers and native binaries cannot skew
 apart. Native tests prove transport conformance, not stock-client gameplay.
+
+### Assisted player joins
+
+The existing `ProviderRuntimeConfiguration.Settings` and `ProviderClient.Configuration`
+accept a final `assistedJoins` boolean, defaulting to `false` in existing constructors.
+It requires `ControlTransport.AUTO` and the existing `NativeProviderTransport`; it
+uses that gameplay listener, DTLS identity, admission capacity and CPK verifier.
+Wrappers must delegate `supportsAssistedJoins()`, `assistedFallbackReadyFamilies()`
+and `assistedJoin(join, requireCurrent)` without replacing the original guard/future.
+No second registration, native listener or command channel is added.
+
+Permission alone keeps the ordinary socket. Direct public endpoints remain preferred;
+unknown or expired checks are not failures. Enable the existing diagnostic-admission
+option to obtain public-endpoint failure evidence. With maintained candidates enabled,
+a failed direct check gives the existing STUN monitor its attempt before assistance;
+an empty profile while that monitor is pending cannot activate assistance. Finished
+private-only/empty discovery can activate it without an impossible public-target probe.
+Fresh positive public checks restore direct preference. Active fallback advertises
+`per_join` in the existing signed connectivity extension and upgrades with
+`nxs-assisted: 1`; the provider may reject this optional capability if not configured.
+
+An `assisted-join` carries the authenticated full offer, player CPK and identity,
+original host context, fixed expiry and host ICE credentials. The transport creates
+the peer before any inbound client packet and sends outbound ICE on the same gameplay
+UDP mux. Returning STUN attaches to that already-owned peer. The actual native answer
+is returned only while the original native/profile/key/deadline guard remains live.
+Pending joins are bounded at 32 and preserve their original expiry. Established peers
+use the existing gameplay child and two data channels; no game-login bypass exists.
+IPv4/IPv6 tests cover ICE/DTLS/SCTP, CPK association and two-way reliable/unreliable
+bytes, including a client with no host candidates. They do not establish universal
+NAT traversal or a stock game login.

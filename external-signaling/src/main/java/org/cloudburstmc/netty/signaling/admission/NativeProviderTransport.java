@@ -255,6 +255,11 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     @Override public long candidatePublicationVersion() { return publicationVersion; }
+    @Override public synchronized Set<Integer> assistedFallbackReadyFamilies() {
+        if (closed || draining) return Set.of();
+        return candidatePublisher == null ? Set.of(((InetSocketAddress) channel.localAddress()).getAddress() instanceof java.net.Inet4Address ? 4 : 6)
+                : candidatePublisher.assistedFallbackReadyFamilies();
+    }
 
     private synchronized void refreshMaintained() {
         if (closed || draining || !channel.isActive() || candidatePublisher == null) return;
@@ -422,6 +427,20 @@ public final class NativeProviderTransport implements ProviderTransport {
             if (closed || draining || !channel.isActive()) throw new IllegalStateException("Native listener identity retired");
         });
         snapshot.requireCurrent(); return snapshot;
+    }
+
+    @Override public boolean supportsAssistedJoins() { return true; }
+
+    @Override public CompletionStage<String> assistedJoin(org.cloudburstmc.netty.signaling.control.AssistedJoin join, Runnable requireCurrent) {
+        Runnable guard = () -> {
+            requireCurrent.run();
+            if (closed || draining || !channel.isServing() || !incarnation.equals(join.incarnation())
+                    || !validator.keyIds().contains(join.keyId()) || epochs.stream().noneMatch(e -> e.id().equals(join.keyId())
+                        && e.notBefore() <= System.currentTimeMillis() && e.retireAfter() > System.currentTimeMillis()
+                        && e.retireAfter() >= join.expiresAt())) throw new IllegalStateException("Assisted native identity unavailable");
+        };
+        guard.run();
+        return channel.assist(join, guard);
     }
 
     @Override

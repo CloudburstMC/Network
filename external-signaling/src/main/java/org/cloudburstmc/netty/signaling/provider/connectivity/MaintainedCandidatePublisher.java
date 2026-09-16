@@ -24,6 +24,7 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     private final ObservationLeaseTracker tracker;
     private final Set<Family> fallback = EnumSet.noneOf(Family.class);
     private volatile boolean closed;
+    private Set<Integer> assistedReady = Set.of();
 
     public MaintainedCandidatePublisher(EndpointSelection selection, EndpointConnectivityController controller,
                                        ObservationLeaseTracker tracker) {
@@ -40,12 +41,20 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
         selection.candidates().stream().filter(candidate -> !fallback.contains(Family.of(candidate.endpoint().getAddress())))
                 .forEach(candidate -> candidates.add(new NativeCandidateSnapshot.Candidate(candidate.endpoint(), NativeCandidateSnapshot.Type.HOST)));
         ObservationLeaseTracker.Capture captured = null;
+        var ready = new HashSet<Integer>();
+        if (controller == null) selection.socketFamilies().forEach(family -> ready.add(family == Family.IPV4 ? 4 : 6));
         if (controller != null) {
             // Recovery retains replay high-water marks: an old success cannot acquire a new expiry.
             if (!tracker.clockValid()) tracker.recoverClockForFutureObservations();
             var sample = controller.snapshot();
             var lanes = new EnumMap<Family, EndpointConnectivityController.FamilySnapshot>(Family.class);
             sample.families().forEach((family, lane) -> {
+                switch (lane.state()) {
+                    case CONFIGURED, DIRECT_CHECK_SUCCEEDED, STUN_NOT_CONFIGURED, STUN_FAILED,
+                         STUN_FRESH, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED -> ready.add(family == Family.IPV4 ? 4 : 6);
+                    case AWAITING_DIRECT_CHECK -> { if (!controller.canAttemptStun(family)) ready.add(family == Family.IPV4 ? 4 : 6); }
+                    default -> { } // In particular, STUN_PENDING cannot promote an empty gathering profile.
+                }
                 var observation = lane.observation().filter(value -> value.mapped() != null
                         && value.successfulResponses() > 0 && value.mappingRevision() > 0);
                 lanes.put(family, new EndpointConnectivityController.FamilySnapshot(lane.state(), lane.directCheck(),
@@ -67,10 +76,13 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
                 candidates.add(candidate); expiries.put(candidate, observation.expiresAt());
             } catch (UnknownHostException impossible) { throw new IllegalStateException(impossible); }
         }
+        assistedReady = Set.copyOf(ready);
         return new Publication(new NativeCandidateSnapshot(candidates), expiries, () -> {
             requireOpen(); if (owned != null) owned.requireCurrent();
         });
     }
+
+    public synchronized Set<Integer> assistedFallbackReadyFamilies() { return closed ? Set.of() : assistedReady; }
 
     /** Transport fences revision, time and the original asynchronous delivery window. */
     public synchronized void reportDirectChecks(List<ConnectivityCheck> checks, long nowMillis) {
