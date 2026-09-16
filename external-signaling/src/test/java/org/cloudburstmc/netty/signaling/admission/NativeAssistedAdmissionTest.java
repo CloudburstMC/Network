@@ -27,6 +27,41 @@ import static org.junit.jupiter.api.Assertions.*;
 class NativeAssistedAdmissionTest {
     @TempDir Path directory;
 
+    @Test @Timeout(35)
+    void timedOutPrecreatedPeersReleaseAssistedCapacityAfterNativeCleanup() throws Exception {
+        var identityHelper = new NativeDiagnosticHostTest(); identityHelper.directory = directory;
+        var identity = identityHelper.identity();
+        var bind = InetAddress.getByName("127.0.0.1");
+        var loop = new DefaultEventLoopGroup(1);
+        var endpoint = new NativeAdmissionServerChannel(identity, (request,now) -> null, new AdmissionGate.Limits(2,64,1,100));
+        try {
+            new ServerBootstrap().group(loop).channelFactory(() -> endpoint)
+                    .childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
+                        protected void initChannel(AdmittedNetherNetChildChannel child) { }
+                    }).bind(bind,NativeDiagnosticHostTest.port(bind)).sync();
+            try (var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(bind).withDisableAutoNegotiation(true),Runnable::run)) {
+                var gathered = new CountDownLatch(1);
+                client.onGatheringStateChange.register((peer,state) -> { if(state==GatheringState.RTC_GATHERING_COMPLETE) gathered.countDown(); });
+                client.createDataChannel("ReliableDataChannel");
+                client.setLocalDescription("offer","timeoutClient","c".repeat(32));
+                assertTrue(gathered.await(5,TimeUnit.SECONDS));
+                for(int attempt=0;attempt<33;attempt++) {
+                    var join=new AssistedJoin(String.format("%032x",attempt+1),"instance-test",1,"34".repeat(16),"K001",identity.fingerprint(),
+                            System.currentTimeMillis()+15000,"1234",TestSignalingProvider.IDENTITY_CPK,
+                            "timeoutHost"+attempt,"h".repeat(32),client.localDescription());
+                    endpoint.assist(join,()->{}).toCompletableFuture().get(5,TimeUnit.SECONDS);
+                    // Deliberately withhold the answer: no peer can reach activation or consume the CPK.
+                    NativeDiagnosticHostTest.await(()->endpoint.liveNativePeers()==0);
+                }
+                assertEquals(33,endpoint.creationAttempts(),"Timeouts cannot permanently consume the32 assisted slots");
+                assertTrue(client.closeAndAwait(Duration.ofSeconds(5)));
+            }
+        } finally {
+            endpoint.close().awaitUninterruptibly();endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);
+            assertEquals(0,endpoint.liveNativePeers());loop.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();
+        }
+    }
+
     @Test @Timeout(40)
     void assistedPeerUsesRealGameplayChildIdentityAndTwoWayChannelsBothFamilies() throws Exception {
         var identityHelper = new NativeDiagnosticHostTest(); identityHelper.directory = directory;

@@ -384,6 +384,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     }
 
     private void finish(AdmissionGate.Reservation r, String reason) {
+        assisted.values().removeIf(peer -> peer.reservation() == r);
         Session session = sessions.remove(r);
         // An outstanding native prepare owns its reservation until request.completion settles.
         if (session != null) {
