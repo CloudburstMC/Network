@@ -36,6 +36,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile String selectedMode;
     volatile int challengeDifficulty = -1;
     volatile JsonObject extensionMetadata;
+    volatile JsonArray heartbeatRetirements;
     volatile int extensionRequests, keyAcknowledgements;
     boolean draining;
     volatile String desiredState = "serving";
@@ -319,6 +320,8 @@ public final class IndependentProviderStub implements AutoCloseable {
                     request.add("keyId", requestedKey.get("keyId"));
                     ok.add("keyRequest", request);
                 }
+                JsonArray retirements = heartbeatRetirements;
+                if (retirements != null) ok.add("retirements", retirements.deepCopy());
                 draining = !body.get("state").getAsString().equals("serving");
                 JsonObject desired = new JsonObject();
                 desired.addProperty("revision", desiredRevision);

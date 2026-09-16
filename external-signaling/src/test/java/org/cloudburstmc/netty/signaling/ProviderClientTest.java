@@ -398,6 +398,74 @@ class ProviderClientTest {
         }
     }
 
+    @Test
+    void retirementRepliesAndRestartNeverExtendPersistedOriginalCutoff(@TempDir Path path) throws Exception {
+        class CapturingTransport extends FakeTransport {
+            final List<List<TicketKey>> snapshots = new CopyOnWriteArrayList<>();
+
+            @Override
+            public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+                snapshots.add(List.copyOf(keys));
+                return super.installTicketKeys(keys);
+            }
+
+            List<TicketKey> latest() {
+                return snapshots.get(snapshots.size() - 1);
+            }
+        }
+        try (var stub = new IndependentProviderStub()) {
+            stub.checkInMillis = 3_600_000;
+            var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Rotation");
+            var firstTransport = new CapturingTransport();
+            var first = new ProviderClient(config, new ProviderStateStore(path), firstTransport, () -> null,
+                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "fixture"), message -> { });
+            long originalCutoff;
+            try {
+                first.start().get(20, TimeUnit.SECONDS);
+                originalCutoff = System.currentTimeMillis() + 300_000;
+                JsonObject oldKey = new JsonObject();
+                oldKey.addProperty("keyId", "T001");
+                oldKey.addProperty("retireAfter", originalCutoff);
+                stub.heartbeatRetirements = new JsonArray();
+                stub.heartbeatRetirements.add(oldKey);
+                first.rotateTicketKey().get(10, TimeUnit.SECONDS);
+                assertEquals(List.of("T001", "T002"), firstTransport.latest().stream().map(ProviderTransport.TicketKey::keyId).toList());
+                assertEquals(originalCutoff, firstTransport.latest().get(0).retireAfter());
+                assertEquals(Long.MAX_VALUE, firstTransport.latest().get(1).retireAfter());
+                // Repeated responses are idempotent; even a provider erroneously rebasing a later
+                // response cannot extend the original local retirement bound.
+                first.readiness().get(10, TimeUnit.SECONDS);
+                JsonArray laterReply = stub.heartbeatRetirements.deepCopy();
+                laterReply.get(0).getAsJsonObject().addProperty("retireAfter", originalCutoff + 300_000);
+                stub.heartbeatRetirements = laterReply;
+                first.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(originalCutoff, firstTransport.latest().get(0).retireAfter());
+            } finally {
+                first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+            var saved = JsonParser.parseString(Files.readString(path.resolve("provider-state.json")))
+                    .getAsJsonObject().getAsJsonArray("ticketKeys");
+            assertEquals(originalCutoff, saved.get(0).getAsJsonObject().get("retireAfter").getAsLong());
+            var resumedTransport = new CapturingTransport();
+            var resumed = new ProviderClient(config, new ProviderStateStore(path), resumedTransport, () -> null,
+                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "fixture"), message -> { });
+            try {
+                resumed.start().get(20, TimeUnit.SECONDS);
+                resumed.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(2, stub.generation);
+                assertFalse(resumedTransport.snapshots.isEmpty());
+                for (var snapshot : resumedTransport.snapshots) {
+                    assertEquals(List.of("T001", "T002"), snapshot.stream().map(ProviderTransport.TicketKey::keyId).toList());
+                    assertEquals(originalCutoff, snapshot.get(0).retireAfter(),
+                            "The very first native installation after restart must retain the saved deadline");
+                    assertEquals(Long.MAX_VALUE, snapshot.get(1).retireAfter());
+                }
+            } finally {
+                resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     private static void eventually(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
