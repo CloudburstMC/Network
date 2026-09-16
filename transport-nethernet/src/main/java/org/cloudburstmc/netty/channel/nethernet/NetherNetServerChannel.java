@@ -368,11 +368,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 }
 
                 log.debug("Data Channels established for {}", Long.toUnsignedString(this.connectionId));
-                child.setDataChannels(reliable, unreliable);
-
-                if (child.pipeline() != null) {
-                    child.pipeline().fireChannelActive();
-                }
+                child.activate(reliable, unreliable);
             }
         }
 
