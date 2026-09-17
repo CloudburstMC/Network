@@ -283,6 +283,18 @@ class NativeAdmissionIntegrationTest {
                                     "a=candidate:1 1 UDP 2130706431 ::1 " + port + " typ host\r\na=end-of-candidates");
                     client.setRemoteDescription(sdp, SessionDescriptionType.ANSWER);
                     await(() -> opened.get() == 2);
+                    var events = new ArrayList<JsonObject>();
+                    var ownedHost = host;
+                    await(() -> {
+                        events.addAll(ownedHost.pollEvents());
+                        return events.stream().anyMatch(e -> e.get("stage").getAsString().equals("ticket.data_channels_open"));
+                    });
+                    var connected = events.stream().filter(e -> e.get("stage").getAsString().equals("ticket.data_channels_open"))
+                            .findFirst().orElseThrow();
+                    assertEquals(InetAddress.getByName(ip), InetAddress.getByName(connected.get("remoteAddress").getAsString()));
+                    assertEquals(client.selectedCandidatePair().local().getPort(), connected.get("remotePort").getAsInt());
+                    assertTrue(events.stream().filter(e -> e.get("stage").getAsString().equals("ticket.ice_seen"))
+                            .allMatch(e -> !e.has("remoteAddress") && !e.has("remotePort")), "No selected endpoint is invented before connection");
                     assertTrue(client.closeAndAwait(Duration.ofSeconds(5)));
                 }
             }

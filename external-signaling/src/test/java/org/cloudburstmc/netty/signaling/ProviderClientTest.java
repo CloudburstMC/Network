@@ -529,9 +529,12 @@ class ProviderClientTest {
             });
             try {
                 client.start().get(20, TimeUnit.SECONDS);
-                host.events.add(JsonParser.parseString(
-                                "{\"ticketId\":\"fixture-ticket\",\"stage\":\"ticket.failed\",\"occurredAt\":\"2026-09-07T00:00:00Z\"}")
-                        .getAsJsonObject());
+                JsonObject observed = JsonParser.parseString("""
+                        {"ticketId":"fixture-ticket","stage":"ticket.data_channels_open",
+                         "occurredAt":"2026-09-07T00:00:00Z","reason":"both_channels_open",
+                         "remoteAddress":"2001:db8::1234","remotePort":54321,"sdp":"must-not-persist"}
+                        """).getAsJsonObject();
+                host.events.add(observed);
                 eventually(() -> stub.outcomeAttempts == 1);
                 int before = stub.heartbeats;
                 eventually(() -> stub.heartbeats >= before + 2);
@@ -540,12 +543,19 @@ class ProviderClientTest {
                         JsonParser.parseString(Files.readString(path.resolve("provider-state.json")))
                                 .getAsJsonObject();
                 assertEquals(1, saved.getAsJsonArray("pendingEvents").size());
+                JsonObject pending = saved.getAsJsonArray("pendingEvents").get(0).getAsJsonObject();
+                assertEquals("2001:db8::1234", pending.get("remoteAddress").getAsString());
+                assertEquals(54321, pending.get("remotePort").getAsInt());
+                assertFalse(pending.has("sdp"));
                 assertTrue(saved.get("profilePublishedAt").getAsLong() > 0);
             } finally {
                 stub.failOutcomes = false;
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }
             assertEquals(1, stub.events.size(), "Shutdown retries the durable outcome without losing it");
+            assertEquals("2001:db8::1234", stub.events.get(0).get("remoteAddress").getAsString());
+            assertEquals(54321, stub.events.get(0).get("remotePort").getAsInt());
+            assertFalse(stub.events.get(0).has("sdp"));
         }
     }
 

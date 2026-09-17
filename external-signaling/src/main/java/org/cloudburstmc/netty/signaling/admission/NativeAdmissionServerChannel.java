@@ -49,21 +49,24 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NativeAdmissionServerChannel.class);
 
-    public record Event(String ticketId, String stage, String reason, long occurredAt, long validationToCreationNanos) {
+    public record Event(String ticketId, String stage, String reason, long occurredAt, long validationToCreationNanos,
+                        InetSocketAddress remoteEndpoint) {
     }
 
     private static final class Session {
         final AdmissionGate.Reservation reservation;
         final AdmittedNetherNetChildChannel child;
+        final PeerConnection peer;
         final long creationNanos = System.nanoTime();
         final CompletableFuture<Void> closed = new CompletableFuture<>();
         volatile boolean failed;
         boolean reported;
         boolean closing;
 
-        Session(AdmissionGate.Reservation reservation, AdmittedNetherNetChildChannel child) {
+        Session(AdmissionGate.Reservation reservation, AdmittedNetherNetChildChannel child, PeerConnection peer) {
             this.reservation = reservation;
             this.child = child;
+            this.peer = peer;
         }
     }
 
@@ -268,7 +271,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
 
     private void initialize(AdmissionGate.Reservation reservation, AdmissionContext a, PeerConnection peer) {
         var child = new AdmittedNetherNetChildChannel(this, peer, reservation.tuple(), address);
-        var session = new Session(reservation, child);
+        var session = new Session(reservation, child, peer);
         creations.incrementAndGet();
         liveNativePeers.incrementAndGet();
         sessions.put(reservation, session);
@@ -374,7 +377,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                         emit(session.reservation, "ticket.ice_seen", "assisted_ice_dtls_established", session.creationNanos);
                     session.reported = true;
                     gate.connected(session.reservation);
-                    emit(session.reservation, "ticket.data_channels_open", "both_channels_open", session.creationNanos);
+                    emit(session.reservation, "ticket.data_channels_open", "both_channels_open", session.creationNanos,
+                            observedRemoteEndpoint(session.peer));
                 }
             }
         } catch (Exception failure) {
@@ -415,9 +419,27 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     }
 
     private void emit(AdmissionGate.Reservation r, String stage, String reason, long createdAt) {
+        emit(r, stage, reason, createdAt, null);
+    }
+
+    private void emit(AdmissionGate.Reservation r, String stage, String reason, long createdAt,
+                      InetSocketAddress remoteEndpoint) {
         if (!events.offer(new Event(r.tokenId(), stage, reason, System.currentTimeMillis(),
-                Math.max(0, createdAt - r.acceptedNanos())))) {
+                Math.max(0, createdAt - r.acceptedNanos()), remoteEndpoint))) {
             droppedEvents.incrementAndGet();
+        }
+    }
+
+    /** Snapshot the selected transport endpoint, never the admission's initial SDP candidate. */
+    private static InetSocketAddress observedRemoteEndpoint(PeerConnection peer) {
+        try {
+            var remote = peer.remoteAddress();
+            if (remote.getPort() < 1 || remote.getPort() > 65535) return null;
+            return new InetSocketAddress(org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(remote.getHostString()),
+                    remote.getPort());
+        } catch (RuntimeException | java.net.UnknownHostException unavailable) {
+            // Peer closure can race this optional observation; telemetry must not fail admission.
+            return null;
         }
     }
 

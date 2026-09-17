@@ -670,6 +670,10 @@ public final class NativeProviderTransport implements ProviderTransport {
             result.addProperty("stage", event.stage());
             result.addProperty("reason", event.reason());
             result.addProperty("occurredAt", Instant.ofEpochMilli(event.occurredAt()).toString());
+            if (event.remoteEndpoint() != null) {
+                result.addProperty("remoteAddress", event.remoteEndpoint().getAddress().getHostAddress());
+                result.addProperty("remotePort", event.remoteEndpoint().getPort());
+            }
             return result;
         }).toList();
     }

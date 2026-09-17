@@ -1175,7 +1175,7 @@ public final class ProviderClient implements AutoCloseable {
         for (JsonObject event : fresh) {
             // Persist only the existing redacted telemetry fields, never native SDP or secret extensions.
             JsonObject safe = new JsonObject();
-            for (String field : List.of("stage", "ticketId", "occurredAt", "reason")) {
+            for (String field : List.of("stage", "ticketId", "occurredAt", "reason", "remoteAddress", "remotePort")) {
                 if (event.has(field)) {
                     safe.add(field, event.get(field));
                 }

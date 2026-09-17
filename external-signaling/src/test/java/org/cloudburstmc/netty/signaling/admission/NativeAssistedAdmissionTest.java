@@ -106,9 +106,13 @@ class NativeAssistedAdmissionTest {
                     }
                     client.setLocalDescription("offer","assistedPlayer", "p".repeat(128)); // Stateless 91-byte bound remains unchanged.
                     assertTrue(gathered.await(5,TimeUnit.SECONDS));
+                    // The first offered tuple is deliberately not the eventual peer. Reporting the
+                    // admission reservation instead of the selected native endpoint would emit port9.
+                    String offer = client.localDescription().replaceFirst("a=candidate:",
+                            "a=candidate:decoy 1 UDP 1 " + numeric + " 9 typ host\r\na=candidate:");
                     var join = new AssistedJoin("12".repeat(16), "instance-test", 1, "34".repeat(16), "K001", identity.fingerprint(),
                             System.currentTimeMillis()+15000, "1234", TestSignalingProvider.IDENTITY_CPK,
-                            "assistedLocalUfrag", "s".repeat(32), client.localDescription());
+                            "assistedLocalUfrag", "s".repeat(32), offer);
                     String answer = endpoint.assist(join, () -> {}).toCompletableFuture().get(5,TimeUnit.SECONDS);
                     assertEquals(1,endpoint.creationAttempts(),"peer exists before client receives an answer");
                     assertThrows(ExecutionException.class, () -> endpoint.assist(join, () -> {}).toCompletableFuture().get());
@@ -121,7 +125,17 @@ class NativeAssistedAdmissionTest {
                     assertTrue(errors.isEmpty(),errors.toString());
                     assertEquals(port,client.selectedCandidatePair().remote().getPort());
                     assertNotNull(child.get());
+                    var observed = new AtomicReference<NativeAdmissionServerChannel.Event>();
+                    NativeDiagnosticHostTest.await(() -> {
+                        endpoint.pollEvents().stream().filter(e -> e.stage().equals("ticket.data_channels_open"))
+                                .forEach(observed::set);
+                        return observed.get() != null;
+                    });
+                    var selected = client.selectedCandidatePair().local();
+                    assertEquals(new java.net.InetSocketAddress(bind, selected.getPort()), observed.get().remoteEndpoint());
+                    assertNotEquals(9, observed.get().remoteEndpoint().getPort());
                     assertTrue(client.closeAndAwait(Duration.ofSeconds(5)));
+                    assertEquals(selected.getPort(), observed.get().remoteEndpoint().getPort(), "Original observation survives closure");
                 }
             } finally {
                 endpoint.close().awaitUninterruptibly(); endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);

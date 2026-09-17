@@ -844,9 +844,36 @@
               "reason": {
                 "type": "string",
                 "maxLength": 128
+              },
+              "remoteAddress": {
+                "type": "string",
+                "maxLength": 45,
+                "pattern": "^[0-9A-Fa-f:.]+$",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ],
+                "description": "Host-observed selected peer IP at transport establishment; never a signaling address or unselected SDP candidate."
+              },
+              "remotePort": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "dependentRequired": {
+              "remoteAddress": [
+                "remotePort"
+              ],
+              "remotePort": [
+                "remoteAddress"
+              ]
+            }
           }
         }
       },
