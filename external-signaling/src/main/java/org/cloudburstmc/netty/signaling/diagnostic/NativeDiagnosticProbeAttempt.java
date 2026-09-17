@@ -205,7 +205,9 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             await(() -> connected.get() && channels[0].isOpen() && channels[1].isOpen(), true);
             for (int i = 0; i < 2; i++) validateChannel(channels[i],i);
             transportEstablished = true;
-            selectedPair(nativePeer); // No diagnostic AUTH is sent to an invalid selected destination.
+            CandidatePair establishedPair = selectedPair(nativePeer); // No AUTH is sent to an invalid selected destination.
+            selectedLocal = numeric(establishedPair.local().getHostString(),establishedPair.local().getPort());
+            selectedRemote = numeric(establishedPair.remote().getHostString(),establishedPair.remote().getPort());
             reason = Reason.PROTOCOL;
             byte[] auth = DiagnosticAssertionCodec.encodeAuth(job.attemptIdHex,assertion);
             try { checkHandshake(); send(0,auth); authSent = true; } finally { Arrays.fill(auth,(byte)0); }
@@ -250,10 +252,16 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         CandidatePair pair = nativePeer.selectedCandidatePair();
         InetSocketAddress selectedLocal = numeric(pair.local().getHostString(),pair.local().getPort());
         InetSocketAddress selectedRemote = numeric(pair.remote().getHostString(),pair.remote().getPort());
-        if (!(selectedLocal.equals(bind) || job.target.assisted() && selectedLocal.equals(gatheredLocal)) || (target != null ? !selectedRemote.equals(target)
+        IceCandidate localCandidate = pair.localCandidate().orElseThrow();
+        var localScope = EndpointAddress.scope(selectedLocal.getAddress());
+        // A NAT may expose a different mapping to the peer than to the discovery server.
+        boolean assistedLocal = job.target.assisted() && (selectedLocal.equals(gatheredLocal)
+                || localCandidate.type() == IceCandidate.Type.PEER_REFLEXIVE
+                && (localScope == EndpointAddress.Scope.PUBLIC || loopbackTest && localScope == EndpointAddress.Scope.LOOPBACK));
+        if (!(selectedLocal.equals(bind) || assistedLocal) || (target != null ? !selectedRemote.equals(target)
                 : EndpointAddress.scope(selectedRemote.getAddress()) != EndpointAddress.Scope.PUBLIC && !(loopbackTest && EndpointAddress.scope(selectedRemote.getAddress()) == EndpointAddress.Scope.LOOPBACK)) || family(selectedLocal.getAddress()) != job.target.family()
                 || family(selectedRemote.getAddress()) != job.target.family()
-                || pair.localCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP
+                || localCandidate.transport() != IceCandidate.Transport.UDP
                 || pair.remoteCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP) throw new Failed(Reason.SELECTED_PATH);
         return pair;
     }

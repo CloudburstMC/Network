@@ -35,7 +35,7 @@ With `ping=true`, success additionally requires the original random PONG. The
 host emits no unsolicited challenge or completion frame. Neither mode exchanges
 Minecraft packets or uses a Minecraft account.
 
-Every success also requires the exact selected UDP local/remote tuple and family,
+Every success also requires the authorized selected UDP local/remote endpoints and family. Profile 1 pins the original tuples; profile 2 also permits a same-family public local peer-reflexive mapping learned through ICE when the mapping towards the host differs from STUN discovery. Success also requires
 valid native statistics with no budget rejection, and completed native cleanup.
 Missing statistics are unavailable, never fabricated zero. Counts are snapshots
 before destruction, not shutdown totals or OS-level delivery proof. Results are

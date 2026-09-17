@@ -275,6 +275,33 @@ class NativeAssistedDiagnosticTest {
         }
     }
 
+    @Test @Timeout(35) void forwardedHostAcceptsProbeMappingThatChangesAfterStunDiscovery() throws Exception {
+        for (String numeric : List.of("127.0.0.1", "::1")) try (var f = new Fixture(numeric);
+                var nat = new RestrictivePair(f.bind, f.hostPort, f.probePort);
+                var advertised = new DatagramSocket(new InetSocketAddress(f.bind, 0));
+                var stun = new StunServer(f.bind, source -> source.getPort() == f.probePort
+                        ? (InetSocketAddress) advertised.getLocalSocketAddress() : nat.mapped(source));
+                var attempt = f.attempt(stun.address())) {
+            nat.hostSent.set(true); // The host has a port forward; the probe's NAT still filters inbound traffic.
+            var result = attempt.run(request -> f.host.assistDiagnostic(f.join(request), () -> {},
+                    Map.of(f.job.target().family(), stun.address()), Map.of()).thenApply(answer ->
+                    DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()), utf8(answer),
+                            new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()), () -> f.catalog, DiagnosticAnswerCodec.Options.system())));
+            assertTrue(result.success(), result.toString());
+            assertTrue(result.transportEstablished()); assertTrue(result.authSent()); assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
+            assertEquals(nat.probeExternal.getLocalSocketAddress(), result.selectedLocal());
+            assertNotEquals(advertised.getLocalPort(), result.selectedLocal().getPort());
+            assertNotEquals(f.probePort, result.selectedLocal().getPort());
+            assertEquals(nat.hostExternal.getLocalSocketAddress(), result.selectedRemote());
+            assertEquals(0, result.udp().rejectedDatagrams());
+            var reports = new ArrayList<NativeDiagnosticHostGate.Result>();
+            NativeDiagnosticProbeAttemptTest.await(() -> { reports.addAll(f.gate.pollResults()); return !reports.isEmpty(); });
+            assertEquals(1, reports.size()); assertTrue(reports.get(0).success(), reports.toString());
+            assertEquals(nat.probeExternal.getLocalSocketAddress(), reports.get(0).selectedRemote());
+            assertEquals(0, f.players.get()); assertEquals(0, f.gate.stats().liveNativePeers());
+        }
+    }
+
     @Test @Timeout(20) void pendingHostDiscoveryClosesOnWithdrawalExpiryAndOwnerClose() throws Exception {
         for (String mode : List.of("withdraw","expiry","close")) {
             int hostPort,probePort;
