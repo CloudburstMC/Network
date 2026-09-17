@@ -50,6 +50,8 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     private static final class Failed extends RuntimeException {
         final Reason reason; Failed(Reason reason) { super(reason.name()); this.reason = reason; }
     }
+    // Exhausting the handshake budget need not expire the caller's still-valid job authority.
+    private static final class HandshakeTimeout extends RuntimeException { }
     private final Job job;
     private final InetSocketAddress bind, target;
     private final Supplier<DiagnosticAnswerCodec.Catalog> catalogReader;
@@ -171,7 +173,8 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                     || pair.localCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP
                     || pair.remoteCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP) throw new Failed(Reason.SELECTED_PATH);
             udp = stats(nativePeer,true); check(); complete = !job.ping() || exchange.complete(); reason = Reason.COMPLETE;
-        } catch (Failed failure) { reason = failure.reason; }
+        } catch (HandshakeTimeout timeout) { reason = answerVerified && !transportEstablished ? Reason.TRANSPORT : Reason.EXPIRED; }
+        catch (Failed failure) { reason = failure.reason; }
         catch (InterruptedException interrupted) { cancelled.set(true); reason = Reason.CANCELLED; Thread.currentThread().interrupt(); }
         catch (GeneralSecurityException | RuntimeException failure) { /* Reason identifies the failing bounded stage; never include secret payloads. */ }
         finally {
@@ -231,11 +234,11 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         while (!condition.getAsBoolean()) pause(handshake);
         if (handshake) checkHandshake(); else check();
     }
-    private void checkHandshake() { check(); if (currentNanos - handshakeDeadlineNanos >= 0) throw new Failed(Reason.EXPIRED); }
+    private void checkHandshake() { check(); if (currentNanos - handshakeDeadlineNanos >= 0) throw new HandshakeTimeout(); }
     private void pause(boolean handshake) throws InterruptedException {
         check(); if (protocolFailed.get()) throw new Failed(Reason.PROTOCOL);
         if (failed.get()) throw new Failed(Reason.TRANSPORT);
-        if (handshake && currentNanos - handshakeDeadlineNanos >= 0) throw new Failed(Reason.EXPIRED);
+        if (handshake && currentNanos - handshakeDeadlineNanos >= 0) throw new HandshakeTimeout();
         Thread.sleep(5);
     }
     private DiagnosticAnswerCodec.Catalog currentCatalog() { check(); return catalog; }

@@ -199,6 +199,45 @@ class NativeDiagnosticProbeAttemptTest {
             } finally {Thread.interrupted();}
         }
     }
+    @Test @Timeout(25) void verifiedAnswerHandshakeTimeoutDistinguishesTransportFromAuthorityFailures() throws Exception {
+        for(String change:List.of("handshake","absolute monotonic","absolute wall","clock rollback","withdraw","cancel"))
+                try(Fixture fixture=new Fixture("127.0.0.1",60000)) {
+            // Receive the first actual ICE check but never answer it: the signed target is unreachable at transport level.
+            fixture.host.close().sync();fixture.host.termination().toCompletableFuture().get(3,TimeUnit.SECONDS);
+            AtomicLong elapsed=new AtomicLong(),wall=new AtomicLong();
+            Clock clock=new Clock(()->System.currentTimeMillis()+wall.get(),()->System.nanoTime()+elapsed.get());
+            try(var silent=new DatagramSocket(new InetSocketAddress(fixture.bind,fixture.port));
+                    var attempt=new NativeDiagnosticProbeAttempt(fixture.job,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.catalog::get,fixture.authorized::get,clock,true)) {
+                silent.setSoTimeout(3000);var executor=Executors.newSingleThreadExecutor();
+                try {
+                    var pending=executor.submit(()->attempt.run(fixture::respond));
+                    var packet=new DatagramPacket(new byte[MAX_UDP_PAYLOAD_BYTES],MAX_UDP_PAYLOAD_BYTES);silent.receive(packet);
+                    assertEquals(fixture.localPort,packet.getPort(),change);
+                    switch(change) {
+                        case "handshake" -> elapsed.set(TimeUnit.SECONDS.toNanos(16));
+                        case "absolute monotonic" -> elapsed.set(TimeUnit.SECONDS.toNanos(61));
+                        case "absolute wall" -> wall.set(61000);
+                        case "clock rollback" -> elapsed.set(-TimeUnit.SECONDS.toNanos(1));
+                        case "withdraw" -> {fixture.authorized.set(false);elapsed.set(TimeUnit.SECONDS.toNanos(16));}
+                        case "cancel" -> {attempt.close();elapsed.set(TimeUnit.SECONDS.toNanos(16));}
+                    }
+                    var result=pending.get(3,TimeUnit.SECONDS);
+                    var expected=switch(change) {
+                        case "handshake" -> NativeDiagnosticProbeAttempt.Reason.TRANSPORT;
+                        case "withdraw" -> NativeDiagnosticProbeAttempt.Reason.WITHDRAWN;
+                        case "cancel" -> NativeDiagnosticProbeAttempt.Reason.CANCELLED;
+                        default -> NativeDiagnosticProbeAttempt.Reason.EXPIRED;
+                    };
+                    assertEquals(expected,result.reason(),change);assertFalse(result.success(),change);
+                    assertTrue(result.answerVerified(),change);assertFalse(result.transportEstablished(),change);
+                    assertFalse(result.authSent(),change);assertFalse(result.pingVerified(),change);assertTrue(result.cleanupComplete(),change);
+                    assertEquals(fixture.expiry,result.job().expiresAt(),change);
+                    if(change.equals("handshake")){assertTrue(result.completedAt()<fixture.expiry);assertTrue(result.udp().sentDatagrams()>0);}
+                    assertEquals(0,fixture.players.get(),change);
+                } finally {executor.shutdownNow();assertTrue(executor.awaitTermination(2,TimeUnit.SECONDS));}
+            }
+        }
+    }
     @Test void publicConstructionRejectsPrivateReservedMappedWrongFamilyAndUnresolvedTargets() throws Exception {
         var context=new Context("https://provider.example","host",id(),1);long expiry=(System.currentTimeMillis()+10000)/1000*1000;
         for(String address:List.of("127.0.0.1","10.0.0.1","100.64.0.1","169.254.1.1","192.0.2.1","0.0.0.0","224.0.0.1","::1","fc00::1","fe80::1","2001:db8::1","3fff::1")) {
