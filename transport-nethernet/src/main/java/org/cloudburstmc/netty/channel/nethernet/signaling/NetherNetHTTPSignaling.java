@@ -1,7 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.jspecify.annotations.Nullable;
-import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
@@ -56,6 +55,7 @@ import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.handler.ssl.OptionalSslHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslHandler;
 import io.netty.util.concurrent.FutureListener;
 import io.netty.util.concurrent.Promise;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -111,6 +111,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final TokenTrust tokenTrust;
     private final boolean serveHttp;
     private final boolean proxyProtocol;
+    private final boolean requiresTls;
     private final int maxConnectionsPerAddress;
     private final int maxPendingJoins;
 
@@ -135,6 +136,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.tokenTrust = builder.tokenTrust;
         this.serveHttp = builder.serveHttp;
         this.proxyProtocol = builder.proxyProtocol;
+        this.requiresTls = builder.requiresTls;
     }
 
     @Override
@@ -302,6 +304,12 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             String host = req.headers().get(HttpHeaderNames.HOST);
             InetSocketAddress remoteAddress = clientAddress(ctx, req);
 
+            if (requiresTls && sslContext != null && ctx.pipeline().get(SslHandler.class) == null) {
+                log.debug("Refused a plaintext request from {}", remoteAddress);
+                respondUpgradeRequired(ctx, keepAlive);
+                return;
+            }
+
             if (path.equals("/v1/join")) {
                 if (!HttpMethod.GET.equals(method)) {
                     respondEmptyWithStatus(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED, keepAlive);
@@ -411,6 +419,17 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     private void respondEmptyWithStatus(ChannelHandlerContext ctx, HttpResponseStatus status, boolean keepAlive) {
         FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.EMPTY_BUFFER);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
+        respond(ctx, response, keepAlive);
+    }
+
+    /**
+     * A 426 has to name what to upgrade to, and TLS on this same port is what it means.
+     */
+    private void respondUpgradeRequired(ChannelHandlerContext ctx, boolean keepAlive) {
+        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
+                HttpResponseStatus.UPGRADE_REQUIRED, Unpooled.EMPTY_BUFFER);
+        response.headers().set(HttpHeaderNames.UPGRADE, "TLS/1.2, HTTP/1.1");
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
         respond(ctx, response, keepAlive);
     }
@@ -694,6 +713,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
         private boolean serveHttp = true;
         private boolean proxyProtocol = false;
+        private boolean requiresTls = true;
         private PlayerFilter playerFilter = (host, player) -> true;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
@@ -940,6 +960,20 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         public Builder setServeHttp(boolean serveHttp) {
             this.serveHttp = serveHttp;
+            return this;
+        }
+
+        /**
+         * Sets whether plaintext requests are answered while TLS is served. Defaults to true, so
+         * they are not: a plaintext request gets a 426 and the peer is left to fall back to
+         * whatever other transport it has, rather than joining over plaintext, where a client
+         * shows its first use trust prompt. Has no effect without a TLS context.
+         *
+         * @param requiresTls Whether to refuse plaintext requests
+         * @return This builder
+         */
+        public Builder setRequiresTls(boolean requiresTls) {
+            this.requiresTls = requiresTls;
             return this;
         }
 

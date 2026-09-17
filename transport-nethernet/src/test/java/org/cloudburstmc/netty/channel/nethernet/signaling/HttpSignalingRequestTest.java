@@ -61,6 +61,13 @@ class HttpSignalingRequestTest {
                 .setTokenTrust(TokenTrust.ANY);
     }
 
+    /** Serves TLS from a certificate no client trusts, which is all a scheme check needs. */
+    private NetherNetHTTPSignaling.Builder tlsBuilder() throws Exception {
+        SelfSignedCertificate certificate = new SelfSignedCertificate("example.test");
+        return this.builder().setSslContext(
+                SslContextBuilder.forServer(certificate.certificate(), certificate.privateKey()).build());
+    }
+
     private void start(NetherNetHTTPSignaling.Builder builder) throws Exception {
         try (ServerSocket probe = new ServerSocket(0)) {
             this.port = probe.getLocalPort();
@@ -177,12 +184,26 @@ class HttpSignalingRequestTest {
     void servesBothSchemesOnTheOnePortClientsLookAt() throws Exception {
         // A client that finds no TLS falls back to plaintext on the same port, so serving TLS must
         // not take plaintext away
-        SelfSignedCertificate certificate = new SelfSignedCertificate("example.test");
-        this.start(this.builder().setSslContext(
-                SslContextBuilder.forServer(certificate.certificate(), certificate.privateKey()).build()));
+        this.start(this.tlsBuilder().setRequiresTls(false));
 
         assertEquals(200, this.status("GET", "/v1/join", null), "plaintext still reaches it");
         assertEquals(200, this.secureStatus(), "and so does TLS");
+    }
+
+    @Test
+    void refusesPlaintextWhileItServesTls() throws Exception {
+        // A peer that cannot reach TLS is sent away to whatever transport it has left, rather than
+        // joining over plaintext, where a client shows its first use trust prompt
+        this.start(this.tlsBuilder());
+
+        HttpResponse<String> response = this.send("GET", "/v1/join", null);
+
+        assertEquals(426, response.statusCode());
+        assertEquals("TLS/1.2, HTTP/1.1", response.headers().firstValue("upgrade").orElse(""),
+                "a 426 has to name what to upgrade to");
+        assertEquals(426, this.status("POST", "/v1/join/42", TestOffers.selfSigned()),
+                "an offer is refused the same way, no peer is allocated for it");
+        assertEquals(200, this.secureStatus(), "TLS is served the status it asked for");
     }
 
     @Test
