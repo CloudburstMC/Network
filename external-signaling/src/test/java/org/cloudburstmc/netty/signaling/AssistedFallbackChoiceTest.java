@@ -121,4 +121,19 @@ class AssistedFallbackChoiceTest {
         report(snapshot, 3300, new ProviderTransport.ConnectivityCheck(4, NOT_ESTABLISHED, 3250, 4000));
         assertTrue(needed(snapshot, 3300), "A newly observed failure can select fallback again");
     }
+
+    @Test void olderOrEqualSuccessCannotClearANewerSelectedFailure() {
+        var snapshot = snapshot(profile(), 1);
+        var oldSuccess = new ProviderTransport.ConnectivityCheck(4, ESTABLISHED, 1200, 5000);
+        report(snapshot, 1300, oldSuccess);
+        assertFalse(needed(snapshot, 1300));
+        report(snapshot, 1600, new ProviderTransport.ConnectivityCheck(4, NOT_ESTABLISHED, 1500, 5000));
+        assertTrue(needed(snapshot, 1600));
+        report(snapshot, 1700, oldSuccess);
+        assertTrue(needed(snapshot, 1700), "Replayed success predates the selected failure");
+        report(snapshot, 1800, new ProviderTransport.ConnectivityCheck(4, ESTABLISHED, 1500, 5000));
+        assertTrue(needed(snapshot, 1800), "Equal timestamps do not prove recovery");
+        report(snapshot, 1900, new ProviderTransport.ConnectivityCheck(4, ESTABLISHED, 1800, 5000));
+        assertFalse(needed(snapshot, 1900));
+    }
 }

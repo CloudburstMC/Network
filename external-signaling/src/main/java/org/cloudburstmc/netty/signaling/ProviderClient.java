@@ -1032,13 +1032,13 @@ public final class ProviderClient implements AutoCloseable {
     static final class AssistedFallbackChoice {
         private record Binding(String instance, long generation, String incarnation, String fingerprint, long revision) { }
         private Binding binding;
-        private final Set<Integer> failedFamilies = new HashSet<>();
+        private final Map<Integer, Long> failedAt = new HashMap<>();
         private final Map<Integer, Long> establishedAt = new HashMap<>();
 
         private JsonObject bind(String instance, long generation, ProviderTransport.HostProfileSnapshot snapshot) {
             try { snapshot.requireCurrent(); }
             catch (RuntimeException unavailable) {
-                binding = null; failedFamilies.clear(); establishedAt.clear();
+                binding = null; failedAt.clear(); establishedAt.clear();
                 throw unavailable;
             }
             var profile = snapshot.profile();
@@ -1046,7 +1046,7 @@ public final class ProviderClient implements AutoCloseable {
                     profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString(),
                     profile.get("dtlsFingerprint").getAsString(), snapshot.candidateRevision());
             if (!current.equals(binding)) {
-                failedFamilies.clear(); establishedAt.clear(); binding = current;
+                failedAt.clear(); establishedAt.clear(); binding = current;
             }
             return profile;
         }
@@ -1061,11 +1061,15 @@ public final class ProviderClient implements AutoCloseable {
                 var established = fresh.stream().filter(check -> check.outcome() == ProviderTransport.ConnectivityOutcome.ESTABLISHED)
                         .mapToLong(ProviderTransport.ConnectivityCheck::checkedAt).max();
                 if (established.isPresent()) {
-                    failedFamilies.remove(family);
+                    // An older regional success cannot undo a subsequently selected failure.
+                    // Equal timestamps do not establish recovery from an existing fallback.
+                    if (established.getAsLong() > failedAt.getOrDefault(family, -1L)) failedAt.remove(family);
                     establishedAt.merge(family, established.getAsLong(), Math::max);
-                } else if (fresh.stream().anyMatch(check -> check.outcome() == ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED
-                        && check.checkedAt() > establishedAt.getOrDefault(family, -1L))) {
-                    failedFamilies.add(family);
+                } else {
+                    fresh.stream().filter(check -> check.outcome() == ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED
+                                    && check.checkedAt() > establishedAt.getOrDefault(family, -1L))
+                            .mapToLong(ProviderTransport.ConnectivityCheck::checkedAt).max()
+                            .ifPresent(checkedAt -> failedAt.merge(family, checkedAt, Math::max));
                 }
                 // Missing, unknown or expired observations cannot undo an already selected fallback.
             }
@@ -1074,7 +1078,7 @@ public final class ProviderClient implements AutoCloseable {
         boolean needed(String instance, long generation, ProviderTransport.HostProfileSnapshot snapshot,
                        Set<Integer> ready, long now) {
             // A refreshed same-mapping capture may be current after the old observation lease expired.
-            return assistedFallbackNeeded(bind(instance, generation, snapshot), ready, failedFamilies, now);
+            return assistedFallbackNeeded(bind(instance, generation, snapshot), ready, failedAt.keySet(), now);
         }
     }
 
