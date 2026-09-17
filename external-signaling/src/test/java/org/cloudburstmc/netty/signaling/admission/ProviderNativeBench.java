@@ -25,13 +25,13 @@ public final class ProviderNativeBench {
     private static final Gson JSON = new Gson();
 
     /** Local fixture declaration only; all signaling, keys, peer admission and bytes use the real implementations. */
-    private static final class LoopbackAssistedDiagnostics implements ProviderTransport {
+    private static final class LoopbackAssistedTransport implements ProviderTransport {
         private final NativeProviderTransport transport;
         private final int family;
         private final InetSocketAddress bind;
         private NativeDiagnosticHostGate diagnostics;
 
-        LoopbackAssistedDiagnostics(NativeProviderTransport transport, InetSocketAddress bind) {
+        LoopbackAssistedTransport(NativeProviderTransport transport, InetSocketAddress bind) {
             if (!bind.getAddress().isLoopbackAddress()) throw new IllegalArgumentException("Loopback fixture only");
             this.transport = transport;
             this.bind = bind;
@@ -50,11 +50,16 @@ public final class ProviderNativeBench {
         @Override public long candidatePublicationVersion() { return transport.candidatePublicationVersion(); }
         @Override public boolean supportsAssistedJoins() { return true; }
         @Override public CompletionStage<String> assistedJoin(AssistedJoin join, Runnable requireCurrent) {
-            return transport.captureHostProfile().thenCompose(snapshot -> transport.channel().assistDiagnostic(join, () -> {
-                requireCurrent.run(); snapshot.requireCurrent();
-                if (!snapshot.profile().get("credentialKeyId").getAsString().equals(join.keyId()))
-                    throw new IllegalStateException("Fixture admission key changed");
-            }, Map.of(), Map.of(family, bind)));
+            return transport.captureHostProfile().thenCompose(snapshot -> {
+                Runnable guard = () -> {
+                    requireCurrent.run(); snapshot.requireCurrent();
+                    if (!snapshot.profile().get("credentialKeyId").getAsString().equals(join.keyId()))
+                        throw new IllegalStateException("Fixture admission key changed");
+                };
+                return join.diagnostic()
+                        ? transport.channel().assistDiagnostic(join, guard, Map.of(), Map.of(family, bind))
+                        : transport.channel().assist(join, guard, Map.of(), Map.of(family, bind));
+            });
         }
         @Override public boolean supportsDiagnosticAdmission() { return true; }
         @Override public CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy, long deadlineNanos) {
@@ -153,13 +158,10 @@ public final class ProviderNativeBench {
             var bind = new InetSocketAddress(bindAddress, port);
             var advertised = advertisedAddress == null ? bind : new InetSocketAddress(
                     org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(advertisedAddress), port);
-            nativeHost = (assisted && !diagnosticAssisted ? NativeProviderTransport.openMaintained(bootstrap,
-                    org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection.select(bind,List.of(),List.of()), Map.of(),
-                    state.resolve("host-cert.pem"),state.resolve("host-key.pem"),new AdmissionGate.Limits(4,8,2,15_000))
-                    : NativeProviderTransport.open(bootstrap, bind, advertised,
+            nativeHost = NativeProviderTransport.open(bootstrap, bind, advertised,
                     state.resolve("host-cert.pem"), state.resolve("host-key.pem"),
-                    new AdmissionGate.Limits(4, 8, 2, 10_000))).toCompletableFuture().get(10, TimeUnit.SECONDS);
-            ProviderTransport transport = diagnosticAssisted ? new LoopbackAssistedDiagnostics(nativeHost, bind) : nativeHost;
+                    new AdmissionGate.Limits(4, 8, 2, 10_000)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            ProviderTransport transport = assisted ? new LoopbackAssistedTransport(nativeHost, bind) : nativeHost;
             provider = new ProviderClient(
                     new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration",
                             ProviderClient.NEW_SERVICE, ProviderClient.ANONYMOUS_PROOF_OF_WORK, null,
