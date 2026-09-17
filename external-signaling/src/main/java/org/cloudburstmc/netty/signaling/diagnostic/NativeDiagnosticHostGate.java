@@ -164,7 +164,9 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                     .withEnableIceUdpMux(true).withIceServers(List.of()).withEnableIceTcp(false)
                     .withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE), Runnable::run,
                     new DtlsIdentity(identity.certificate(),identity.privateKey()),
-                    new UdpSendLimits(MAX_UDP_SENDS,MAX_UDP_PAYLOAD_BYTES,session.nativeDeadline,remote));
+                    // ICE authenticates new-source Binding requests before learning peer-reflexive
+                    // endpoints. Keep the traffic budget, but allow replies to their actual ports.
+                    new UdpSendLimits(MAX_UDP_SENDS,MAX_UDP_PAYLOAD_BYTES,session.nativeDeadline,null));
             session.created = true; session.settled = true;
             session.peer.setRemoteDescription(join.offer(),SessionDescriptionType.OFFER);
             session.peer.setLocalDescription("answer",join.localUfrag(),join.localPassword());
@@ -183,7 +185,16 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                 && s.admission.credentials().localUfrag().equals(request.localUfrag())).findFirst().orElse(null);
         if (session == null || session.peer == null || session.closing || !authorized(session,observe())
                 || !session.admission.remoteUfrag().equals(request.remoteUfrag())) return null;
+        try {
+            if (!assistedRemoteAllowed(session, new InetSocketAddress(EndpointAddress.parse(request.remoteAddress()), request.remotePort()))) return null;
+        } catch (UnknownHostException | IllegalArgumentException invalid) { return null; }
         return IceUdpMuxListener.Acceptance.reuse(session.peer,Instant.ofEpochMilli(session.admission.claims().expiresAt()));
+    }
+    private boolean assistedRemoteAllowed(Session session, InetSocketAddress remote) {
+        var scope = EndpointAddress.scope(remote.getAddress());
+        return (remote.getAddress() instanceof Inet6Address ? 6 : 4) == session.admission.claims().family()
+                && (scope == EndpointAddress.Scope.PUBLIC
+                || listenerAddress.getAddress().isLoopbackAddress() && scope == EndpointAddress.Scope.LOOPBACK);
     }
     /** A pending answer cannot outlive its original native attempt while local gathering completes. */
     public synchronized void requireAssistedCurrent(AssistedJoin join) {
@@ -307,7 +318,8 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             InetSocketAddress remote = new InetSocketAddress(EndpointAddress.parse(pair.remote().getHostString()), pair.remote().getPort());
             boolean boundLocal = local.getPort() == listenerAddress.getPort()
                     && (listenerAddress.getAddress().isAnyLocalAddress() || listenerAddress.getAddress().equals(local.getAddress()));
-            if (!remote.equals(session.remote) || !(boundLocal || session.requireCurrent != null && local.equals(session.gatheredLocal)) ||
+            boolean remoteAllowed = session.requireCurrent == null ? remote.equals(session.remote) : assistedRemoteAllowed(session, remote);
+            if (!remoteAllowed || !(boundLocal || session.requireCurrent != null && local.equals(session.gatheredLocal)) ||
                     (local.getAddress() instanceof Inet6Address ? 6 : 4) != session.admission.claims().family() ||
                     pair.localCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP || pair.remoteCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP) throw invalid();
             session.stats = stats; session.selectedLocal = local; session.selectedRemote = remote;

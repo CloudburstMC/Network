@@ -115,6 +115,44 @@ class NativeAssistedDiagnosticTest {
             }
     }
 
+    @Test @Timeout(35) void assistedPeerLearnsAuthenticatedSourcePortWithoutReplyingToForgedChecks() throws Exception {
+        for (String numeric : List.of("127.0.0.1", "::1")) try (var f = new Fixture(numeric);
+                var advertised = new DatagramSocket(new InetSocketAddress(f.bind, 0));
+                var forged = new DatagramSocket(new InetSocketAddress(f.bind, 0));
+                var stun = new StunServer(f.bind, source -> new InetSocketAddress(f.bind, advertised.getLocalPort()));
+                var attempt = f.attempt(stun.address())) {
+            var result = attempt.run(request -> {
+                var join = f.join(request);
+                assertTrue(join.offer().contains(" " + advertised.getLocalPort() + " typ srflx"));
+                return f.host.assistDiagnostic(join, () -> {}).thenApplyAsync(answer -> {
+                    try {
+                        byte[] packet = binding(join.localUfrag() + ":" + request.ufrag(), "wrong-password");
+                        forged.send(new DatagramPacket(packet, packet.length, f.bind, f.hostPort));
+                        forged.setSoTimeout(250);
+                        assertThrows(SocketTimeoutException.class,
+                                () -> forged.receive(new DatagramPacket(new byte[2048], 2048)),
+                                "An unauthenticated source must not receive an ICE response");
+                    } catch (Exception failure) { throw new CompletionException(failure); }
+                    return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()), utf8(answer),
+                            new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()), () -> f.catalog, DiagnosticAnswerCodec.Options.system());
+                });
+            });
+            assertTrue(result.success(), result.toString());
+            assertTrue(result.transportEstablished()); assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
+            assertEquals(new InetSocketAddress(f.bind, f.probePort), stun.observed.get(), "STUN uses the actual peer socket");
+            assertEquals(f.hostPort, result.selectedRemote().getPort());
+            var reports = new ArrayList<NativeDiagnosticHostGate.Result>();
+            NativeDiagnosticProbeAttemptTest.await(() -> { reports.addAll(f.gate.pollResults()); return !reports.isEmpty(); });
+            assertEquals(1, reports.size());
+            var report = reports.get(0);
+            assertTrue(report.success(), report.toString()); assertTrue(report.authenticated());
+            assertEquals(new InetSocketAddress(f.bind, f.probePort), report.selectedRemote());
+            assertNotEquals(advertised.getLocalPort(), report.selectedRemote().getPort());
+            assertEquals(0, report.udp().rejectedDatagrams());
+            assertEquals(0, f.players.get()); assertTrue(f.host.pollEvents().isEmpty());
+        }
+    }
+
     @Test @Timeout(20) void validProfileTwoStunCannotCreateAnInboundDiagnosticPeer() throws Exception {
         try(var f=new Fixture("127.0.0.1");var attempt=f.attempt(null)) {
             var result=attempt.run(request->{

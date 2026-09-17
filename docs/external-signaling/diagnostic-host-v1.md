@@ -20,7 +20,7 @@ DTLS and the detached ES384 AUTH bind the original offer, attempt, target and ex
 For profile 1, only the received numeric source tuple is reconstructed into remote SDP. Profile 2 requires a verified proactive WebSocket offer and assertion, scoped to a locally enabled assisted family; incoming stateless admission cannot enable it. No incoming DNS, STUN/TURN/TCP configuration is installed.
 
 The native send guard is installed before acceptance: 256 UDP datagrams, 1200-byte
-payload cap, one exact destination and a fixed monotonic deadline. Profile 2 uses the authenticated peer candidate from the signed offer, while the probe applies one signed fresh host candidate so ICE runs in both directions. A shared per-attempt gatherer serves player and diagnostic assistance; its STUN monitor stops at the original deadline or completion, without restarting background warming. Attempts last at
+payload cap and a fixed monotonic deadline. Profile 1 pins one exact destination. Profile 2 starts with the authenticated peer candidate from the signed offer and permits same-family public peer-reflexive endpoints learned through authenticated ICE checks. The probe applies one signed fresh host candidate so ICE runs in both directions. A shared per-attempt gatherer serves player and diagnostic assistance; its STUN monitor stops at the original deadline or completion, without restarting background warming. Attempts last at
 most 60 seconds, including a 15-second handshake. Four concurrent diagnostics also
 count against shared player/diagnostic native capacity. Sixteen used attempt IDs
 remain until their original expiry. Bad initial STUN integrity creates no peer and
@@ -67,7 +67,7 @@ deadline, then closes. The prober's `pingVerified` requires its original PONG. W
 claims transport establishment and AUTH submission only, not remote application
 verification. Neither result is gameplay proof or universal NAT classification.
 
-Success requires the exact selected UDP family/tuple, available bounded native send
+Success requires the authorized UDP family and endpoint (including authenticated peer-reflexive selection for profile 2), available bounded native send
 statistics with no rejection, and actual native cleanup. Native counters are
 pre-destruction snapshots, not final totals or delivery receipts. Clock expiry,
 withdrawal or protocol failure prevents qualification. Failed cleanup retains the
