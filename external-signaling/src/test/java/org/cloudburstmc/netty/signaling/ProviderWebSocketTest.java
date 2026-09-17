@@ -319,30 +319,23 @@ class ProviderWebSocketTest {
     }
 
     @Test
-    void assistedFallbackRequiresFinishedDiscoveryAndFreshNegativePublicEvidence() throws Exception {
-        JsonObject profile = new ProviderClientTest.FakeTransport().hostProfile().toCompletableFuture().get();
-        assertFalse(ProviderClient.assistedFallbackNeeded(profile, Set.of(), List.of(), 1000));
-        assertTrue(ProviderClient.assistedFallbackNeeded(profile, Set.of(4), List.of(), 1000));
-        profile.getAsJsonArray("candidates").get(0).getAsJsonObject().addProperty("address","8.8.8.8");
-        var failed = new ProviderTransport.ConnectivityCheck(4,ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED,900,2000);
-        var positive = new ProviderTransport.ConnectivityCheck(4,ProviderTransport.ConnectivityOutcome.ESTABLISHED,950,2000);
-        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(),1000));
-        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(),List.of(failed),1000));
-        assertTrue(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(failed),1000));
-        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(failed,positive),1000));
-        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(failed),2000));
-        var candidate=profile.getAsJsonArray("candidates").get(0).getAsJsonObject();
-        candidate.addProperty("type","srflx");candidate.addProperty("expiresAt",2000);
-        assertFalse(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(),1000));
-        assertTrue(ProviderClient.assistedFallbackNeeded(profile,Set.of(4),List.of(),2000));
-    }
-
-    @Test
     void assistedPushUsesOwnedNativeCaptureAndSuppressesLatePreparedAnswer(@TempDir Path directory) throws Exception {
         try (Provider provider = new Provider()) {
             var started = new LinkedBlockingQueue<org.cloudburstmc.netty.signaling.control.AssistedJoin>();
             var nativeResult = new AtomicReference<CompletableFuture<String>>();
+            provider.stub.extensionMetadata.add("org.nethernet.connectivity", connectivityFeedback(System.currentTimeMillis()));
             var transport = new ProviderClientTest.FakeTransport() {
+                @Override public CompletionStage<JsonObject> hostProfile() {
+                    return super.hostProfile().thenApply(profile -> {
+                        profile.getAsJsonArray("candidates").get(0).getAsJsonObject().addProperty("address", "8.8.8.8");
+                        return profile;
+                    });
+                }
+                @Override public CompletionStage<HostProfileSnapshot> captureHostProfile() {
+                    return hostProfile().thenApply(profile -> new HostProfileSnapshot(profile, 1, () -> {
+                        if (closed.isDone()) throw new IllegalStateException("Native listener closed");
+                    }));
+                }
                 @Override public boolean supportsAssistedJoins() { return true; }
                 @Override public Set<Integer> assistedFallbackReadyFamilies() { return Set.of(4); }
                 @Override public CompletionStage<String> assistedJoin(org.cloudburstmc.netty.signaling.control.AssistedJoin join, Runnable guard) {
@@ -361,6 +354,10 @@ class ProviderWebSocketTest {
                         "A 15-minute idle provider schedule must renew the original five-minute assisted authority early");
                 JsonObject profile = provider.stub.lastHeartbeat.getAsJsonObject("hostProfile");
                 assertEquals("nethernet.websocket-assisted.v1",profile.getAsJsonObject("statelessAdmission").get("assisted").getAsString());
+                int upgrades = provider.upgrades.get();
+                provider.stub.extensionMetadata.add("org.nethernet.connectivity", connectivityFeedback(null));
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(upgrades, provider.upgrades.get(), "An empty feedback gap must not remove assistance and reconnect");
                 var generator = java.security.KeyPairGenerator.getInstance("EC"); generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
                 JsonObject join = new JsonObject(); join.addProperty("kind","assisted-join"); join.addProperty("version",1); join.addProperty("id","ab".repeat(16));
                 join.add("instanceId",provider.stub.registration.get("instanceId")); join.addProperty("generation",1);
@@ -374,6 +371,25 @@ class ProviderWebSocketTest {
                 assertNotNull(started.poll(5,TimeUnit.SECONDS)); nativeResult.get().complete("actual-prepared-answer");
                 JsonObject reply = provider.assistedReplies.poll(5,TimeUnit.SECONDS); assertNotNull(reply);
                 assertTrue(reply.get("accepted").getAsBoolean()); assertEquals("actual-prepared-answer",reply.get("answer").getAsString());
+                var authorityField = ProviderClient.class.getDeclaredField("assistedAuthority"); authorityField.setAccessible(true);
+                Object originalAuthority = authorityField.get(client);
+                var constructor = originalAuthority.getClass().getDeclaredConstructors()[0]; constructor.setAccessible(true);
+                var components = originalAuthority.getClass().getRecordComponents();
+                Object[] arguments = new Object[components.length];
+                for (int i = 0; i < components.length; i++) {
+                    var accessor = components[i].getAccessor(); accessor.setAccessible(true); arguments[i] = accessor.invoke(originalAuthority);
+                }
+                for (int expiredField : List.of(3, 4)) {
+                    Object[] expired = arguments.clone();
+                    expired[expiredField] = expiredField == 3 ? System.nanoTime() - 1 : System.currentTimeMillis() - 1;
+                    authorityField.set(client, constructor.newInstance(expired));
+                    join.addProperty("id", (expiredField == 3 ? "ef" : "01").repeat(16));
+                    provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
+                    var denied = provider.assistedReplies.poll(5, TimeUnit.SECONDS); assertNotNull(denied);
+                    assertFalse(denied.get("accepted").getAsBoolean(), "Retained mode cannot extend either authority deadline");
+                    assertTrue(started.isEmpty(), "Expired authority must not reach the native transport");
+                }
+                authorityField.set(client, originalAuthority);
                 join.addProperty("id","cd".repeat(16));
                 provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
                 assertNotNull(started.poll(5,TimeUnit.SECONDS));
@@ -382,6 +398,17 @@ class ProviderWebSocketTest {
                 assertNull(provider.assistedReplies.poll(200,TimeUnit.MILLISECONDS));
             } finally { client.stop().toCompletableFuture().get(10,TimeUnit.SECONDS); }
         }
+    }
+
+    private static JsonObject connectivityFeedback(Long checkedAt) {
+        var checks = new JsonArray();
+        if (checkedAt != null) {
+            var check = new JsonObject(); check.addProperty("family", 4); check.addProperty("outcome", "not-established");
+            check.addProperty("checkedAt", checkedAt); check.addProperty("expiresAt", checkedAt + 60000); checks.add(check);
+        }
+        var data = new JsonObject(); data.addProperty("candidateRevision", 1); data.add("checks", checks);
+        var extension = new JsonObject(); extension.addProperty("version", 1); extension.addProperty("critical", false); extension.add("data", data);
+        return extension;
     }
 
     private static ProviderClient client(Provider provider, Path path, ProviderClient.ControlTransport mode,
