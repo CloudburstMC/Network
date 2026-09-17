@@ -1,6 +1,6 @@
 # NXS control transport
 
-Status: simplification in progress. This replaces the experimental control-session design; it is not a production-readiness claim. The existing seven NXS operations remain the basis of the single host lifecycle:
+NXS uses one host lifecycle over HTTPS and an optional WebSocket carrier. Both carriers use the same seven operations:
 
 `register`, `complete`, `heartbeat`, `outcomes`, `rotate`, `retire`, `deregister`.
 
@@ -34,13 +34,13 @@ The response contains the request's idempotency key as `id`, the actual HTTP `st
 
 The current adapter bounds complete UTF-8 messages to 524,288 bytes, original bodies to the existing NXS body limit, and queued operations to four per connection. These are transport bounds, not permission to increase original operation limits. Literal `ping` receives `pong`; this verifies socket liveness only and never renews authorization or commits a heartbeat.
 
-Ordinary hosts can use HTTPS or WSS. Assisted mode requires a live, authenticated, addressable WebSocket and bounded offer/answer/cancellation handling. An ordinary Worker socket cannot later be found by an unrelated request; an assisted socket must be owned by the designated Durable Object. Assisted wire integration remains unfinished and must not be advertised before it works.
+Ordinary hosts can use HTTPS or WSS. Assisted mode requires a live, authenticated, addressable WebSocket and bounded offer/answer/cancellation handling. An ordinary Worker socket cannot later be found by an unrelated request; an assisted socket must be owned by the designated Durable Object. The client advertises assistance only when configured, supported by its native transport and needed for its available endpoints and connectivity observations. It accepts assisted joins only while its authority and owning connection remain current.
 
 ## Failure and expiry
 
 Reconnect after graceful close, abrupt loss or detected blackhole with bounded backoff and jitter. Reuse the same identity and reconcile non-repeatable operations. Do not replay expired assisted offers. Superseded sockets cannot change current state or deliver a result for a different attempt.
 
-Cached authority has a fixed maximum age of five minutes. Reconnect, ping/pong and re-reading the same cached snapshot cannot extend it. Key publication/retirement must accommodate delayed visibility. Ordinary observations should avoid strong database commits; key and identity mutations still require their authoritative checks. The simplified adapter currently uses existing operation authentication; cached authentication/observations and cost validation remain open.
+Cached authority has a fixed maximum age of five minutes. Reconnect, ping/pong and re-reading the same cached snapshot cannot extend it. Key publication/retirement must accommodate delayed visibility. Ordinary observations should avoid strong database commits; key and identity mutations still require their authoritative checks. Both carriers use the existing operation authentication. Provider storage choices and fleet capacity require separate deployment validation.
 
 Reporting frequency, socket keepalive, authorization deadlines and UDP STUN refresh are independent. A long report interval never suspends needed UDP maintenance.
 
@@ -48,4 +48,4 @@ Reporting frequency, socket keepalive, authorization deadlines and UDP STUN refr
 
 A probe uses normal-strength signed admission and Minecraft-compatible WebRTC settings to establish ICE, DTLS and SCTP. A small data-channel ping/pong is optional corroboration. No Minecraft login, diagnostic ownership installation protocol, dual-party completion journal or delivery receipt is required for a connectivity verdict. Record the attempted family/candidate revision, observed stage, timestamp and bounded failure reason. Preserve isolation from gameplay and resource limits.
 
-The previous implementation is recoverable from Git history and the `archive/connectivity-control-20260915` branch. Remaining diagnostic/native adapters are being simplified to this scope; their presence is not a commitment to retain the experimental control wire formats.
+This contract does not establish deployment readiness. Regional transport checks, IPv4/IPv6 coverage, connection rotation, fleet capacity and game-client regression results must be verified against the deployed provider and host versions.
