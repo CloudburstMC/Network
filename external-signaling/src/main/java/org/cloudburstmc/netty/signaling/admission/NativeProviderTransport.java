@@ -509,9 +509,10 @@ public final class NativeProviderTransport implements ProviderTransport {
         var observed = candidatePublication;
         if (observed != null) observed.requireCurrent();
         return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, capturedGeneration, publicationVersion, () -> {
+            if (closed || draining || !channel.isActive())
+                throw new IllegalStateException("Native endpoint snapshot closed");
+            if (candidateGeneration != capturedGeneration) throw new HostProfileSnapshotChangedException();
             if (observed != null) observed.requireCurrent();
-            if (candidateGeneration != capturedGeneration || closed || draining || !channel.isActive())
-                throw new IllegalStateException("Native endpoint snapshot changed or closed");
         }));
     }
 

@@ -70,9 +70,15 @@ public interface ProviderTransport {
         return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Assisted joins unavailable"));
     }
 
+    /** Candidate material changed while the native listener remained available; capture a fresh profile. */
+    final class HostProfileSnapshotChangedException extends IllegalStateException {
+        public HostProfileSnapshotChangedException() { super("Host profile candidate snapshot changed"); }
+    }
+
     /**
      * Immutable profile bytes plus an endpoint-material ownership guard. The guard throws IllegalStateException
-     * after semantic replacement or native retirement; it must never wait, acquire a monitor or perform I/O.
+     * after native retirement, or HostProfileSnapshotChangedException after live semantic replacement;
+     * it must never wait, acquire a monitor or perform I/O.
      */
     final class HostProfileSnapshot {
         private final JsonObject profile;

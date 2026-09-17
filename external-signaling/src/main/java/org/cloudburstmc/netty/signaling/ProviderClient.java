@@ -737,7 +737,7 @@ public final class ProviderClient implements AutoCloseable {
             installKeys();
         }
         // Key delivery and local diagnostic installation can need an immediate second exchange.
-        for (int exchange = 0; exchange < 3; exchange++) {
+        for (int exchange = 0; exchange < 3; exchange++) try {
             JsonObject body = new JsonObject(), profile = null;
             ProviderTransport.HostProfileSnapshot profileSnapshot = null, diagnosticSnapshot = null;
             if (installedKeyId != null && hostState.equals("serving")) {
@@ -828,12 +828,18 @@ public final class ProviderClient implements AutoCloseable {
                     captured == null ? () -> { } : captured::requireCurrent);
             long diagnosticSuccessNanos = System.nanoTime(), diagnosticSuccessMillis = System.currentTimeMillis();
             ProtocolExtensions.validate(response);
+            boolean again = false;
             if (profileSnapshot != null) {
                 try { profileSnapshot.requireCurrent(); }
-                catch (RuntimeException replaced) {
-                    lastProfile = null;
-                    disableDiagnosticAdmission();
-                    throw replaced;
+                catch (ProviderTransport.HostProfileSnapshotChangedException replaced) {
+                    invalidatePublishedProfile();
+                    // The operation committed. Keep its keys and lease, but grant no authority to stale endpoints.
+                    profileSnapshot = null;
+                    diagnosticSnapshot = null;
+                    again = true;
+                } catch (RuntimeException unavailable) {
+                    invalidatePublishedProfile();
+                    throw unavailable;
                 }
             }
             if (config.assistedJoins()) {
@@ -845,12 +851,13 @@ public final class ProviderClient implements AutoCloseable {
                 if (!response.has("hostProfileRevision") || response.get("hostProfileRevision").isJsonNull()) {
                     throw new IOException("Profile acknowledgement missing");
                 }
-                profileRevision = response.get("hostProfileRevision").getAsString();
-                lastProfile = profile.deepCopy();
-                state.addProperty("profilePublishedAt", System.currentTimeMillis());
-                save();
+                if (profileSnapshot != null) {
+                    profileRevision = response.get("hostProfileRevision").getAsString();
+                    lastProfile = profile.deepCopy();
+                    state.addProperty("profilePublishedAt", System.currentTimeMillis());
+                    save();
+                }
             }
-            boolean again = false;
             if (response.has("ticketKey")) {
                 JsonObject key = response.remove("ticketKey").getAsJsonObject();
                 if (!state.has("keyRequestId") || !response.has("keyRequest") ||
@@ -942,8 +949,19 @@ public final class ProviderClient implements AutoCloseable {
             if (!again) {
                 return;
             }
+        } catch (ProviderTransport.HostProfileSnapshotChangedException replaced) {
+            invalidatePublishedProfile();
+            // An ambiguous carrier attempt must follow ordinary recovery before any fresh operation.
+            if (state.has("pendingWebSocketOperation")) break;
         }
         nextHeartbeat = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+    }
+
+    private void invalidatePublishedProfile() throws Exception {
+        lastProfile = null;
+        profileRevision = null;
+        assistedAuthority = null;
+        disableDiagnosticAdmission();
     }
 
     private static boolean diagnosticProfile(ProviderTransport.HostProfileSnapshot snapshot) {

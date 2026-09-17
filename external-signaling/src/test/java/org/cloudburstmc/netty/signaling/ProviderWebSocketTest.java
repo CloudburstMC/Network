@@ -29,6 +29,133 @@ import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderWebSocketTest {
+    private static final class ChangingProfileTransport extends ProviderClientTest.FakeTransport {
+        volatile long revision = 1;
+        boolean replaceDuringCapture;
+        volatile List<TicketKey> keys = List.of();
+
+        @Override public CompletionStage<HostProfileSnapshot> captureHostProfile() {
+            long captured = revision;
+            JsonObject profile = hostProfile().toCompletableFuture().join();
+            profile.getAsJsonArray("candidates").get(0).getAsJsonObject().addProperty("port", 19132 + captured);
+            HostProfileSnapshot snapshot = new HostProfileSnapshot(profile, captured, captured, () -> {
+                if (closed.isDone()) throw new IllegalStateException("Native listener closed");
+                if (revision != captured) throw new HostProfileSnapshotChangedException();
+            });
+            if (replaceDuringCapture) { replaceDuringCapture = false; revision++; }
+            return CompletableFuture.completedFuture(snapshot);
+        }
+
+        @Override public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+            this.keys = List.copyOf(keys);
+            return super.installTicketKeys(keys);
+        }
+    }
+
+    @Test
+    void recoveredStartupRetainsCommittedKeysAndRepublishesChangedProfile(@TempDir Path rootDirectory) throws Exception {
+        for (var mode : List.of(ProviderClient.ControlTransport.AUTO, ProviderClient.ControlTransport.HTTP)) try (Provider provider = new Provider()) {
+            Path directory = rootDirectory.resolve(mode.name());
+            var first = client(provider, directory, mode, new ProviderClientTest.FakeTransport());
+            try { first.start().get(20, TimeUnit.SECONDS); }
+            finally { first.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
+            try (var store = new ProviderStateStore(directory)) {
+                var state = store.read();
+                state.addProperty("profilePublishedAt", 1);
+                state.addProperty("keyRequestId", UUID.randomUUID().toString());
+                store.write(state);
+            }
+            var transport = new ChangingProfileTransport();
+            long retirement = System.currentTimeMillis() + 300000;
+            var retired = new JsonObject(); retired.addProperty("keyId", "T001"); retired.addProperty("retireAfter", retirement);
+            provider.stub.heartbeatRetirements = new JsonArray(); provider.stub.heartbeatRetirements.add(retired);
+            var committed = new AtomicInteger();
+            var beforeFreshAcknowledgement = new AtomicReference<JsonObject>();
+            provider.stub.heartbeatResponseHook = () -> {
+                if (committed.incrementAndGet() == 1) {
+                    transport.revision++;
+                    provider.stub.heartbeatRetirements = null; // Retirement is delivered only in the superseded response.
+                } else if (committed.get() == 2) {
+                    try { beforeFreshAcknowledgement.set(JsonParser.parseString(Files.readString(directory.resolve("provider-state.json"))).getAsJsonObject()); }
+                    catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+                }
+            };
+            var recovered = client(provider, directory, mode, transport);
+            try {
+                assertEquals(2, recovered.start().get(20, TimeUnit.SECONDS).get("leaseGeneration").getAsLong());
+                assertEquals(2, committed.get());
+                var between = beforeFreshAcknowledgement.get();
+                assertEquals(1, between.get("profilePublishedAt").getAsLong(), "Stale acknowledgement must not publish the old profile");
+                assertFalse(between.has("keyRequestId"));
+                assertEquals(2, between.getAsJsonArray("ticketKeys").size());
+                assertEquals(retirement, between.getAsJsonArray("ticketKeys").get(0).getAsJsonObject().get("retireAfter").getAsLong());
+                assertEquals(List.of("T001", "T002"), transport.keys.stream().map(ProviderTransport.TicketKey::keyId).toList());
+                assertEquals(19134, provider.stub.lastHeartbeat.getAsJsonObject("hostProfile").getAsJsonArray("candidates").get(0).getAsJsonObject().get("port").getAsInt());
+                var saved = JsonParser.parseString(Files.readString(directory.resolve("provider-state.json"))).getAsJsonObject();
+                assertTrue(saved.get("profilePublishedAt").getAsLong() > 1);
+                assertFalse(saved.has("pendingWebSocketOperation"));
+                assertEquals(mode == ProviderClient.ControlTransport.AUTO ? "websocket" : "http", recovered.lastControlCarrier());
+                assertEquals(0, transport.drains);
+            } finally { provider.stub.heartbeatResponseHook = () -> { }; recovered.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
+    void startupRecapturesChangesDuringCaptureAndBeforeSend(@TempDir Path directory) throws Exception {
+        for (boolean duringCapture : List.of(true, false)) try (Provider provider = new Provider()) {
+            var transport = new ChangingProfileTransport(); transport.replaceDuringCapture = duringCapture;
+            var healthCalls = new AtomicInteger();
+            var client = client(provider, directory.resolve(Boolean.toString(duringCapture)), ProviderClient.ControlTransport.AUTO,
+                    transport, () -> {
+                        if (!duringCapture && healthCalls.getAndIncrement() == 0) transport.revision++;
+                        return new ProviderClient.Health(true, true, 20, 0, "nethernet", "fixture");
+                    });
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertEquals(1, provider.stub.heartbeats, "Superseded bytes must not reach the provider");
+                assertEquals(19134, provider.stub.lastHeartbeat.getAsJsonObject("hostProfile").getAsJsonArray("candidates").get(0).getAsJsonObject().get("port").getAsInt());
+            } finally { client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
+    void repeatedCandidateChangesRetainLeaseAndScheduleFreshPublication(@TempDir Path directory) throws Exception {
+        try (Provider provider = new Provider()) {
+            provider.stub.checkInMillis = 120000;
+            var transport = new ChangingProfileTransport();
+            provider.stub.heartbeatResponseHook = () -> transport.revision++;
+            var client = client(provider, directory, ProviderClient.ControlTransport.AUTO, transport);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertEquals(3, provider.stub.heartbeats, "Each immediate exchange remains bounded");
+                assertFalse(JsonParser.parseString(Files.readString(directory.resolve("provider-state.json"))).getAsJsonObject().has("profilePublishedAt"));
+                var response = client.readiness().get(20, TimeUnit.SECONDS);
+                assertEquals(120000, response.getAsJsonObject("checkIn").get("afterMillis").getAsLong());
+                var freshCommit = new CompletableFuture<Void>();
+                provider.stub.heartbeatResponseHook = () -> freshCommit.complete(null);
+                freshCommit.get(5, TimeUnit.SECONDS);
+                client.extensions().get(5, TimeUnit.SECONDS); // Wait behind the scheduled heartbeat on its serialized executor.
+                assertTrue(JsonParser.parseString(Files.readString(directory.resolve("provider-state.json"))).getAsJsonObject().has("profilePublishedAt"));
+                assertEquals(0, transport.drains);
+            } finally { provider.stub.heartbeatResponseHook = () -> { }; client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
+    void closedListenerAfterCommittedHeartbeatStillFailsStartup(@TempDir Path directory) throws Exception {
+        try (Provider provider = new Provider()) {
+            var transport = new ChangingProfileTransport();
+            provider.stub.heartbeatResponseHook = () -> transport.closed.complete(null);
+            var client = client(provider, directory, ProviderClient.ControlTransport.AUTO, transport);
+            try {
+                var failure = assertThrows(ExecutionException.class, () -> client.start().get(20, TimeUnit.SECONDS));
+                assertEquals(IllegalStateException.class, failure.getCause().getClass());
+                assertEquals(1, provider.stub.heartbeats);
+                assertFalse(JsonParser.parseString(Files.readString(directory.resolve("provider-state.json"))).getAsJsonObject().has("profilePublishedAt"));
+            } finally { provider.stub.heartbeatResponseHook = () -> { }; client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
+        }
+    }
+
     @Test
     void existingLifecycleUsesSignedWebSocketOperationsAndHttpsRecovery(@TempDir Path directory) throws Exception {
         try (Provider provider = new Provider()) {

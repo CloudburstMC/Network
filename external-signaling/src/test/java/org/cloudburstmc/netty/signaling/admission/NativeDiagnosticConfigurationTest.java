@@ -109,13 +109,13 @@ class NativeDiagnosticConfigurationTest {
             assertEquals(first.candidateRevision(),host.transport.captureHostProfile().toCompletableFuture().get().candidateRevision());
             host.advertised.set(List.of(new InetSocketAddress(host.bind,host.port+1)));
             var second=host.transport.captureHostProfile().toCompletableFuture().get();
-            assertTrue(second.candidateRevision()>first.candidateRevision());assertThrows(IllegalStateException.class,first::requireCurrent);
+            assertTrue(second.candidateRevision()>first.candidateRevision());assertThrows(ProviderTransport.HostProfileSnapshotChangedException.class,first::requireCurrent);
             host.advertised.set(List.of(new InetSocketAddress(host.bind,host.port)));
             var third=host.transport.captureHostProfile().toCompletableFuture().get();
             assertTrue(third.candidateRevision()>second.candidateRevision());
             assertThrows(ExecutionException.class,()->host.transport.configureDiagnostics(policy).toCompletableFuture().get());
             var current=host.policy(System.currentTimeMillis()+20000);host.configure(current);
-            host.transport.drain().toCompletableFuture().get();assertThrows(IllegalStateException.class,third::requireCurrent);
+            host.transport.drain().toCompletableFuture().get();assertEquals(IllegalStateException.class,assertThrows(IllegalStateException.class,third::requireCurrent).getClass());
             assertThrows(ExecutionException.class,()->host.transport.configureDiagnostics(current).toCompletableFuture().get());
         }
     }
