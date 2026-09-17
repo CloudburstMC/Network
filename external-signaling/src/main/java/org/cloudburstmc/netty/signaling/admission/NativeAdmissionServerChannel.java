@@ -82,6 +82,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private final Map<AdmissionGate.Reservation, Session> sessions = new HashMap<>();
     private record AssistedPeer(PeerConnection peer, AdmissionGate.Reservation reservation, long deadlineNanos, Runnable requireCurrent) { }
     private final Map<String, AssistedPeer> assisted = new HashMap<>();
+    private record AssistedAnswer(AssistedJoin join, String description, long deadlineNanos, Runnable requireCurrent,
+                                  Runnable cancelPeer, java.util.function.Consumer<InetSocketAddress> capture,
+                                  StunUdpMuxMonitor monitor, int family, CompletableFuture<String> result) { }
+    private final List<AssistedAnswer> gatheringAnswers = new ArrayList<>();
     private final ArrayBlockingQueue<Event> events = new ArrayBlockingQueue<>(256);
     private final AtomicLong droppedEvents = new AtomicLong();
     private final AtomicLong creations = new AtomicLong();
@@ -145,6 +149,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         }
         NativeDiagnosticHostGate diagnostic = diagnostics;
         if (diagnostic != null) {
+            if (request.localUfrag().startsWith("NXD1")) {
+                var prepared = diagnostic.reuse(request);
+                if (prepared != null) return CompletableFuture.completedFuture(prepared);
+            }
             var players = gate.stats();
             var checks = diagnostic.stats();
             if (players.sessions() + checks.active() >= limits.sessions() || players.pending() + checks.pending() >= limits.pending()) {
@@ -204,8 +212,37 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 Runnable::run, peer -> initialize(reservation, a, peer), Instant.ofEpochMilli(a.expiresAt())));
     }
 
+    /** Same owned listener, quarantined diagnostic policy; no player reservation or child. */
+    public CompletionStage<String> assistDiagnostic(AssistedJoin join, Runnable requireCurrent) {
+        return assistDiagnostic(join, requireCurrent, Map.of(), Map.of(address.getAddress() instanceof Inet6Address ? 6 : 4, address));
+    }
+    public CompletionStage<String> assistDiagnostic(AssistedJoin join, Runnable requireCurrent,
+                                                    Map<Integer, InetSocketAddress> stunServers, Map<Integer, InetSocketAddress> publicCandidates) {
+        var servers = Map.copyOf(stunServers); var candidates = Map.copyOf(publicCandidates);
+        CompletableFuture<String> result = new CompletableFuture<>();
+        eventLoop().execute(() -> {
+            try {
+                requireCurrent.run();
+                NativeDiagnosticHostGate gate = diagnostics;
+                if (!isServing() || gate == null) throw new IllegalStateException("Diagnostic assistance unavailable");
+                var players = this.gate.stats(); var checks = gate.stats();
+                if (players.sessions()+checks.active() >= limits.sessions() || players.pending()+checks.pending() >= limits.pending())
+                    throw new IllegalStateException("Diagnostic capacity unavailable");
+                String description = gate.assist(join,requireCurrent);
+                gatherAssistedAnswer(join, description, () -> { requireCurrent.run(); gate.requireAssistedCurrent(join); },
+                        () -> gate.cancelAssisted(join), candidate -> gate.assistedAnswerCandidate(join,candidate), servers, candidates, result);
+            } catch (Throwable failure) { result.completeExceptionally(failure); }
+        });
+        return result.minimalCompletionStage();
+    }
+
     /** Precreate a peer and start outbound ICE, without waiting for any incoming player packet. */
     CompletionStage<String> assist(AssistedJoin join, Runnable requireCurrent) {
+        return assist(join, requireCurrent, Map.of(), Map.of(address.getAddress() instanceof Inet6Address ? 6 : 4, address));
+    }
+    CompletionStage<String> assist(AssistedJoin join, Runnable requireCurrent,
+                                   Map<Integer, InetSocketAddress> stunServers, Map<Integer, InetSocketAddress> publicCandidates) {
+        var servers = Map.copyOf(stunServers); var candidates = Map.copyOf(publicCandidates);
         long remaining = join.expiresAt() - System.currentTimeMillis();
         if (remaining <= 0 || remaining > 30_000) return CompletableFuture.failedFuture(new IllegalArgumentException("Assisted deadline"));
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining);
@@ -215,6 +252,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             PeerConnection peer = null;
             try {
                 requireCurrent.run();
+                if (join.diagnostic()) throw new IllegalArgumentException("Diagnostic purpose requires diagnostic gate");
                 if (!isServing() || System.nanoTime() >= deadline || !identity.fingerprint().equalsIgnoreCase(join.hostFingerprint())
                         || assisted.size() >= 32 || assisted.containsKey(join.localUfrag())) throw new IllegalStateException("Assisted admission unavailable");
                 var offer = AssistedJoin.parseOffer(join.offer());
@@ -252,7 +290,13 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 initialize(reservation, admission, peer);
                 requireCurrent.run();
                 if (System.nanoTime() >= deadline || System.currentTimeMillis() >= join.expiresAt()) throw new IllegalStateException("Assisted deadline");
-                result.complete(peer.localDescription());
+                var ownedReservation = reservation;
+                gatherAssistedAnswer(join, peer.localDescription(), () -> {
+                    requireCurrent.run();
+                    if (System.nanoTime() >= deadline || System.currentTimeMillis() >= join.expiresAt()
+                            || !sessions.containsKey(ownedReservation) || gate.admission(ownedReservation) == null)
+                        throw new IllegalStateException("Assisted peer retired");
+                }, () -> finish(ownedReservation, "assisted_answer_failed"), candidate -> { }, servers, candidates, result);
             } catch (Throwable failure) {
                 AssistedPeer owned = assisted.get(join.localUfrag());
                 if (owned != null && owned.peer() == peer) assisted.remove(join.localUfrag());
@@ -267,6 +311,91 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             }
         });
         return result.minimalCompletionStage();
+    }
+
+    /** One fresh answer candidate, gathered on the gameplay mux only for this owned join. */
+    private void gatherAssistedAnswer(AssistedJoin join, String description, Runnable requireCurrent, Runnable cancelPeer,
+                                     java.util.function.Consumer<InetSocketAddress> capture,
+                                     Map<Integer, InetSocketAddress> servers, Map<Integer, InetSocketAddress> candidates,
+                                     CompletableFuture<String> result) {
+        StunUdpMuxMonitor monitor = null;
+        try {
+            requireCurrent.run();
+            long started = System.nanoTime(), remaining = join.expiresAt() - System.currentTimeMillis();
+            if (remaining <= 0 || gatheringAnswers.size() >= 36 || servers.size() > 2 || candidates.size() > 2)
+                throw new IllegalStateException("Assisted gathering unavailable");
+            var families = new LinkedHashSet<Integer>();
+            AssistedJoin.parseOffer(join.offer()).candidates().forEach(c -> families.add(c.getAddress() instanceof Inet6Address ? 6 : 4));
+            for (int family : families) {
+                InetSocketAddress candidate = candidates.get(family);
+                if (candidate != null) {
+                    requireAnswerEndpoint(candidate, family);
+                    String answer = assistedAnswer(description, candidate, "host");
+                    requireCurrent.run();
+                    if (System.currentTimeMillis() >= join.expiresAt()) throw new IllegalStateException("Assisted gathering expired");
+                    capture.accept(candidate);
+                    result.complete(answer);
+                    return;
+                }
+            }
+            int family = families.stream().filter(servers::containsKey).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("No eligible assisted discovery endpoint"));
+            InetSocketAddress server = servers.get(family);
+            requireAnswerEndpoint(server, family);
+            monitor = new StunUdpMuxMonitor(address.getAddress(), address.getPort(), server.getAddress().getHostAddress(), server.getPort());
+            gatheringAnswers.add(new AssistedAnswer(join, description,
+                    started + TimeUnit.MILLISECONDS.toNanos(Math.min(remaining, 15000)),
+                    requireCurrent, cancelPeer, capture, monitor, family, result));
+        } catch (Throwable failure) {
+            failAssistedAnswer(monitor, cancelPeer, result, failure);
+        }
+    }
+    private void closeAssistedMonitor(StunUdpMuxMonitor monitor) {
+        if (monitor == null) return;
+        try { monitor.close(); }
+        catch (RuntimeException failure) { nativeCloseFailure.compareAndSet(null, failure); throw failure; }
+    }
+    private void failAssistedAnswer(StunUdpMuxMonitor monitor, Runnable cancelPeer, CompletableFuture<String> result, Throwable failure) {
+        try { closeAssistedMonitor(monitor); } catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+        try { cancelPeer.run(); } catch (Throwable cleanup) { nativeCloseFailure.compareAndSet(null, cleanup); if (cleanup != failure) failure.addSuppressed(cleanup); }
+        result.completeExceptionally(failure);
+    }
+    private void requireAnswerEndpoint(InetSocketAddress endpoint, int family) {
+        if (endpoint.isUnresolved() || endpoint.getPort() < 1 || (endpoint.getAddress() instanceof Inet6Address ? 6 : 4) != family
+                || (EndpointAddress.scope(endpoint.getAddress()) != EndpointAddress.Scope.PUBLIC
+                    && !(address.getAddress().isLoopbackAddress() && endpoint.getAddress().isLoopbackAddress())))
+            throw new IllegalArgumentException("Assisted discovery requires an eligible numeric endpoint");
+    }
+    private static String assistedAnswer(String description, InetSocketAddress candidate, String type) {
+        return String.join("\r\n", description.lines().filter(line -> !line.startsWith("a=candidate:")
+                && !line.startsWith("a=remote-candidates:") && !line.equals("a=end-of-candidates")).toList())
+                + "\r\na=candidate:1 1 UDP 2130706431 " + candidate.getAddress().getHostAddress() + " " + candidate.getPort()
+                + " typ " + type + "\r\na=end-of-candidates\r\n";
+    }
+    private void finishAssistedAnswers() {
+        for (AssistedAnswer pending : new ArrayList<>(gatheringAnswers)) {
+            try {
+                pending.requireCurrent().run();
+                if (!isOpen() || pending.result().isCancelled() || System.nanoTime() >= pending.deadlineNanos()
+                        || System.currentTimeMillis() >= pending.join().expiresAt()) throw new IllegalStateException("Assisted gathering expired");
+                var observation = pending.monitor().binding(0);
+                if (observation.isEmpty() || observation.get().state() != StunBinding.State.SUCCEEDED) continue;
+                var mapping = observation.get();
+                InetSocketAddress candidate = new InetSocketAddress(EndpointAddress.parse(mapping.mappedAddress()), mapping.mappedPort());
+                requireAnswerEndpoint(candidate, pending.family());
+                String answer = assistedAnswer(pending.description(), candidate, "srflx");
+                closeAssistedMonitor(pending.monitor());
+                gatheringAnswers.remove(pending);
+                pending.requireCurrent().run();
+                if (System.nanoTime() >= pending.deadlineNanos() || System.currentTimeMillis() >= pending.join().expiresAt())
+                    throw new IllegalStateException("Assisted gathering expired");
+                pending.capture().accept(candidate);
+                pending.result().complete(answer);
+            } catch (Throwable failure) {
+                gatheringAnswers.remove(pending);
+                failAssistedAnswer(pending.monitor(), pending.cancelPeer(), pending.result(), failure);
+            }
+        }
     }
 
     private void initialize(AdmissionGate.Reservation reservation, AdmissionContext a, PeerConnection peer) {
@@ -355,6 +484,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 diagnostics.tick();
                 if (diagnostics.failure() != null) { nativeCloseFailure.compareAndSet(null, diagnostics.failure()); close(); return; }
             }
+            finishAssistedAnswers();
 
             var warning = gate.pollPendingLimitWarning(System.nanoTime());
             if (warning != null) {
@@ -583,6 +713,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         if (maintenance != null) {
             maintenance.cancel(false);
         }
+        finishAssistedAnswers(); // isOpen=false closes every per-attempt monitor before mux retirement.
         if (diagnostics != null) diagnostics.close();
 
         if (connectivity != null) {

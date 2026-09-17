@@ -89,27 +89,6 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
         return external.isEmpty() ? EndpointSelection.discover(bind, external, List.of()) : EndpointSelection.select(bind, external, List.of());
     }
 
-    /** Numeric endpoints only; DNS/provider selection belongs to the embedding platform. */
-    static Map<EndpointSelection.Family, InetSocketAddress> stunServers(EndpointSelection selection, Map<String, String> options) {
-        if (selection.configured()) return Map.of();
-        var encoded = JsonParser.parseString(options.getOrDefault("stunServers", "[]")).getAsJsonArray();
-        if (encoded.size() > 2) throw new IllegalArgumentException("At most one STUN server per family");
-        var servers = new EnumMap<EndpointSelection.Family, InetSocketAddress>(EndpointSelection.Family.class);
-        for (var entry : encoded) {
-            var value = entry.getAsJsonObject();
-            try {
-                var address = EndpointAddress.parse(value.get("address").getAsString());
-                var family = EndpointSelection.Family.of(address);
-                var server = new InetSocketAddress(address, strictPort(value.get("port")));
-                if (address.isAnyLocalAddress() || address.isMulticastAddress() || servers.putIfAbsent(family, server) != null)
-                    throw new IllegalArgumentException("One numeric unicast STUN server per family required");
-            } catch (java.net.UnknownHostException invalid) { throw new IllegalArgumentException("STUN server must be numeric", invalid); }
-        }
-        // Keep possible fallback servers; the controller waits for a fresh direct failure per family.
-        servers.keySet().removeIf(family -> !selection.socketFamilies().contains(family));
-        return Map.copyOf(servers);
-    }
-
     private static int strictPort(JsonElement value) {
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber())
             throw new IllegalArgumentException("Advertised port must be an integer between 1 and 65535");
@@ -138,7 +117,7 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             if (publication != null) {
                 if (!MAINTAINED_V1.equals(publication)) throw new IllegalArgumentException("Unknown candidate publication mode");
                 var selected = maintainedSelection(udpBind, options);
-                var servers = stunServers(selected, options);
+                Map<EndpointSelection.Family, InetSocketAddress> servers = Map.of(); // Configured after provider discovery.
                 var identity = ProviderHostIdentity.ensure(Path.of(directory));
                 return NativeProviderTransport.openMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
                         .thenApply(transport -> new Host(transport, transport.channel(), List.of()));

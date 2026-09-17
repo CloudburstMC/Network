@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:nxs:diagnostic-answer-v1:draft",
-  "title": "Draft canonical provider diagnostic answer",
-  "description": "Schema describes fields; runtime additionally requires canonical order/byte equality, fixed request deadline, trusted key catalog, exact SDP/profile, signature and delivery freshness. No route is advertised.",
+  "title": "Provider-signed diagnostic answer",
+  "description": "Canonical signed answer. Profile 1 requires the exact authorized target candidate; profile 2 binds one freshly gathered same-family candidate for reciprocal ICE. Runtime verifies original authority deadlines, signatures, public endpoint scope and offer bindings.",
   "type": "object",
   "additionalProperties": false,
   "required": [

@@ -6,9 +6,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
 import org.cloudburstmc.netty.signaling.ProviderClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,12 +26,12 @@ class ProviderRuntimeConfigurationTest {
 
     @Test void assistedOptInUsesExistingAdapterAndRequiresAuto(@TempDir Path directory) throws Exception {
         var settings = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "", List.of(), Map.of(),
-                ProviderClient.ControlTransport.AUTO, false, true, List.of(), true);
+                ProviderClient.ControlTransport.AUTO, false, true, true);
         assertTrue(ProviderRuntimeConfiguration.resolve(settings,directory,"0.0.0.0",19132,10,"test").clientConfiguration().assistedJoins());
         var disabled = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "",List.of(),Map.of());
         assertFalse(ProviderRuntimeConfiguration.resolve(disabled,directory,"0.0.0.0",19132,10,"test").clientConfiguration().assistedJoins());
         var http = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "", List.of(), Map.of(),
-                ProviderClient.ControlTransport.HTTP, false, true, List.of(), true);
+                ProviderClient.ControlTransport.HTTP, false, true, true);
         assertTrue(assertThrows(IOException.class, () -> ProviderRuntimeConfiguration.resolve(http,directory,"0.0.0.0",19132,10,"test")).getMessage().contains("control-transport=auto"));
     }
 
@@ -164,62 +161,14 @@ class ProviderRuntimeConfigurationTest {
                 ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 65535, 20, "Host").udpPort());
     }
 
-    @Test void maintainedSettingsUseOrdinaryFactoryAndConfiguredAddressesSuppressStun(@TempDir Path dir) throws Exception {
-        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
-                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, true, true,
-                List.of("1.1.1.1:3478", "[2606:4700:4700::1111]:3478"));
-        var selected = runtime(dir, settings);
-        assertEquals(2, selected.stunServers().size());
-        assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
-        assertFalse(selected.nativeHostOptions().containsKey("controlMode"));
-        var configured = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of("8.8.8.8:19133"), Map.of(),
-                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, false, true, List.of("not parsed", "still unused", "entire family set ignored"));
-        assertTrue(runtime(dir, configured).stunServers().isEmpty());
-        assertEquals("[]", runtime(dir, configured).nativeHostOptions().get("stunServers"));
-    }
-    @Test
-    void resolvesBothFamiliesWithoutDependingOnDnsOrder(@TempDir Path dir) throws Exception {
-        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
-                ProviderClient.ControlTransport.HTTP, true, true, List.of("stun.example:3478"));
-        var calls = new ArrayList<String>();
-        var warnings = new ArrayList<String>();
-        var result = ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40, "Host", name -> {
-            calls.add(name);
-            return new InetAddress[] { InetAddress.getByName("2606:4700:4700::1111"),
-                    InetAddress.getByName("1.1.1.1"), InetAddress.getByName("8.8.8.8") };
-        }, warnings::add);
-        assertEquals(List.of("stun.example"), calls);
-        assertTrue(warnings.isEmpty());
-        assertEquals(2, result.stunServers().size());
-        assertEquals("1.1.1.1", result.stunServers().get(1).getAddress().getHostAddress());
-        assertTrue(result.stunServers().stream().noneMatch(java.net.InetSocketAddress::isUnresolved));
-        assertFalse(result.nativeHostOptions().get("stunServers").contains("stun.example"));
-    }
-
-    @Test
-    void dnsFailurePreservesDirectStartupAndOtherStunFamily(@TempDir Path dir) throws Exception {
-        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
-                ProviderClient.ControlTransport.HTTP, true, true, List.of("stun.invalid:3478", "[2606:4700:4700::1111]:3478"));
-        var warnings = new ArrayList<String>();
-        var result = ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40, "Host",
-                name -> { throw new UnknownHostException(name); }, warnings::add);
-        assertEquals(1, warnings.size());
-        assertEquals(1, result.stunServers().size());
-        assertEquals(16, result.stunServers().get(0).getAddress().getAddress().length);
-        assertTrue(result.maintainedCandidates());
-        assertEquals("discovered", result.clientConfiguration().connectivityMethod());
-    }
-
-    @Test
-    void explicitEndpointsOrDisabledMaintenanceNeverResolveStun(@TempDir Path dir) throws Exception {
-        for (boolean enabled : List.of(false, true)) {
-            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "",
-                    enabled ? List.of("1.1.1.1:19133") : List.of(), Map.of(), ProviderClient.ControlTransport.HTTP,
-                    true, enabled, List.of("stun.example:3478"));
-            var result = ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40, "Host",
-                    name -> { throw new AssertionError("Unexpected DNS lookup"); }, message -> { throw new AssertionError(message); });
-            assertTrue(result.stunServers().isEmpty());
+    @Test void maintainedSettingsLeaveStunConfigurationToProviderDiscovery(@TempDir Path dir) throws Exception {
+        for (var endpoints : List.of(List.<String>of(), List.of("8.8.8.8:19133"))) {
+            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", endpoints, Map.of(),
+                    ProviderClient.ControlTransport.HTTP, true, true);
+            var selected = runtime(dir, settings);
+            assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
+            assertFalse(selected.nativeHostOptions().containsKey("stunServers"));
+            assertFalse(selected.nativeHostOptions().containsKey("controlMode"));
         }
     }
-
 }

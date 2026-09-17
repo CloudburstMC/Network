@@ -2,6 +2,7 @@
 package org.cloudburstmc.netty.signaling.diagnostic;
 
 import org.cloudburstmc.netty.signaling.admission.NativeHostIdentity;
+import org.cloudburstmc.netty.signaling.control.AssistedJoin;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import tel.schich.libdatachannel.*;
 import java.net.*;
@@ -31,6 +32,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         final AtomicBoolean failed = new AtomicBoolean(), protocolFailed = new AtomicBoolean(), connected = new AtomicBoolean();
         final AtomicInteger receivedBytes = new AtomicInteger(), receivedFrames = new AtomicInteger();
         final DataChannel[] channel = new DataChannel[2];
+        Runnable requireCurrent;
         PeerConnection peer;
         DiagnosticPrincipal principal;
         DiagnosticExchange exchange;
@@ -41,7 +43,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         byte[] auth;
         long completeNanos;
         UdpSendStats stats;
-        InetSocketAddress selectedLocal, selectedRemote;
+        InetSocketAddress selectedLocal, selectedRemote, gatheredLocal;
         Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos, long nativeDeadline) {
             this.admission = admission; this.key = key; this.remote = remote; this.deadlineNanos = deadlineNanos;
             this.handshakeDeadlineNanos = handshakeDeadlineNanos; this.nativeDeadline = nativeDeadline;
@@ -112,7 +114,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             Claims claims = admission.claims();
             InetSocketAddress remote = new InetSocketAddress(EndpointAddress.parse(request.remoteAddress()), request.remotePort());
             int family = remote.getAddress() instanceof Inet6Address ? 6 : 4;
-            if (family != claims.family() || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims)) ||
+            if (claims.profile() != PROFILE || family != claims.family() || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims)) ||
                     used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote)) || !admission.usable()) throw invalid();
             long remaining = claims.expiresAt() - now;
             if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS || nativeStart > Long.MAX_VALUE - remaining) throw invalid();
@@ -126,6 +128,80 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                 .udpSendLimits(new UdpSendLimits(MAX_UDP_SENDS, MAX_UDP_PAYLOAD_BYTES, session.nativeDeadline, remote))
                 .expiresAt(Instant.ofEpochMilli(claims.expiresAt())).initialize(peer -> initialize(session, peer)).build();
         } catch (RuntimeException | UnknownHostException invalid) { admission.close(); rejected++; return null; }
+    }
+    /** Authenticated WebSocket path only; never accepts a profile2 permit from an unknown inbound packet. */
+    public synchronized String assist(AssistedJoin join, Runnable requireCurrent) {
+        Objects.requireNonNull(requireCurrent); requireCurrent.run();
+        long now = observe(), nanos = lastNanos, nativeStart = UdpSendLimits.monotonicTimeMillis();
+        prune(now);
+        if (!join.diagnostic() || closed || closeFailure != null || clockFailed || now >= policy.expiresAt()
+                || sessions.size() >= 4 || used.size() >= 16 || !join.hostFingerprint().equalsIgnoreCase(identity.fingerprint())
+                || !join.instanceId().equals(policy.context().hostId()) || join.generation() != policy.context().generation()
+                || !join.incarnation().equals(policy.context().incarnation())) throw invalid();
+        Key key = policy.key(join.keyId());
+        if (key == null) throw invalid();
+        String remoteUfrag = AssistedJoin.parseOffer(join.offer()).ufrag();
+        VerifiedDiagnosticAdmission admission = open(policy.context(),key,join.localUfrag(),remoteUfrag,policy.expiresAt(),clock);
+        if (admission == null) throw invalid();
+        Session session = null;
+        try {
+            Claims claims = admission.claims();
+            var remote = DiagnosticAssertionCodec.candidate(utf8(join.offer()),claims,remoteUfrag);
+            var scope = EndpointAddress.scope(remote.getAddress());
+            if (claims.profile() != ASSISTED_PROFILE || !claims.attemptIdHex().equals(join.id()) || claims.expiresAt() != join.expiresAt()
+                    || !admission.credentials().icePwd().equals(join.localPassword()) || !admission.verifies(join.diagnosticAssertion())
+                    || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims))
+                    || used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote))
+                    || (scope != EndpointAddress.Scope.PUBLIC && !(listenerAddress.getAddress().isLoopbackAddress() && scope == EndpointAddress.Scope.LOOPBACK))) throw invalid();
+            long remaining = claims.expiresAt() - now;
+            if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS || nativeStart > Long.MAX_VALUE - remaining) throw invalid();
+            session = new Session(admission,key,remote,nanos+remaining*1_000_000L,
+                    nanos+Math.min(remaining,MAX_HANDSHAKE_MILLIS)*1_000_000L,nativeStart+remaining);
+            session.requireCurrent = requireCurrent;
+            sessions.put(claims.attemptIdHex(),session); used.put(claims.attemptIdHex(),claims.expiresAt());
+            session.peer = PeerConnection.createPeerWithUdpLimits(PeerConnectionConfiguration.DEFAULT
+                    .withBindAddress(listenerAddress.getAddress()).withPortRangeBegin(listenerAddress.getPort()).withPortRangeEnd(listenerAddress.getPort())
+                    .withEnableIceUdpMux(true).withIceServers(List.of()).withEnableIceTcp(false)
+                    .withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE), Runnable::run,
+                    new DtlsIdentity(identity.certificate(),identity.privateKey()),
+                    new UdpSendLimits(MAX_UDP_SENDS,MAX_UDP_PAYLOAD_BYTES,session.nativeDeadline,remote));
+            session.created = true; session.settled = true;
+            session.peer.setRemoteDescription(join.offer(),SessionDescriptionType.OFFER);
+            session.peer.setLocalDescription("answer",join.localUfrag(),join.localPassword());
+            initialize(session,session.peer);
+            if (!authorized(session,observe())) throw invalid();
+            return session.peer.localDescription();
+        } catch (RuntimeException failure) {
+            if (session == null) admission.close();
+            else { session.settled = true; stop(session,"assisted_failed"); }
+            rejected++; throw failure;
+        }
+    }
+    /** Reuse a proactively prepared diagnostic peer; unknown profile2 attempts remain rejected. */
+    public synchronized IceUdpMuxListener.Acceptance reuse(IceUdpMuxListener.Request request) {
+        Session session = sessions.values().stream().filter(s -> s.requireCurrent != null
+                && s.admission.credentials().localUfrag().equals(request.localUfrag())).findFirst().orElse(null);
+        if (session == null || session.peer == null || session.closing || !authorized(session,observe())
+                || !session.admission.remoteUfrag().equals(request.remoteUfrag())) return null;
+        return IceUdpMuxListener.Acceptance.reuse(session.peer,Instant.ofEpochMilli(session.admission.claims().expiresAt()));
+    }
+    /** A pending answer cannot outlive its original native attempt while local gathering completes. */
+    public synchronized void requireAssistedCurrent(AssistedJoin join) {
+        Session session = sessions.get(join.id());
+        if (session == null || session.closing || !session.admission.credentials().localUfrag().equals(join.localUfrag())
+                || !authorized(session, observe())) throw invalid();
+    }
+    public synchronized void cancelAssisted(AssistedJoin join) {
+        Session session = sessions.get(join.id());
+        if (session != null && session.admission.credentials().localUfrag().equals(join.localUfrag())) stop(session, "assisted_answer_failed");
+    }
+    /** Trusted same-mux gatherer capture, before the signed answer is exposed. */
+    public synchronized void assistedAnswerCandidate(AssistedJoin join, InetSocketAddress candidate) {
+        requireAssistedCurrent(join);
+        Session session = sessions.get(join.id());
+        if (candidate.isUnresolved() || candidate.getPort() < 1
+                || (candidate.getAddress() instanceof Inet6Address ? 6 : 4) != session.admission.claims().family()) throw invalid();
+        session.gatheredLocal = candidate;
     }
     private synchronized void initialize(Session session, PeerConnection peer) {
         session.peer = peer; session.created = true; // Own it before anything that may reject initialization.
@@ -151,6 +227,8 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         // Admission capped this permit by its original policy and endpoint deadlines. A later
         // same-endpoint renewal governs new admissions without shortening this captured permit.
         // Explicit context/key/endpoint withdrawal still retires it immediately.
+        try { if (session.requireCurrent != null) session.requireCurrent.run(); }
+        catch (RuntimeException withdrawn) { return false; }
         return !closed && closeFailure == null && !clockFailed && session.admission.context().equals(policy.context()) && now < claims.expiresAt() && lastNanos - session.deadlineNanos < 0 &&
             keyEquals(session.key, policy.key(session.key.keyId())) && now >= session.key.notBefore() && now < session.key.retireAt() &&
             policy.endpoints().contains(DiagnosticHostPolicy.Endpoint.from(claims));
@@ -227,8 +305,9 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         try {
             InetSocketAddress local = new InetSocketAddress(EndpointAddress.parse(pair.local().getHostString()), pair.local().getPort());
             InetSocketAddress remote = new InetSocketAddress(EndpointAddress.parse(pair.remote().getHostString()), pair.remote().getPort());
-            if (!remote.equals(session.remote) || local.getPort() != listenerAddress.getPort() ||
-                    !listenerAddress.getAddress().isAnyLocalAddress() && !listenerAddress.getAddress().equals(local.getAddress()) ||
+            boolean boundLocal = local.getPort() == listenerAddress.getPort()
+                    && (listenerAddress.getAddress().isAnyLocalAddress() || listenerAddress.getAddress().equals(local.getAddress()));
+            if (!remote.equals(session.remote) || !(boundLocal || session.requireCurrent != null && local.equals(session.gatheredLocal)) ||
                     (local.getAddress() instanceof Inet6Address ? 6 : 4) != session.admission.claims().family() ||
                     pair.localCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP || pair.remoteCandidate().orElseThrow().transport() != IceCandidate.Transport.UDP) throw invalid();
             session.stats = stats; session.selectedLocal = local; session.selectedRemote = remote;

@@ -53,6 +53,18 @@ class DiagnosticAnswerCodecTest {
         }
         Files.createDirectories(Path.of("build")); Files.writeString(Path.of("build/diagnostic-java-answers.json"), fresh.toString());
     }
+    @Test void assistedAnswerHasFreshSignedDestinationAndCannotBeUsedForDirectAdmission() {
+        var c=expected.claims();
+        var assisted=new Claims(c.expiresAt(),c.clientFingerprintHex(),c.clientIcePwd(),c.attemptIdHex(),c.offerDigestHex(),c.candidateRevision(),c.family(),"00".repeat(16),0,ASSISTED_PROFILE);
+        var e=new Expected(expected.context(),assisted,expected.remoteUfrag(),expected.hostFingerprintHex());
+        String answer=value("answer").replace(" 19132 typ", " 19135 typ");
+        String wire=DiagnosticAnswerCodec.sign(e,utf8(answer),signer,()->catalog,options);
+        try(var verified=DiagnosticAnswerCodec.verify(e,wire,()->catalog,options)) {assertNotNull(verified);assertArrayEquals(utf8(answer),verified.takeSdp());}
+        assertNull(DiagnosticAnswerCodec.verify(expected,wire,()->catalog,options));
+        String empty=String.join("\r\n",answer.lines().filter(line->!line.startsWith("a=candidate:")).toList())+"\r\n";
+        assertThrows(IllegalArgumentException.class,()->DiagnosticAnswerCodec.sign(e,utf8(empty),signer,()->catalog,options));
+        assertThrows(IllegalArgumentException.class,()->DiagnosticAnswerCodec.sign(e,utf8(answer+"a=remote-candidates:1 127.0.0.1 19132\r\n"),signer,()->catalog,options));
+    }
     @Test void canonicalWireRejectsDuplicatesLossyNumbersUnknownFieldsAndNestedStructures() {
         String original = value("wire");
         for (String wire : new String[]{original.replace("{\"version\":1", "{\"version\":1,\"version\":1"), original.substring(0, original.length() - 1) + ",\"other\":0}", " " + original, original.replace("\"version\":1", "\"version\":1.0"), original.replace("diagnostic-answer", "player-answer"), original.replace("\"kind\"", "\"\\u006bind\""), "{\"unknown\":" + "[".repeat(5000) + "0" + "]".repeat(5000) + "}"}) assertNull(verify(wire));

@@ -50,6 +50,27 @@ class DiagnosticCodecTest {
         }
         Files.createDirectories(Path.of("build")); Files.writeString(Path.of("build/diagnostic-java-signatures.json"), fresh.toString());
     }
+    @Test void assistedProfileIsSignedAndUsesOnlyTheZeroTargetSentinel() throws Exception {
+        var generator=java.security.KeyPairGenerator.getInstance("EC");generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));var pair=generator.generateKeyPair();
+        for(int family:new int[]{4,6}) {
+            String offer=value("offer").replace("typ host","typ srflx");
+            if(family==6)offer=offer.replace("198.51.100.2","2001:db8::2");
+            var c=new Claims(claims.expiresAt(),claims.clientFingerprintHex(),claims.clientIcePwd(),claims.attemptIdHex(),hex(digest(utf8(offer))),9,family,"00".repeat(16),0,ASSISTED_PROFILE);
+            byte[] encoded=encode(c,new byte[16]);assertEquals(family==4?2:130,Byte.toUnsignedInt(encoded[108]));assertEquals(c,decode(encoded));
+            var proof=DiagnosticAssertionCodec.sign(context,c,value("remoteUfrag"),pair);
+            var credentials=issue(context,key,c,value("remoteUfrag"),utf8(offer),proof,parent,clock);
+            try(var opened=DiagnosticAdmissionCodec.open(context,key,credentials.localUfrag(),value("remoteUfrag"),parent,clock)) {
+                assertNotNull(opened);assertEquals(c,opened.claims());assertTrue(opened.verifies(proof));
+                assertNotNull(opened.authenticate(DiagnosticAssertionCodec.encodeAuth(c.attemptIdHex(),proof)));
+            }
+            final String exactOffer=offer;
+            assertThrows(IllegalArgumentException.class,()->new Claims(c.expiresAt(),c.clientFingerprintHex(),c.clientIcePwd(),c.attemptIdHex(),c.offerDigestHex(),9,family,c.targetAddressHex(),1,ASSISTED_PROFILE));
+            assertThrows(IllegalArgumentException.class,()->new Claims(c.expiresAt(),c.clientFingerprintHex(),c.clientIcePwd(),c.attemptIdHex(),c.offerDigestHex(),9,family,"01".repeat(16),0,ASSISTED_PROFILE));
+            var direct=new Claims(c.expiresAt(),c.clientFingerprintHex(),c.clientIcePwd(),c.attemptIdHex(),c.offerDigestHex(),9,family,"00".repeat(16),19132,PROFILE);
+            assertThrows(IllegalArgumentException.class,()->DiagnosticAssertionCodec.validateOffer(utf8(exactOffer),direct,value("remoteUfrag")));
+            assertFalse(DiagnosticAssertionCodec.verify(context,direct,value("remoteUfrag"),proof));
+        }
+    }
     @Test void budgetAndAddressCanonicalization() {
         assertArrayEquals(new int[]{246, 248, 256, 258}, new int[]{ufragLength(22), ufragLength(24), ufragLength(30), ufragLength(31)});
         assertEquals(claims.targetAddressHex(), address(4, "203.0.113.8")); assertEquals("20010db8000100000000000000000008", address(6, "2001:0DB8:0001::8"));

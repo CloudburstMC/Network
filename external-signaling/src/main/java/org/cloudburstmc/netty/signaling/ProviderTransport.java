@@ -17,6 +17,9 @@
 package org.cloudburstmc.netty.signaling;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import java.net.InetSocketAddress;
+import java.util.Set;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 
 import java.util.List;
@@ -64,8 +67,6 @@ public interface ProviderTransport {
     CompletionStage<JsonObject> hostProfile();
 
     default boolean supportsAssistedJoins() { return false; }
-    /** Families whose existing discovery/STUN phase has settled; an in-flight monitor is never ready. */
-    default java.util.Set<Integer> assistedFallbackReadyFamilies() { return java.util.Set.of(); }
     default CompletionStage<String> assistedJoin(org.cloudburstmc.netty.signaling.control.AssistedJoin join, Runnable requireCurrent) {
         return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Assisted joins unavailable"));
     }
@@ -82,6 +83,8 @@ public interface ProviderTransport {
      */
     final class HostProfileSnapshot {
         private final JsonObject profile;
+        private final JsonArray probeCandidates;
+        private final Set<Integer> assistedFamilies;
         private final long candidateRevision;
         private final long publicationVersion;
         private final Runnable current;
@@ -92,6 +95,13 @@ public interface ProviderTransport {
             this(profile, candidateRevision, 0, requireCurrent);
         }
         public HostProfileSnapshot(JsonObject profile, long candidateRevision, long publicationVersion, Runnable requireCurrent) {
+            this(profile, candidateRevision, publicationVersion, profile.getAsJsonArray("candidates"), Set.of(), requireCurrent);
+        }
+        public HostProfileSnapshot(JsonObject profile, long candidateRevision, long publicationVersion,
+                                   JsonArray probeCandidates, Set<Integer> assistedFamilies, Runnable requireCurrent) {
+            this.probeCandidates = Objects.requireNonNull(probeCandidates).deepCopy();
+            this.assistedFamilies = Set.copyOf(assistedFamilies);
+            if (probeCandidates.size() > 32 || !Set.of(4, 6).containsAll(assistedFamilies)) throw new IllegalArgumentException("Connectivity snapshot bounds");
             if (publicationVersion < 0) throw new IllegalArgumentException("Publication version");
             this.publicationVersion = publicationVersion;
             if (candidateRevision < 0 || candidateRevision > 9007199254740991L) throw new IllegalArgumentException("Candidate revision");
@@ -100,6 +110,8 @@ public interface ProviderTransport {
             this.current = Objects.requireNonNull(requireCurrent, "requireCurrent");
         }
         public JsonObject profile() { return profile.deepCopy(); }
+        public JsonArray probeCandidates() { return probeCandidates.deepCopy(); }
+        public Set<Integer> assistedFamilies() { return assistedFamilies; }
         /** Zero means this adapter has no revisioned native capture. */
         public long candidateRevision() { return candidateRevision; }
         public long publicationVersion() { return publicationVersion; }
@@ -126,14 +138,32 @@ public interface ProviderTransport {
     /** Cheap local publication counter; freshness changes do not change candidateRevision. */
     default long candidatePublicationVersion() { return 0; }
 
-    enum ConnectivityOutcome { ESTABLISHED, NOT_ESTABLISHED, UNKNOWN }
-    record ConnectivityCheck(int family, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
+    enum ConnectivityOutcome { ESTABLISHED, NOT_ESTABLISHED, UNKNOWN, UNAVAILABLE }
+    record ConnectivityCheck(int family, String method, InetSocketAddress target, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
+        public ConnectivityCheck(int family, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
+            this(family, "defined", null, outcome, checkedAt, expiresAt);
+        }
         public ConnectivityCheck {
             Objects.requireNonNull(outcome);
+            if (!Set.of("defined", "discovered", "warm_stun", "per_join").contains(method)
+                    || target != null && (target.isUnresolved() || target.getPort() < 1
+                    || (target.getAddress() instanceof java.net.Inet4Address ? 4 : 6) != family))
+                throw new IllegalArgumentException("Invalid connectivity method/target");
             if ((family != 4 && family != 6) || checkedAt < 0 || expiresAt > 9007199254740991L
                     || expiresAt <= checkedAt || expiresAt - checkedAt > 300000)
                 throw new IllegalArgumentException("Invalid connectivity check");
         }
+    }
+
+    record StunServer(String host, int port) {
+        public StunServer {
+            if (host == null || host.isEmpty() || host.length() > 253 || !host.matches("[A-Za-z0-9.:-]+") || port < 1 || port > 65535)
+                throw new IllegalArgumentException("Invalid provider STUN server");
+        }
+    }
+    /** Provider discovery only. Explicit endpoints suppress resolution and monitoring. */
+    default CompletionStage<Void> configureStunServers(List<StunServer> servers) {
+        return java.util.concurrent.CompletableFuture.completedFuture(null);
     }
 
     /** Existing heartbeat feedback only; no state/health command or reachability assertion. */

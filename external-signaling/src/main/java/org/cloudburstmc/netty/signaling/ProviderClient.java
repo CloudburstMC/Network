@@ -206,6 +206,7 @@ public final class ProviderClient implements AutoCloseable {
     private PrivateKey privateKey;
     private String profileRevision;
     private JsonObject lastProfile;
+    private ProviderTransport.HostProfileSnapshot publishedProfileSnapshot;
     private long publishedCandidateRevision, publishedCandidateVersion;
     private long observedCandidateRevision, observedCandidateVersion, nextCandidateRefresh;
 
@@ -227,7 +228,6 @@ public final class ProviderClient implements AutoCloseable {
                                      long deadlineNanos, long expiresAt) { }
     private volatile AssistedAuthority assistedAuthority;
     private volatile boolean assistedMode;
-    private final AssistedFallbackChoice assistedFallbackChoice = new AssistedFallbackChoice();
     private String hostState = "serving";
     private String installedKeyId;
     private List<ProviderTransport.TicketKey> installedTicketKeys = List.of();
@@ -265,6 +265,7 @@ public final class ProviderClient implements AutoCloseable {
             discovery = exchange(URI.create(origin + "/.well-known/nethernet-external-signaling"), "GET", null, false,
                     null, null);
             validateDiscovery();
+            transport.configureStunServers(discoveryStunServers()).toCompletableFuture().get(10, TimeUnit.SECONDS);
             configureWebSocket();
             state = store.read();
             if (state.has("provider") && !origin.equals(state.get("provider").getAsString())) {
@@ -322,6 +323,25 @@ public final class ProviderClient implements AutoCloseable {
             }, 1000, 1000, TimeUnit.MILLISECONDS);
             return redactedRegistration();
         });
+    }
+
+    private List<ProviderTransport.StunServer> discoveryStunServers() throws IOException {
+        try {
+            if (!discovery.has("extensions") || !discovery.getAsJsonObject("extensions").has(CONNECTIVITY_EXTENSION)) return List.of();
+            var extension = discovery.getAsJsonObject("extensions").getAsJsonObject(CONNECTIVITY_EXTENSION);
+            if (extension.get("version").getAsInt() != 1) return List.of();
+            var data = extension.getAsJsonObject("data");
+            if (!data.has("stunServers")) return List.of();
+            var values = data.getAsJsonArray("stunServers");
+            if (values.size() > 2) throw new IllegalArgumentException("STUN discovery bound");
+            var result = new ArrayList<ProviderTransport.StunServer>();
+            for (var value : values) {
+                var server = value.getAsJsonObject();
+                if (!server.keySet().equals(Set.of("host", "port"))) throw new IllegalArgumentException("STUN discovery fields");
+                result.add(new ProviderTransport.StunServer(server.get("host").getAsString(), server.get("port").getAsBigDecimal().intValueExact()));
+            }
+            return List.copyOf(result);
+        } catch (RuntimeException invalid) { throw new IOException("Invalid provider STUN discovery", invalid); }
     }
 
     private void validateDiscovery() throws IOException {
@@ -718,6 +738,8 @@ public final class ProviderClient implements AutoCloseable {
             observedCandidateVersion = snapshot.publicationVersion();
             observedCandidateRevision = snapshot.candidateRevision();
         }
+        if (publishedProfileSnapshot != null) try { publishedProfileSnapshot.requireCurrent(); }
+        catch (RuntimeException changed) { return true; }
         return observedCandidateRevision != publishedCandidateRevision || System.nanoTime() >= nextCandidateRefresh;
     }
 
@@ -781,11 +803,15 @@ public final class ProviderClient implements AutoCloseable {
             body.addProperty("acceptingPlayers", health.acceptingPlayers() && installedKeyId != null && hostState.equals("serving"));
             JsonObject extensions = heartbeatExtensions.deepCopy();
             boolean diagnosticsAdvertised = diagnosticSnapshot != null && diagnosticInstallationCurrent(diagnosticSnapshot);
-            if (diagnosticsAdvertised || assistedMode && profileSnapshot != null && profileSnapshot.candidateRevision() > 0) {
+            if (profileSnapshot != null && profileSnapshot.candidateRevision() > 0) {
                 profileSnapshot.requireCurrent();
                 var data = new JsonObject();
                 data.addProperty("diagnostics", diagnosticsAdvertised);
                 data.addProperty("candidateRevision", profileSnapshot.candidateRevision());
+                data.add("probeCandidates", profileSnapshot.probeCandidates());
+                var assistedFamilies = new JsonArray();
+                if (config.assistedJoins()) profileSnapshot.assistedFamilies().stream().sorted().forEach(assistedFamilies::add);
+                data.add("assistedFamilies", assistedFamilies);
                 data.addProperty("method", assistedMode ? "per_join" : profile.getAsJsonArray("candidates").asList().stream()
                         .anyMatch(item -> "srflx".equals(item.getAsJsonObject().get("type").getAsString()))
                         ? "warm_stun" : config.connectivityMethod());
@@ -919,6 +945,7 @@ public final class ProviderClient implements AutoCloseable {
             lastReportedHealth = health;
             lastHeartbeat = response.deepCopy();
             if (profileSnapshot != null) {
+                publishedProfileSnapshot = profileSnapshot;
                 publishedCandidateRevision = profileSnapshot.candidateRevision();
                 publishedCandidateVersion = profileSnapshot.publicationVersion();
                 nextCandidateRefresh = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
@@ -938,6 +965,7 @@ public final class ProviderClient implements AutoCloseable {
             }
             if (profileSnapshot != null) {
                 reportConnectivityFeedback(profileSnapshot, response);
+                profileSnapshot.requireCurrent(); // A host policy transition promptly republishes, even at the same candidate revision.
                 if (config.assistedJoins()) {
                     var latest = transport.captureHostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
                     latest.requireCurrent();
@@ -957,17 +985,18 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private void invalidatePublishedProfile() throws Exception {
+        publishedProfileSnapshot = null;
         lastProfile = null;
         profileRevision = null;
         assistedAuthority = null;
         disableDiagnosticAdmission();
     }
 
-    private static boolean diagnosticProfile(ProviderTransport.HostProfileSnapshot snapshot) {
+    private boolean diagnosticProfile(ProviderTransport.HostProfileSnapshot snapshot) {
         JsonObject profile = snapshot.profile();
         if (snapshot.candidateRevision() < 1 || !profile.has("statelessAdmission") || !profile.has("candidates")) return false;
-        JsonArray candidates = profile.getAsJsonArray("candidates");
-        if (candidates.isEmpty() || candidates.size() > 32) return false;
+        JsonArray candidates = snapshot.probeCandidates();
+        if (candidates.isEmpty() && (!config.assistedJoins() || snapshot.assistedFamilies().isEmpty()) || candidates.size() > 32) return false;
         for (JsonElement item : candidates) {
             JsonObject candidate = item.getAsJsonObject();
             String type = candidate.get("type").getAsString();
@@ -988,7 +1017,7 @@ public final class ProviderClient implements AutoCloseable {
             JsonObject data = extension.getAsJsonObject("data");
             if (!data.has("checks") || data.get("candidateRevision").getAsBigDecimal().longValueExact() != snapshot.candidateRevision()) return;
             JsonArray checks = data.getAsJsonArray("checks");
-            if (checks.size() > 6) throw new IllegalArgumentException("Connectivity feedback bound");
+            if (checks.size() > 18) throw new IllegalArgumentException("Connectivity feedback bound");
             var parsed = new ArrayList<ProviderTransport.ConnectivityCheck>();
             long now = System.currentTimeMillis();
             for (JsonElement item : checks) {
@@ -997,15 +1026,21 @@ public final class ProviderClient implements AutoCloseable {
                     case "established" -> ProviderTransport.ConnectivityOutcome.ESTABLISHED;
                     case "not-established" -> ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED;
                     case "unknown" -> ProviderTransport.ConnectivityOutcome.UNKNOWN;
+                    case "unavailable" -> ProviderTransport.ConnectivityOutcome.UNAVAILABLE;
                     default -> throw new IllegalArgumentException("Unknown connectivity outcome");
                 };
-                var value = new ProviderTransport.ConnectivityCheck(check.get("family").getAsBigDecimal().intValueExact(), outcome,
+                java.net.InetSocketAddress target = null;
+                if (check.has("target")) {
+                    var endpoint = check.getAsJsonObject("target");
+                    target = new java.net.InetSocketAddress(org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(endpoint.get("address").getAsString()),
+                            endpoint.get("port").getAsBigDecimal().intValueExact());
+                }
+                var value = new ProviderTransport.ConnectivityCheck(check.get("family").getAsBigDecimal().intValueExact(),
+                        check.has("method") ? check.get("method").getAsString() : "defined", target, outcome,
                         check.get("checkedAt").getAsBigDecimal().longValueExact(), check.get("expiresAt").getAsBigDecimal().longValueExact());
                 if (value.checkedAt() <= now && value.expiresAt() > now) parsed.add(value);
             }
             snapshot.requireCurrent();
-            if (config.assistedJoins()) assistedFallbackChoice.report(registration("instanceId"),
-                    state.get("generation").getAsLong(), snapshot, parsed, now);
             transport.reportConnectivityChecks(snapshot.candidateRevision(), parsed).toCompletableFuture().get(10, TimeUnit.SECONDS);
         } catch (Exception unavailable) {
             // Optional observations must not undo a successful ordinary heartbeat or change host serving state.
@@ -1024,82 +1059,8 @@ public final class ProviderClient implements AutoCloseable {
 
     private boolean assistedNeeded(ProviderTransport.HostProfileSnapshot snapshot) {
         if (!config.assistedJoins() || websocketEndpoint == null || !transport.supportsAssistedJoins()) return false;
-        return assistedFallbackChoice.needed(registration("instanceId"), state.get("generation").getAsLong(),
-                snapshot, transport.assistedFallbackReadyFamilies(), System.currentTimeMillis());
-    }
-
-    /** Local connectivity choice only. Every join still needs its separate, bounded AssistedAuthority. */
-    static final class AssistedFallbackChoice {
-        private record Binding(String instance, long generation, String incarnation, String fingerprint, long revision) { }
-        private Binding binding;
-        private final Map<Integer, Long> failedAt = new HashMap<>();
-        private final Map<Integer, Long> establishedAt = new HashMap<>();
-
-        private JsonObject bind(String instance, long generation, ProviderTransport.HostProfileSnapshot snapshot) {
-            try { snapshot.requireCurrent(); }
-            catch (RuntimeException unavailable) {
-                binding = null; failedAt.clear(); establishedAt.clear();
-                throw unavailable;
-            }
-            var profile = snapshot.profile();
-            var current = new Binding(instance, generation,
-                    profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString(),
-                    profile.get("dtlsFingerprint").getAsString(), snapshot.candidateRevision());
-            if (!current.equals(binding)) {
-                failedAt.clear(); establishedAt.clear(); binding = current;
-            }
-            return profile;
-        }
-
-        void report(String instance, long generation, ProviderTransport.HostProfileSnapshot snapshot,
-                    List<ProviderTransport.ConnectivityCheck> checks, long now) {
-            bind(instance, generation, snapshot);
-            if (snapshot.candidateRevision() < 1) return;
-            for (int family : List.of(4, 6)) {
-                var fresh = checks.stream().filter(check -> check.family() == family
-                        && check.checkedAt() <= now && check.expiresAt() > now).toList();
-                var established = fresh.stream().filter(check -> check.outcome() == ProviderTransport.ConnectivityOutcome.ESTABLISHED)
-                        .mapToLong(ProviderTransport.ConnectivityCheck::checkedAt).max();
-                if (established.isPresent()) {
-                    // An older regional success cannot undo a subsequently selected failure.
-                    // Equal timestamps do not establish recovery from an existing fallback.
-                    if (established.getAsLong() > failedAt.getOrDefault(family, -1L)) failedAt.remove(family);
-                    establishedAt.merge(family, established.getAsLong(), Math::max);
-                } else {
-                    fresh.stream().filter(check -> check.outcome() == ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED
-                                    && check.checkedAt() > establishedAt.getOrDefault(family, -1L))
-                            .mapToLong(ProviderTransport.ConnectivityCheck::checkedAt).max()
-                            .ifPresent(checkedAt -> failedAt.merge(family, checkedAt, Math::max));
-                }
-                // Missing, unknown or expired observations cannot undo an already selected fallback.
-            }
-        }
-
-        boolean needed(String instance, long generation, ProviderTransport.HostProfileSnapshot snapshot,
-                       Set<Integer> ready, long now) {
-            // A refreshed same-mapping capture may be current after the old observation lease expired.
-            return assistedFallbackNeeded(bind(instance, generation, snapshot), ready, failedAt.keySet(), now);
-        }
-    }
-
-    private static boolean assistedFallbackNeeded(JsonObject profile, Set<Integer> ready,
-                                                  Set<Integer> failedFamilies, long now) {
-        for (int family : ready) {
-            boolean publicCandidate = false;
-            for (var item : profile.getAsJsonArray("candidates")) {
-                var candidate = item.getAsJsonObject();
-                if (candidate.has("expiresAt") && candidate.get("expiresAt").getAsLong() <= now) continue;
-                try {
-                    var address = org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(candidate.get("address").getAsString());
-                    if ((address instanceof java.net.Inet4Address ? 4 : 6) == family
-                            && org.cloudburstmc.netty.util.nethernet.EndpointAddress.scope(address)
-                            == org.cloudburstmc.netty.util.nethernet.EndpointAddress.Scope.PUBLIC) publicCandidate = true;
-                } catch (java.net.UnknownHostException malformed) { return false; }
-            }
-            if (!publicCandidate) return true;
-            if (failedFamilies.contains(family)) return true;
-        }
-        return false;
+        snapshot.requireCurrent();
+        return !snapshot.assistedFamilies().isEmpty();
     }
 
     private boolean diagnosticInstallationCurrent(ProviderTransport.HostProfileSnapshot snapshot) {
@@ -1138,7 +1099,7 @@ public final class ProviderClient implements AutoCloseable {
             var keys = installedTicketKeys.stream().map(key -> new DiagnosticAdmissionCodec.Key(key.keyId(), key.secret(),
                     key.notBefore(), Math.min(key.retireAfter(), 9007199254740991L))).toList();
             var endpointExpiries = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
-            for (JsonElement item : profile.getAsJsonArray("candidates")) {
+            for (JsonElement item : snapshot.probeCandidates()) {
                 JsonObject candidate = item.getAsJsonObject();
                 var address = org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(candidate.get("address").getAsString());
                 int family = address instanceof java.net.Inet6Address ? 6 : 4;
@@ -1149,6 +1110,8 @@ public final class ProviderClient implements AutoCloseable {
                 if (endpointExpiry <= System.currentTimeMillis()) throw new IOException("Diagnostic endpoint expired");
                 endpointExpiries.merge(endpoint, endpointExpiry, Math::min);
             }
+            if (config.assistedJoins()) for (int family : snapshot.assistedFamilies())
+                endpointExpiries.put(DiagnosticHostPolicy.Endpoint.assisted(family, snapshot.candidateRevision()), expiresAt);
             snapshot.requireCurrent();
             transport.configureDiagnostics(new DiagnosticHostPolicy(context, keys, endpointExpiries.keySet(), expiresAt, endpointExpiries), deadline)
                     .toCompletableFuture().get(10, TimeUnit.SECONDS);

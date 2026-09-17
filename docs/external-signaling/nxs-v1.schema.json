@@ -941,6 +941,20 @@
                     "warm_stun",
                     "per_join"
                   ]
+                },
+                "probeCandidates": {
+                  "$ref": "#/$defs/hostProfile/properties/candidates"
+                },
+                "assistedFamilies": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      4,
+                      6
+                    ]
+                  }
                 }
               }
             },
@@ -968,7 +982,7 @@
                 },
                 "checks": {
                   "type": "array",
-                  "maxItems": 6,
+                  "maxItems": 18,
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -996,7 +1010,8 @@
                         "enum": [
                           "established",
                           "not-established",
-                          "unknown"
+                          "unknown",
+                          "unavailable"
                         ]
                       },
                       "checkedAt": {
@@ -1008,6 +1023,76 @@
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 9007199254740991
+                      },
+                      "method": {
+                        "enum": [
+                          "defined",
+                          "discovered",
+                          "warm_stun",
+                          "per_join"
+                        ]
+                      },
+                      "target": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "address",
+                          "port"
+                        ],
+                        "properties": {
+                          "address": {
+                            "type": "string",
+                            "maxLength": 45,
+                            "pattern": "^[0-9A-Fa-f:.]+$",
+                            "anyOf": [
+                              {
+                                "format": "ipv4"
+                              },
+                              {
+                                "format": "ipv6"
+                              }
+                            ]
+                          },
+                          "port": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "stunServers"
+              ],
+              "properties": {
+                "stunServers": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "host",
+                      "port"
+                    ],
+                    "properties": {
+                      "host": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 253,
+                        "pattern": "^[A-Za-z0-9.:-]+$"
+                      },
+                      "port": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
                       }
                     }
                   }

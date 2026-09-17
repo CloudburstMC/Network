@@ -112,12 +112,16 @@ public final class DiagnosticAnswerCodec {
         if (!fingerprint.matches("sha-256 (?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}") || !fingerprint.substring(8).replace(":", "").equalsIgnoreCase(expected.hostFingerprintHex)) throw invalid();
         String local = one(lines, "a=ice-ufrag:");
         if (!local.matches("NXD1[A-Z0-9]{4}[A-Za-z0-9+/]+") || local.length() != ufragLength(expected.claims.clientIcePwd().length()) || unbase64(local.substring(8)).length != 156 + expected.claims.clientIcePwd().length() || !one(lines, "a=ice-pwd:").matches("[A-Za-z0-9+/]{32}")) throw invalid();
+        if (lines.stream().anyMatch(line -> line.startsWith("a=remote-candidates:"))) throw invalid();
         String[] c = one(lines, "a=candidate:").split(" ", -1);
-        if (c.length < 8 || c.length > 20 || c.length % 2 != 0 || !c[0].matches("[A-Za-z0-9+/]{1,32}") || !c[1].equals("1") || !c[2].equalsIgnoreCase("udp") || !c[3].matches("[0-9]{1,10}") || Long.parseLong(c[3]) > 0xffffffffL || !c[6].equals("typ") || !List.of("host", "srflx").contains(c[7]) || !c[5].matches("[0-9]{1,5}") || Integer.parseInt(c[5]) != expected.claims.targetPort() || !address(expected.claims.family(), c[4]).equals(expected.claims.targetAddressHex())) throw invalid();
+        if (c.length < 8 || c.length > 20 || c.length % 2 != 0 || !c[0].matches("[A-Za-z0-9+/]{1,32}") || !c[1].equals("1") || !c[2].equalsIgnoreCase("udp") || !c[3].matches("[0-9]{1,10}") || Long.parseLong(c[3]) > 0xffffffffL || !c[6].equals("typ") || !List.of("host", "srflx").contains(c[7]) || !c[5].matches("[0-9]{1,5}") || Integer.parseInt(c[5]) < 1 || Integer.parseInt(c[5]) > 65535) throw invalid();
+        String candidateAddress = address(expected.claims.family(), c[4]);
+        if (expected.claims.profile() == PROFILE && (Integer.parseInt(c[5]) != expected.claims.targetPort()
+                || !candidateAddress.equals(expected.claims.targetAddressHex()))) throw invalid();
         Set<String> seen = new HashSet<>();
         for (int i = 8; i < c.length; i += 2) {
             String name = c[i], value = c[i + 1]; if (!seen.add(name)) throw invalid();
-            if (name.equals("raddr")) { if (!c[7].equals("srflx")) throw invalid(); address(value.contains(":") ? 6 : 4, value); }
+            if (name.equals("raddr")) { if (!c[7].equals("srflx")) throw invalid(); address(expected.claims.profile() == ASSISTED_PROFILE ? expected.claims.family() : value.contains(":") ? 6 : 4, value); }
             else if (name.equals("ufrag")) { if (!value.equals(local)) throw invalid(); }
             else if (!List.of("rport", "generation", "network-id", "network-cost").contains(name) || !value.matches("[0-9]{1,10}") || Long.parseLong(value) > (name.equals("rport") ? 65535 : 0xffffffffL) || (name.equals("rport") && !c[7].equals("srflx"))) throw invalid();
         }

@@ -5,7 +5,7 @@ The game server locally calls `NativeProviderTransport.configureDiagnostics(poli
 or the lower-level `NativeAdmissionServerChannel.enableDiagnostics(policy)`.
 `DiagnosticHostPolicy` owns the provider/host/incarnation/generation, at most eight
 trusted diagnostic keys, at most 32 exact numeric family/address/port/revision
-endpoints, and their deadlines. Incoming permits cannot configure these values.
+endpoints or explicitly assisted families, and their deadlines. Incoming permits cannot configure these values.
 The transport bridge checks its own incarnation and advertised endpoints before
 configuration; a withdrawn endpoint is removed from the same gate without clearing
 its replay history. `disableDiagnostics()` cancels diagnostic eligibility. Neither
@@ -17,11 +17,10 @@ or completion receipt. Local observations do not alter serving state or health.
 `NXD1` is quarantined even when malformed or diagnostics are disabled, so it cannot
 fall through to the player validator. Signed permit, exact ICE credentials, pinned
 DTLS and the detached ES384 AUTH bind the original offer, attempt, target and expiry.
-Only the received numeric source tuple is reconstructed into remote SDP; no incoming
-DNS, STUN/TURN/TCP configuration or arbitrary SDP is installed.
+For profile 1, only the received numeric source tuple is reconstructed into remote SDP. Profile 2 requires a verified proactive WebSocket offer and assertion, scoped to a locally enabled assisted family; incoming stateless admission cannot enable it. No incoming DNS, STUN/TURN/TCP configuration is installed.
 
 The native send guard is installed before acceptance: 256 UDP datagrams, 1200-byte
-payload cap, one exact destination and a fixed monotonic deadline. Attempts last at
+payload cap, one exact destination and a fixed monotonic deadline. Profile 2 uses the authenticated peer candidate from the signed offer, while the probe applies one signed fresh host candidate so ICE runs in both directions. A shared per-attempt gatherer serves player and diagnostic assistance; its STUN monitor stops at the original deadline or completion, without restarting background warming. Attempts last at
 most 60 seconds, including a 15-second handshake. Four concurrent diagnostics also
 count against shared player/diagnostic native capacity. Sixteen used attempt IDs
 remain until their original expiry. Bad initial STUN integrity creates no peer and
@@ -78,5 +77,4 @@ to 32 queued observations with a dropped-result count; no durable journal is req
 The signed admission and signed answer contracts remain in `diagnostic-v1.md` and
 `diagnostic-answer-v1.md`. A regional workload still needs trusted target permission,
 rate limits and pristine-source history to claim a first-contact check. IPv4 and IPv6
-are separate observations. The native budget API still requires the unpublished JNI
-chain; localhost tests do not establish deployment or stock-client gameplay.
+are separate observations. The native budget API requires the pinned JNI chain; localhost tests do not establish deployment or stock-client gameplay.

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:nxs:diagnostic-v1:draft",
-  "title": "Draft NXS diagnostic claims; no advertised route",
-  "description": "Describes codec values, not a public HTTP API. Runtime additionally checks canonical origin/UTF-8, key windows, exact parent coverage, offer profile, cryptographic signatures and fixed absolute/monotonic deadlines. Execution and signed answer remain required integration gates.",
+  "title": "NXS diagnostic admission claims",
+  "description": "Runtime also verifies canonical bytes, signatures, original authority deadlines and the exact diagnostic offer profile.",
   "$ref": "#/$defs/claims",
   "$defs": {
     "context": {
@@ -90,11 +90,14 @@
         },
         "targetPort": {
           "type": "integer",
-          "minimum": 1,
+          "minimum": 0,
           "maximum": 65535
         },
         "profile": {
-          "const": 1
+          "enum": [
+            1,
+            2
+          ]
         }
       },
       "allOf": [
@@ -121,6 +124,32 @@
                   "type": "string",
                   "pattern": "^00000000000000000000ffff[0-9a-f]{8}$"
                 }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "profile": {
+                "const": 2
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "targetAddressHex": {
+                "const": "00000000000000000000000000000000"
+              },
+              "targetPort": {
+                "const": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "targetPort": {
+                "minimum": 1
               }
             }
           }

@@ -332,12 +332,11 @@ class ProviderWebSocketTest {
                     });
                 }
                 @Override public CompletionStage<HostProfileSnapshot> captureHostProfile() {
-                    return hostProfile().thenApply(profile -> new HostProfileSnapshot(profile, 1, () -> {
+                    return hostProfile().thenApply(profile -> new HostProfileSnapshot(profile, 1, 0, profile.getAsJsonArray("candidates"), Set.of(4), () -> {
                         if (closed.isDone()) throw new IllegalStateException("Native listener closed");
                     }));
                 }
                 @Override public boolean supportsAssistedJoins() { return true; }
-                @Override public Set<Integer> assistedFallbackReadyFamilies() { return Set.of(4); }
                 @Override public CompletionStage<String> assistedJoin(org.cloudburstmc.netty.signaling.control.AssistedJoin join, Runnable guard) {
                     guard.run(); var result = new CompletableFuture<String>(); nativeResult.set(result); started.add(join); return result;
                 }

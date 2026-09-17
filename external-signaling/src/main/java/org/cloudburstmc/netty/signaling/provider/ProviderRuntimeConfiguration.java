@@ -25,13 +25,11 @@ import org.cloudburstmc.netty.util.nethernet.SecretValue;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.net.URI;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.function.Consumer;
 
 /**
  * Validated NXS settings, with the listener and capacity inherited from whatever is hosting.
@@ -40,7 +38,7 @@ public record ProviderRuntimeConfiguration(
     URI origin, Path stateDirectory, String authorizationToken, String region, String pool,
     Map<String, String> tags, String label, String bindAddress, int udpPort,
     List<InetSocketAddress> advertisedEndpoints, int capacity, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
-    boolean maintainedCandidates, List<InetSocketAddress> stunServers, boolean assistedJoins
+    boolean maintainedCandidates, boolean assistedJoins
 ) {
     /**
      * @param settings   What the host has configured for the provider
@@ -53,16 +51,6 @@ public record ProviderRuntimeConfiguration(
      */
     public static ProviderRuntimeConfiguration resolve(Settings settings, Path directory, String bindAddress,
                                                        int udpPort, int maxPlayers, String label) throws IOException {
-        return resolve(settings, directory, bindAddress, udpPort, maxPlayers, label, InetAddress::getAllByName,
-                message -> System.getLogger(ProviderRuntimeConfiguration.class.getName()).log(System.Logger.Level.WARNING, message));
-    }
-
-    @FunctionalInterface
-    interface AddressResolver { InetAddress[] resolve(String name) throws UnknownHostException; }
-
-    // DNS is resolved during host startup, never from the gameplay event loop or heartbeat.
-    static ProviderRuntimeConfiguration resolve(Settings settings, Path directory, String bindAddress,
-            int udpPort, int maxPlayers, String label, AddressResolver resolver, Consumer<String> warning) throws IOException {
         if (settings.assistedJoins() && settings.controlTransport() != ProviderClient.ControlTransport.AUTO)
             throw new IOException("nxs.assisted-joins requires nxs.control-transport=auto");
         URI origin;
@@ -102,12 +90,9 @@ public record ProviderRuntimeConfiguration(
             throw new IOException("Invalid inherited routing capacity");
         }
 
-        // Explicit advertised endpoints suppress DNS and STUN, including omitted families.
-        var stun = endpoints.isEmpty() && settings.maintainedCandidates()
-                ? resolveStunServers(settings.stunServers(), resolver, warning) : List.<InetSocketAddress>of();
         var runtime = new ProviderRuntimeConfiguration(origin, state, token, region, pool, Map.copyOf(tags), label,
             bind, port, List.copyOf(endpoints), capacity, settings.controlTransport(), settings.diagnosticAdmission(),
-            settings.maintainedCandidates(), List.copyOf(stun), settings.assistedJoins());
+            settings.maintainedCandidates(), settings.assistedJoins());
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
@@ -129,16 +114,16 @@ public record ProviderRuntimeConfiguration(
      */
     public record Settings(String endpoint, String token, List<String> advertiseAddresses,
                            Map<String, String> data, ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
-                           boolean maintainedCandidates, List<String> stunServers, boolean assistedJoins) {
-        public Settings { Objects.requireNonNull(controlTransport); stunServers = List.copyOf(stunServers); }
+                           boolean maintainedCandidates, boolean assistedJoins) {
+        public Settings { Objects.requireNonNull(controlTransport); }
         public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
                         ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission,
-                        boolean maintainedCandidates, List<String> stunServers) {
-            this(endpoint, token, advertiseAddresses, data, controlTransport, diagnosticAdmission, maintainedCandidates, stunServers, false);
+                        boolean maintainedCandidates) {
+            this(endpoint, token, advertiseAddresses, data, controlTransport, diagnosticAdmission, maintainedCandidates, false);
         }
         public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
                         ProviderClient.ControlTransport controlTransport, boolean diagnosticAdmission) {
-            this(endpoint, token, advertiseAddresses, data, controlTransport, diagnosticAdmission, false, List.of());
+            this(endpoint, token, advertiseAddresses, data, controlTransport, diagnosticAdmission, false);
         }
         public Settings(String endpoint, String token, List<String> advertiseAddresses, Map<String, String> data,
                         ProviderClient.ControlTransport controlTransport) {
@@ -157,39 +142,6 @@ public record ProviderRuntimeConfiguration(
         return new ProviderClient.Configuration(origin, profile(), label, ProviderClient.AUTOMATIC,
             authorizationToken == null ? ProviderClient.ANONYMOUS_PROOF_OF_WORK : ProviderClient.BEARER_TOKEN,
             authorizationToken, region, pool, tags, controlTransport, diagnosticAdmission, advertisedEndpoints.isEmpty() ? "discovered" : "defined", assistedJoins);
-    }
-
-    private static List<InetSocketAddress> resolveStunServers(List<String> configured, AddressResolver resolver,
-                                                             Consumer<String> warning) throws IOException {
-        if (configured.size() > 2) throw new IOException("nxs.stun-servers allows at most two endpoints");
-        var selected = new LinkedHashMap<Integer, InetSocketAddress>();
-        for (String value : configured) {
-            URI endpoint;
-            try {
-                endpoint = URI.create("stun://" + value);
-                if (endpoint.getHost() == null || endpoint.getHost().length() > 253 || endpoint.getRawUserInfo() != null ||
-                        !endpoint.getRawPath().isEmpty() || endpoint.getRawQuery() != null || endpoint.getRawFragment() != null ||
-                        endpoint.getPort() < 1 || endpoint.getPort() > 65535) throw new IllegalArgumentException();
-            } catch (IllegalArgumentException invalid) {
-                throw new IOException("nxs.stun-servers entries must be host:port or [IPv6]:port with ports 1-65535");
-            }
-            String host = endpoint.getHost();
-            if (host.startsWith("[")) host = host.substring(1, host.length() - 1);
-            InetAddress[] addresses;
-            try { addresses = new InetAddress[] { EndpointAddress.parse(host) }; }
-            catch (UnknownHostException hostname) {
-                try { addresses = resolver.resolve(host); }
-                catch (UnknownHostException unavailable) {
-                    warning.accept("STUN server " + endpoint.getHost() + " could not be resolved; direct connectivity remains available.");
-                    continue;
-                }
-            }
-            for (InetAddress address : addresses) {
-                if (EndpointAddress.scope(address) != EndpointAddress.Scope.UNUSABLE)
-                    selected.putIfAbsent(address.getAddress().length, new InetSocketAddress(address, endpoint.getPort()));
-            }
-        }
-        return List.copyOf(selected.values());
     }
 
     private static InetSocketAddress endpoint(String value) throws IOException {
@@ -253,12 +205,7 @@ public record ProviderRuntimeConfiguration(
         options.put("diagnosticAdmission", Boolean.toString(diagnosticAdmission));
         if (maintainedCandidates) {
             options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
-            var servers = new JsonArray();
-            for (var endpoint : stunServers) {
-                var item = new JsonObject(); item.addProperty("address", endpoint.getAddress().getHostAddress());
-                item.addProperty("port", endpoint.getPort()); servers.add(item);
-            }
-            options.put("stunServers", servers.toString());
+
         }
         return Map.copyOf(options);
     }

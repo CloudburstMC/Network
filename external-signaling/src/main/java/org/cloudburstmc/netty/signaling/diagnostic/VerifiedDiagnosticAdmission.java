@@ -25,12 +25,16 @@ public final class VerifiedDiagnosticAdmission implements AutoCloseable {
     public Credentials credentials() { return credentials; }
     public String remoteUfrag() { return remoteUfrag; }
     synchronized boolean usable() { return !closed && clock.wallMillis().getAsLong() < claims.expiresAt() && clock.nanoTime().getAsLong() - deadlineNanos < 0; }
+    synchronized boolean verifies(DiagnosticAssertionCodec.Assertion proof) {
+        return usable() && MessageDigest.isEqual(binding, identity(secret, contextDigest, proof.publicPoint()))
+                && DiagnosticAssertionCodec.verify(context, claims, remoteUfrag, proof) && usable();
+    }
     /** One AUTH verification, before any challenge. Call only after pinned DTLS and exact channels. */
     public synchronized DiagnosticPrincipal authenticate(byte[] frame) {
         if (used || !usable()) return null; used = true;
         try {
             DiagnosticAssertionCodec.Assertion proof = DiagnosticAssertionCodec.decodeAuth(frame, claims.attemptIdHex());
-            if (!MessageDigest.isEqual(binding, identity(secret, contextDigest, proof.publicPoint())) || !DiagnosticAssertionCodec.verify(context, claims, remoteUfrag, proof) || !usable()) return null;
+            if (!verifies(proof)) return null;
             return new DiagnosticPrincipal(context, claims);
         } catch (RuntimeException invalid) { return null; } finally { close(); }
     }

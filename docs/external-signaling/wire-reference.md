@@ -532,39 +532,26 @@ from these checks.
 
 ### Optional connectivity observation
 
-An opted-in host may include `org.nethernet.connectivity` in the ordinary authenticated heartbeat extensions:
+Provider discovery supplies STUN configuration through `org.nethernet.connectivity`:
 
 ```json
-{"version":1,"critical":false,"data":{"diagnostics":true,"candidateRevision":1,"method":"defined"}}
+{"version":1,"critical":false,"data":{"stunServers":[{"host":"stun.cloudflare.com","port":3478}]}}
 ```
 
-`method` is `defined` when local configuration supplies advertised endpoints, `discovered` when they are derived locally, or `warm_stun` when the published profile includes a fresh maintained STUN endpoint. It does not assert successful traversal. Incarnation, DTLS fingerprint and candidate endpoints remain in the existing `hostProfile`; unchanged profiles retain their existing revision association. The positive `candidateRevision` belongs to that native listener and advances when endpoint material changes, including a change back to an earlier endpoint. It does not advance for an ordinary heartbeat or key renewal.
+The host resolves up to two discovered servers off the native event loop, selecting a numeric server for each supported family. Explicit advertised endpoints suppress local discovery and STUN for all families, including omitted ones. An absent or empty server list leaves mapping discovery unavailable; there is no embedding-platform fallback.
 
-The Network runtime defaults diagnostic admission off. Opt-in supports direct `host` candidates and maintained `srflx` candidates carrying their original expiry; each reflexive diagnostic endpoint is capped to that expiry. After a successful heartbeat, the host configures the same-mux diagnostic gate from its actual installed admission keys and authenticated registration generation, with a fixed maximum five-minute lifetime (also bounded by any shorter check-in lease). Queueing, retries and a failed heartbeat cannot extend that lifetime. The ordinary heartbeat schedule brings renewal forward while respecting minimum update spacing. If that spacing exceeds the remaining lifetime, diagnostics expire until a successful refresh; there is no second polling lifecycle. Draining/closing disables diagnostics without giving the provider control of player serving state.
+The host owns connectivity selection independently for IPv4 and IPv6. A public `host` candidate uses Direct (`defined` or `discovered`) and never starts STUN. A fresh matching Direct failure selects assistance for that family. A family without a public host candidate can start same-mux STUN. Its mapping is initially a diagnostic target only; an exact fresh `warm_stun` success promotes it to player candidates and keeps it warm. Warm failure stops that family's monitor, withdraws the mapping and selects assistance. Private-only explicit endpoints do not opt into public assistance. Unknown or unavailable observations do not select a new mode.
 
-The first successful heartbeat installs the local policy; a subsequent ordinary heartbeat advertises this observation only while that installed native snapshot and fixed deadline remain current. This is local opt-in, not a new installation acknowledgement protocol or proof of reachability. The provider must bind diagnostic jobs to the current authenticated profile, incarnation, candidate revision and bounded lease; a probe can still race a later local withdrawal. No secret appears in the extension, and existing signed diagnostic admission/answer formats remain unchanged.
+New hosts always include both arrays in the ordinary authenticated heartbeat extension; optional decoding permits older fixtures:
 
-The host may explicitly withdraw this opt-in with `diagnostics:false`, retaining its method and candidate revision. Provider heartbeat feedback uses the same optional extension envelope with data `{method,candidateRevision,checks}`; each of at most six checks contains `{region,family,outcome,checkedAt,expiresAt}`. Outcomes are `established`, `not-established` or `unknown`, with separate IPv4/IPv6 observations. The provider excludes stale checks. Feedback describes connectivity observations, does not command serving state or assert routing eligibility, and contains no raw internal probe report.
+```json
+{"version":1,"critical":false,"data":{"diagnostics":false,"candidateRevision":1,"method":"discovered","probeCandidates":[],"assistedFamilies":[]}}
+```
 
+`probeCandidates` carries the full intended Direct and Warm diagnostic set, using the existing ICE candidate shape and original `srflx` expiry. Pending mappings are absent from `hostProfile.candidates` until proven. `assistedFamilies` is the host's authoritative list of families requiring WebSocket assistance; providers must not infer additional families from expired or missing reports. The global `method` is a presentation summary only (`defined`, `discovered`, `warm_stun` or `per_join`). Incarnation, fingerprint and player endpoints remain in `hostProfile`. The native `candidateRevision` advances when an observed mapping or native endpoint identity changes, including an ABA replacement. Promotion, withdrawal and assisted-family choice preserve that revision so stage evidence remains associated; a separate local snapshot fence invalidates their previous policy immediately. Same-mapping expiry refresh and ordinary heartbeat do not advance the revision.
 
-Maintained candidates use this same heartbeat/profile path. Configured external
-endpoints suppress discovery and STUN for all families, including omitted ones.
-Otherwise direct candidates are tried first per family; a fresh matching negative
-connectivity observation permits STUN fallback for that family. A still-valid
-established observation wins over negative or unknown feedback. With no usable
-direct candidate, same-mux STUN discovery can start immediately. Native refresh,
-expiry and material replacement continue independently of slow control requests.
-The client publishes replacements and withdrawals promptly and coalesces
-freshness-only updates; it does not introduce a lease document, owner claim,
-receipt, or additional control operation. Ordinary registration recovery resolves
-an ambiguous WebSocket operation before fresh state is sent.
+Diagnostic admission remains an explicit local opt-in. After a successful heartbeat the host installs the gate using existing admission keys, registration generation and current diagnostic targets. Authority lasts at most five minutes, bounded by any shorter check-in lease, key retirement and original mapping expiry. A subsequent ordinary heartbeat sets `diagnostics:true` only while that installation remains current. Pending-only or assisted-only families can authorize diagnostics without publishing player candidates. Assisted diagnostics use the separate signed connectivity-check purpose over the existing live authenticated WebSocket, without retaining a stale target. Queueing, retries, failed heartbeats and retained connectivity choices cannot extend authority. Draining and closing disable diagnostics while player serving state stays host-owned.
 
-The embedding runtime accepts up to two STUN `host:port` settings and resolves
-hostnames with the JDK at startup, selecting the first usable address per family.
-Explicit advertised endpoints and disabled maintenance skip DNS and STUN entirely.
-A DNS failure is logged and leaves direct candidates and other resolved servers
-available. The native controller receives numeric endpoints and still waits for
-a failed direct check before opening STUN for that family. Embedders choose the
-service; Geyser defaults to [Cloudflare STUN](https://developers.cloudflare.com/realtime/turn/)
-at `stun.cloudflare.com:3478`, with maintained candidates and authenticated checks
-enabled. An empty STUN list disables mapping discovery.
+Provider feedback uses the same envelope with `{method,candidateRevision,checks}`. Up to eighteen checks retain separate region, family and stage observations: `{region,family,method,target?,outcome,checkedAt,expiresAt}`. The target is an exact numeric `{address,port}`; a failed Assisted attempt can omit it. Outcomes are `established`, `not-established`, `unknown` and `unavailable`. Hosts only use fresh feedback matching their current revision, expected stage and exact target. Assisted success cannot promote a Direct or Warm path. Newer matching evidence supersedes older evidence, with failure winning equal timestamps; absence or expiry does not undo the retained choice. Native mapping ownership and every incoming join still require their own fresh bounded authority.
+
+Native refresh, expiry and replacement continue independently of control requests. The client promptly publishes material changes and coalesces freshness updates. This adds no operation, lease document, completion journal or persistent connectivity state. Ordinary registration recovery resolves an ambiguous WebSocket operation before fresh state is sent.

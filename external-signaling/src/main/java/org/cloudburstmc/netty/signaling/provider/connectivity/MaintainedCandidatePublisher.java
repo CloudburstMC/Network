@@ -3,28 +3,35 @@ package org.cloudburstmc.netty.signaling.provider.connectivity;
 import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityCheck;
 import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityOutcome;
 import org.cloudburstmc.netty.signaling.admission.NativeCandidateSnapshot;
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
-import java.time.Duration;
 import java.util.*;
 
 import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection.Family;
 
-/** Local same-mux observations and ordinary profile material; never a reachability verdict. */
+/** Host-owned family policy. Pending same-mux mappings are diagnostic targets, never player candidates. */
 public final class MaintainedCandidatePublisher implements AutoCloseable {
-    public record Publication(NativeCandidateSnapshot candidates,
-                              Map<NativeCandidateSnapshot.Candidate, Long> expiries, Runnable current) {
-        public Publication { expiries = Map.copyOf(expiries); Objects.requireNonNull(current); }
+    public record Publication(long mappingRevision, NativeCandidateSnapshot candidates, NativeCandidateSnapshot probeCandidates,
+                              Map<NativeCandidateSnapshot.Candidate, Long> expiries, Set<Integer> assistedFamilies,
+                              Runnable current) {
+        public Publication { expiries = Map.copyOf(expiries); assistedFamilies = Set.copyOf(assistedFamilies); Objects.requireNonNull(current); }
         public void requireCurrent() { current.run(); }
     }
+    private record Mapping(NativeCandidateSnapshot.Candidate candidate, long epoch, long revision) { }
     private final EndpointSelection selection;
     private final EndpointConnectivityController controller;
     private final ObservationLeaseTracker tracker;
-    private final Set<Family> fallback = EnumSet.noneOf(Family.class);
+    private final Map<Family, Mapping> mappings = new EnumMap<>(Family.class);
+    private final Set<Family> promoted = EnumSet.noneOf(Family.class);
+    private final Set<Integer> assisted = new HashSet<>();
+    private final Map<Family, Long> failedAt = new EnumMap<>(Family.class), establishedAt = new EnumMap<>(Family.class);
+    private final Map<Family, InetSocketAddress> servers = new EnumMap<>(Family.class);
+    private Publication current;
+    private long mappingRevision;
     private volatile boolean closed;
-    private Set<Integer> assistedReady = Set.of();
 
     public MaintainedCandidatePublisher(EndpointSelection selection, EndpointConnectivityController controller,
                                        ObservationLeaseTracker tracker) {
@@ -34,87 +41,110 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
         this.controller = controller;
     }
 
-    /** Called on the native event loop, independently of provider requests. */
-    public synchronized Publication refresh() {
+    public boolean needsStunServers() {
+        return !selection.configured() && selection.socketFamilies().stream().anyMatch(f -> selection.candidates(f).isEmpty());
+    }
+    public synchronized void configureStunServers(Map<Family, InetSocketAddress> numericServers) {
         requireOpen();
-        var candidates = new ArrayList<NativeCandidateSnapshot.Candidate>();
-        selection.candidates().stream().filter(candidate -> !fallback.contains(Family.of(candidate.endpoint().getAddress())))
-                .forEach(candidate -> candidates.add(new NativeCandidateSnapshot.Candidate(candidate.endpoint(), NativeCandidateSnapshot.Type.HOST)));
-        ObservationLeaseTracker.Capture captured = null;
-        var ready = new HashSet<Integer>();
-        if (controller == null) selection.socketFamilies().forEach(family -> ready.add(family == Family.IPV4 ? 4 : 6));
-        if (controller != null) {
-            // Recovery retains replay high-water marks: an old success cannot acquire a new expiry.
-            if (!tracker.clockValid()) tracker.recoverClockForFutureObservations();
-            var sample = controller.snapshot();
-            var lanes = new EnumMap<Family, EndpointConnectivityController.FamilySnapshot>(Family.class);
-            sample.families().forEach((family, lane) -> {
-                switch (lane.state()) {
-                    case CONFIGURED, DIRECT_CHECK_SUCCEEDED, STUN_NOT_CONFIGURED, STUN_FAILED,
-                         STUN_FRESH, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED -> ready.add(family == Family.IPV4 ? 4 : 6);
-                    case AWAITING_DIRECT_CHECK -> { if (!controller.canAttemptStun(family)) ready.add(family == Family.IPV4 ? 4 : 6); }
-                    default -> { } // In particular, STUN_PENDING cannot promote an empty gathering profile.
-                }
-                var observation = lane.observation().filter(value -> value.mapped() != null
-                        && value.successfulResponses() > 0 && value.mappingRevision() > 0);
-                lanes.put(family, new EndpointConnectivityController.FamilySnapshot(lane.state(), lane.directCheck(),
-                        lane.directCheckExpiresAtNanos(), lane.directCandidates(), observation, lane.freshStunEndpoint()));
-            });
-            try { captured = tracker.capture(new EndpointConnectivityController.Snapshot(sample.candidateRevision(), lanes)); }
-            catch (RuntimeException unavailable) { /* Withdraw reflexive endpoints; the listener survives. */ }
-        }
-        var expiries = new HashMap<NativeCandidateSnapshot.Candidate, Long>();
-        var owned = candidates.size() < 32 && captured != null && !captured.observations().isEmpty() ? captured : null;
-        if (owned != null) for (var observation : owned.observations()) {
-            var family = observation.family().equals("ipv4") ? Family.IPV4 : Family.IPV6;
-            if (!selection.candidates(family).isEmpty() && !fallback.contains(family))
-                throw new IllegalStateException("Direct family cannot publish unsolicited STUN fallback");
-            if (candidates.size() == 32) break;
-            try {
-                var endpoint = new InetSocketAddress(InetAddress.getByAddress(HexFormat.of().parseHex(observation.addressHex())), observation.port());
-                var candidate = new NativeCandidateSnapshot.Candidate(endpoint, NativeCandidateSnapshot.Type.SRFLX);
-                candidates.add(candidate); expiries.put(candidate, observation.expiresAt());
-            } catch (UnknownHostException impossible) { throw new IllegalStateException(impossible); }
-        }
-        assistedReady = Set.copyOf(ready);
-        return new Publication(new NativeCandidateSnapshot(candidates), expiries, () -> {
-            requireOpen(); if (owned != null) owned.requireCurrent();
+        if (controller == null) return;
+        numericServers.forEach((family, server) -> {
+            if (selection.socketFamilies().contains(family) && selection.candidates(family).isEmpty()
+                    && !server.equals(servers.get(family))) {
+                controller.replaceStunServer(family, server); servers.put(family, server);
+            }
         });
     }
 
-    public synchronized Set<Integer> assistedFallbackReadyFamilies() { return closed ? Set.of() : assistedReady; }
+    /** Trusted discovery endpoints for a bounded attempt; reading them never restarts background warming. */
+    public synchronized Map<Integer, InetSocketAddress> assistedStunServers() {
+        requireOpen();
+        var selected = new HashMap<Integer, InetSocketAddress>();
+        servers.forEach((family, server) -> {
+            if (assisted.contains(number(family))) selected.put(number(family), server);
+        });
+        return Map.copyOf(selected);
+    }
 
-    /** Transport fences revision, time and the original asynchronous delivery window. */
+    /** Called on the native event loop independently of provider requests. */
+    public synchronized Publication refresh() {
+        requireOpen();
+        var players = new ArrayList<NativeCandidateSnapshot.Candidate>();
+        selection.candidates().forEach(candidate -> players.add(new NativeCandidateSnapshot.Candidate(candidate.endpoint(), NativeCandidateSnapshot.Type.HOST)));
+        var probes = new ArrayList<>(players);
+        var expiries = new HashMap<NativeCandidateSnapshot.Candidate, Long>();
+        ObservationLeaseTracker.Capture captured = null;
+        if (controller != null) {
+            if (!tracker.clockValid()) tracker.recoverClockForFutureObservations();
+            var sample = controller.snapshot();
+            sample.families().forEach((family, lane) -> {
+                if (lane.directCandidates().isEmpty() && switch (lane.state()) {
+                    case STUN_FAILED, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED, STUN_STOPPED -> true;
+                    default -> false;
+                }) {
+                    assisted.add(number(family));
+                    controller.stopStun(family);
+                }
+            });
+            try { captured = tracker.capture(controller.snapshot()); }
+            catch (RuntimeException unavailable) { /* Withdraw observations if their ownership clock is unavailable. */ }
+        }
+        var owned = captured;
+        var nextMappings = new EnumMap<Family, Mapping>(Family.class);
+        if (owned != null) for (var observation : owned.observations()) {
+            var family = observation.family().equals("ipv4") ? Family.IPV4 : Family.IPV6;
+            if (!selection.candidates(family).isEmpty()) throw new IllegalStateException("Public direct family cannot use STUN");
+            if (probes.size() == 32) break;
+            try {
+                var endpoint = new InetSocketAddress(InetAddress.getByAddress(HexFormat.of().parseHex(observation.addressHex())), observation.port());
+                var candidate = new NativeCandidateSnapshot.Candidate(endpoint, NativeCandidateSnapshot.Type.SRFLX);
+                var mapping = new Mapping(candidate, observation.monitorEpoch(), observation.mappingRevision());
+                nextMappings.put(family, mapping);
+                if (!mapping.equals(mappings.get(family))) {
+                    mappingRevision = Math.incrementExact(mappingRevision);
+                    promoted.remove(family); failedAt.remove(family); establishedAt.remove(family);
+                }
+                probes.add(candidate); expiries.put(candidate, observation.expiresAt());
+                if (promoted.contains(family)) players.add(candidate);
+            } catch (UnknownHostException impossible) { throw new IllegalStateException(impossible); }
+        }
+        for (Family family : Family.values()) if (!nextMappings.containsKey(family)) promoted.remove(family);
+        mappings.clear(); mappings.putAll(nextMappings);
+        current = new Publication(mappingRevision, new NativeCandidateSnapshot(players), new NativeCandidateSnapshot(probes), expiries, assisted, () -> {
+            requireOpen(); if (owned != null) owned.requireCurrent();
+        });
+        return current;
+    }
+
+    /** Revision and original observation lifetime are fenced by the transport before this call. */
     public synchronized void reportDirectChecks(List<ConnectivityCheck> checks, long nowMillis) {
         requireOpen();
-        if (controller == null) return;
+        if (current == null) return;
         for (Family family : Family.values()) {
-            if (fallback.contains(family) || selection.candidates(family).isEmpty()) continue;
-            var fresh = checks.stream().filter(check -> check.family() == (family == Family.IPV4 ? 4 : 6)
-                    && check.checkedAt() <= nowMillis && check.expiresAt() > nowMillis).toList();
-            var positive = fresh.stream().filter(check -> check.outcome() == ConnectivityOutcome.ESTABLISHED).toList();
-            var negative = fresh.stream().filter(check -> check.outcome() == ConnectivityOutcome.NOT_ESTABLISHED).toList();
-            var selected = !positive.isEmpty() ? positive : negative;
-            if (selected.isEmpty()) continue;
-            if (positive.isEmpty() && !controller.canAttemptStun(family)) continue;
-            long expiresAt = positive.isEmpty()
-                    ? selected.stream().mapToLong(ConnectivityCheck::expiresAt).min().orElseThrow()
-                    : selected.stream().mapToLong(ConnectivityCheck::expiresAt).max().orElseThrow();
-            var token = controller.beginDirectCheck(family, Duration.ofMillis(expiresAt - nowMillis));
-            boolean failed = positive.isEmpty();
-            if (controller.completeDirectCheck(token, failed ? EndpointConnectivityController.CheckOutcome.FAILED
-                    : EndpointConnectivityController.CheckOutcome.SUCCEEDED) && failed) fallback.add(family);
+            var direct = selection.candidates(family).stream()
+                    .filter(c -> EndpointAddress.scope(c.endpoint().getAddress()) == EndpointAddress.Scope.PUBLIC).toList();
+            var mapping = mappings.get(family);
+            if (direct.isEmpty() && (selection.configured() || mapping == null)) continue;
+            var fresh = checks.stream().filter(check -> check.family() == number(family) && check.target() != null
+                    && check.checkedAt() <= nowMillis && check.expiresAt() > nowMillis
+                    && (!direct.isEmpty() ? Set.of("defined", "discovered").contains(check.method())
+                        && direct.stream().anyMatch(c -> c.endpoint().equals(check.target()))
+                        : "warm_stun".equals(check.method()) && mapping.candidate().endpoint().equals(check.target())
+                        && check.expiresAt() <= current.expiries().get(mapping.candidate()))).toList();
+            long positive = fresh.stream().filter(c -> c.outcome() == ConnectivityOutcome.ESTABLISHED).mapToLong(ConnectivityCheck::checkedAt).max().orElse(-1);
+            long negative = fresh.stream().filter(c -> c.outcome() == ConnectivityOutcome.NOT_ESTABLISHED).mapToLong(ConnectivityCheck::checkedAt).max().orElse(-1);
+            // Failure wins equal timestamps. Older successes cannot undo a newer failed selection.
+            if (negative >= positive && negative >= 0 && negative >= establishedAt.getOrDefault(family, -1L)
+                    && negative >= failedAt.getOrDefault(family, -1L)) {
+                failedAt.put(family, negative); promoted.remove(family); assisted.add(number(family));
+                if (direct.isEmpty()) controller.stopStun(family);
+            } else if (positive > failedAt.getOrDefault(family, -1L) && positive >= establishedAt.getOrDefault(family, -1L)) {
+                establishedAt.put(family, positive); assisted.remove(number(family));
+                if (direct.isEmpty()) promoted.add(family);
+            }
         }
     }
 
-    /** Called by the listener whenever its semantic candidate revision advances, including withdrawal/ABA. */
-    public synchronized void materialChanged() {
-        requireOpen();
-        if (controller != null) controller.invalidateDirectChecks();
-    }
-
+    private static int number(Family family) { return family == Family.IPV4 ? 4 : 6; }
     private void requireOpen() { if (closed) throw new IllegalStateException("Candidate publisher closed"); }
-    @Override public synchronized void close() {
-        closed = true; tracker.close(); if (controller != null) controller.close();
-    }
+    @Override public synchronized void close() { closed = true; tracker.close(); if (controller != null) controller.close(); }
 }

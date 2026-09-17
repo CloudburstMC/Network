@@ -65,10 +65,27 @@ public final class DiagnosticAssertionCodec {
         String fingerprint = one(lines, "a=fingerprint:");
         if (!fingerprint.matches("sha-256 (?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}") || !fingerprint.substring(8).replace(":", "").equalsIgnoreCase(c.clientFingerprintHex())) throw invalid();
         String[] candidate = one(lines, "a=candidate:").split(" ", -1);
-        if ((candidate.length < 8 || candidate.length > 16 || candidate.length % 2 != 0) || !candidate[0].matches("[A-Za-z0-9+/]{1,32}") || !candidate[1].equals("1") || !candidate[2].equalsIgnoreCase("udp") || !candidate[3].matches("[0-9]{1,10}") || Long.parseLong(candidate[3]) > 0xffffffffL || !candidate[5].matches("[0-9]{1,5}") || Integer.parseInt(candidate[5]) < 1 || Integer.parseInt(candidate[5]) > 65535 || !candidate[6].equals("typ") || !candidate[7].equals("host")) throw invalid();
+        if ((candidate.length < 8 || candidate.length > 20 || candidate.length % 2 != 0) || !candidate[0].matches("[A-Za-z0-9+/]{1,32}") || !candidate[1].equals("1") || !candidate[2].equalsIgnoreCase("udp") || !candidate[3].matches("[0-9]{1,10}") || Long.parseLong(candidate[3]) > 0xffffffffL || !candidate[5].matches("[0-9]{1,5}") || Integer.parseInt(candidate[5]) < 1 || Integer.parseInt(candidate[5]) > 65535 || !candidate[6].equals("typ") || !(candidate[7].equals("host") || (c.profile() == ASSISTED_PROFILE && candidate[7].equals("srflx")))) throw invalid();
         java.util.Set<String> extensions = new java.util.HashSet<>();
-        for (int i = 8; i < candidate.length; i += 2) { String name = candidate[i], value = candidate[i + 1]; if (!extensions.add(name) || (name.equals("ufrag") ? !value.equals(remoteUfrag) : !List.of("generation", "network-id", "network-cost").contains(name) || !value.matches("[0-9]{1,10}") || Long.parseLong(value) > 0xffffffffL)) throw invalid(); }
+        for (int i = 8; i < candidate.length; i += 2) {
+            String name = candidate[i], value = candidate[i + 1];
+            if (!extensions.add(name)) throw invalid();
+            if (name.equals("raddr")) { if (!candidate[7].equals("srflx")) throw invalid(); address(c.family(), value); }
+            else if (name.equals("rport")) { if (!candidate[7].equals("srflx") || !value.matches("[0-9]{1,5}")) throw invalid(); integer(Long.parseLong(value),1,65535); }
+            else if (name.equals("ufrag") ? !value.equals(remoteUfrag) : !List.of("generation", "network-id", "network-cost").contains(name) || !value.matches("[0-9]{1,10}") || Long.parseLong(value) > 0xffffffffL) throw invalid();
+        }
+        if (extensions.contains("raddr") != extensions.contains("rport")) throw invalid();
         address(c.family(), candidate[4]); if (!hex(digest(bytes)).equals(c.offerDigestHex())) throw invalid();
+    }
+    /** Returns the sole signed numeric candidate after full offer validation. */
+    public static java.net.InetSocketAddress candidate(byte[] input, Claims claims, String remoteUfrag) {
+        validateOffer(input, claims, remoteUfrag);
+        String line = one(Arrays.stream(new String(input, StandardCharsets.UTF_8).split("\\r?\\n")).toList(), "a=candidate:");
+        String[] parts = line.split(" ");
+        try {
+            byte[] packed = unhex(address(claims.family(), parts[4]), 16);
+            return new java.net.InetSocketAddress(java.net.InetAddress.getByAddress(claims.family() == 4 ? Arrays.copyOfRange(packed,12,16) : packed), Integer.parseInt(parts[5]));
+        } catch (java.net.UnknownHostException invalidAddress) { throw invalid(); }
     }
     private static String one(List<String> lines, String prefix) { List<String> values = lines.stream().filter(l -> l.startsWith(prefix)).toList(); if (values.size() != 1) throw invalid(); return values.get(0).substring(prefix.length()); }
 }

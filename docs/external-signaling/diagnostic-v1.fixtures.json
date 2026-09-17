@@ -163,6 +163,54 @@
       "authHex": "004e5844500101000606060606060606060606060606061e049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf8b21e4f96675555e61b2ca8194d96e823583994fe91cc449641adc394ecbd9fb4d5b9634bead8eda056cc67c3c39ef825a79f727420011786cd215fe7ed5a6036c5441afc921edf1a9531b1ae1b4ccda6497acb9db2589e49e2e2b781b59412a",
       "localUfrag": "NXD1D001MjM0NTY3ODk6Ozw97htgamy1JrYVAdCeBkA0N6FUu/JI3VyRLC9c0UCN6S95Nb9OfzGZ+5dblHz0tSi2t/fYaN0KJT2OV3z2MQfodu9RlOoDcVNRW99JYiD9x4iXbFBD3Yi2fSRgGOibJiiQNC/Tr06tu41GSVPkcRhmFshNXKbd6nIxW9B+3J4TGFa1+dr7PCb9PLjLXsklCkMH515jnObmFSgyYfegVKslCjcw71j0/zgU74kqNlUv",
       "icePwd": "GUNp4lNgvyEdXQuMlOntCLbIajwUNmR9"
+    },
+    {
+      "name": "v4-assisted",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+        "offerDigestHex": "a5d8c0fad72f891fb77c8a437cdf59551fcf410bb8aecce559c26f3a9dd0264b",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "00000000000000000000000000000000",
+        "targetPort": 0,
+        "profile": 2
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ srflx generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "b4b4b4b4b4b4b4b4b4b4b4b4",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "2ffd534eb8b205843803a518a11f0ac76623650c94375f28a1b0f0fde67477bd483c33964bf10dcacd5c66fc7fef35fd9775a0212ea76407d12f0f481a7e40c6fdb744c244fabbdaecf92466272c7badd030328366419e02ef41ccdb8edea50a",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00000000000000000000000000000000a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a5d8c0fad72f891fb77c8a437cdf59551fcf410bb8aecce559c26f3a9dd0264b000000000000000902000000000000000000000000000000000000186162636465666768696a6b6c6d6e6f707172737475767778000461626344",
+      "authHex": "004e584450010100a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf2ffd534eb8b205843803a518a11f0ac76623650c94375f28a1b0f0fde67477bd483c33964bf10dcacd5c66fc7fef35fd9775a0212ea76407d12f0f481a7e40c6fdb744c244fabbdaecf92466272c7badd030328366419e02ef41ccdb8edea50a",
+      "localUfrag": "NXD1D001tLS0tLS0tLS0tLS0ROneOv1kZTqunLywtMhgYcL19n5Jp+Pdi6PolGnZIjFXflO1GaGd2oqXFslaRdzAp8d9hIfldDY6F7GwQzskX0jFT543LUirpqPFFEg6oK7sIjNaXqjUOlnK3csWjeWnVdOm9bdh6T69VaSJbuC9HWZjIDDbynLGvDkeFGDXDP9H6YNlJoEOs2z4V6Yrlw07o9H5yBICjCi9kOkOqgsCcN+CYqo4SI9g",
+      "icePwd": "wXduaUSBD+8WmknqD+i8uT1vWCkLX1ob"
+    },
+    {
+      "name": "v6-assisted",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6",
+        "offerDigestHex": "0d5bd211afb6e61ea6512af3eccfc0da26af192dc1cc4e3ff140dcee9a143efb",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "00000000000000000000000000000000",
+        "targetPort": 0,
+        "profile": 2
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ srflx generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "b6b6b6b6b6b6b6b6b6b6b6b6",
+      "publicPointHex": "049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bf",
+      "signatureHex": "b93e054e81ed3771eb7129a8cb0570b98a522169958d7b8294034fc646bbaedcf4dc1ba4095ce1549051a103ada0e58d947da9dfc18adc86c3571596c71c1c4beac7207d693eb2dbb968dfb97f9bbd85b77920107afa6d35bdba1f1f045e5b06",
+      "assertionTranscriptHex": "6e78732d646961676e6f737469632d617373657274696f6e2d763100cd933f0b7d5142272c4ed0d65cf7e099c999b610e81e7b1043b979023078e5516a9a1cde0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00000000000000000000000000000000a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a60d5bd211afb6e61ea6512af3eccfc0da26af192dc1cc4e3ff140dcee9a143efb000000000000000982000000000000000000000000000000000000186162636465666768696a6b6c6d6e6f707172737475767778000461626344",
+      "authHex": "004e584450010100a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6049384e8c3250257ad8472a92548183215109bc5c7997d71c762b368a9638a423b8479a372240c3642b3af4e3d3ee02beefb8e7db5a72d3caed5fb724fefe2ef5b6060b91ec73e8dc935b642b7ef507d9220bfe8a91015fd50cc8f18b584dda9bfb93e054e81ed3771eb7129a8cb0570b98a522169958d7b8294034fc646bbaedcf4dc1ba4095ce1549051a103ada0e58d947da9dfc18adc86c3571596c71c1c4beac7207d693eb2dbb968dfb97f9bbd85b77920107afa6d35bdba1f1f045e5b06",
+      "localUfrag": "NXD1D001tra2tra2tra2tra20G7G5vocR2HEnGRrXcWB7NzG+sHBuYuUl4/jL6JIIMmM8RhoYmjOP5NtrPut9mYupnGFY+weuC2OSCjBMG987wzx/RHg3B4L5B6yyBsLgt1HEc0I941E0D8+kqdAvhOn4B7/J2q400+Ctpse1FAugLgM5OZSA4LXrHngQTPkXjwlsrt9P0cF427PVXOZxRREgxwiGeW+dMKcmB8EIcluayRGaybSiQK7",
+      "icePwd": "xonrcyVDMxjLvGCMWVqG9zUjIeSxvxar"
     }
   ]
 }

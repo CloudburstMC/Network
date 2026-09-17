@@ -69,9 +69,9 @@ class EndpointConnectivityControllerTest {
         assertFalse(f.controller.completeDirectCheck(check, CheckOutcome.FAILED));
         f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.FAILED);
         f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV6), CheckOutcome.SUCCEEDED);
-        assertEquals(State.STUN_PENDING, f.state(Family.IPV4));
+        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
         assertEquals(State.DIRECT_CHECK_SUCCEEDED, f.state(Family.IPV6));
-        assertEquals(1, f.opens);
+        assertEquals(0, f.opens);
         f.controller.close();
     }
 
@@ -206,38 +206,23 @@ class EndpointConnectivityControllerTest {
         assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
         assertNull(f.monitors.get(Family.IPV4));
         assertTrue(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.FAILED));
-        assertEquals(State.STUN_PENDING, f.state(Family.IPV4));
-        var monitor = f.monitors.get(Family.IPV4);
+        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
         f.controller.invalidateDirectChecks();
-        assertEquals(State.STUN_PENDING, f.state(Family.IPV4));
-        assertSame(monitor, f.monitors.get(Family.IPV4));
-        assertFalse(monitor.closed);
+        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
+        assertNull(f.monitors.get(Family.IPV4), "Direct failure never opens STUN for a public host family");
         f.controller.close();
     }
 
-    @Test void expiredFailureBecomesUnknownWhilePreviouslyStartedStunStaysWarm() {
-        var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST))));
-        var check = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
-        assertTrue(f.controller.completeDirectCheck(check, CheckOutcome.FAILED));
+    @Test void stoppedWarmLaneCannotRestartFromServerRefresh() {
+        var f = new Fixture(automatic(List.of()));
         f.snapshot(); var monitor = f.monitors.get(Family.IPV4);
-        monitor.success(Family.IPV4, "8.8.8.8", 40000, 1, 1, 0);
-        var first = f.snapshot();
-        f.clock.addAndGet(Duration.ofSeconds(11).toNanos());
-        monitor.success(Family.IPV4, "8.8.8.8", 40000, 1, 2, 0);
-        var expired = f.snapshot();
-        var family = expired.families().get(Family.IPV4);
-        assertEquals(CheckOutcome.UNKNOWN, family.directCheck());
-        assertEquals(State.STUN_FRESH, family.state());
-        assertEquals(first.candidateRevision(), expired.candidateRevision());
-        assertFalse(monitor.closed);
-        assertEquals(2, f.opens, "Report expiry must not replace either family's warm monitor");
-        f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.UNKNOWN);
-        assertEquals(State.STUN_FRESH, f.state(Family.IPV4));
-        assertFalse(monitor.closed);
-        f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.SUCCEEDED);
-        assertTrue(monitor.closed, "A fresh successful direct check retires fallback");
-        assertEquals(State.DIRECT_CHECK_SUCCEEDED, f.state(Family.IPV4));
-        assertTrue(f.snapshot().families().get(Family.IPV4).freshStunEndpoint().isEmpty());
+        f.controller.stopStun(Family.IPV4);
+        assertTrue(monitor.closed);
+        assertEquals(State.STUN_STOPPED, f.state(Family.IPV4));
+        f.controller.replaceStunServer(Family.IPV4, SERVERS.get(Family.IPV4));
+        assertEquals(State.STUN_STOPPED, f.state(Family.IPV4));
+        assertEquals(2, f.opens);
+        assertFalse(f.monitors.get(Family.IPV6).closed);
         f.controller.close();
     }
 

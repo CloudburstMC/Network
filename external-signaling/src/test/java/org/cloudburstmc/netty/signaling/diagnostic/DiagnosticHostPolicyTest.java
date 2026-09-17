@@ -18,6 +18,15 @@ class DiagnosticHostPolicyTest {
         var extra=new ArrayList<>(policy.keys());extra.add(new Key("D008","s".repeat(32),0,10000));
         assertThrows(IllegalArgumentException.class,()->new DiagnosticHostPolicy(context,extra,policy.endpoints(),4000));
     }
+    @Test void twoAssistedFamiliesDoNotConsumeOrExpandConcreteEndpointCapacity() {
+        var endpoints=new HashSet<DiagnosticHostPolicy.Endpoint>();
+        for(int i=0;i<32;i++)endpoints.add(endpoint(20000+i));
+        endpoints.add(DiagnosticHostPolicy.Endpoint.assisted(4,7));endpoints.add(DiagnosticHostPolicy.Endpoint.assisted(6,7));
+        var policy=new DiagnosticHostPolicy(context,List.of(),endpoints,4000);
+        assertEquals(34,policy.endpoints().size());
+        endpoints.remove(endpoint(20000));endpoints.add(DiagnosticHostPolicy.Endpoint.assisted(4,8));
+        assertThrows(IllegalArgumentException.class,()->new DiagnosticHostPolicy(context,List.of(),endpoints,4000));
+    }
     @Test void rejectsAmbiguousEndpointsDuplicateKeysAndInvalidDeadlines() {
         var target=endpoint(19132);var key=new Key("D001","secret-value-which-must-not-be-logged",0,5000);
         assertThrows(IllegalArgumentException.class,()->new DiagnosticHostPolicy(context,List.of(key,key),Set.of(target),4000));

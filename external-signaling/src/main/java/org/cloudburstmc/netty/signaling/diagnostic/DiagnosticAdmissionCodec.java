@@ -19,7 +19,7 @@ import java.util.function.LongSupplier;
 /** Draft NXD1 primitives; no listener, player admission, workload authorization or traffic execution. */
 public final class DiagnosticAdmissionCodec {
     private DiagnosticAdmissionCodec() { }
-    public static final int PROFILE = 1, SCTP_PORT = 5000, MAX_MESSAGE_SIZE = 262144;
+    public static final int PROFILE = 1, ASSISTED_PROFILE = 2, SCTP_PORT = 5000, MAX_MESSAGE_SIZE = 262144;
     public static final int MAX_ATTEMPT_MILLIS = 60_000, MAX_HANDSHAKE_MILLIS = 15_000;
     public static final int MAX_APPLICATION_SEND_BYTES = 1024, MAX_FRAME_BYTES = 256, MAX_FRAMES = 12;
     /** Profile bounds enforced by the opt-in NativeDiagnosticHostGate and its immutable native agent budget. */
@@ -39,8 +39,9 @@ public final class DiagnosticAdmissionCodec {
     public record Claims(long expiresAt, String clientFingerprintHex, String clientIcePwd, String attemptIdHex,
                          String offerDigestHex, long candidateRevision, int family, String targetAddressHex, int targetPort, int profile) {
         public Claims {
-            integer(expiresAt, 1000, 0xffffffffL * 1000); integer(candidateRevision, 1, SAFE); integer(targetPort, 1, 65535);
-            if (expiresAt % 1000 != 0 || profile != PROFILE || (family != 4 && family != 6) || !clientIcePwd.matches("[A-Za-z0-9+/]{22,30}")) throw invalid();
+            integer(expiresAt, 1000, 0xffffffffL * 1000); integer(candidateRevision, 1, SAFE); integer(targetPort, profile == ASSISTED_PROFILE ? 0 : 1, 65535);
+            if (expiresAt % 1000 != 0 || (profile != PROFILE && profile != ASSISTED_PROFILE) || (family != 4 && family != 6) || !clientIcePwd.matches("[A-Za-z0-9+/]{22,30}")) throw invalid();
+            if (profile == ASSISTED_PROFILE && (targetPort != 0 || !"00".repeat(16).equals(targetAddressHex))) throw invalid();
             unhex(clientFingerprintHex, 32); unhex(attemptIdHex, 16); unhex(offerDigestHex, 32); byte[] address = unhex(targetAddressHex, 16);
             if (family == 4 ? !Arrays.equals(Arrays.copyOf(address, 12), new byte[12]) : targetAddressHex.startsWith("00000000000000000000ffff")) throw invalid();
         }
@@ -96,13 +97,13 @@ public final class DiagnosticAdmissionCodec {
     static byte[] encode(Claims c, byte[] binding) {
         if (binding.length != 16) throw invalid(); ByteBuffer b = ByteBuffer.allocate(128 + c.clientIcePwd.length());
         return b.putInt((int) (c.expiresAt / 1000)).put(unhex(c.clientFingerprintHex, 32)).put(binding).put(unhex(c.attemptIdHex, 16)).put(unhex(c.offerDigestHex, 32))
-                .putLong(c.candidateRevision).put((byte) (c.family == 6 ? 129 : 1)).put(unhex(c.targetAddressHex, 16)).putShort((short) c.targetPort).put((byte) c.clientIcePwd.length()).put(utf8(c.clientIcePwd)).array();
+                .putLong(c.candidateRevision).put((byte) (c.profile | (c.family == 6 ? 128 : 0))).put(unhex(c.targetAddressHex, 16)).putShort((short) c.targetPort).put((byte) c.clientIcePwd.length()).put(utf8(c.clientIcePwd)).array();
     }
     static Claims decode(byte[] bytes) {
         if (bytes.length < 150 || bytes.length != 128 + Byte.toUnsignedInt(bytes[127])) throw invalid(); ByteBuffer b = ByteBuffer.wrap(bytes);
-        int packed = Byte.toUnsignedInt(bytes[108]); if (packed != 1 && packed != 129) throw invalid();
+        int packed = Byte.toUnsignedInt(bytes[108]); if (packed != 1 && packed != 129 && packed != 2 && packed != 130) throw invalid();
         return new Claims(Integer.toUnsignedLong(b.getInt(0)) * 1000, hex(Arrays.copyOfRange(bytes, 4, 36)), new String(bytes, 128, bytes.length - 128, StandardCharsets.US_ASCII),
-                hex(Arrays.copyOfRange(bytes, 52, 68)), hex(Arrays.copyOfRange(bytes, 68, 100)), b.getLong(100), packed == 129 ? 6 : 4, hex(Arrays.copyOfRange(bytes, 109, 125)), Short.toUnsignedInt(b.getShort(125)), 1);
+                hex(Arrays.copyOfRange(bytes, 52, 68)), hex(Arrays.copyOfRange(bytes, 68, 100)), b.getLong(100), (packed & 128) != 0 ? 6 : 4, hex(Arrays.copyOfRange(bytes, 109, 125)), Short.toUnsignedInt(b.getShort(125)), packed & 127);
     }
     static byte[] identity(byte[] secret, byte[] context, byte[] point) { DiagnosticAssertionCodec.publicKey(point); return Arrays.copyOf(hmac(secret, concat(domain("identity"), context, DiagnosticAssertionCodec.spki(point))), 16); }
     private static String icePassword(byte[] secret, byte[] context, String local) { return base64(Arrays.copyOf(hmac(secret, concat(domain("ice"), context, utf8(local))), 24)); }

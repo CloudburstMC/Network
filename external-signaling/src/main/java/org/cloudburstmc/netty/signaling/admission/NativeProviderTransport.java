@@ -56,6 +56,8 @@ public final class NativeProviderTransport implements ProviderTransport {
     private NativeCandidateSnapshot candidateSnapshot;
     private List<NativeCandidateSnapshot.Candidate> ordinaryCandidateOrder = List.of();
     private volatile long candidateGeneration = 1;
+    private volatile long candidatePolicyGeneration;
+    private long maintainedMappingRevision;
     private MaintainedCandidatePublisher candidatePublisher;
     private MaintainedCandidatePublisher.Publication candidatePublication;
     private ScheduledFuture<?> candidateTask;
@@ -162,6 +164,7 @@ public final class NativeProviderTransport implements ProviderTransport {
                 synchronized (transport) {
                     if (transport.closed || !transport.channel.isActive()) throw new IllegalStateException("Native listener closed");
                     transport.candidatePublisher = new MaintainedCandidatePublisher(selection, value, new ObservationLeaseTracker(transport.incarnation));
+                    transport.candidatePublisher.configureStunServers(servers);
                     transport.refreshMaintained();
                     transport.candidateTask = transport.channel.eventLoop().scheduleWithFixedDelay(
                             transport::refreshMaintained, 1, 1, TimeUnit.SECONDS);
@@ -224,13 +227,17 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     private boolean replaceCandidateMaterial(NativeCandidateSnapshot next) {
+        return replaceCandidateMaterial(next, false, !candidateSnapshot.equals(next));
+    }
+    private boolean replaceCandidateMaterial(NativeCandidateSnapshot next, boolean diagnosticChanged, boolean identityChanged) {
         if (!fixedCandidates || closed || draining || !channel.isActive()) throw new IllegalStateException("Native listener unavailable");
-        if (candidateSnapshot.equals(next)) return false;
-        if (candidateGeneration >= 9007199254740991L) throw new IllegalStateException("Candidate revision exhausted");
-        long nextGeneration = Math.incrementExact(candidateGeneration);
+        if (candidateSnapshot.equals(next) && !diagnosticChanged && !identityChanged) return false;
+        if (identityChanged) {
+            if (candidateGeneration >= 9007199254740991L) throw new IllegalStateException("Candidate revision exhausted");
+            candidateGeneration = Math.incrementExact(candidateGeneration);
+        }
         candidateSnapshot = next;
-        candidateGeneration = nextGeneration;
-        if (candidatePublisher != null) candidatePublisher.materialChanged();
+        candidatePolicyGeneration = Math.incrementExact(candidatePolicyGeneration);
         if (diagnosticGate != null && diagnosticPolicy != null) {
             diagnosticGate.retainEndpoints(Set.of());
         }
@@ -255,31 +262,57 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     @Override public long candidatePublicationVersion() { return publicationVersion; }
-    @Override public synchronized Set<Integer> assistedFallbackReadyFamilies() {
-        if (closed || draining) return Set.of();
-        return candidatePublisher == null ? Set.of(((InetSocketAddress) channel.localAddress()).getAddress() instanceof java.net.Inet4Address ? 4 : 6)
-                : candidatePublisher.assistedFallbackReadyFamilies();
-    }
-
     private synchronized void refreshMaintained() {
         if (closed || draining || !channel.isActive() || candidatePublisher == null) return;
         try {
             var next = candidatePublisher.refresh();
-            boolean changed = replaceCandidateMaterial(next.candidates());
+            boolean diagnosticChanged = candidatePublication == null ? !next.probeCandidates().equals(next.candidates())
+                    : !candidatePublication.probeCandidates().equals(next.probeCandidates())
+                    || !candidatePublication.assistedFamilies().equals(next.assistedFamilies());
+            boolean changed = replaceCandidateMaterial(next.candidates(), diagnosticChanged, next.mappingRevision() != maintainedMappingRevision);
+            maintainedMappingRevision = next.mappingRevision();
             if (candidatePublication == null || changed || !candidatePublication.expiries().equals(next.expiries()))
                 publicationVersion = Math.incrementExact(publicationVersion);
             candidatePublication = next;
         } catch (RuntimeException unavailable) {
             // A failed refresh cannot leave an old mapping published indefinitely. Keep sampling.
-            replaceCandidateMaterial(NativeCandidateSnapshot.hosts(List.of()));
+            replaceCandidateMaterial(NativeCandidateSnapshot.hosts(List.of()), true, true);
             candidatePublication = null;
             publicationVersion = Math.incrementExact(publicationVersion);
         }
     }
 
+    @Override public CompletionStage<Void> configureStunServers(List<StunServer> servers) {
+        if (servers.size() > 2) return CompletableFuture.failedFuture(new IllegalArgumentException("At most two provider STUN servers"));
+        synchronized (this) {
+            if (closed || candidatePublisher == null || !candidatePublisher.needsStunServers()) return CompletableFuture.completedFuture(null);
+        }
+        // ProviderClient invokes configuration from its background discovery task, never the native loop.
+        var numeric = new java.util.EnumMap<EndpointSelection.Family, InetSocketAddress>(EndpointSelection.Family.class);
+        for (var server : servers) {
+            try {
+                for (var address : java.net.InetAddress.getAllByName(server.host())) {
+                    if (!address.isAnyLocalAddress() && !address.isMulticastAddress())
+                        numeric.putIfAbsent(EndpointSelection.Family.of(address), new InetSocketAddress(address, server.port()));
+                }
+            } catch (java.net.UnknownHostException unavailable) { /* Unavailable discovery remains unknown. */ }
+        }
+        var result = new CompletableFuture<Void>();
+        try { channel.eventLoop().execute(() -> {
+            try {
+                synchronized (this) {
+                    if (closed || draining || candidatePublisher == null) throw new IllegalStateException("Native listener unavailable");
+                    candidatePublisher.configureStunServers(numeric); refreshMaintained();
+                }
+                result.complete(null);
+            } catch (RuntimeException failure) { result.completeExceptionally(failure); }
+        }); } catch (RuntimeException failure) { result.completeExceptionally(failure); }
+        return result;
+    }
+
     @Override public CompletionStage<Void> reportConnectivityChecks(long revision, List<ConnectivityCheck> checks) {
         Objects.requireNonNull(checks);
-        if (checks.size() > 6) throw new IllegalArgumentException("At most six connectivity checks");
+        if (checks.size() > 18) throw new IllegalArgumentException("At most eighteen connectivity checks");
         var owned = List.copyOf(checks);
         long startNanos = System.nanoTime(), startMillis = diagnosticNow();
         synchronized (this) {
@@ -350,8 +383,9 @@ public final class NativeProviderTransport implements ProviderTransport {
                         if (diagnosticMutation != mutation || closed || draining || !channel.isActive()) throw new IllegalStateException("Diagnostic configuration cancelled");
                         if (now >= policy.expiresAt() || policy.endpointExpiries().values().stream().anyMatch(expiry -> now >= expiry))
                             throw new IllegalArgumentException("Expired diagnostic configuration");
-                        NativeCandidateSnapshot current = currentCandidates();
-                        if (!incarnation.equals(policy.context().incarnation()) || policy.endpoints().stream().anyMatch(endpoint -> endpoint.candidateRevision() != candidateGeneration || !containsEndpoint(current, endpoint)))
+                        NativeCandidateSnapshot current = candidatePublication == null ? currentCandidates() : candidatePublication.probeCandidates();
+                        if (!incarnation.equals(policy.context().incarnation()) || policy.endpoints().stream().anyMatch(endpoint -> endpoint.candidateRevision() != candidateGeneration
+                                || (endpoint.assisted() ? candidatePublication == null || !candidatePublication.assistedFamilies().contains(endpoint.family()) : !containsEndpoint(current, endpoint))))
                             throw new IllegalArgumentException("Diagnostic listener or endpoint mismatch");
                         if (candidatePublication != null) {
                             candidatePublication.requireCurrent();
@@ -440,7 +474,20 @@ public final class NativeProviderTransport implements ProviderTransport {
                         && e.retireAfter() >= join.expiresAt())) throw new IllegalStateException("Assisted native identity unavailable");
         };
         guard.run();
-        return channel.assist(join, guard);
+        Map<Integer, InetSocketAddress> stunServers;
+        var publicCandidates = new HashMap<Integer, InetSocketAddress>();
+        synchronized (this) {
+            stunServers = candidatePublisher == null ? Map.of() : candidatePublisher.assistedStunServers();
+            if (candidateSnapshot != null) for (var candidate : candidateSnapshot.candidates()) {
+                var endpoint = candidate.endpoint();
+                if (candidate.type() == NativeCandidateSnapshot.Type.HOST
+                        && EndpointAddress.scope(endpoint.getAddress()) == EndpointAddress.Scope.PUBLIC)
+                    publicCandidates.putIfAbsent(endpoint.getAddress() instanceof java.net.Inet4Address ? 4 : 6, endpoint);
+            }
+        }
+        var selected = Map.copyOf(publicCandidates);
+        return join.diagnostic() ? channel.assistDiagnostic(join, guard, stunServers, selected)
+                : channel.assist(join, guard, stunServers, selected);
     }
 
     @Override
@@ -472,25 +519,7 @@ public final class NativeProviderTransport implements ProviderTransport {
             return CompletableFuture.failedFuture(unavailable);
         }
 
-        JsonArray candidates = new JsonArray();
-        int index = 0;
-        for (NativeCandidateSnapshot.Candidate selected : endpoints) {
-            InetSocketAddress endpoint = selected.endpoint();
-            JsonObject candidate = new JsonObject();
-            candidate.addProperty("address", endpoint.getAddress().getHostAddress());
-            candidate.addProperty("port", endpoint.getPort());
-            candidate.addProperty("component", 1);
-            candidate.addProperty("foundation", Integer.toString(++index));
-            candidate.addProperty("priority", 2130706431 - (index - 1) * 256);
-            candidate.addProperty("protocol", "udp");
-            candidate.addProperty("type", selected.type().wire());
-            if (selected.type() == NativeCandidateSnapshot.Type.SRFLX) {
-                Long expiry = candidatePublication == null ? null : candidatePublication.expiries().get(selected);
-                if (expiry == null) return CompletableFuture.failedFuture(new IllegalStateException("Unbounded reflexive endpoint"));
-                candidate.addProperty("expiresAt", expiry);
-            }
-            candidates.add(candidate);
-        }
+        JsonArray candidates = encodeCandidates(endpoints);
 
         JsonObject capability = new JsonObject();
         capability.addProperty("capability", CAPABILITY);
@@ -505,15 +534,42 @@ public final class NativeProviderTransport implements ProviderTransport {
         profile.addProperty("maxMessageSize", NetherNetFrameDecoder.MESSAGE_LIMIT);
         profile.addProperty("sctpPort", 5000);
 
-        long capturedGeneration = candidateGeneration;
+        long capturedGeneration = candidateGeneration, capturedPolicyGeneration = candidatePolicyGeneration;
         var observed = candidatePublication;
         if (observed != null) observed.requireCurrent();
-        return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, capturedGeneration, publicationVersion, () -> {
+        var probes = candidatePublication == null ? candidates : encodeCandidates(candidatePublication.probeCandidates().candidates());
+        var assisted = candidatePublication == null ? Set.<Integer>of() : candidatePublication.assistedFamilies();
+        return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, capturedGeneration, publicationVersion, probes, assisted, () -> {
             if (closed || draining || !channel.isActive())
                 throw new IllegalStateException("Native endpoint snapshot closed");
-            if (candidateGeneration != capturedGeneration) throw new HostProfileSnapshotChangedException();
+            if (candidateGeneration != capturedGeneration || candidatePolicyGeneration != capturedPolicyGeneration)
+                throw new HostProfileSnapshotChangedException();
             if (observed != null) observed.requireCurrent();
         }));
+    }
+
+    private JsonArray encodeCandidates(List<NativeCandidateSnapshot.Candidate> endpoints) {
+        JsonArray candidates = new JsonArray();
+        int index = 0;
+        for (NativeCandidateSnapshot.Candidate selected : endpoints) {
+            InetSocketAddress endpoint = selected.endpoint();
+            JsonObject candidate = new JsonObject();
+            candidate.addProperty("address", endpoint.getAddress().getHostAddress());
+            candidate.addProperty("port", endpoint.getPort());
+            candidate.addProperty("component", 1);
+            candidate.addProperty("foundation", Integer.toString(++index));
+            candidate.addProperty("priority", 2130706431 - (index - 1) * 256);
+            candidate.addProperty("protocol", "udp");
+            candidate.addProperty("type", selected.type().wire());
+            if (selected.type() == NativeCandidateSnapshot.Type.SRFLX) {
+                Long expiry = candidatePublication == null ? null : candidatePublication.expiries().get(selected);
+                if (expiry == null) throw new IllegalStateException("Unbounded reflexive endpoint");
+                candidate.addProperty("expiresAt", expiry);
+            }
+            candidates.add(candidate);
+        }
+
+        return candidates;
     }
 
     private static List<InetSocketAddress> checkedEndpoints(List<InetSocketAddress> endpoints) {

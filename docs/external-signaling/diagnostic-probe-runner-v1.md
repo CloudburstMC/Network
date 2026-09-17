@@ -8,13 +8,11 @@ revision, expected host fingerprint and expiry are immutable. `ping` defaults to
 false; setting it true requests the single reliable PING/PONG described in
 `diagnostic-host-v1.md`.
 
-The public constructor permits one numeric global-unicast destination and an exact
-same-family local bind/port. Private, reserved, mapped-IPv6 and DNS targets fail
-closed. Only the package-private native test constructor permits loopback. No ICE
-server, TURN, proxy, TCP, trickle or alternative candidate is exposed.
+Profile 1 permits one numeric global-unicast destination and an exact same-family local bind/port. Profile 2 uses the zero target sentinel and an explicitly supplied numeric, same-family provider-advertised STUN endpoint when the probe needs public mapping discovery. Private, reserved, mapped-IPv6 and DNS targets fail
+closed. Only the package-private native test constructor permits loopback. No TURN, proxy, TCP, trickle or unsigned answer candidate is exposed. The profile-2 monitor uses the same bound socket and closes with the attempt; its STUN traffic is separate from native peer counters.
 
 `run(signaling)` runs once on a caller-owned bounded worker. Before gathering it
-installs native limits: 256 UDP sends, 1200-byte payload cap, exact destination,
+installs native limits: 256 UDP sends, 1200-byte payload cap, exact destination for profile 1 (authenticated peer-reflexive destination for profile 2),
 fixed monotonic deadline. The attempt is at most 60 seconds; gathering, signing,
 signaling and channel establishment must fit the original 15-second handshake.
 Forward wall corrections and monotonic elapsed time prevent expiry extension by
@@ -55,6 +53,4 @@ not be logged or persisted.
 Focused tests use actual localhost IPv4/IPv6 UDP, pinned DTLS, SCTP, signed admission
 and optional ping/pong; no public traffic or game protocol. They cover forged/withdrawn
 credentials, wrong pins, replay/quotas, missing or late signaling, original deadlines,
-cancellation and exact cleanup. Use the local unpublished JNI override when running
-`nativeAdmissionTest`; normal dependency publication and independent client interop
-remain separate integration work.
+cancellation and exact cleanup. Run `nativeAdmissionTest` against the pinned JNI artifacts; dependency publication and independent client interop remain separate evidence.

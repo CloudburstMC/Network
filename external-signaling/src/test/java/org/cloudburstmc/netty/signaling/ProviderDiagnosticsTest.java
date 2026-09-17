@@ -23,7 +23,12 @@ class ProviderDiagnosticsTest {
         final List<DiagnosticHostPolicy> policies = new CopyOnWriteArrayList<>();
         volatile long revision = 1, publicationVersion = 1, deadline, expiry;
         volatile int port = 19133;
-        volatile boolean empty;
+        volatile boolean empty, pending;
+        Set<Integer> assistedFamilies = Set.of();
+        volatile List<ProviderTransport.StunServer> stunServers = List.of();
+        public CompletionStage<Void> configureStunServers(List<ProviderTransport.StunServer> servers) {
+            stunServers = List.copyOf(servers); return CompletableFuture.completedFuture(null);
+        }
         final List<List<ProviderTransport.ConnectivityCheck>> feedback = new CopyOnWriteArrayList<>();
         volatile int disabled;
         volatile boolean srflx;
@@ -43,9 +48,13 @@ class ProviderDiagnosticsTest {
         }
         @Override public CompletionStage<HostProfileSnapshot> captureHostProfile() {
             long captured = revision, originalExpiry = expiry, version = publicationVersion;
-            return hostProfile().thenApply(profile -> new HostProfileSnapshot(profile, captured, version, () -> {
+            return hostProfile().thenApply(profile -> {
+                var probes = profile.getAsJsonArray("candidates").deepCopy();
+                if (pending) profile.add("candidates", new JsonArray());
+                return new HostProfileSnapshot(profile, captured, version, probes, assistedFamilies, () -> {
                 if (revision != captured || closed.isDone() || originalExpiry > 0 && System.currentTimeMillis() >= originalExpiry) throw new IllegalStateException("stale snapshot");
-            }));
+                });
+            });
         }
         public long candidatePublicationVersion() { return publicationVersion; }
         public CompletionStage<Void> reportConnectivityChecks(long revision, List<ConnectivityCheck> checks) {
@@ -104,7 +113,8 @@ class ProviderDiagnosticsTest {
             try {
                 var observed = new CopyOnWriteArrayList<Boolean>();
                 f.provider.heartbeatResponseHook = () -> {
-                    boolean advertised = f.provider.lastHeartbeat.has("extensions");
+                    boolean advertised = f.provider.lastHeartbeat.has("extensions") && f.provider.lastHeartbeat
+                            .getAsJsonObject("extensions").getAsJsonObject(NAMESPACE).getAsJsonObject("data").get("diagnostics").getAsBoolean();
                     if (advertised) assertFalse(transport.policies.isEmpty(), "Opt-in preceded actual local installation");
                     observed.add(advertised);
                 };
@@ -122,7 +132,7 @@ class ProviderDiagnosticsTest {
                 var extension = f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE);
                 assertEquals(Set.of("version", "critical", "data"), extension.keySet());
                 var data = extension.getAsJsonObject("data");
-                assertEquals(Set.of("diagnostics", "candidateRevision", "method"), data.keySet());
+                assertEquals(Set.of("diagnostics", "candidateRevision", "method", "probeCandidates", "assistedFamilies"), data.keySet());
                 assertEquals("defined", data.get("method").getAsString());
                 assertEquals(1, data.get("candidateRevision").getAsLong());
                 int applications = transport.policies.size();
@@ -134,6 +144,25 @@ class ProviderDiagnosticsTest {
                 assertTrue(transport.disabled > disables);
                 assertFalse(f.provider.lastHeartbeat.has("extensions"));
                 assertEquals("draining", f.provider.lastHeartbeat.get("state").getAsString());
+            } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test @Timeout(30) void discoveryConfiguresStunAndPendingMappingGetsOnlyDiagnosticAuthority() throws Exception {
+        try (var f = new Fixture()) {
+            f.provider.extensionMetadata = JsonParser.parseString("{\"org.nethernet.connectivity\":{\"version\":1,\"critical\":false,\"data\":{\"stunServers\":[{\"host\":\"stun.example\",\"port\":3478}]}}}").getAsJsonObject();
+            var transport = new Transport(); transport.srflx = true; transport.pending = true;
+            transport.expiry = System.currentTimeMillis() + 180000;
+            var client = f.client(directory, transport, true, "discovered");
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertEquals(List.of(new ProviderTransport.StunServer("stun.example", 3478)), transport.stunServers);
+                assertTrue(transport.captureHostProfile().toCompletableFuture().get().profile().getAsJsonArray("candidates").isEmpty());
+                var data = f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE).getAsJsonObject("data");
+                assertTrue(data.get("diagnostics").getAsBoolean());
+                assertEquals(1, data.getAsJsonArray("probeCandidates").size());
+                assertTrue(data.getAsJsonArray("assistedFamilies").isEmpty());
+                assertEquals(Set.of(transport.expiry), new HashSet<>(transport.policies.get(transport.policies.size() - 1).endpointExpiries().values()));
             } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
         }
     }
@@ -171,11 +200,27 @@ class ProviderDiagnosticsTest {
                 var client = f.client(directory.resolve(Boolean.toString(enabled)), transport, enabled, "discovered");
                 try {
                     client.start().get(20, TimeUnit.SECONDS);
-                    assertTrue(transport.policies.isEmpty()); assertFalse(f.provider.lastHeartbeat.has("extensions"));
+                    assertTrue(transport.policies.isEmpty());
+                    assertFalse(f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE)
+                            .getAsJsonObject("data").get("diagnostics").getAsBoolean());
                 } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
             }
         }
     }
+    @Test @Timeout(30) void disabledAssistanceCannotAdvertiseAnAssistedOnlyDiagnosticPolicy() throws Exception {
+        try (var f = new Fixture()) {
+            var transport = new Transport(); transport.empty = true; transport.assistedFamilies = Set.of(4);
+            var client = f.client(directory, transport, true, "discovered");
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertTrue(transport.policies.isEmpty());
+                var data = f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE).getAsJsonObject("data");
+                assertFalse(data.get("diagnostics").getAsBoolean());
+                assertTrue(data.getAsJsonArray("assistedFamilies").isEmpty());
+            } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+        }
+    }
+
     @Test @Timeout(30) void maintainedExpiryAndMethodUseTheOriginalNativeObservation() throws Exception {
         try (var f = new Fixture()) {
             var transport = new Transport(); transport.srflx = true;
@@ -242,16 +287,30 @@ class ProviderDiagnosticsTest {
                 var checks = new JsonArray();
                 for (long checked : List.of(now - 1000, now - 300000, now + 10000)) {
                     var check = new JsonObject(); check.addProperty("region", "fixture"); check.addProperty("family", 4);
+                    check.addProperty("method", "warm_stun");
+                    check.add("target", JsonParser.parseString("{\"address\":\"8.8.8.8\",\"port\":19133}"));
                     check.addProperty("outcome", "not-established"); check.addProperty("checkedAt", checked); check.addProperty("expiresAt", checked + 60000); checks.add(check);
                 }
                 data.add("checks", checks);
                 var extension = new JsonObject(); extension.addProperty("version", 1); extension.addProperty("critical", false); extension.add("data", data);
                 f.provider.extensionMetadata = new JsonObject(); f.provider.extensionMetadata.add(NAMESPACE, extension);
                 client.readiness().get(10, TimeUnit.SECONDS);
-                assertEquals(List.of(new ProviderTransport.ConnectivityCheck(4, ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED, now - 1000, now + 59000)), transport.feedback.get(0));
+                assertEquals(List.of(new ProviderTransport.ConnectivityCheck(4, "warm_stun", new java.net.InetSocketAddress("8.8.8.8", 19133), ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED, now - 1000, now + 59000)), transport.feedback.get(0));
+                var stages = new JsonArray();
+                for (int i = 0; i < 18; i++) {
+                    var check = checks.get(0).deepCopy().getAsJsonObject();
+                    check.addProperty("method", List.of("discovered", "warm_stun", "per_join").get(i % 3));
+                    check.addProperty("outcome", i % 2 == 0 ? "unavailable" : "unknown");
+                    stages.add(check);
+                }
+                data.add("checks", stages);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(18, transport.feedback.get(1).size());
+                assertEquals(ProviderTransport.ConnectivityOutcome.UNAVAILABLE, transport.feedback.get(1).get(0).outcome());
+                assertEquals("per_join", transport.feedback.get(1).get(2).method());
                 data.addProperty("candidateRevision", 2);
                 client.readiness().get(10, TimeUnit.SECONDS);
-                assertEquals(1, transport.feedback.size());
+                assertEquals(2, transport.feedback.size());
             } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
         }
     }

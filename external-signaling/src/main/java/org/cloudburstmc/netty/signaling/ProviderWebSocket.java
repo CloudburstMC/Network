@@ -128,7 +128,7 @@ final class ProviderWebSocket implements AutoCloseable {
                 var join = org.cloudburstmc.netty.signaling.control.AssistedJoin.decode(text);
                 if (!connection.binding.equals(join.instanceId() + ":" + join.generation())) throw new IOException("Assisted owner mismatch");
                 long remaining = join.expiresAt() - System.currentTimeMillis();
-                if (remaining <= 0 || remaining > 30_000) throw new IOException("Assisted deadline");
+                if (remaining <= 0 || remaining > (join.diagnostic() ? org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.MAX_ATTEMPT_MILLIS : 30_000)) throw new IOException("Assisted deadline");
                 long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining);
                 assistedInFlight++;
                 CompletionStage<AssistedAnswer> work;

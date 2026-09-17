@@ -19,7 +19,7 @@ public final class EndpointConnectivityController implements AutoCloseable {
     public enum CheckOutcome { UNKNOWN, SUCCEEDED, FAILED }
     public enum State {
         CONFIGURED, DISABLED_BY_CONFIG, UNSUPPORTED_FAMILY, AWAITING_DIRECT_CHECK, DIRECT_CHECK_SUCCEEDED,
-        STUN_NOT_CONFIGURED, STUN_PENDING, STUN_FAILED, STUN_FRESH, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED, CLOSED
+        STUN_STOPPED, STUN_NOT_CONFIGURED, STUN_PENDING, STUN_FAILED, STUN_FRESH, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED, CLOSED
     }
     public enum TransactionState { PENDING, SUCCEEDED, FAILED }
 
@@ -90,6 +90,7 @@ public final class EndpointConnectivityController implements AutoCloseable {
         Monitor monitor;
         long epoch;
         boolean failed;
+        boolean stopped;
         InetSocketAddress fresh;
         Lane(List<EndpointSelection.Candidate> direct, InetSocketAddress server) { this.direct = direct; this.server = server; }
     }
@@ -123,11 +124,6 @@ public final class EndpointConnectivityController implements AutoCloseable {
 
     public synchronized DirectCheck beginDirectCheck(Family family) {
         return beginDirectCheck(family, Duration.ofSeconds(30));
-    }
-
-    synchronized boolean canAttemptStun(Family family) {
-        return !closed && !selection.configured() && selection.socketFamilies().contains(family)
-                && lanes.get(family).server != null;
     }
 
     /** Bounds both request completion and the resulting report, measured from this call. */
@@ -188,6 +184,14 @@ public final class EndpointConnectivityController implements AutoCloseable {
         lane.failed = false;
     }
 
+    /** A verified failed warm path retires its monitor; later sampling must not restart it. */
+    public synchronized void stopStun(Family family) {
+        requireOpen();
+        Lane lane = lanes.get(family);
+        lane.stopped = true;
+        stop(lane);
+    }
+
     public synchronized Snapshot snapshot() {
         EnumMap<Family, FamilySnapshot> result = new EnumMap<>(Family.class);
         for (Family family : Family.values()) result.put(family, sample(family, lanes.get(family)));
@@ -203,7 +207,8 @@ public final class EndpointConnectivityController implements AutoCloseable {
                 ? (lane.direct.isEmpty() ? State.DISABLED_BY_CONFIG : State.CONFIGURED)
                 : !selection.socketFamilies().contains(family) ? State.UNSUPPORTED_FAMILY : lane.failed ? State.MONITOR_FAILED
                 : lane.result == CheckOutcome.SUCCEEDED ? State.DIRECT_CHECK_SUCCEEDED
-                : !lane.direct.isEmpty() && !lane.fallbackChosen ? State.AWAITING_DIRECT_CHECK
+                : !lane.direct.isEmpty() ? State.AWAITING_DIRECT_CHECK
+                : lane.stopped ? State.STUN_STOPPED
                 : lane.server == null ? State.STUN_NOT_CONFIGURED : null;
         if (inactive != null) return view(lane, inactive, null);
         try {

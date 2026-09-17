@@ -20,7 +20,7 @@ for (const vector of fixture.vectors) {
   const c = vector.claims, plain = Buffer.alloc(128 + c.clientIcePwd.length);
   plain.writeUInt32BE(c.expiresAt / 1000, 0); hex(c.clientFingerprintHex).copy(plain, 4);
   hex(c.attemptIdHex).copy(plain, 52); hex(c.offerDigestHex).copy(plain, 68);
-  plain.writeBigUInt64BE(BigInt(c.candidateRevision), 100); plain[108] = c.family === 6 ? 129 : 1;
+  plain.writeBigUInt64BE(BigInt(c.candidateRevision), 100); plain[108] = c.profile | (c.family === 6 ? 128 : 0);
   hex(c.targetAddressHex).copy(plain, 109); plain.writeUInt16BE(c.targetPort, 125);
   plain[127] = c.clientIcePwd.length; utf8(c.clientIcePwd).copy(plain, 128);
   assert.equal(sha(utf8(vector.offer)).toString("hex"), c.offerDigestHex);
