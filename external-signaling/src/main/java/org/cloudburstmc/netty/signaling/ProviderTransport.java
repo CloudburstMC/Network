@@ -111,6 +111,7 @@ public interface ProviderTransport {
         }
         public JsonObject profile() { return profile.deepCopy(); }
         public JsonArray probeCandidates() { return probeCandidates.deepCopy(); }
+        /** Families eligible for assistance when explicitly enabled by ProviderClient configuration. */
         public Set<Integer> assistedFamilies() { return assistedFamilies; }
         /** Zero means this adapter has no revisioned native capture. */
         public long candidateRevision() { return candidateRevision; }

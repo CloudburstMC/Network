@@ -26,7 +26,7 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     private final ObservationLeaseTracker tracker;
     private final Map<Family, Mapping> mappings = new EnumMap<>(Family.class);
     private final Set<Family> promoted = EnumSet.noneOf(Family.class);
-    private final Set<Integer> assisted = new HashSet<>();
+    private final Set<Integer> assistedFamilies;
     private final Map<Family, Long> failedAt = new EnumMap<>(Family.class), establishedAt = new EnumMap<>(Family.class);
     private final Map<Family, InetSocketAddress> servers = new EnumMap<>(Family.class);
     private Publication current;
@@ -36,9 +36,18 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     public MaintainedCandidatePublisher(EndpointSelection selection, EndpointConnectivityController controller,
                                        ObservationLeaseTracker tracker) {
         this.selection = Objects.requireNonNull(selection); this.tracker = Objects.requireNonNull(tracker);
-        if (selection.configured() && controller != null || !selection.configured() && controller == null)
+        if (selection.configured() && controller != null)
             throw new IllegalArgumentException("Configured endpoints suppress the connectivity controller");
         this.controller = controller;
+        // These are transport capabilities, not a connectivity verdict. ProviderClient applies
+        // the host's explicit assisted-joins setting. Configured addresses never open other families.
+        var families = new HashSet<Integer>();
+        if (selection.configured()) {
+            selection.candidates().stream()
+                    .filter(candidate -> EndpointAddress.scope(candidate.endpoint().getAddress()) == EndpointAddress.Scope.PUBLIC)
+                    .forEach(candidate -> families.add(number(Family.of(candidate.endpoint().getAddress()))));
+        } else selection.socketFamilies().forEach(family -> families.add(number(family)));
+        assistedFamilies = Set.copyOf(families);
     }
 
     public boolean needsStunServers() {
@@ -46,11 +55,12 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     }
     public synchronized void configureStunServers(Map<Family, InetSocketAddress> numericServers) {
         requireOpen();
-        if (controller == null) return;
+        if (selection.configured()) return;
         numericServers.forEach((family, server) -> {
             if (selection.socketFamilies().contains(family) && selection.candidates(family).isEmpty()
                     && !server.equals(servers.get(family))) {
-                controller.replaceStunServer(family, server); servers.put(family, server);
+                if (controller != null) controller.replaceStunServer(family, server);
+                servers.put(family, server);
             }
         });
     }
@@ -60,7 +70,7 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
         requireOpen();
         var selected = new HashMap<Integer, InetSocketAddress>();
         servers.forEach((family, server) -> {
-            if (assisted.contains(number(family))) selected.put(number(family), server);
+            if (assistedFamilies.contains(number(family))) selected.put(number(family), server);
         });
         return Map.copyOf(selected);
     }
@@ -81,7 +91,6 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
                     case STUN_FAILED, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED, STUN_STOPPED -> true;
                     default -> false;
                 }) {
-                    assisted.add(number(family));
                     controller.stopStun(family);
                 }
             });
@@ -109,37 +118,32 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
         }
         for (Family family : Family.values()) if (!nextMappings.containsKey(family)) promoted.remove(family);
         mappings.clear(); mappings.putAll(nextMappings);
-        current = new Publication(mappingRevision, new NativeCandidateSnapshot(players), new NativeCandidateSnapshot(probes), expiries, assisted, () -> {
+        current = new Publication(mappingRevision, new NativeCandidateSnapshot(players), new NativeCandidateSnapshot(probes), expiries, assistedFamilies, () -> {
             requireOpen(); if (owned != null) owned.requireCurrent();
         });
         return current;
     }
 
-    /** Revision and original observation lifetime are fenced by the transport before this call. */
+    /** Warm mappings alone depend on probe feedback. Revision and observation lifetime are fenced by the transport. */
     public synchronized void reportDirectChecks(List<ConnectivityCheck> checks, long nowMillis) {
         requireOpen();
         if (current == null) return;
         for (Family family : Family.values()) {
-            var direct = selection.candidates(family).stream()
-                    .filter(c -> EndpointAddress.scope(c.endpoint().getAddress()) == EndpointAddress.Scope.PUBLIC).toList();
             var mapping = mappings.get(family);
-            if (direct.isEmpty() && (selection.configured() || mapping == null)) continue;
+            if (mapping == null) continue;
             var fresh = checks.stream().filter(check -> check.family() == number(family) && check.target() != null
                     && check.checkedAt() <= nowMillis && check.expiresAt() > nowMillis
-                    && (!direct.isEmpty() ? Set.of("defined", "discovered").contains(check.method())
-                        && direct.stream().anyMatch(c -> c.endpoint().equals(check.target()))
-                        : "warm_stun".equals(check.method()) && mapping.candidate().endpoint().equals(check.target())
-                        && check.expiresAt() <= current.expiries().get(mapping.candidate()))).toList();
+                    && "warm_stun".equals(check.method()) && mapping.candidate().endpoint().equals(check.target())
+                    && check.expiresAt() <= current.expiries().get(mapping.candidate())).toList();
             long positive = fresh.stream().filter(c -> c.outcome() == ConnectivityOutcome.ESTABLISHED).mapToLong(ConnectivityCheck::checkedAt).max().orElse(-1);
             long negative = fresh.stream().filter(c -> c.outcome() == ConnectivityOutcome.NOT_ESTABLISHED).mapToLong(ConnectivityCheck::checkedAt).max().orElse(-1);
             // Failure wins equal timestamps. Older successes cannot undo a newer failed selection.
             if (negative >= positive && negative >= 0 && negative >= establishedAt.getOrDefault(family, -1L)
                     && negative >= failedAt.getOrDefault(family, -1L)) {
-                failedAt.put(family, negative); promoted.remove(family); assisted.add(number(family));
-                if (direct.isEmpty()) controller.stopStun(family);
+                failedAt.put(family, negative); promoted.remove(family);
+                controller.stopStun(family);
             } else if (positive > failedAt.getOrDefault(family, -1L) && positive >= establishedAt.getOrDefault(family, -1L)) {
-                establishedAt.put(family, positive); assisted.remove(number(family));
-                if (direct.isEmpty()) promoted.add(family);
+                establishedAt.put(family, positive); promoted.add(family);
             }
         }
     }

@@ -161,6 +161,15 @@ class ProviderRuntimeConfigurationTest {
                 ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 65535, 20, "Host").udpPort());
     }
 
+    @Test void explicitAssistanceReachesClientAndNativeHost(@TempDir Path dir) throws Exception {
+        for (boolean assisted : List.of(false, true)) {
+            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+                    ProviderClient.ControlTransport.AUTO, true, true, assisted);
+            var selected = runtime(dir, settings);
+            assertEquals(assisted, selected.clientConfiguration().assistedJoins());
+            assertEquals(Boolean.toString(assisted), selected.nativeHostOptions().get("assistedJoins"));
+        }
+    }
     @Test void maintainedSettingsLeaveStunConfigurationToProviderDiscovery(@TempDir Path dir) throws Exception {
         for (var endpoints : List.of(List.<String>of(), List.of("8.8.8.8:19133"))) {
             var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", endpoints, Map.of(),

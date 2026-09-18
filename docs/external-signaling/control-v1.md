@@ -34,7 +34,7 @@ The response contains the request's idempotency key as `id`, the actual HTTP `st
 
 The current adapter bounds complete UTF-8 messages to 524,288 bytes, original bodies to the existing NXS body limit, and queued operations to four per connection. These are transport bounds, not permission to increase original operation limits. Literal `ping` receives `pong`; this verifies socket liveness only and never renews authorization or commits a heartbeat.
 
-Ordinary hosts can use HTTPS or WSS. Assisted mode requires a live, authenticated, addressable WebSocket and bounded offer/answer/cancellation handling. An ordinary Worker socket cannot later be found by an unrelated request; an assisted socket must be owned by the designated Durable Object. The client advertises assistance only when configured, supported by its native transport and needed for its available endpoints and connectivity observations. It accepts assisted joins only while its authority and owning connection remain current.
+Ordinary hosts can use HTTPS or WSS. Assisted mode requires a live, authenticated, addressable WebSocket and bounded offer/answer/cancellation handling. An ordinary Worker socket cannot later be found by an unrelated request; an assisted socket must be owned by the designated Durable Object. The client advertises assistance only when explicitly enabled in host configuration and supported by its native transport. It advertises every eligible family immediately; connectivity observations never enable or disable assistance. Assistance defaults to off. It accepts assisted joins only while its authority and owning connection remain current.
 
 ## Failure and expiry
 

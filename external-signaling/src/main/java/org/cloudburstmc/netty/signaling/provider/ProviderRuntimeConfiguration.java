@@ -203,6 +203,7 @@ public record ProviderRuntimeConfiguration(
         options.put("advertisedEndpoints", encodedAdvertisedEndpoints());
         options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
         options.put("diagnosticAdmission", Boolean.toString(diagnosticAdmission));
+        options.put("assistedJoins", Boolean.toString(assistedJoins));
         if (maintainedCandidates) {
             options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
 

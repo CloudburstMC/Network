@@ -111,6 +111,8 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
 
             if (options.containsKey("controlMode")) throw new IllegalArgumentException("Obsolete provider control mode");
             String publication = options.get("candidatePublication");
+            String assisted = options.getOrDefault("assistedJoins", "false");
+            if (!Set.of("true", "false").contains(assisted)) throw new IllegalArgumentException("assistedJoins must be a boolean");
             String diagnostic = options.get("diagnosticAdmission");
             if (diagnostic != null && !Set.of("true", "false").contains(diagnostic))
                 throw new IllegalArgumentException("diagnosticAdmission must be a boolean");
@@ -119,7 +121,7 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
                 var selected = maintainedSelection(udpBind, options);
                 Map<EndpointSelection.Family, InetSocketAddress> servers = Map.of(); // Configured after provider discovery.
                 var identity = ProviderHostIdentity.ensure(Path.of(directory));
-                return NativeProviderTransport.openMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults())
+                return NativeProviderTransport.openMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults(), Boolean.parseBoolean(assisted))
                         .thenApply(transport -> new Host(transport, transport.channel(), List.of()));
             }
             EndpointSource endpoints = endpointSource(udpBind, options);

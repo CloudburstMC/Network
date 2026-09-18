@@ -65,8 +65,8 @@ class MaintainedCandidatePublisherTest {
             h.both(); var pending = h.publisher.refresh();
             assertTrue(pending.candidates().candidates().isEmpty());
             assertEquals(2, pending.probeCandidates().candidates().size());
-            assertTrue(pending.assistedFamilies().isEmpty());
-            assertTrue(h.publisher.assistedStunServers().isEmpty(), "Only selected assisted families may gather per attempt");
+            assertEquals(Set.of(4, 6), pending.assistedFamilies(), "Assistance capability is available before probe feedback");
+            assertEquals(Set.of(4, 6), h.publisher.assistedStunServers().keySet());
             h.publisher.reportDirectChecks(List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.ESTABLISHED)), h.wall);
             var promoted = h.publisher.refresh();
             assertEquals(pending.mappingRevision(), promoted.mappingRevision());
@@ -74,18 +74,20 @@ class MaintainedCandidatePublisherTest {
             h.publisher.reportDirectChecks(List.of(check(h, 6, "warm_stun", "2606:4700:4700::1001", 43001, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
             var failed = h.publisher.refresh();
             assertEquals(promoted.mappingRevision(), failed.mappingRevision());
-            assertEquals(Set.of(6), failed.assistedFamilies());
+            assertEquals(Set.of(4, 6), failed.assistedFamilies(), "Probe failure does not select assistance");
             assertEquals(1, failed.probeCandidates().candidates().size());
             assertTrue(h.monitors.get(Family.IPV6).closed);
             var stopped = h.monitors.get(Family.IPV6);
-            assertEquals(Map.of(6, stopped.server), h.publisher.assistedStunServers());
+            assertEquals(Set.of(4, 6), h.publisher.assistedStunServers().keySet());
+            assertEquals(stopped.server, h.publisher.assistedStunServers().get(6));
             assertSame(stopped, h.monitors.get(Family.IPV6), "Per-attempt configuration cannot replace background monitor");
             assertFalse(h.monitors.get(Family.IPV4).closed);
             h.advance(70000); h.monitors.get(Family.IPV4).success("8.8.8.8", 43000);
             assertEquals(promoted.candidates(), h.publisher.refresh().candidates(), "Same mapping stays warm after proof expiry");
             assertTrue(h.monitors.get(Family.IPV6).closed, "Failed warm path cannot silently restart");
             assertSame(stopped, h.monitors.get(Family.IPV6));
-            assertEquals(Map.of(6, stopped.server), h.publisher.assistedStunServers());
+            assertEquals(Set.of(4, 6), h.publisher.assistedStunServers().keySet());
+            assertEquals(stopped.server, h.publisher.assistedStunServers().get(6));
         }
     }
     @Test void wrongEndpointStageUnknownAndExpiredEvidenceCannotPromote() {
@@ -99,25 +101,28 @@ class MaintainedCandidatePublisherTest {
                 check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.UNAVAILABLE),
                 new ConnectivityCheck(4, "warm_stun", endpoint("8.8.8.8", 43000), ConnectivityOutcome.ESTABLISHED, h.wall - 2000, h.wall - 1)), h.wall);
             assertTrue(h.publisher.refresh().candidates().candidates().isEmpty());
-            assertTrue(h.publisher.refresh().assistedFamilies().isEmpty());
+            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
         }
     }
-    @Test void directFailureSelectsAssistanceNeverStunAndOlderSuccessCannotClearIt() {
+    @Test void directFeedbackCannotChangeAssistanceCapabilitiesOrStartStun() {
         var direct = new EndpointSelection.Candidate(endpoint("8.8.8.8", 19132), EndpointSelection.Provenance.LOCAL_INTERFACE);
         try (var h = new Harness(List.of(direct))) {
-            h.publisher.refresh();
-            var older = check(h, 4, "discovered", "8.8.8.8", 19132, ConnectivityOutcome.ESTABLISHED);
-            h.publisher.reportDirectChecks(List.of(older), h.wall); h.advance(1000);
-            h.publisher.reportDirectChecks(List.of(check(h, 4, "defined", "8.8.8.8", 19132, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
-            h.publisher.reportDirectChecks(List.of(older), h.wall);
-            assertEquals(Set.of(4), h.publisher.refresh().assistedFamilies());
-            assertEquals(Set.of(Family.IPV6), h.monitors.keySet());
-            assertTrue(h.publisher.assistedStunServers().isEmpty(), "A failed public Direct path still forbids STUN");
-            h.advance(70000); h.publisher.reportDirectChecks(List.of(), h.wall);
-            assertEquals(Set.of(4), h.publisher.refresh().assistedFamilies());
-            h.publisher.reportDirectChecks(List.of(check(h, 4, "discovered", "8.8.8.8", 19132, ConnectivityOutcome.ESTABLISHED)), h.wall);
-            assertTrue(h.publisher.refresh().assistedFamilies().isEmpty());
-            assertEquals(Set.of(Family.IPV6), h.monitors.keySet());
+            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
+            for (var outcome : ConnectivityOutcome.values()) {
+                h.publisher.reportDirectChecks(List.of(check(h, 4, "discovered", "8.8.8.8", 19132, outcome)), h.wall);
+                assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
+                assertEquals(Set.of(Family.IPV6), h.monitors.keySet());
+                assertEquals(Set.of(6), h.publisher.assistedStunServers().keySet(), "Public Direct family never gathers STUN");
+                h.advance(1000);
+            }
+        }
+    }
+    @Test void stoppedOrBrokenWarmMonitorCannotChangeAssistanceCapabilities() {
+        try (var h = new Harness(List.of())) {
+            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
+            h.monitors.get(Family.IPV4).broken = true;
+            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
+            assertTrue(h.monitors.get(Family.IPV4).closed);
         }
     }
     @Test void remapAbaAndExpiryWithdrawPromotedMappingWithoutRenewingOldCapture() {
@@ -134,6 +139,19 @@ class MaintainedCandidatePublisherTest {
             assertThrows(IllegalStateException.class, retained::requireCurrent);
         }
     }
+    @Test void explicitAssistanceKeepsPerJoinDiscoveryWithoutBackgroundWarming() {
+        var selection = EndpointSelection.select(endpoint("::", 19132), List.of(), List.of());
+        try (var publisher = new MaintainedCandidatePublisher(selection, null, new ObservationLeaseTracker(INCARNATION))) {
+            assertTrue(publisher.needsStunServers());
+            var server = endpoint("1.1.1.1", 3478);
+            publisher.configureStunServers(Map.of(Family.IPV4, server));
+            var publication = publisher.refresh();
+            assertEquals(Set.of(4, 6), publication.assistedFamilies());
+            assertTrue(publication.candidates().candidates().isEmpty());
+            assertTrue(publication.probeCandidates().candidates().isEmpty());
+            assertEquals(Map.of(4, server), publisher.assistedStunServers());
+        }
+    }
     @Test void configuredPrivateEndpointsSuppressPublicAssistanceAndAllStun() {
         for (String address : List.of("10.0.0.8", "8.8.8.8")) {
             var endpoint = endpoint(address, 19132);
@@ -141,7 +159,8 @@ class MaintainedCandidatePublisherTest {
             try (var publisher = new MaintainedCandidatePublisher(selection, null, new ObservationLeaseTracker(INCARNATION))) {
                 assertFalse(publisher.needsStunServers());
                 publisher.configureStunServers(Map.of(Family.IPV4, endpoint("1.1.1.1", 3478)));
-                publisher.refresh();
+                assertEquals(address.startsWith("10.") ? Set.of() : Set.of(4), publisher.refresh().assistedFamilies(),
+                        "Configured assistance is bounded to public configured endpoint families before feedback");
                 long now = System.currentTimeMillis();
                 publisher.reportDirectChecks(List.of(new ConnectivityCheck(4, "defined", endpoint, ConnectivityOutcome.NOT_ESTABLISHED, now, now + 60000)), now);
                 assertEquals(address.startsWith("10.") ? Set.of() : Set.of(4), publisher.refresh().assistedFamilies());

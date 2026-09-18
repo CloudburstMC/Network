@@ -153,11 +153,18 @@ public final class NativeProviderTransport implements ProviderTransport {
     public static CompletionStage<NativeProviderTransport> openMaintained(ServerBootstrap bootstrap,
             EndpointSelection selection, Map<EndpointSelection.Family, InetSocketAddress> numericStunServers,
             Path certificate, Path privateKey, AdmissionGate.Limits limits) {
+        return openMaintained(bootstrap, selection, numericStunServers, certificate, privateKey, limits, false);
+    }
+
+    /** Explicit assistance uses bounded per-join discovery instead of background STUN warming. */
+    public static CompletionStage<NativeProviderTransport> openMaintained(ServerBootstrap bootstrap,
+            EndpointSelection selection, Map<EndpointSelection.Family, InetSocketAddress> numericStunServers,
+            Path certificate, Path privateKey, AdmissionGate.Limits limits, boolean assistedJoins) {
         Objects.requireNonNull(selection);
         var servers = Map.copyOf(numericStunServers);
         var direct = NativeCandidateSnapshot.hosts(selection.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
         return open(bootstrap, selection.bind(), null, certificate, privateKey, limits, false, direct).thenCompose(transport -> {
-            var controller = selection.configured()
+            var controller = selection.configured() || assistedJoins
                     ? CompletableFuture.<org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController>completedFuture(null)
                     : transport.channel.enableConnectivity(selection, servers, Duration.ofMinutes(5));
             return controller.thenApply(value -> {
@@ -385,7 +392,7 @@ public final class NativeProviderTransport implements ProviderTransport {
                             throw new IllegalArgumentException("Expired diagnostic configuration");
                         NativeCandidateSnapshot current = candidatePublication == null ? currentCandidates() : candidatePublication.probeCandidates();
                         if (!incarnation.equals(policy.context().incarnation()) || policy.endpoints().stream().anyMatch(endpoint -> endpoint.candidateRevision() != candidateGeneration
-                                || (endpoint.assisted() ? candidatePublication == null || !candidatePublication.assistedFamilies().contains(endpoint.family()) : !containsEndpoint(current, endpoint))))
+                                || (endpoint.assisted() ? !eligibleAssistedFamilies(current.candidates()).contains(endpoint.family()) : !containsEndpoint(current, endpoint))))
                             throw new IllegalArgumentException("Diagnostic listener or endpoint mismatch");
                         if (candidatePublication != null) {
                             candidatePublication.requireCurrent();
@@ -538,7 +545,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         var observed = candidatePublication;
         if (observed != null) observed.requireCurrent();
         var probes = candidatePublication == null ? candidates : encodeCandidates(candidatePublication.probeCandidates().candidates());
-        var assisted = candidatePublication == null ? Set.<Integer>of() : candidatePublication.assistedFamilies();
+        var assisted = eligibleAssistedFamilies(endpoints);
         return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, capturedGeneration, publicationVersion, probes, assisted, () -> {
             if (closed || draining || !channel.isActive())
                 throw new IllegalStateException("Native endpoint snapshot closed");
@@ -546,6 +553,17 @@ public final class NativeProviderTransport implements ProviderTransport {
                 throw new HostProfileSnapshotChangedException();
             if (observed != null) observed.requireCurrent();
         }));
+    }
+
+    private Set<Integer> eligibleAssistedFamilies(List<NativeCandidateSnapshot.Candidate> endpoints) {
+        if (candidatePublication != null) return candidatePublication.assistedFamilies();
+        var families = new HashSet<Integer>();
+        for (var candidate : endpoints) {
+            var address = candidate.endpoint().getAddress();
+            if (EndpointAddress.scope(address) == EndpointAddress.Scope.PUBLIC)
+                families.add(address instanceof java.net.Inet4Address ? 4 : 6);
+        }
+        return Set.copyOf(families);
     }
 
     private JsonArray encodeCandidates(List<NativeCandidateSnapshot.Candidate> endpoints) {

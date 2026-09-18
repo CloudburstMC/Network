@@ -519,8 +519,8 @@ class NativeAdmissionStagingTest {
             stun.setSoTimeout(250);
             assertThrows(SocketTimeoutException.class, () -> stun.receive(new DatagramPacket(new byte[1024], 1024)), "Direct failure cannot start STUN");
             var after = host.transport.captureHostProfile().toCompletableFuture().get();
-            assertEquals(revision, after.candidateRevision(), "Assisted choice preserves Direct stage evidence");
-            assertEquals(Set.of(4), after.assistedFamilies());
+            assertEquals(revision, after.candidateRevision(), "Direct feedback cannot change host policy");
+            assertEquals(Set.of(4, 6), after.assistedFamilies());
             assertEquals(1, after.profile().getAsJsonArray("candidates").size(), "Direct endpoint remains distinct from selected assisted policy");
             long establishedAt = System.currentTimeMillis();
             host.transport.reportConnectivityChecks(revision, List.of(new ProviderTransport.ConnectivityCheck(4, "discovered", target,
@@ -528,9 +528,9 @@ class NativeAdmissionStagingTest {
             host.transport.reportConnectivityChecks(revision, List.of(negative)).toCompletableFuture().get();
             var recovered = host.transport.captureHostProfile().toCompletableFuture().get();
             assertEquals(revision, recovered.candidateRevision());
-            assertTrue(recovered.assistedFamilies().isEmpty());
-            assertThrows(IllegalStateException.class, after::requireCurrent);
-            assertThrows(IllegalStateException.class, before::requireCurrent, "Returning to Direct cannot revive an old snapshot");
+            assertEquals(before.assistedFamilies(), recovered.assistedFamilies());
+            after.requireCurrent();
+            before.requireCurrent();
             assertTrue(host.transport.channel().isServing());
             assertEquals(0, host.transport.channel().creationAttempts());
         }

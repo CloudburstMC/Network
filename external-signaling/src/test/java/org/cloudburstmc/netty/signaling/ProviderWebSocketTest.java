@@ -319,11 +319,51 @@ class ProviderWebSocketTest {
     }
 
     @Test
+    void configuredAssistanceIsAdvertisedAtStartupAndUnaffectedByFeedback(@TempDir Path directory) throws Exception {
+        for (boolean enabled : List.of(false, true)) for (boolean candidateFree : List.of(false, true)) {
+            try (Provider provider = new Provider()) {
+                var transport = new ProviderClientTest.FakeTransport() {
+                    @Override public CompletionStage<HostProfileSnapshot> captureHostProfile() {
+                        return hostProfile().thenApply(profile -> {
+                            if (candidateFree) profile.add("candidates", new JsonArray());
+                            return new HostProfileSnapshot(profile, 1, 0, profile.getAsJsonArray("candidates"), Set.of(4, 6), () -> { });
+                        });
+                    }
+                    @Override public boolean supportsAssistedJoins() { return true; }
+                };
+                var config = new ProviderClient.Configuration(URI.create(provider.stub.origin), "nxs-admission-v1",
+                        "configured assistance", ProviderClient.NEW_SERVICE, ProviderClient.BEARER_TOKEN,
+                        "independent-provider-token", null, null, Map.of(), ProviderClient.ControlTransport.AUTO,
+                        false, "discovered", enabled);
+                var client = new ProviderClient(config, new ProviderStateStore(directory.resolve(enabled + "-" + candidateFree)), transport,
+                        () -> null, () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "test"), message -> { });
+                try {
+                    client.start().get(20, TimeUnit.SECONDS);
+                    assertEquals(enabled, provider.stub.lastHeartbeat.getAsJsonObject("hostProfile")
+                            .getAsJsonObject("statelessAdmission").has("assisted"), "Configuration applies before any feedback");
+                    for (String outcome : List.of("unknown", "not-established", "established", "unavailable")) {
+                        var data = provider.stub.lastHeartbeat.getAsJsonObject("extensions")
+                                .getAsJsonObject("org.nethernet.connectivity").getAsJsonObject("data");
+                        assertEquals(enabled ? "[4,6]" : "[]", data.getAsJsonArray("assistedFamilies").toString());
+                        assertEquals(enabled ? "per_join" : "discovered", data.get("method").getAsString());
+                        var feedback = connectivityFeedback(System.currentTimeMillis());
+                        feedback.getAsJsonObject("data").getAsJsonArray("checks").get(0).getAsJsonObject().addProperty("outcome", outcome);
+                        provider.stub.extensionMetadata.add("org.nethernet.connectivity", feedback);
+                        client.readiness().get(10, TimeUnit.SECONDS);
+                    }
+                    var data = provider.stub.lastHeartbeat.getAsJsonObject("extensions")
+                            .getAsJsonObject("org.nethernet.connectivity").getAsJsonObject("data");
+                    assertEquals(enabled ? "[4,6]" : "[]", data.getAsJsonArray("assistedFamilies").toString());
+                } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
+            }
+        }
+    }
+
+    @Test
     void assistedPushUsesOwnedNativeCaptureAndSuppressesLatePreparedAnswer(@TempDir Path directory) throws Exception {
         try (Provider provider = new Provider()) {
             var started = new LinkedBlockingQueue<org.cloudburstmc.netty.signaling.control.AssistedJoin>();
             var nativeResult = new AtomicReference<CompletableFuture<String>>();
-            provider.stub.extensionMetadata.add("org.nethernet.connectivity", connectivityFeedback(System.currentTimeMillis()));
             var transport = new ProviderClientTest.FakeTransport() {
                 @Override public CompletionStage<JsonObject> hostProfile() {
                     return super.hostProfile().thenApply(profile -> {
