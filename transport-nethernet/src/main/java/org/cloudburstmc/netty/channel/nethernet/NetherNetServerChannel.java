@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import org.jspecify.annotations.Nullable;
@@ -18,12 +19,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jose4j.lang.JoseException;
-import tel.schich.libdatachannel.DataChannel;
-import tel.schich.libdatachannel.GatheringState;
-import tel.schich.libdatachannel.PeerConnection;
-import tel.schich.libdatachannel.PeerConnectionConfiguration;
-import tel.schich.libdatachannel.PeerState;
-import tel.schich.libdatachannel.SessionDescriptionType;
+import tel.schich.libdatachannel.*;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -283,6 +279,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             pc.onDataChannel.register((peer, dataChannel) -> onDataChannel(dataChannel));
             pc.onLocalCandidate.register((peer, candidate, mediaId) -> onLocalCandidate(candidate));
             pc.onStateChange.register((peer, state) -> onConnectionChange(state));
+            pc.onIceStateChange.register((peer, state) -> onIceStateChange(state));
             pc.onGatheringStateChange.register((peer, state) -> onGatheringStateChange(state));
         }
 
@@ -331,6 +328,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         private void onConnectionChange(PeerState state) {
             log.debug("Connection {} state changed: {}", Long.toUnsignedString(this.connectionId), state);
+
+            NetherChannelMetrics metrics = child != null ? child.config().getOption(NetherChannelOption.NETHER_METRICS) : null;
+            if (metrics != null) {
+                metrics.peerStateChange(state);
+            }
+
             if (state == PeerState.RTC_CONNECTED) {
                 // The selected candidate pair is the only place the peer's real address appears
                 InetSocketAddress raw = this.peerConnection.remoteAddress();
@@ -345,6 +348,13 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 if (handshakeTimeout != null) {
                     handshakeTimeout.cancel(false);
                 }
+            }
+        }
+
+        private void onIceStateChange(IceState state) {
+            NetherChannelMetrics metrics = child != null ? child.config().getOption(NetherChannelOption.NETHER_METRICS) : null;
+            if (metrics != null) {
+                metrics.iceStateChange(state);
             }
         }
 
