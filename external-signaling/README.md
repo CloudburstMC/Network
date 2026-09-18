@@ -67,15 +67,14 @@ Wrappers must delegate `supportsAssistedJoins()`, `assistedFallbackReadyFamilies
 and `assistedJoin(join, requireCurrent)` without replacing the original guard/future.
 No second registration, native listener or command channel is added.
 
-Permission alone keeps the ordinary socket. Direct public endpoints remain preferred;
-unknown or expired checks are not failures. Enable the existing diagnostic-admission
-option to obtain public-endpoint failure evidence. With maintained candidates enabled,
-a failed direct check gives the existing STUN monitor its attempt before assistance;
-an empty profile while that monitor is pending cannot activate assistance. Finished
-private-only/empty discovery can activate it without an impossible public-target probe.
-Fresh positive public checks restore direct preference. Active fallback advertises
-`per_join` in the existing signed connectivity extension and upgrades with
-`nxs-assisted: 1`; the provider may reject this optional capability if not configured.
+The host configuration controls assistance; connectivity checks never enable or disable
+it. With `assistedJoins=false`, maintained candidates can still use background STUN
+warming, and a fresh successful check is required before offering a warmed mapping.
+With `assistedJoins=true`, supported address families use per-join assistance and
+bounded per-join STUN discovery instead of background warming. Configured endpoints
+remain authoritative. Assisted mode advertises `per_join` in the existing signed
+connectivity extension and upgrades with `nxs-assisted: 1`; the provider may reject
+this optional capability if not configured.
 
 An `assisted-join` carries the authenticated full offer, player CPK and identity,
 original host context, fixed expiry and host ICE credentials. The transport creates
