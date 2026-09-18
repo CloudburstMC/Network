@@ -37,7 +37,7 @@ class AcceptOfferTest {
                 .setIdentity(ServerIdentity.generate("example.test"))
                 .setTokenTrust(TokenTrust.ANY)
                 .setServeHttp(serveHttp)
-                .setPlayerFilter((host, player) -> allow)
+                .setPlayerFilter((host, player) -> allow ? null : NetherNetHTTPSignaling.JoinRefusal.REJECTED)
                 .build();
         signaling.setNewConnectionHandler((id, networkId, payload, address, player) -> { });
         return signaling;
@@ -84,7 +84,7 @@ class AcceptOfferTest {
 
         NetherNetHTTPSignaling.OfferRejected rejected =
                 assertInstanceOf(NetherNetHTTPSignaling.OfferRejected.class, e.getCause());
-        assertEquals(NetherNetHTTPSignaling.OfferRejected.Reason.REJECTED, rejected.reason());
+        assertEquals(NetherNetHTTPSignaling.JoinRefusal.REJECTED, rejected.refusal());
     }
 
     @Test
@@ -98,6 +98,6 @@ class AcceptOfferTest {
 
         NetherNetHTTPSignaling.OfferRejected rejected =
                 assertInstanceOf(NetherNetHTTPSignaling.OfferRejected.class, e.getCause());
-        assertEquals(NetherNetHTTPSignaling.OfferRejected.Reason.INVALID_IDENTITY, rejected.reason());
+        assertEquals(NetherNetHTTPSignaling.JoinRefusal.INVALID_IDENTITY, rejected.refusal());
     }
 }

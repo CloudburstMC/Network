@@ -358,14 +358,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 }
 
                 Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
-                OfferRejected.Reason reason = cause instanceof OfferRejected rejected
-                        ? rejected.reason() : OfferRejected.Reason.UNAVAILABLE;
-                respondEmptyWithStatus(ctx, switch (reason) {
-                    case INVALID_IDENTITY -> HttpResponseStatus.UNAUTHORIZED;
-                    case REJECTED -> HttpResponseStatus.FORBIDDEN;
-                    case TIMEOUT -> HttpResponseStatus.GATEWAY_TIMEOUT;
-                    case UNAVAILABLE -> HttpResponseStatus.SERVICE_UNAVAILABLE;
-                }, keepAlive);
+                respondEmptyWithStatus(ctx, (cause instanceof OfferRejected rejected
+                        ? rejected.refusal() : JoinRefusal.ERROR).status(), keepAlive);
             });
         }
 
@@ -523,7 +517,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         if (pendingAnswers.size() >= maxPendingJoins) {
             log.warn("Refusing joins, {} are already waiting for an answer", pendingAnswers.size());
             return CompletableFuture.failedFuture(
-                    new OfferRejected(OfferRejected.Reason.UNAVAILABLE, "too many joins in flight", null));
+                    new OfferRejected(JoinRefusal.FULL, "too many joins in flight", null));
         }
 
         JwtClaims claims;
@@ -532,7 +526,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         } catch (Exception e) {
             log.error("Identity validation failed", e);
             return CompletableFuture.failedFuture(
-                    new OfferRejected(OfferRejected.Reason.INVALID_IDENTITY, "identity validation failed", e));
+                    new OfferRejected(JoinRefusal.INVALID_IDENTITY, "identity validation failed", e));
         }
 
         PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
@@ -540,24 +534,24 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
 
         // Let the user reject the player before we start a connection for them
-        boolean allowed;
+        JoinRefusal refusal;
         try {
-            allowed = playerFilter.allow(host, player);
+            refusal = playerFilter.refuse(host, player);
         } catch (Exception e) {
             log.error("Player filter failed for " + player.xuid(), e);
-            allowed = false;
+            refusal = JoinRefusal.REJECTED;
         }
 
-        if (!allowed) {
-            log.debug("Rejected join from " + player.displayName() + " (" + player.xuid() + ")");
+        if (refusal != null) {
+            log.debug("Rejected join from " + player.displayName() + " (" + player.xuid() + "): " + refusal);
             return CompletableFuture.failedFuture(
-                    new OfferRejected(OfferRejected.Reason.REJECTED, "rejected by the player filter", null));
+                    new OfferRejected(refusal, "turned away by the player filter", null));
         }
 
         EventLoop loop = this.eventLoop;
         if (loop == null || newConnectionHandler == null) {
             return CompletableFuture.failedFuture(
-                    new OfferRejected(OfferRejected.Reason.UNAVAILABLE, "signaling is not bound", null));
+                    new OfferRejected(JoinRefusal.ERROR, "signaling is not bound", null));
         }
 
         CompletableFuture<String> result = new CompletableFuture<>();
@@ -566,7 +560,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         Promise<String> answer = loop.newPromise();
         // Never replace the answer owned by another offer for this network ID.
         if (pendingAnswers.putIfAbsent(networkId, answer) != null) {
-            return CompletableFuture.failedFuture(new OfferRejected(OfferRejected.Reason.UNAVAILABLE,
+            return CompletableFuture.failedFuture(new OfferRejected(JoinRefusal.DUPLICATE,
                     "network ID already pending", null));
         }
 
@@ -583,7 +577,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 return;
             }
             log.error("No SDP answer for " + networkId, future.cause());
-            result.completeExceptionally(new OfferRejected(OfferRejected.Reason.TIMEOUT,
+            result.completeExceptionally(new OfferRejected(JoinRefusal.TIMEOUT,
                     "no answer was produced", future.cause()));
         });
 
@@ -592,28 +586,66 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         return result;
     }
 
-    /** Why an offer did not produce an answer. */
+    /**
+     * Why a join did not happen, and the status it is refused with.
+     * <p>
+     * The constants are what this signaling raises on its own. A host answering something else
+     * builds one.
+     */
+    public static class JoinRefusal {
+        /** The offer carried no usable identity assertion. */
+        public static final JoinRefusal INVALID_IDENTITY = new JoinRefusal(HttpResponseStatus.UNAUTHORIZED);
+        /** The player filter turned the peer away. */
+        public static final JoinRefusal REJECTED = new JoinRefusal(HttpResponseStatus.FORBIDDEN);
+        /** There is no room for another player. */
+        public static final JoinRefusal FULL = new JoinRefusal(HttpResponseStatus.SERVICE_UNAVAILABLE);
+        /** Another join for this network ID is already waiting for an answer. */
+        public static final JoinRefusal DUPLICATE = new JoinRefusal(HttpResponseStatus.CONFLICT);
+        /** Nothing produced an answer in time. */
+        public static final JoinRefusal TIMEOUT = new JoinRefusal(HttpResponseStatus.GATEWAY_TIMEOUT);
+        /** Signaling is not in a state to answer, or something failed while answering. */
+        public static final JoinRefusal ERROR = new JoinRefusal(HttpResponseStatus.INTERNAL_SERVER_ERROR);
+
+        private final HttpResponseStatus status;
+
+        public JoinRefusal(HttpResponseStatus status) {
+            // A 2xx leaves the client parsing an answer we never wrote
+            if (status.code() >= 200 && status.code() < 300) {
+                throw new IllegalArgumentException("A refusal cannot tell a client the join worked: " + status);
+            }
+            this.status = status;
+        }
+
+        public HttpResponseStatus status() {
+            return this.status;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof JoinRefusal refusal && this.status.equals(refusal.status);
+        }
+
+        @Override
+        public int hashCode() {
+            return this.status.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return this.status.toString();
+        }
+    }
+
     public static final class OfferRejected extends Exception {
-        public enum Reason {
-            /** The offer carried no usable identity assertion. */
-            INVALID_IDENTITY,
-            /** The player filter turned the peer away. */
-            REJECTED,
-            /** Nothing produced an answer in time. */
-            TIMEOUT,
-            /** Signaling is not in a state to answer. */
-            UNAVAILABLE
-        }
+        private final JoinRefusal refusal;
 
-        private final Reason reason;
-
-        OfferRejected(Reason reason, String message, @Nullable Throwable cause) {
+        OfferRejected(JoinRefusal refusal, String message, @Nullable Throwable cause) {
             super(message, cause);
-            this.reason = reason;
+            this.refusal = refusal;
         }
 
-        public Reason reason() {
-            return this.reason;
+        public JoinRefusal refusal() {
+            return this.refusal;
         }
     }
 
@@ -666,14 +698,14 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * Called once the identity attached to an SDP offer has been validated, before
          * the connection is handed to the {@link NewConnectionHandler}.
          * <p>
-         * Called on the event loop, so don't block in here. A thrown exception is treated
-         * as a rejection.
+         * Called on the event loop, so don't block in here. A thrown exception turns the player
+         * away as {@link JoinRefusal#REJECTED} does.
          *
          * @param host   The host header from the join request, which may be used to identify the server
          * @param player The validated player attempting to join
-         * @return true to accept the player, false to reject them with a 403
+         * @return Why to turn the player away, or null to let them in
          */
-        boolean allow(String host, PlayerInfo player);
+        @Nullable JoinRefusal refuse(String host, PlayerInfo player);
     }
 
     /**
@@ -714,7 +746,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         private boolean serveHttp = true;
         private boolean proxyProtocol = false;
         private boolean requiresTls = true;
-        private PlayerFilter playerFilter = (host, player) -> true;
+        private PlayerFilter playerFilter = (host, player) -> null;
         private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
 
         /**
