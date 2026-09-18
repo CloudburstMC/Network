@@ -38,6 +38,13 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<Boolean> NETHER_INFER_PEER_CANDIDATES =
             valueOf(NetherChannelOption.class, "NETHER_INFER_PEER_CANDIDATES");
 
+    /**
+     * The {@link NetherChannelMetrics} to report per-channel events to. Unset by default, in which
+     * case nothing is reported.
+     */
+    public static final ChannelOption<NetherChannelMetrics> NETHER_METRICS =
+            valueOf(NetherChannelOption.class, "NETHER_METRICS");
+
     @SuppressWarnings("deprecation")
     protected NetherChannelOption(String name) {
         super(name);

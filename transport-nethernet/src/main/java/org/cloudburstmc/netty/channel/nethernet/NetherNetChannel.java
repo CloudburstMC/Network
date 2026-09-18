@@ -13,6 +13,8 @@ import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import tel.schich.libdatachannel.CandidatePair;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelCallback;
 import tel.schich.libdatachannel.PeerConnection;
@@ -177,11 +179,22 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     private void onMessage(NetherNetMessageAssembler assembler, ByteBuffer data) {
+        NetherChannelMetrics metrics = config.getOption(NetherChannelOption.NETHER_METRICS);
+
         // The native ByteBuffer expires when this callback returns.
         ByteBuf packet = assembler.decode(data, alloc());
         if (packet == null) {
+            if (metrics != null) {
+                metrics.decodeFail(1);
+            }
             return;
         }
+
+        if (metrics != null) {
+            metrics.messagesIn(1);
+            metrics.bytesIn(packet.readableBytes());
+        }
+
         try {
             eventLoop().execute(() -> {
                 if (!isOpen() || (assembler != reliableAssembler && assembler != unreliableAssembler)) {
@@ -253,6 +266,12 @@ public abstract class NetherNetChannel extends AbstractChannel {
                 log.debug("Nothing sent for an empty outbound message");
             } else {
                 log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
+
+                NetherChannelMetrics metrics = config.getOption(NetherChannelOption.NETHER_METRICS);
+                if (metrics != null) {
+                    metrics.messagesOut(segments);
+                    metrics.bytesOut(totalLength);
+                }
             }
         } catch (Exception e) {
             pipeline().fireExceptionCaught(e);
