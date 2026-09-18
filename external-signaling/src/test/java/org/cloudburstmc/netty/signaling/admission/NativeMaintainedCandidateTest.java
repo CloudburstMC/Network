@@ -167,8 +167,10 @@ class NativeMaintainedCandidateTest {
                 }
                 host.transport.reportConnectivityChecks(remapped.candidateRevision(), failure).toCompletableFuture().get();
                 var after = host.transport.captureHostProfile().toCompletableFuture().get();
-                assertTrue(after.candidateRevision() > remapped.candidateRevision());
-                assertEquals(4, after.profile().getAsJsonArray("candidates").size(), "A failed check adds private addresses alongside the fresh mappings");
+                assertEquals(remapped.candidateRevision(), after.candidateRevision(), "Offer decisions must preserve recovery probe authority");
+                assertTrue(after.publicationVersion() > remapped.publicationVersion());
+                assertEquals(2, after.profile().getAsJsonArray("candidates").size(), "Failed public mappings are withheld; LAN/VPN fallback remains");
+                assertEquals(2, after.probeCandidates().size(), "Public mappings remain testable");
                 assertThrows(IllegalStateException.class, remapped::requireCurrent);
                 player4.exchange(); player6.exchange();
             }
@@ -213,7 +215,9 @@ class NativeMaintainedCandidateTest {
             var after = host.transport.captureHostProfile().toCompletableFuture().get();
             assertEquals(revision, after.candidateRevision(), "Direct feedback cannot change host policy");
             assertEquals(Set.of(4, 6), after.assistedFamilies());
-            assertEquals(1, after.profile().getAsJsonArray("candidates").size(), "Direct endpoint remains distinct from selected assisted policy");
+            assertEquals(0, after.profile().getAsJsonArray("candidates").size(), "Failed direct endpoint is withheld without assistance");
+            assertEquals(1, after.probeCandidates().size());
+            assertTrue(after.publicationVersion() > before.publicationVersion());
             long establishedAt = System.currentTimeMillis();
             host.transport.reportConnectivityChecks(revision, List.of(new ProviderTransport.ConnectivityCheck(4, "discovered", target,
                     ProviderTransport.ConnectivityOutcome.ESTABLISHED, establishedAt, establishedAt + 10000))).toCompletableFuture().get();
@@ -221,8 +225,9 @@ class NativeMaintainedCandidateTest {
             var recovered = host.transport.captureHostProfile().toCompletableFuture().get();
             assertEquals(revision, recovered.candidateRevision());
             assertEquals(before.assistedFamilies(), recovered.assistedFamilies());
-            after.requireCurrent();
-            before.requireCurrent();
+            assertEquals(1, recovered.profile().getAsJsonArray("candidates").size());
+            assertThrows(IllegalStateException.class, after::requireCurrent);
+            assertThrows(IllegalStateException.class, before::requireCurrent);
             assertTrue(host.transport.channel().isServing());
             assertEquals(0, host.transport.channel().creationAttempts());
         }

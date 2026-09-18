@@ -125,3 +125,29 @@ Hosts can request automatic registration: the provider uses token authority to
 choose account provisioning or attachment. Anonymous hosts create new services.
 Geyser exposes only signaling mode, advertised endpoints, token, provider origin
 and registration metadata; see the [Geyser configuration](https://github.com/teamziax/GeyserNetherNet/blob/nxs-dev/PROVIDER.md).
+
+### Host decisions after connectivity checks
+
+The game server owns publication. Each fresh terminal check is associated with its
+region, method, and exact public endpoint. A pass in one region can keep that
+endpoint available even when a different region fails; unknown/unavailable results
+are not network failures. Without assisted joins, a failed public endpoint is
+withheld from player offers. Its probe target and listener remain active so a
+successful maintenance check can restore it. Expiry alone does not restore a failed
+endpoint. A replacement STUN mapping is a new endpoint and is offered immediately.
+Configured endpoints follow the same rule; configuration still limits which
+endpoints are eligible and disables automatic discovery.
+
+With assistance explicitly enabled, regional failures do not disable the family or
+remove its public candidates. Per-join STUN discovers a peer for each attempt, and
+clients with different NAT/firewall behavior can still connect. A discovered peer
+from a failed assisted attempt is diagnostic evidence, not a maintained public
+candidate. Private candidates remain available for reachable LAN/VPN clients.
+
+`candidateRevision` identifies the probe endpoint material. A publication-only
+change advances the local `publicationVersion` and invalidates captured player
+profiles without invalidating unchanged recovery targets. Disabling background
+STUN warming does not disable publication policy, diagnostics, or recovery checks.
+Adapters should log each completed regional result and explain the current offer
+decision, including when assistance remains possible or a public endpoint is
+withheld. Neither these checks nor offer changes close established sessions.

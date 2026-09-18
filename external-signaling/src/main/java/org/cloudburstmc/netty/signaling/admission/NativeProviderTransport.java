@@ -127,17 +127,24 @@ public final class NativeProviderTransport implements ProviderTransport {
     public static CompletionStage<NativeProviderTransport> openMaintained(ServerBootstrap bootstrap,
             EndpointSelection selection, Map<EndpointSelection.Family, InetSocketAddress> numericStunServers,
             Path certificate, Path privateKey, AdmissionGate.Limits limits, boolean assistedJoins) {
+        return openMaintained(bootstrap, selection, numericStunServers, certificate, privateKey, limits, assistedJoins, true);
+    }
+
+    /** Warming can be disabled without disabling host-owned publication and recovery checks. */
+    public static CompletionStage<NativeProviderTransport> openMaintained(ServerBootstrap bootstrap,
+            EndpointSelection selection, Map<EndpointSelection.Family, InetSocketAddress> numericStunServers,
+            Path certificate, Path privateKey, AdmissionGate.Limits limits, boolean assistedJoins, boolean stunWarming) {
         Objects.requireNonNull(selection);
         var servers = Map.copyOf(numericStunServers);
         var direct = NativeCandidateSnapshot.hosts(selection.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
         return open(bootstrap, selection.bind(), null, certificate, privateKey, limits, direct).thenCompose(transport -> {
-            var controller = selection.configured() || assistedJoins
+            var controller = selection.configured() || assistedJoins || !stunWarming
                     ? CompletableFuture.<org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController>completedFuture(null)
                     : transport.channel.enableConnectivity(selection, servers, Duration.ofMinutes(5));
             return controller.thenApply(value -> {
                 synchronized (transport) {
                     if (transport.closed || !transport.channel.isActive()) throw new IllegalStateException("Native listener closed");
-                    transport.candidatePublisher = new MaintainedCandidatePublisher(selection, value);
+                    transport.candidatePublisher = new MaintainedCandidatePublisher(selection, value, assistedJoins);
                     transport.candidatePublisher.configureStunServers(servers);
                     transport.refreshMaintained();
                     transport.candidateTask = transport.channel.eventLoop().scheduleWithFixedDelay(
@@ -220,9 +227,9 @@ public final class NativeProviderTransport implements ProviderTransport {
         if (closed || draining || !channel.isActive() || candidatePublisher == null) return;
         try {
             var next = candidatePublisher.refresh();
-            boolean changed = replaceCandidateMaterial(next.candidates(), next.mappingRevision() != maintainedMappingRevision);
+            boolean changed = replaceCandidateMaterial(next.probeCandidates(), next.mappingRevision() != maintainedMappingRevision);
             maintainedMappingRevision = next.mappingRevision();
-            if (candidatePublication == null || changed)
+            if (candidatePublication == null || changed || !candidatePublication.candidates().equals(next.candidates()))
                 publicationVersion = Math.incrementExact(publicationVersion);
             candidatePublication = next;
         } catch (RuntimeException unavailable) {
@@ -449,7 +456,7 @@ public final class NativeProviderTransport implements ProviderTransport {
             return CompletableFuture.failedFuture(unavailable);
         }
 
-        JsonArray candidates = encodeCandidates(endpoints);
+        JsonArray candidates = encodeCandidates(candidatePublication == null ? endpoints : candidatePublication.candidates().candidates());
 
         JsonObject capability = new JsonObject();
         capability.addProperty("capability", CAPABILITY);
@@ -464,13 +471,14 @@ public final class NativeProviderTransport implements ProviderTransport {
         profile.addProperty("sctpPort", 5000);
 
         long capturedGeneration = candidateGeneration;
+        long capturedPublication = publicationVersion;
         var observed = candidatePublication;
         if (observed != null) observed.requireCurrent();
         var assisted = eligibleAssistedFamilies(endpoints);
-        return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, capturedGeneration, publicationVersion, candidates, assisted, () -> {
+        return CompletableFuture.completedFuture(new HostProfileSnapshot(profile, capturedGeneration, publicationVersion, encodeCandidates(endpoints), assisted, () -> {
             if (closed || draining || !channel.isActive())
                 throw new IllegalStateException("Native endpoint snapshot closed");
-            if (candidateGeneration != capturedGeneration)
+            if (candidateGeneration != capturedGeneration || publicationVersion != capturedPublication)
                 throw new HostProfileSnapshotChangedException();
             if (observed != null) observed.requireCurrent();
         }));

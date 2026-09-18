@@ -65,14 +65,16 @@ class MaintainedCandidatePublisherTest {
     static List<InetSocketAddress> published(Harness h) {
         return h.publisher.refresh().candidates().candidates().stream().map(NativeCandidateSnapshot.Candidate::endpoint).toList();
     }
-    @Test void publishesLatestStunImmediatelyAndAddsPrivateFallbackOnFailure() {
+    @Test void withdrawsFailedStunFromPlayersWhileKeepingRecoveryChecks() {
         try (var h = new Harness(List.of(local("10.0.0.8"), local("fd00::8")))) {
             assertEquals(List.of(endpoint("10.0.0.8", 19132), endpoint("fd00::8", 19132)), published(h));
             h.both();
             assertEquals(List.of(endpoint("8.8.8.8", 43000), endpoint("2606:4700:4700::1001", 43001)), published(h));
             h.publisher.reportDirectChecks(List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
-            assertEquals(3, published(h).size());
+            assertEquals(2, published(h).size());
             assertTrue(published(h).contains(endpoint("10.0.0.8", 19132)));
+            assertFalse(published(h).contains(endpoint("8.8.8.8", 43000)));
+            assertTrue(h.publisher.refresh().probeCandidates().candidates().stream().anyMatch(c -> c.endpoint().equals(endpoint("8.8.8.8", 43000))));
             assertFalse(published(h).contains(endpoint("fd00::8", 19132)));
             assertFalse(h.monitors.get(Family.IPV4).closed);
             h.advance(1000);
@@ -98,7 +100,7 @@ class MaintainedCandidatePublisherTest {
         try (var h = new Harness(List.of(local("10.0.0.8")))) {
             h.both(); var original = h.publisher.refresh();
             h.publisher.reportDirectChecks(List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
-            assertEquals(3, published(h).size());
+            assertEquals(2, published(h).size());
             h.monitors.get(Family.IPV4).success("8.8.4.4", 43002);
             assertEquals(2, published(h).size());
             assertThrows(IllegalStateException.class, original::requireCurrent);
@@ -117,7 +119,7 @@ class MaintainedCandidatePublisherTest {
         try (var h = new Harness(List.of(local("8.8.8.8"), local("10.0.0.8")))) {
             assertEquals(List.of(endpoint("8.8.8.8", 19132)), published(h));
             h.publisher.reportDirectChecks(List.of(check(h, 4, "discovered", "8.8.8.8", 19132, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
-            assertEquals(2, published(h).size());
+            assertEquals(1, published(h).size());
             assertEquals(Set.of(Family.IPV6), h.monitors.keySet());
             assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
         }
@@ -133,7 +135,7 @@ class MaintainedCandidatePublisherTest {
     }
     @Test void assistanceCanUseLocalFallbackWithoutBackgroundWarming() {
         var selection = EndpointSelection.select(endpoint("::", 19132), List.of(), List.of(local("10.0.0.8")));
-        try (var publisher = new MaintainedCandidatePublisher(selection, null)) {
+        try (var publisher = new MaintainedCandidatePublisher(selection, null, true)) {
             var server = endpoint("1.1.1.1", 3478);
             publisher.configureStunServers(Map.of(Family.IPV4, server));
             assertEquals(1, publisher.refresh().candidates().candidates().size());
@@ -141,4 +143,49 @@ class MaintainedCandidatePublisherTest {
             assertEquals(Set.of(4, 6), publisher.refresh().assistedFamilies());
         }
     }
+    @Test void assistanceKeepsPublicAddressAndFamilyAfterFailedChecks() {
+        var selection = EndpointSelection.select(endpoint("::", 19132), List.of(), List.of(local("8.8.8.8"), local("10.0.0.8")));
+        try (var publisher = new MaintainedCandidatePublisher(selection, null, true)) {
+            var before = publisher.refresh();
+            long now = System.currentTimeMillis();
+            publisher.reportDirectChecks(List.of(
+                new ConnectivityCheck("lim1", 4, "per_join", endpoint("8.8.8.8", 19132), ConnectivityOutcome.NOT_ESTABLISHED, now, now + 60000),
+                new ConnectivityCheck("vin1", 4, "discovered", endpoint("8.8.8.8", 19132), ConnectivityOutcome.NOT_ESTABLISHED, now, now + 60000)), now);
+            var after = publisher.refresh();
+            assertTrue(after.candidates().candidates().stream().anyMatch(c -> c.endpoint().equals(endpoint("8.8.8.8", 19132))));
+            assertEquals(before.assistedFamilies(), after.assistedFamilies());
+        }
+    }
+    @Test void configuredPublicEndpointsWithdrawIndependentlyAndRecoverWithoutWarming() {
+        var first = endpoint("8.8.8.8", 29132);
+        var second = endpoint("8.8.4.4", 29132);
+        var selection = EndpointSelection.select(endpoint("::", 19132), List.of(first, second), List.of());
+        try (var publisher = new MaintainedCandidatePublisher(selection, null, false)) {
+            long now = System.currentTimeMillis();
+            publisher.refresh();
+            publisher.reportDirectChecks(List.of(new ConnectivityCheck("lim1", 4, "defined", first, ConnectivityOutcome.NOT_ESTABLISHED, now, now + 60000)), now);
+            var failed = publisher.refresh();
+            assertEquals(List.of(new NativeCandidateSnapshot.Candidate(second, NativeCandidateSnapshot.Type.HOST)), failed.candidates().candidates());
+            assertEquals(2, failed.probeCandidates().candidates().size());
+            publisher.reportDirectChecks(List.of(), now + 60001);
+            assertEquals(failed.candidates(), publisher.refresh().candidates(), "Expiry cannot reoffer a known failed endpoint");
+            publisher.reportDirectChecks(List.of(new ConnectivityCheck("lim1", 4, "defined", first, ConnectivityOutcome.ESTABLISHED, now + 60002, now + 120000)), now + 60002);
+            assertEquals(2, publisher.refresh().candidates().candidates().size());
+        }
+    }
+    @Test void regionalSuccessProtectsTheSameTargetButNotOtherTargets() {
+        try (var h = new Harness(List.of(local("8.8.8.8"), local("8.8.4.4")))) {
+            published(h);
+            h.publisher.reportDirectChecks(List.of(
+                new ConnectivityCheck("lim1", 4, "discovered", endpoint("8.8.8.8", 19132), ConnectivityOutcome.ESTABLISHED, h.wall - 1000, h.wall + 60000),
+                new ConnectivityCheck("vin1", 4, "discovered", endpoint("8.8.8.8", 19132), ConnectivityOutcome.NOT_ESTABLISHED, h.wall, h.wall + 60000),
+                new ConnectivityCheck("lim1", 4, "discovered", endpoint("8.8.4.4", 19132), ConnectivityOutcome.NOT_ESTABLISHED, h.wall, h.wall + 60000)), h.wall);
+            assertEquals(List.of(endpoint("8.8.8.8", 19132)), published(h));
+            h.advance(1000);
+            h.publisher.reportDirectChecks(List.of(new ConnectivityCheck("lim1", 4, "discovered", endpoint("8.8.8.8", 19132), ConnectivityOutcome.NOT_ESTABLISHED, h.wall, h.wall + 60000)), h.wall);
+            assertTrue(published(h).isEmpty());
+            assertEquals(2, h.publisher.refresh().probeCandidates().candidates().size());
+        }
+    }
+
 }

@@ -114,6 +114,8 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             String publication = options.get("candidatePublication");
             String assisted = options.getOrDefault("assistedJoins", "false");
             if (!Set.of("true", "false").contains(assisted)) throw new IllegalArgumentException("assistedJoins must be a boolean");
+            String warming = options.getOrDefault("stunWarming", "true");
+            if (!Set.of("true", "false").contains(warming)) throw new IllegalArgumentException("stunWarming must be a boolean");
             String diagnostic = options.get("diagnosticAdmission");
             if (diagnostic != null && !Set.of("true", "false").contains(diagnostic))
                 throw new IllegalArgumentException("diagnosticAdmission must be a boolean");
@@ -122,7 +124,7 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
                 var selected = maintainedSelection(udpBind, options);
                 Map<EndpointSelection.Family, InetSocketAddress> servers = Map.of(); // Configured after provider discovery.
                 var identity = ProviderHostIdentity.ensure(Path.of(directory));
-                return NativeProviderTransport.openMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults(), Boolean.parseBoolean(assisted))
+                return NativeProviderTransport.openMaintained(bootstrap, selected, servers, identity.certificate(), identity.privateKey(), AdmissionGate.Limits.defaults(), Boolean.parseBoolean(assisted), Boolean.parseBoolean(warming))
                         .thenApply(transport -> new Host(transport, transport.channel(), List.of()));
             }
             EndpointSource endpoints = endpointSource(udpBind, options);

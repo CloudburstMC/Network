@@ -179,4 +179,12 @@ class ProviderRuntimeConfigurationTest {
             assertFalse(selected.nativeHostOptions().containsKey("stunServers"));
         }
     }
+    @Test void disabledWarmingKeepsPublicationAndRecoveryPolicy(@TempDir Path dir) throws Exception {
+        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+            ProviderClient.ControlTransport.HTTP, true, false, false);
+        var selected = runtime(dir, settings);
+        assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
+        assertEquals("false", selected.nativeHostOptions().get("stunWarming"));
+    }
+
 }

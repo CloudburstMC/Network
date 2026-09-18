@@ -94,12 +94,16 @@ public interface ProviderTransport {
     default long candidatePublicationVersion() { return 0; }
 
     enum ConnectivityOutcome { ESTABLISHED, NOT_ESTABLISHED, UNKNOWN, UNAVAILABLE }
-    record ConnectivityCheck(int family, String method, InetSocketAddress target, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
+    record ConnectivityCheck(String region, int family, String method, InetSocketAddress target, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
+        public ConnectivityCheck(int family, String method, InetSocketAddress target, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
+            this("unspecified", family, method, target, outcome, checkedAt, expiresAt);
+        }
         public ConnectivityCheck(int family, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
             this(family, "defined", null, outcome, checkedAt, expiresAt);
         }
         public ConnectivityCheck {
             Objects.requireNonNull(outcome);
+            if (region == null || !region.matches("[A-Za-z0-9_-]{1,32}")) throw new IllegalArgumentException("Invalid connectivity region");
             if (!Set.of("defined", "discovered", "warm_stun", "per_join").contains(method)
                     || target != null && (target.isUnresolved() || target.getPort() < 1
                     || (target.getAddress() instanceof java.net.Inet4Address ? 4 : 6) != family))

@@ -294,7 +294,7 @@ class ProviderDiagnosticsTest {
                 var extension = new JsonObject(); extension.addProperty("version", 1); extension.addProperty("critical", false); extension.add("data", data);
                 f.provider.extensionMetadata = new JsonObject(); f.provider.extensionMetadata.add(NAMESPACE, extension);
                 client.readiness().get(10, TimeUnit.SECONDS);
-                assertEquals(List.of(new ProviderTransport.ConnectivityCheck(4, "warm_stun", new java.net.InetSocketAddress("8.8.8.8", 19133), ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED, now - 1000, now + 59000)), transport.feedback.get(0));
+                assertEquals(List.of(new ProviderTransport.ConnectivityCheck("fixture", 4, "warm_stun", new java.net.InetSocketAddress("8.8.8.8", 19133), ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED, now - 1000, now + 59000)), transport.feedback.get(0));
                 var stages = new JsonArray();
                 for (int i = 0; i < 18; i++) {
                     var check = checks.get(0).deepCopy().getAsJsonObject();

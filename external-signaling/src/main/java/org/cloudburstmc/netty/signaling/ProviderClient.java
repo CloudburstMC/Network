@@ -1043,7 +1043,7 @@ public final class ProviderClient implements AutoCloseable {
                     target = new java.net.InetSocketAddress(org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(endpoint.get("address").getAsString()),
                             endpoint.get("port").getAsBigDecimal().intValueExact());
                 }
-                var value = new ProviderTransport.ConnectivityCheck(check.get("family").getAsBigDecimal().intValueExact(),
+                var value = new ProviderTransport.ConnectivityCheck(check.get("region").getAsString(), check.get("family").getAsBigDecimal().intValueExact(),
                         check.has("method") ? check.get("method").getAsString() : "defined", target, outcome,
                         check.get("checkedAt").getAsBigDecimal().longValueExact(), check.get("expiresAt").getAsBigDecimal().longValueExact());
                 if (value.checkedAt() <= now && value.expiresAt() > now) parsed.add(value);
