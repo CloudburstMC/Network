@@ -65,9 +65,6 @@ public final class RegionalDiagnosticHost {
             out.put("selectedLocalAddress", result.selectedLocal().getAddress().getHostAddress()); out.put("selectedLocalPort", result.selectedLocal().getPort());
             out.put("selectedRemoteAddress", result.selectedRemote().getAddress().getHostAddress()); out.put("selectedRemotePort", result.selectedRemote().getPort());
         }
-        if (result.udp() != null) {
-            var udp=result.udp(); out.put("udp", Map.of("reserved", udp.reservedDatagrams(), "sent", udp.sentDatagrams(), "bytes", udp.sentBytes(), "rejected", udp.rejectedDatagrams()));
-        }
         return out;
     }
     public static void main(String[] args) throws Exception {

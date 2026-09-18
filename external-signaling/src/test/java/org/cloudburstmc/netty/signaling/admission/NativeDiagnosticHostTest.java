@@ -54,11 +54,10 @@ class NativeDiagnosticHostTest {
         Credentials credentials;
         Claims claims;
         byte[] auth;
-        Client(InetAddress bind, int hostPort, long expiry) throws Exception {
+        Client(InetAddress bind, long expiry) throws Exception {
             this.expiry = expiry; int localPort = port(bind);
-            peer = PeerConnection.createPeerWithUdpLimits(PeerConnectionConfiguration.DEFAULT.withBindAddress(bind).withDisableAutoNegotiation(true)
-                    .withEnableIceUdpMux(true).withPortRangeBegin(localPort).withPortRangeEnd(localPort).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE), Runnable::run,null,
-                new UdpSendLimits(MAX_UDP_SENDS,MAX_UDP_PAYLOAD_BYTES,UdpSendLimits.monotonicTimeMillis() + expiry-System.currentTimeMillis(),new InetSocketAddress(bind,hostPort)));
+            peer = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(bind).withDisableAutoNegotiation(true)
+                    .withEnableIceUdpMux(true).withPortRangeBegin(localPort).withPortRangeEnd(localPort).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE), Runnable::run);
             for (int i=0;i<2;i++) {
                 int index=i;
                 channels[i]=peer.createDataChannel(i==0?"ReliableDataChannel":"UnreliableDataChannel",DataChannelInitSettings.DEFAULT.withReliability(DataChannelReliability.DEFAULT.withUnordered(i==1).withUnreliable(i==1).withMaxRetransmits(0)));
@@ -124,7 +123,7 @@ class NativeDiagnosticHostTest {
                 new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){playerChildren.incrementAndGet();}}).bind(bind,port).sync();
                 var policy=new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(family,DiagnosticAdmissionCodec.address(family,address),port,7)),expiry+10000);
                 var gate=endpoint.enableDiagnostics(policy).toCompletableFuture().get(3,TimeUnit.SECONDS);
-                try(Client client=new Client(bind,port,expiry)) {
+                try(Client client=new Client(bind,expiry)) {
                     client.connect(identity,context,key,family,address,port,false);client.start(false);
                     var reports=new ArrayList<NativeDiagnosticHostGate.Result>();
                     await(()->{client.tick();reports.addAll(gate.pollResults());return !reports.isEmpty();});
@@ -133,7 +132,7 @@ class NativeDiagnosticHostTest {
                     assertTrue(report.authenticated());assertNull(client.failure.get());
                     assertEquals(0,gate.stats().liveNativePeers());assertEquals(0,gate.stats().active());assertEquals(1,gate.stats().retainedAttempts());
                     assertEquals(0,playerValidations.get());assertEquals(0,playerChildren.get());assertEquals(0,endpoint.creationAttempts());assertTrue(endpoint.pollEvents().isEmpty());
-                    assertEquals(family,report.selectedLocal().getAddress() instanceof Inet6Address?6:4);assertTrue(report.udp().sentDatagrams()>2);assertEquals(0,report.udp().rejectedDatagrams());
+                    assertEquals(family,report.selectedLocal().getAddress() instanceof Inet6Address?6:4);
                     assertEquals(context,report.context());assertEquals(key.keyId(),report.keyId());assertEquals(client.claims.offerDigestHex(),report.offerDigestHex());
                     assertEquals(client.claims.clientFingerprintHex(),report.clientFingerprintHex());assertEquals(expiry,report.expiresAt());assertEquals(port,report.selectedLocal().getPort());
                     assertEquals(1,report.sentFrames());assertEquals(2,report.receivedFrames());
@@ -160,7 +159,7 @@ class NativeDiagnosticHostTest {
                 var target=new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,7);
                 var policy=new DiagnosticHostPolicy(context,List.of(key),Set.of(target),expiry+10000);
                 var gate=endpoint.enableDiagnostics(policy).toCompletableFuture().get(3,TimeUnit.SECONDS);
-                try(Client client=new Client(bind,port,expiry)) {
+                try(Client client=new Client(bind,expiry)) {
                     client.connect(identity,context,key,4,"127.0.0.1",port,mode.equals("dtls"));
                     if(!mode.equals("dtls")) {
                         await(()->client.channels[0].isOpen()&&client.channels[1].isOpen());
@@ -181,7 +180,7 @@ class NativeDiagnosticHostTest {
                     assertEquals(0,playerValidations.get(),mode);assertEquals(0,endpoint.creationAttempts(),mode);assertTrue(endpoint.pollEvents().isEmpty(),mode);
                     if(mode.startsWith("empty-")) {
                         gate.replacePolicy(policy);
-                        try(Client fresh=new Client(bind,port,expiry)) {
+                        try(Client fresh=new Client(bind,expiry)) {
                             fresh.connect(identity,context,key,4,"127.0.0.1",port,false);fresh.start(false);var recovered=new ArrayList<NativeDiagnosticHostGate.Result>();
                             await(()->{fresh.tick();recovered.addAll(gate.pollResults());return !recovered.isEmpty();});
                             assertTrue(recovered.get(0).success(),recovered.toString());assertEquals(2,gate.stats().retainedAttempts());
@@ -203,7 +202,7 @@ class NativeDiagnosticHostTest {
             try(DatagramSocket socket=new DatagramSocket(new InetSocketAddress(bind,0))) {socket.send(new DatagramPacket(malformed,malformed.length,bind,port));await(()->endpoint.nativeStats()[0]>0);}
             assertEquals(0,playerValidations.get());assertEquals(0,endpoint.liveNativePeers());
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,8)),expiry+10000)).toCompletableFuture().get();
-            try(Client client=new Client(bind,port,expiry)) {
+            try(Client client=new Client(bind,expiry)) {
                 var before=NativeDiagnostics.creationAttempts();client.connect(identity,context,key,4,"127.0.0.1",port,false);
                 await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(before,0);assertEquals(0,gate.stats().active());assertEquals(0,gate.stats().retainedAttempts());assertEquals(0,playerValidations.get());
             }
@@ -228,9 +227,9 @@ class NativeDiagnosticHostTest {
             var playerEvents=new ArrayList<NativeAdmissionServerChannel.Event>();
             await(()->{playerEvents.addAll(endpoint.pollEvents());return playerEvents.stream().anyMatch(event->event.stage().equals("ticket.data_channels_open"));});
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,7)),expiry+10000)).toCompletableFuture().get();
-            try(Client diagnostic=new Client(bind,port,expiry)) {
+            try(Client diagnostic=new Client(bind,expiry)) {
                 diagnostic.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->diagnostic.channels[0].isOpen()&&diagnostic.channels[1].isOpen());assertEquals(2,endpoint.liveNativePeers());
-                try(Client extra=new Client(bind,port,expiry)) {
+                try(Client extra=new Client(bind,expiry)) {
                     var created=NativeDiagnostics.creationAttempts();long received=endpoint.nativeStats()[0];extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->endpoint.nativeStats()[0]>received);
                     Thread.sleep(200);NativeDiagnostics.assertCreations(created,0);assertEquals(2,endpoint.liveNativePeers());assertEquals(1,gate.stats().active());
                 }
@@ -250,9 +249,9 @@ class NativeDiagnosticHostTest {
         try {
             new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){fail("player child");}}).bind(bind,port).sync();
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,7)),expiry+10000)).toCompletableFuture().get();
-            for(int i=0;i<4;i++) {Client client=new Client(bind,port,expiry);clients.add(client);client.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->client.channels[0].isOpen()&&client.channels[1].isOpen());}
+            for(int i=0;i<4;i++) {Client client=new Client(bind,expiry);clients.add(client);client.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->client.channels[0].isOpen()&&client.channels[1].isOpen());}
             assertEquals(4,gate.stats().active());assertEquals(4,gate.stats().pending());
-            try(Client extra=new Client(bind,port,expiry)) {var before=NativeDiagnostics.creationAttempts();extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(before,0);}
+            try(Client extra=new Client(bind,expiry)) {var before=NativeDiagnostics.creationAttempts();extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(before,0);}
             var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{reports.addAll(gate.pollResults());return reports.size()==4&&gate.stats().active()==0&&gate.stats().retainedAttempts()==0;});
             assertTrue(reports.stream().noneMatch(NativeDiagnosticHostGate.Result::success));assertEquals(0,gate.stats().liveNativePeers());
             Client original=clients.get(0);byte[] replay=StatelessAdmissionValidatorTest.binding(original.credentials.localUfrag()+":"+original.ufrag,original.credentials.icePwd());long rejected=gate.stats().rejected();var created=NativeDiagnostics.creationAttempts();
@@ -268,11 +267,11 @@ class NativeDiagnosticHostTest {
         try {
             new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){fail("player child");}}).bind(bind,port).sync();
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,7)),expiry+10000)).toCompletableFuture().get();
-            for(int i=0;i<16;i++)try(Client client=new Client(bind,port,expiry)) {
+            for(int i=0;i<16;i++)try(Client client=new Client(bind,expiry)) {
                 client.connect(identity,context,key,4,"127.0.0.1",port,false);client.start(true);var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{reports.addAll(gate.pollResults());return !reports.isEmpty();});
                 assertFalse(reports.get(0).success());assertEquals(0,gate.stats().active());assertEquals(i+1,gate.stats().retainedAttempts());
             }
-            try(Client client=new Client(bind,port,expiry)) {var created=NativeDiagnostics.creationAttempts();client.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(created,0);assertEquals(16,gate.stats().retainedAttempts());}
+            try(Client client=new Client(bind,expiry)) {var created=NativeDiagnostics.creationAttempts();client.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(created,0);assertEquals(16,gate.stats().retainedAttempts());}
         } finally {endpoint.close().awaitUninterruptibly();endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
     }
 }

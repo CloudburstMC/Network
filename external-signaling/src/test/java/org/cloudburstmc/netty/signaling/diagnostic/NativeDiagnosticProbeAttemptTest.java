@@ -76,7 +76,7 @@ class NativeDiagnosticProbeAttemptTest {
             assertTrue(result.answerVerified());assertTrue(result.transportEstablished());assertTrue(result.authSent());assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
             assertEquals(fixture.job,result.job());assertEquals(fixture.localPort,result.selectedLocal().getPort());assertEquals(fixture.port,result.selectedRemote().getPort());
             assertEquals(fixture.bind,result.selectedLocal().getAddress());assertEquals(fixture.bind,result.selectedRemote().getAddress());
-            assertEquals(2,result.sentFrames());assertEquals(1,result.receivedFrames());assertTrue(result.udp().sentDatagrams()>2);assertEquals(0,result.udp().rejectedDatagrams());assertTrue(result.udp().reservedDatagrams()<=MAX_UDP_SENDS);
+            assertEquals(2,result.sentFrames());assertEquals(1,result.receivedFrames());
             attempt.termination().toCompletableFuture().get(1,TimeUnit.SECONDS);assertThrows(IllegalStateException.class,()->attempt.run(fixture::respond));
             var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{reports.addAll(fixture.gate.pollResults());return !reports.isEmpty();});
             assertEquals(1,reports.size());assertTrue(reports.get(0).success(),reports.toString());assertTrue(reports.get(0).authenticated());
@@ -103,7 +103,7 @@ class NativeDiagnosticProbeAttemptTest {
                 return CompletableFuture.completedFuture(wire);
             });
             assertFalse(result.success(),mode);assertFalse(result.answerVerified(),mode);assertFalse(result.transportEstablished(),mode);assertTrue(result.cleanupComplete(),mode);assertFalse(result.pingVerified(),mode);
-            assertNotNull(result.udp(),mode);assertEquals(0,result.udp().reservedDatagrams(),mode);assertEquals(0,result.udp().sentDatagrams(),mode);assertEquals(0,fixture.host.nativeStats()[0],mode);assertEquals(0,fixture.gate.stats().active(),mode);assertEquals(0,fixture.players.get(),mode);
+            assertEquals(0,fixture.host.nativeStats()[0],mode);assertEquals(0,fixture.gate.stats().active(),mode);assertEquals(0,fixture.players.get(),mode);
         }
     }
     @Test @Timeout(20) void cancelledAndUnavailableSignalingKeepOriginalDeadlineAndCleanUp() throws Exception {
@@ -115,7 +115,7 @@ class NativeDiagnosticProbeAttemptTest {
                 assertTrue(submitted.await(2,TimeUnit.SECONDS));if(cancel)attempt.close();
                 var result=future.get(4,TimeUnit.SECONDS);
                 assertFalse(result.success());assertEquals(cancel?NativeDiagnosticProbeAttempt.Reason.CANCELLED:NativeDiagnosticProbeAttempt.Reason.EXPIRED,result.reason());
-                assertTrue(result.cleanupComplete());assertTrue(response.isCancelled());assertEquals(0,result.udp()==null?0:result.udp().sentDatagrams());assertEquals(0,fixture.gate.stats().active());
+                assertTrue(result.cleanupComplete());assertTrue(response.isCancelled());assertEquals(0,fixture.gate.stats().active());
                 attempt.termination().toCompletableFuture().get(1,TimeUnit.SECONDS);
             } finally {executor.shutdownNow();assertTrue(executor.awaitTermination(2,TimeUnit.SECONDS));}
         }
@@ -123,7 +123,7 @@ class NativeDiagnosticProbeAttemptTest {
     @Test @Timeout(20) void installedHostWithdrawalAfterAnswerCannotQualify() throws Exception {
         try(Fixture fixture=new Fixture("::1",4000);var attempt=fixture.attempt()) {
             var result=attempt.run(request->{String wire=fixture.respond(request).toCompletableFuture().join();fixture.gate.replacePolicy(new DiagnosticHostPolicy(fixture.context,List.of(),Set.of(),fixture.expiry+10000));return CompletableFuture.completedFuture(wire);});
-            assertFalse(result.success());assertTrue(result.answerVerified());assertFalse(result.authSent());assertTrue(result.cleanupComplete());assertFalse(result.pingVerified());assertTrue(result.udp().sentDatagrams()>0);assertEquals(0,fixture.gate.stats().liveNativePeers());assertEquals(0,fixture.players.get());
+            assertFalse(result.success());assertTrue(result.answerVerified());assertFalse(result.authSent());assertTrue(result.cleanupComplete());assertFalse(result.pingVerified());assertEquals(0,fixture.gate.stats().liveNativePeers());assertEquals(0,fixture.players.get());
         }
     }
     @Test @Timeout(20) void signedButWrongActualDtlsIdentityFailsBothFamilies() throws Exception {
@@ -151,7 +151,7 @@ class NativeDiagnosticProbeAttemptTest {
                 assertFalse(result.success(),change);assertFalse(result.pingVerified(),change);assertTrue(result.cleanupComplete(),change);
                 assertEquals(change.equals("withdraw after checks")?NativeDiagnosticProbeAttempt.Reason.WITHDRAWN:NativeDiagnosticProbeAttempt.Reason.EXPIRED,result.reason(),change);
                 assertEquals(change.equals("withdraw after checks"),result.answerVerified(),change);assertEquals(0,fixture.players.get(),change);
-                if(!change.equals("withdraw after checks"))assertEquals(0,result.udp().sentDatagrams(),change);
+                if(!change.equals("withdraw after checks"))assertEquals(0,fixture.host.nativeStats()[0],change);
             }
         }
     }
@@ -169,7 +169,7 @@ class NativeDiagnosticProbeAttemptTest {
                 assertFalse(result.isDone()); // The violating callback is still live; native destruction already completed.
                 assertEquals(0,fixture.host.nativeStats()[0]);release.countDown();
                 var stopped=result.get(2,TimeUnit.SECONDS);assertFalse(stopped.success());assertTrue(stopped.cleanupComplete());
-                assertEquals(NativeDiagnosticProbeAttempt.Reason.CANCELLED,stopped.reason());assertNull(stopped.udp());
+                assertEquals(NativeDiagnosticProbeAttempt.Reason.CANCELLED,stopped.reason());
             } finally {release.countDown();executor.shutdownNow();assertTrue(executor.awaitTermination(2,TimeUnit.SECONDS));}
         }
     }
@@ -184,7 +184,7 @@ class NativeDiagnosticProbeAttemptTest {
                 });
                 assertFalse(result.answerVerified(),result.toString());assertFalse(result.success());
                 assertEquals(NativeDiagnosticProbeAttempt.Reason.EXPIRED,result.reason());assertTrue(result.cleanupComplete());
-                assertEquals(0,result.udp().sentDatagrams());assertEquals(0,fixture.host.nativeStats()[0]);
+                assertEquals(0,fixture.host.nativeStats()[0]);
             }
         }
     }
@@ -211,7 +211,7 @@ class NativeDiagnosticProbeAttemptTest {
                 silent.setSoTimeout(3000);var executor=Executors.newSingleThreadExecutor();
                 try {
                     var pending=executor.submit(()->attempt.run(fixture::respond));
-                    var packet=new DatagramPacket(new byte[MAX_UDP_PAYLOAD_BYTES],MAX_UDP_PAYLOAD_BYTES);silent.receive(packet);
+                    var packet=new DatagramPacket(new byte[2048],2048);silent.receive(packet);
                     assertEquals(fixture.localPort,packet.getPort(),change);
                     switch(change) {
                         case "handshake" -> elapsed.set(TimeUnit.SECONDS.toNanos(16));
@@ -232,7 +232,7 @@ class NativeDiagnosticProbeAttemptTest {
                     assertTrue(result.answerVerified(),change);assertFalse(result.transportEstablished(),change);
                     assertFalse(result.authSent(),change);assertFalse(result.pingVerified(),change);assertTrue(result.cleanupComplete(),change);
                     assertEquals(fixture.expiry,result.job().expiresAt(),change);
-                    if(change.equals("handshake")){assertTrue(result.completedAt()<fixture.expiry);assertTrue(result.udp().sentDatagrams()>0);}
+                    if(change.equals("handshake")){assertTrue(result.completedAt()<fixture.expiry);}
                     assertEquals(0,fixture.players.get(),change);
                 } finally {executor.shutdownNow();assertTrue(executor.awaitTermination(2,TimeUnit.SECONDS));}
             }
@@ -252,7 +252,7 @@ class NativeDiagnosticProbeAttemptTest {
         try(var unused=new NativeDiagnosticProbeAttempt(publicJob,new InetSocketAddress(InetAddress.getByName("127.0.0.1"),12346),()->null,()->true)) {
             unused.close();unused.termination().toCompletableFuture().get(1,TimeUnit.SECONDS);
             var stopped=unused.run(request->{fail("cancelled before run must not signal");return null;});
-            assertFalse(stopped.success());assertTrue(stopped.cleanupComplete());assertNull(stopped.udp());
+            assertFalse(stopped.success());assertTrue(stopped.cleanupComplete());
         }
     }
 }

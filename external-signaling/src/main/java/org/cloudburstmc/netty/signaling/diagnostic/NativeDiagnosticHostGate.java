@@ -17,7 +17,7 @@ import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCod
 public final class NativeDiagnosticHostGate implements AutoCloseable {
     public record Result(Context context, String keyId, String attemptId, String offerDigestHex, String clientFingerprintHex, long expiresAt,
                          DiagnosticHostPolicy.Endpoint target, boolean success, String reason,
-                         InetSocketAddress selectedLocal, InetSocketAddress selectedRemote, UdpSendStats udp,
+                         InetSocketAddress selectedLocal, InetSocketAddress selectedRemote,
                          int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, boolean authenticated, long completedAt,
                          boolean cleanupComplete) { }
     public record Stats(int active, int pending, int retainedAttempts, int liveNativePeers, long rejected, long droppedResults) { }
@@ -26,7 +26,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         final VerifiedDiagnosticAdmission admission;
         final Key key;
         final InetSocketAddress remote;
-        final long deadlineNanos, handshakeDeadlineNanos, nativeDeadline;
+        final long deadlineNanos, handshakeDeadlineNanos;
         final ArrayBlockingQueue<DataChannel> channels = new ArrayBlockingQueue<>(2);
         final ArrayBlockingQueue<Incoming> messages = new ArrayBlockingQueue<>(MAX_FRAMES);
         final AtomicBoolean failed = new AtomicBoolean(), protocolFailed = new AtomicBoolean(), connected = new AtomicBoolean();
@@ -42,11 +42,10 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         String phase = "channels";
         byte[] auth;
         long completeNanos;
-        UdpSendStats stats;
         InetSocketAddress selectedLocal, selectedRemote, gatheredLocal;
-        Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos, long nativeDeadline) {
+        Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos) {
             this.admission = admission; this.key = key; this.remote = remote; this.deadlineNanos = deadlineNanos;
-            this.handshakeDeadlineNanos = handshakeDeadlineNanos; this.nativeDeadline = nativeDeadline;
+            this.handshakeDeadlineNanos = handshakeDeadlineNanos;
         }
     }
     private final NativeHostIdentity identity;
@@ -69,7 +68,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         this.listenerAddress = listenerAddress;
         if (observe() >= policy.expiresAt()) throw invalid();
     }
-    /** Trusted local configuration only. Does not renew any admitted attempt or its native deadline. */
+    /** Trusted local configuration only. Does not renew any admitted attempt or its original deadline. */
     public synchronized void replacePolicy(DiagnosticHostPolicy replacement) {
         Objects.requireNonNull(replacement);
         if (closed || !replacement.context().hostId().equals(policy.context().hostId()) ||
@@ -106,8 +105,6 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                 request.localUfrag().length() < 8 || !request.localUfrag().startsWith("NXD1")) { rejected++; return null; }
         Key key = policy.key(request.localUfrag().substring(4, 8));
         if (key == null) { rejected++; return null; }
-        // Capture native time before crypto. The resulting deadline is never refreshed at initialization.
-        long nativeStart = UdpSendLimits.monotonicTimeMillis();
         VerifiedDiagnosticAdmission admission = open(policy.context(), key, request.localUfrag(), request.remoteUfrag(), policy.expiresAt(), clock);
         if (admission == null) { rejected++; return null; }
         try {
@@ -117,22 +114,21 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             if (claims.profile() != PROFILE || family != claims.family() || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims)) ||
                     used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote)) || !admission.usable()) throw invalid();
             long remaining = claims.expiresAt() - now;
-            if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS || nativeStart > Long.MAX_VALUE - remaining) throw invalid();
+            if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS) throw invalid();
             Session session = new Session(admission, key, remote, nanos + remaining * 1_000_000L,
-                nanos + Math.min(remaining, MAX_HANDSHAKE_MILLIS) * 1_000_000L, nativeStart + remaining);
+                nanos + Math.min(remaining, MAX_HANDSHAKE_MILLIS) * 1_000_000L);
             sessions.put(claims.attemptIdHex(), session); used.put(claims.attemptIdHex(), claims.expiresAt());
             request.completion().whenComplete((peer, failure) -> settled(session, failure));
             return IceUdpMuxListener.Acceptance.builder(remoteDescription(admission, remote), admission.credentials().icePwd())
                 .configuration(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE))
                 .identity(new DtlsIdentity(identity.certificate(), identity.privateKey()))
-                .udpSendLimits(new UdpSendLimits(MAX_UDP_SENDS, MAX_UDP_PAYLOAD_BYTES, session.nativeDeadline, remote))
                 .expiresAt(Instant.ofEpochMilli(claims.expiresAt())).initialize(peer -> initialize(session, peer)).build();
         } catch (RuntimeException | UnknownHostException invalid) { admission.close(); rejected++; return null; }
     }
     /** Authenticated WebSocket path only; never accepts a profile2 permit from an unknown inbound packet. */
     public synchronized String assist(AssistedJoin join, Runnable requireCurrent) {
         Objects.requireNonNull(requireCurrent); requireCurrent.run();
-        long now = observe(), nanos = lastNanos, nativeStart = UdpSendLimits.monotonicTimeMillis();
+        long now = observe(), nanos = lastNanos;
         prune(now);
         if (!join.diagnostic() || closed || closeFailure != null || clockFailed || now >= policy.expiresAt()
                 || sessions.size() >= 4 || used.size() >= 16 || !join.hostFingerprint().equalsIgnoreCase(identity.fingerprint())
@@ -154,19 +150,16 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                     || used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote))
                     || (scope != EndpointAddress.Scope.PUBLIC && !(listenerAddress.getAddress().isLoopbackAddress() && scope == EndpointAddress.Scope.LOOPBACK))) throw invalid();
             long remaining = claims.expiresAt() - now;
-            if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS || nativeStart > Long.MAX_VALUE - remaining) throw invalid();
+            if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS) throw invalid();
             session = new Session(admission,key,remote,nanos+remaining*1_000_000L,
-                    nanos+Math.min(remaining,MAX_HANDSHAKE_MILLIS)*1_000_000L,nativeStart+remaining);
+                    nanos+Math.min(remaining,MAX_HANDSHAKE_MILLIS)*1_000_000L);
             session.requireCurrent = requireCurrent;
             sessions.put(claims.attemptIdHex(),session); used.put(claims.attemptIdHex(),claims.expiresAt());
-            session.peer = PeerConnection.createPeerWithUdpLimits(PeerConnectionConfiguration.DEFAULT
+            session.peer = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT
                     .withBindAddress(listenerAddress.getAddress()).withPortRangeBegin(listenerAddress.getPort()).withPortRangeEnd(listenerAddress.getPort())
                     .withEnableIceUdpMux(true).withIceServers(List.of()).withEnableIceTcp(false)
                     .withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE), Runnable::run,
-                    new DtlsIdentity(identity.certificate(),identity.privateKey()),
-                    // ICE authenticates new-source Binding requests before learning peer-reflexive
-                    // endpoints. Keep the traffic budget, but allow replies to their actual ports.
-                    new UdpSendLimits(MAX_UDP_SENDS,MAX_UDP_PAYLOAD_BYTES,session.nativeDeadline,null));
+                    identity.certificate(),identity.privateKey());
             session.created = true; session.settled = true;
             session.peer.setRemoteDescription(join.offer(),SessionDescriptionType.OFFER);
             session.peer.setLocalDescription("answer",join.localUfrag(),join.localPassword());
@@ -219,7 +212,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         if (!authorized(session, observe()) || session.wantsClose) throw invalid();
         String local = peer.localDescription();
         if (!local.contains("a=fingerprint:" + identity.fingerprint() + "\r\n") ||
-                !local.contains("a=ice-ufrag:" + session.admission.credentials().localUfrag() + "\r\n") || peer.udpSendStats().isEmpty()) throw invalid();
+                !local.contains("a=ice-ufrag:" + session.admission.credentials().localUfrag() + "\r\n")) throw invalid();
         peer.onStateChange.register((p, state) -> {
             if (state == PeerState.RTC_CONNECTED) session.connected.set(true);
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) session.failed.set(true);
@@ -309,9 +302,6 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         return session.channel[0] != null && session.channel[1] != null && session.channel[0].isOpen() && session.channel[1].isOpen();
     }
     private void capture(Session session) {
-        UdpSendStats stats = session.peer.udpSendStats().orElseThrow(DiagnosticAdmissionCodec::invalid);
-        if (stats.rejectedDatagrams() != 0 || stats.sentDatagrams() < 1 || stats.reservedDatagrams() < stats.sentDatagrams() ||
-                stats.reservedDatagrams() > MAX_UDP_SENDS || stats.sentBytes() < stats.sentDatagrams() || stats.sentBytes() > stats.sentDatagrams() * MAX_UDP_PAYLOAD_BYTES) throw invalid();
         CandidatePair pair = session.peer.selectedCandidatePair();
         try {
             InetSocketAddress local = new InetSocketAddress(EndpointAddress.parse(pair.local().getHostString()), pair.local().getPort());
@@ -322,7 +312,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             if (!remoteAllowed || !(boundLocal || session.requireCurrent != null && local.equals(session.gatheredLocal)) ||
                     (local.getAddress() instanceof Inet6Address ? 6 : 4) != session.admission.claims().family() ||
                     IceCandidate.parse(pair.localCandidate()).transport() != IceCandidate.Transport.UDP || IceCandidate.parse(pair.remoteCandidate()).transport() != IceCandidate.Transport.UDP) throw invalid();
-            session.stats = stats; session.selectedLocal = local; session.selectedRemote = remote;
+            session.selectedLocal = local; session.selectedRemote = remote;
         } catch (UnknownHostException malformed) { throw invalid(); }
     }
     private void stop(Session session, String reason) {
@@ -333,11 +323,6 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         if (!session.settled) return; // The listener owns any in-progress prepare until completion settles.
         session.closing = true;
         if (session.peer == null) { finished(session, null); return; }
-        // A reporting failure must never skip actual native cleanup.
-        try {
-            var latest = session.peer.udpSendStats();
-            if (latest.isPresent()) session.stats = latest.get();
-        } catch (RuntimeException unavailable) { session.complete = false; session.reason = "native_stats_unavailable"; }
         try {
             session.peer.closeAsync().whenComplete((ignored, failure) -> finished(session, failure));
         } catch (RuntimeException failure) { finished(session, failure); }
@@ -348,13 +333,13 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         // Forged STUN never allocated a peer, so cannot consume an otherwise usable permit.
         if (!session.created) used.remove(session.admission.claims().attemptIdHex());
         long now = observe();
-        boolean success = failure == null && session.complete && !session.protocolFailed.get() && authorized(session, now) && session.stats != null && session.stats.rejectedDatagrams() == 0;
+        boolean success = failure == null && session.complete && !session.protocolFailed.get() && authorized(session, now);
         if (session.created) {
             DiagnosticExchange exchange = session.exchange;
             Claims claims = session.admission.claims();
             Result result = new Result(session.admission.context(), session.key.keyId(), claims.attemptIdHex(), claims.offerDigestHex(), claims.clientFingerprintHex(), claims.expiresAt(), DiagnosticHostPolicy.Endpoint.from(claims), success,
                 failure != null ? "native_cleanup_failed" : session.complete && !success ? "observation_invalidated" : session.reason,
-                session.selectedLocal, session.selectedRemote, session.stats, exchange == null ? 0 : exchange.sentFrames(), exchange == null ? 0 : exchange.sentBytes(),
+                session.selectedLocal, session.selectedRemote, exchange == null ? 0 : exchange.sentFrames(), exchange == null ? 0 : exchange.sentBytes(),
                 session.receivedFrames.get(), session.receivedBytes.get(), session.principal != null, now, failure == null);
             if (!results.offer(result)) droppedResults++;
         }

@@ -9,11 +9,10 @@ false; setting it true requests the single reliable PING/PONG described in
 `diagnostic-host-v1.md`.
 
 Profile 1 permits one numeric global-unicast destination and an exact same-family local bind/port. Profile 2 uses the zero target sentinel and an explicitly supplied numeric, same-family provider-advertised STUN endpoint when the probe needs public mapping discovery. Private, reserved, mapped-IPv6 and DNS targets fail
-closed. Only the package-private native test constructor permits loopback. No TURN, proxy, TCP, trickle or unsigned answer candidate is exposed. The profile-2 monitor uses the same bound socket and closes with the attempt; its STUN traffic is separate from native peer counters.
+closed. Only the package-private native test constructor permits loopback. No TURN, proxy, TCP, trickle or unsigned answer candidate is exposed. The profile-2 monitor uses the same bound socket and closes with the attempt.
 
-`run(signaling)` runs once on a caller-owned bounded worker. Before gathering it
-installs native limits: 256 UDP sends, 1200-byte payload cap, exact destination for profile 1 (authenticated peer-reflexive destination for profile 2),
-fixed monotonic deadline. The attempt is at most 60 seconds; gathering, signing,
+`run(signaling)` runs once on a caller-owned bounded worker using an ordinary ICE
+peer. The attempt is at most 60 seconds; gathering, signing,
 signaling and channel establishment must fit the original 15-second handshake.
 Forward wall corrections and monotonic elapsed time prevent expiry extension by
 clock rollback. Native callbacks retain only bounded frame copies. No executor,
@@ -36,9 +35,7 @@ host emits no unsolicited challenge or completion frame. Neither mode exchanges
 Minecraft packets or uses a Minecraft account.
 
 Every success also requires the authorized selected UDP local/remote endpoints and family. Profile 1 pins the original tuples; profile 2 also permits a same-family public local peer-reflexive mapping learned through ICE when the mapping towards the host differs from STUN discovery. Success also requires
-valid native statistics with no budget rejection, and completed native cleanup.
-Missing statistics are unavailable, never fabricated zero. Counts are snapshots
-before destruction, not shutdown totals or OS-level delivery proof. Results are
+completed native cleanup. Results are
 immutable local observations; there is no completion digest, host receipt or
 required dual-party journal. First-contact reachability still requires independent
 source-history evidence; one pass cannot establish universal any-source filtering.
@@ -47,7 +44,7 @@ Cancellation starts native close immediately, including while a misbehaving sign
 callback blocks. Cleanup waits up to five seconds. `cleanupComplete=false` requires
 the caller to retain its capacity reservation until `termination()` settles; a blocked
 callback similarly still occupies its own worker. No cleanup/retry renews the original
-native send deadline. Sensitive offers, ICE credentials, assertions and answers must
+attempt deadline. Sensitive offers, ICE credentials, assertions and answers must
 not be logged or persisted.
 
 Focused tests use actual localhost IPv4/IPv6 UDP, pinned DTLS, SCTP, signed admission

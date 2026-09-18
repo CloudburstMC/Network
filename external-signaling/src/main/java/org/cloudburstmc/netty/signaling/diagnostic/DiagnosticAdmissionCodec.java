@@ -22,8 +22,6 @@ public final class DiagnosticAdmissionCodec {
     public static final int PROFILE = 1, ASSISTED_PROFILE = 2, SCTP_PORT = 5000, MAX_MESSAGE_SIZE = 262144;
     public static final int MAX_ATTEMPT_MILLIS = 60_000, MAX_HANDSHAKE_MILLIS = 15_000;
     public static final int MAX_APPLICATION_SEND_BYTES = 1024, MAX_FRAME_BYTES = 256, MAX_FRAMES = 12;
-    /** Profile bounds enforced by the opt-in NativeDiagnosticHostGate and its immutable native agent budget. */
-    public static final int MAX_UDP_SENDS = 256, MAX_UDP_PAYLOAD_BYTES = 1200;
     static final long SAFE = 9007199254740991L;
     public record Context(String providerOrigin, String hostId, String incarnation, long generation) {
         public Context {

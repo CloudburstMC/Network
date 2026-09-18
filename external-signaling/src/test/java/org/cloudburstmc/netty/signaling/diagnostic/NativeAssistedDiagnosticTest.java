@@ -81,7 +81,6 @@ class NativeAssistedDiagnosticTest {
             assertTrue(result.authSent());assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
             assertEquals(f.hostPort,result.selectedRemote().getPort());assertEquals(f.probePort,result.selectedLocal().getPort());
             assertEquals(new InetSocketAddress(f.bind,f.probePort),stun.observed.get());
-            assertEquals(0,result.udp().rejectedDatagrams()); assertTrue(result.udp().sentDatagrams()>2);
             var reports=new ArrayList<NativeDiagnosticHostGate.Result>();
             NativeDiagnosticProbeAttemptTest.await(()->{reports.addAll(f.gate.pollResults());return !reports.isEmpty();});
             assertEquals(1,reports.size());assertTrue(reports.get(0).success(),reports.toString());assertTrue(reports.get(0).authenticated());
@@ -110,7 +109,7 @@ class NativeAssistedDiagnosticTest {
                     } catch (RuntimeException invalid) { return CompletableFuture.failedFuture(invalid); }
                 });
                 assertFalse(result.success(),mode);assertFalse(result.answerVerified(),mode);assertTrue(result.cleanupComplete(),mode);
-                assertEquals(0,result.udp().sentDatagrams(),mode);assertEquals(0,f.gate.stats().active(),mode);
+                assertEquals(0,f.gate.stats().active(),mode);
                 assertEquals(0,f.gate.stats().liveNativePeers(),mode);assertEquals(0,f.players.get(),mode);assertTrue(f.host.pollEvents().isEmpty(),mode);
             }
     }
@@ -148,7 +147,6 @@ class NativeAssistedDiagnosticTest {
             assertTrue(report.success(), report.toString()); assertTrue(report.authenticated());
             assertEquals(new InetSocketAddress(f.bind, f.probePort), report.selectedRemote());
             assertNotEquals(advertised.getLocalPort(), report.selectedRemote().getPort());
-            assertEquals(0, report.udp().rejectedDatagrams());
             assertEquals(0, f.players.get()); assertTrue(f.host.pollEvents().isEmpty());
         }
     }
@@ -293,7 +291,6 @@ class NativeAssistedDiagnosticTest {
             assertNotEquals(advertised.getLocalPort(), result.selectedLocal().getPort());
             assertNotEquals(f.probePort, result.selectedLocal().getPort());
             assertEquals(nat.hostExternal.getLocalSocketAddress(), result.selectedRemote());
-            assertEquals(0, result.udp().rejectedDatagrams());
             var reports = new ArrayList<NativeDiagnosticHostGate.Result>();
             NativeDiagnosticProbeAttemptTest.await(() -> { reports.addAll(f.gate.pollResults()); return !reports.isEmpty(); });
             assertEquals(1, reports.size()); assertTrue(reports.get(0).success(), reports.toString());
@@ -332,26 +329,21 @@ class NativeAssistedDiagnosticTest {
         }
     }
 
-    @Test @Timeout(20) void discoverySharesBudgetedPeerSocketWithoutRelaxingItsDestination() throws Exception {
+    @Test @Timeout(20) void discoverySharesPeerSocket() throws Exception {
         for (String numeric : List.of("127.0.0.1", "::1")) {
             InetAddress bind = InetAddress.getByName(numeric);
             int port = NativeDiagnosticProbeAttemptTest.port(bind);
             try (var server = new StunServer(bind);
-                 var target = new DatagramSocket(new InetSocketAddress(bind,0));
                  var monitor = new StunUdpMuxMonitor(bind,port,server.address().getHostString(),server.address().getPort());
-                 var peer = PeerConnection.createPeerWithUdpLimits(PeerConnectionConfiguration.DEFAULT.withBindAddress(bind)
+                 var peer = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(bind)
                          .withPortRangeBegin(port).withPortRangeEnd(port).withEnableIceUdpMux(true).withIceServers(List.of())
-                         .withDisableAutoNegotiation(true), Runnable::run, null,
-                         new UdpSendLimits(256,1200,UdpSendLimits.monotonicTimeMillis()+15000,
-                                 new InetSocketAddress(bind,target.getLocalPort())))) {
+                         .withDisableAutoNegotiation(true), Runnable::run)) {
                 peer.createDataChannel("test"); peer.setLocalDescription("offer","probeFixture","p".repeat(24));
                 NativeDiagnosticProbeAttemptTest.await(() -> monitor.binding(0).map(b -> b.state()==StunBinding.State.SUCCEEDED).orElse(false));
                 assertEquals(new InetSocketAddress(bind,port),server.observed.get());
                 var mapping = monitor.binding(0).orElseThrow(); assertEquals(port,mapping.mappedPort());
                 assertEquals(bind,InetAddress.getByName(mapping.mappedAddress()));
                 assertTrue(peer.localDescription().contains(" " + port + " typ host"));
-                var stats = peer.udpSendStats().orElseThrow();
-                assertEquals(0,stats.reservedDatagrams()); assertEquals(0,stats.rejectedDatagrams());
                 assertTrue(peer.closeAndAwait(Duration.ofSeconds(5)));
             }
         }

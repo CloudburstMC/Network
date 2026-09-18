@@ -62,7 +62,7 @@ class NativeDiagnosticConfigurationTest {
             return new DiagnosticHostPolicy(context,List.of(diagnosticKey),Set.of(endpoint),endpointExpiry);
         }
         void configure(DiagnosticHostPolicy policy) throws Exception { transport.configureDiagnostics(policy).toCompletableFuture().get(5,TimeUnit.SECONDS); }
-        Client client(long expiry) throws Exception { return new Client(bind,port,expiry); }
+        Client client(long expiry) throws Exception { return new Client(bind,expiry); }
         void connect(Client client,DiagnosticHostPolicy policy) throws Exception {
             client.connect(identity,policy.context(),diagnosticKey,bind instanceof Inet6Address?6:4,bind.getHostAddress(),port,false,policy.endpoints().iterator().next().candidateRevision(),null,null);
         }

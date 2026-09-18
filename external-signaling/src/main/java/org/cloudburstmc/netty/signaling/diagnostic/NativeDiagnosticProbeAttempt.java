@@ -37,15 +37,13 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     }
     /** Must return promptly, with a bounded HTTP body; may not perform blocking IO on the calling worker. */
     @FunctionalInterface public interface Signaling { CompletionStage<String> exchange(Request request); }
-    public enum Reason { COMPLETE, CANCELLED, EXPIRED, WITHDRAWN, GATHERING, SIGNALING, ANSWER, TRANSPORT, PROTOCOL, SELECTED_PATH, NATIVE_BUDGET, CLEANUP }
-    /** Local evidence only. Without ping, authSent does not prove host AUTH verification.
-     * UDP counters are owned peer snapshots, not final totals or delivery evidence; separate STUN discovery traffic is excluded. */
+    public enum Reason { COMPLETE, CANCELLED, EXPIRED, WITHDRAWN, GATHERING, SIGNALING, ANSWER, TRANSPORT, PROTOCOL, SELECTED_PATH, CLEANUP }
+    /** Local evidence only. Without ping, authSent does not prove host AUTH verification. */
     public record Result(Job job, boolean success, Reason reason, boolean answerVerified, boolean transportEstablished,
                          boolean authSent, boolean pingVerified, boolean cleanupComplete,
                          String offerDigestHex, String clientFingerprintHex, InetSocketAddress selectedLocal,
-                         InetSocketAddress selectedRemote, UdpSendStats udp, int sentFrames, int sentBytes,
-                         int receivedFrames, int receivedBytes,
-                         long nativeDeadlineMonotonicMillis, long completedAt) { }
+                         InetSocketAddress selectedRemote, int sentFrames, int sentBytes,
+                         int receivedFrames, int receivedBytes, long completedAt) { }
     private record Incoming(int channel, byte[] bytes) { }
     private static final class Failed extends RuntimeException {
         final Reason reason; Failed(Reason reason) { super(reason.name()); this.reason = reason; }
@@ -109,11 +107,11 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     public Result run(Signaling signaling) {
         Objects.requireNonNull(signaling);
         if (!started.compareAndSet(false,true)) throw new IllegalStateException("Diagnostic attempt already used");
-        Reason reason = Reason.GATHERING; DiagnosticExchange exchange = null; UdpSendStats udp = null;
+        Reason reason = Reason.GATHERING; DiagnosticExchange exchange = null;
         InetSocketAddress selectedLocal = null, selectedRemote = null;
         boolean answerVerified = false, transportEstablished = false, authSent = false, complete = false, cleanup = false;
         String offerHash = null, fingerprint = null;
-        long nativeDeadline = 0; CompletableFuture<String> pending = null; StunUdpMuxMonitor monitor = null; boolean discoveryClean = true;
+        CompletableFuture<String> pending = null; StunUdpMuxMonitor monitor = null; boolean discoveryClean = true;
         try {
             anchorWall = clock.wallMillis().getAsLong(); anchorNanos = clock.nanoTime().getAsLong();
             previousNanos = currentNanos = anchorNanos; currentWall = anchorWall;
@@ -123,16 +121,10 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             deadlineNanos = anchorNanos + remaining * 1_000_000L;
             handshakeDeadlineNanos = anchorNanos + Math.min(remaining,MAX_HANDSHAKE_MILLIS) * 1_000_000L;
             check(); catalog = Objects.requireNonNull(catalogReader.get()); check();
-            long nativeStart = UdpSendLimits.monotonicTimeMillis(); check(); remaining = job.expiresAt - currentWall;
-            if (nativeStart > Long.MAX_VALUE - remaining) throw new Failed(Reason.EXPIRED);
-            nativeDeadline = nativeStart + remaining;
             var configuration = PeerConnectionConfiguration.DEFAULT.withIceServers(List.of()).withEnableIceTcp(false)
                 .withBindAddress(bind.getAddress()).withPortRangeBegin(bind.getPort()).withPortRangeEnd(bind.getPort())
                 .withEnableIceUdpMux(true).withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE);
-            PeerConnection nativePeer = PeerConnection.createPeerWithUdpLimits(configuration, Runnable::run, null,
-                // Profile2 receives only the signed public candidate checked below; further peer-reflexive
-                // destinations require native STUN integrity verification. All other limits remain installed.
-                new UdpSendLimits(MAX_UDP_SENDS, MAX_UDP_PAYLOAD_BYTES, nativeDeadline, target));
+            PeerConnection nativePeer = PeerConnection.createPeer(configuration, Runnable::run);
             peer.set(nativePeer); check();
             nativePeer.onStateChange.register((p,state) -> {
                 if (state == PeerState.RTC_CONNECTED) connected.set(true);
@@ -144,9 +136,6 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             String ufrag = random(18), password = random(18);
             checkHandshake(); nativePeer.setLocalDescription("offer",ufrag,password);
             await(gathered::get, true);
-            // Creation installs the guard before ICE initialization; counters exist only once gathering creates its agent.
-            udp = stats(nativePeer,false);
-            if (udp.reservedDatagrams() != 0 || udp.rejectedDatagrams() != 0) throw new Failed(Reason.NATIVE_BUDGET);
             String offerText = nativePeer.localDescription();
             if (offerText.length() > DiagnosticAnswerCodec.MAX_SDP_BYTES) throw new Failed(Reason.GATHERING);
             if (job.target.assisted()) {
@@ -219,7 +208,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             CandidatePair pair = selectedPair(nativePeer);
             selectedLocal = numeric(pair.local().getHostString(),pair.local().getPort());
             selectedRemote = numeric(pair.remote().getHostString(),pair.remote().getPort());
-            udp = stats(nativePeer,true); check(); complete = !job.ping() || exchange.complete(); reason = Reason.COMPLETE;
+            check(); complete = !job.ping() || exchange.complete(); reason = Reason.COMPLETE;
         } catch (HandshakeTimeout timeout) { reason = answerVerified && !transportEstablished ? Reason.TRANSPORT : Reason.EXPIRED; }
         catch (Failed failure) { reason = failure.reason; }
         catch (InterruptedException interrupted) { cancelled.set(true); reason = Reason.CANCELLED; Thread.currentThread().interrupt(); }
@@ -230,7 +219,6 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             PeerConnection value = peer.get();
             if (value == null) { cleanup = true; termination.complete(null); }
             else {
-                try { udp = stats(value,complete); } catch (RuntimeException unavailable) { udp = null; if (complete) reason = Reason.NATIVE_BUDGET; complete = false; }
                 boolean interrupted = Thread.interrupted();
                 try {
                     closePeer(value).toCompletableFuture().get(5,TimeUnit.SECONDS); cleanup = true; peer.compareAndSet(value,null);
@@ -242,11 +230,11 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         }
         cleanup = cleanup && discoveryClean;
         if (complete && cleanup) { try { check(); } catch (RuntimeException withdrawn) { complete = false; reason = withdrawn instanceof Failed failure ? failure.reason : Reason.WITHDRAWN; } }
-        boolean success = complete && cleanup && !protocolFailed.get() && udp != null && udp.rejectedDatagrams() == 0;
+        boolean success = complete && cleanup && !protocolFailed.get();
         if (!success && reason == Reason.COMPLETE) reason = Reason.PROTOCOL;
         return new Result(job,success,reason,answerVerified,transportEstablished,authSent,exchange != null && exchange.complete(),cleanup,
-            offerHash,fingerprint,selectedLocal,selectedRemote,udp,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
-            nativeDeadline,currentWall);
+            offerHash,fingerprint,selectedLocal,selectedRemote,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
+            currentWall);
     }
     private CandidatePair selectedPair(PeerConnection nativePeer) {
         CandidatePair pair = nativePeer.selectedCandidatePair();
@@ -318,13 +306,6 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         if (!authorized.getAsBoolean()) throw new Failed(Reason.WITHDRAWN);
         if (catalog != null && (!catalog.equals(catalogReader.get()) || !catalog.providerOrigin().equals(job.context.providerOrigin())
                 || currentWall < catalog.notBefore() || job.expiresAt > catalog.expiresAt())) throw new Failed(Reason.WITHDRAWN);
-    }
-    private static UdpSendStats stats(PeerConnection peer,boolean qualifying) {
-        UdpSendStats value = peer.udpSendStats().orElseThrow(() -> new Failed(Reason.NATIVE_BUDGET));
-        if (value.reservedDatagrams() < 0 || value.reservedDatagrams() > MAX_UDP_SENDS || value.sentDatagrams() < 0
-                || value.sentDatagrams() > value.reservedDatagrams() || value.sentBytes() < value.sentDatagrams()
-                || value.sentBytes() > value.sentDatagrams() * MAX_UDP_PAYLOAD_BYTES || qualifying && (value.sentDatagrams() == 0 || value.rejectedDatagrams() != 0)) throw new Failed(Reason.NATIVE_BUDGET);
-        return value;
     }
     private static InetSocketAddress numeric(String value,int port) { try { return new InetSocketAddress(EndpointAddress.parse(value),port); } catch (UnknownHostException e) { throw invalid(); } }
     private static int family(InetAddress address) { return address instanceof Inet6Address ? 6 : 4; }
