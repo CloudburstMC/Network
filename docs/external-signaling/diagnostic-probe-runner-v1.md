@@ -4,8 +4,7 @@
 using libdatachannel and the Minecraft transport profile. It does not enroll hosts,
 authenticate workloads, lease queue jobs, retry another candidate or run gameplay.
 `Job` is trusted local input, not proof of authority. Its original attempt, target,
-revision, expected host fingerprint and expiry are immutable. `ping` defaults to
-false; setting it true requests the single reliable PING/PONG described in
+revision, expected host fingerprint and expiry are immutable. Every successful attempt exchanges the single reliable PING/PONG described in
 `diagnostic-host-v1.md`.
 
 Profile 1 permits one numeric global-unicast destination and an exact same-family local bind/port. Profile 2 uses the zero target sentinel and an explicitly supplied numeric, same-family provider-advertised STUN endpoint when the probe needs public mapping discovery. Private, reserved, mapped-IPv6 and DNS targets fail
@@ -27,12 +26,11 @@ never receives the reusable host admission key. Catalog and authorization reader
 must be bounded synchronous local reads. They are rechecked across asynchronous
 work and before native effects; a catalog change cancels this attempt.
 
-Both correctly configured channels must open before AUTH is sent. With `ping=false`,
-success reports provider answer verification, observed transport/channel establishment
-and AUTH submission. It does not claim host application verification or data delivery.
-With `ping=true`, success additionally requires the original random PONG. The
-host emits no unsolicited challenge or completion frame. Neither mode exchanges
-Minecraft packets or uses a Minecraft account.
+Both correctly configured channels must open before the prober sends its only
+PING. It verifies the matching PONG and immediately closes the connection. There
+is no AUTH frame, application retry or completion handshake. A missing, malformed,
+wrong-attempt or wrong-nonce PONG cannot produce success. No Minecraft packets or
+accounts are involved.
 
 Every success also requires the authorized selected UDP local/remote endpoints and family. Profile 1 pins the original tuples; profile 2 also permits a same-family public local peer-reflexive mapping learned through ICE when the mapping towards the host differs from STUN discovery. Success also requires
 completed native cleanup. Results are
@@ -48,6 +46,6 @@ attempt deadline. Sensitive offers, ICE credentials, assertions and answers must
 not be logged or persisted.
 
 Focused tests use actual localhost IPv4/IPv6 UDP, pinned DTLS, SCTP, signed admission
-and optional ping/pong; no public traffic or game protocol. They cover forged/withdrawn
+and one ping/pong; no public traffic or game protocol. They cover forged/withdrawn
 credentials, wrong pins, replay/quotas, missing or late signaling, original deadlines,
 cancellation and exact cleanup. Run `nativeAdmissionTest` against the pinned JNI artifacts; dependency publication and independent client interop remain separate evidence.

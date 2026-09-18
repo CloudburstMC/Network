@@ -80,7 +80,7 @@ class NativeDiagnosticConfigurationTest {
             try(Client client=host.client(expiry)) {
                 host.connect(client,policy);client.start(false);var results=new ArrayList<NativeDiagnosticHostGate.Result>();
                 await(()->{client.tick();results.addAll(host.transport.pollDiagnosticResults(1));return !results.isEmpty();});
-                var result=results.get(0);assertTrue(result.success(),result.toString());assertTrue(result.authenticated());assertTrue(result.cleanupComplete());
+                var result=results.get(0);assertTrue(result.success(),result.toString());assertTrue(result.cleanupComplete());
                 assertTrue(client.exchange.complete());assertEquals(expiry,result.expiresAt());
                 assertEquals(0,host.children.get());assertEquals(0,host.transport.channel().creationAttempts());assertEquals(0,host.transport.channel().liveNativePeers());
                 assertFalse(host.transport.channel().isServing());assertTrue(host.transport.pollEvents(32).isEmpty());
@@ -98,7 +98,7 @@ class NativeDiagnosticConfigurationTest {
             try(Client client=host.client(expiry)) {
                 host.connect(client,policy);client.start(false);var results=new ArrayList<NativeDiagnosticHostGate.Result>();
                 await(()->{client.tick();results.addAll(host.transport.pollDiagnosticResults(1));return !results.isEmpty();});
-                assertTrue(results.get(0).success());assertTrue(results.get(0).authenticated());assertTrue(client.exchange.complete());
+                assertTrue(results.get(0).success());assertTrue(client.exchange.complete());
                 assertTrue(results.get(0).cleanupComplete());assertEquals(0,host.children.get());assertEquals(0,host.transport.channel().creationAttempts());
             }
             host.transport.disableDiagnostics().toCompletableFuture().get();assertTrue(host.transport.channel().isServing());

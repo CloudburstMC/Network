@@ -53,7 +53,6 @@ class NativeDiagnosticHostTest {
         DiagnosticExchange exchange;
         Credentials credentials;
         Claims claims;
-        byte[] auth;
         Client(InetAddress bind, long expiry) throws Exception {
             this.expiry = expiry; int localPort = port(bind);
             peer = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(bind).withDisableAutoNegotiation(true)
@@ -85,7 +84,6 @@ class NativeDiagnosticHostTest {
             claims=new Claims(expiry,fingerprint,password,id(),hash(utf8(offer)),candidateRevision,family,DiagnosticAdmissionCodec.address(family,target),port,1);
             KeyPair prober=keyPair(); var assertion=DiagnosticAssertionCodec.sign(context,claims,ufrag,prober);
             credentials=DiagnosticAdmissionCodec.issue(context,key,claims,ufrag,utf8(offer),assertion,key.retireAt(),Clock.system());
-            auth=DiagnosticAssertionCodec.encodeAuth(claims.attemptIdHex(),assertion);
             String answer="v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:active\r\na=ice-ufrag:"+credentials.localUfrag()+"\r\na=ice-pwd:"+credentials.icePwd()+"\r\na=fingerprint:"+identity.fingerprint()+"\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 "+target+" "+port+" typ host\r\na=end-of-candidates\r\n";
             KeyPair provider=keyPair(); byte[] encoded=provider.getPublic().getEncoded();
             var catalog=new DiagnosticAnswerCodec.Catalog(context.providerOrigin(),0,key.retireAt(),List.of(new DiagnosticAnswerCodec.VerificationKey("provider-diagnostic","test-answer",hex(Arrays.copyOfRange(encoded,encoded.length-97,encoded.length)),0,key.retireAt())));
@@ -98,10 +96,12 @@ class NativeDiagnosticHostTest {
             }
         }
         void send(int channel,byte[] bytes) {channels[channel].sendMessage(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip());}
-        void start(boolean wrongAuth) throws Exception {
+        void start(boolean wrongPing) throws Exception {
             await(()->channels[0].isOpen()&&channels[1].isOpen());
-            byte[] frame=auth.clone();if(wrongAuth)frame[150]^=1;send(0,frame);
-            if(!wrongAuth){exchange=new DiagnosticExchange(claims.attemptIdHex(),false,this::send);exchange.start();}
+            exchange=new DiagnosticExchange(claims.attemptIdHex(),false,(channel,bytes)->{
+                if(wrongPing)bytes[8]^=1;
+                send(channel,bytes);
+            });exchange.start();
         }
         void tick() {
             if(exchange==null)return;
@@ -129,13 +129,13 @@ class NativeDiagnosticHostTest {
                     await(()->{client.tick();reports.addAll(gate.pollResults());return !reports.isEmpty();});
                     assertEquals(1,reports.size());var report=reports.get(0);
                     assertTrue(report.success(),report.toString());assertTrue(client.exchange.complete());
-                    assertTrue(report.authenticated());assertNull(client.failure.get());
+                    assertNull(client.failure.get());
                     assertEquals(0,gate.stats().liveNativePeers());assertEquals(0,gate.stats().active());assertEquals(1,gate.stats().retainedAttempts());
                     assertEquals(0,playerValidations.get());assertEquals(0,playerChildren.get());assertEquals(0,endpoint.creationAttempts());assertTrue(endpoint.pollEvents().isEmpty());
                     assertEquals(family,report.selectedLocal().getAddress() instanceof Inet6Address?6:4);
                     assertEquals(context,report.context());assertEquals(key.keyId(),report.keyId());assertEquals(client.claims.offerDigestHex(),report.offerDigestHex());
                     assertEquals(client.claims.clientFingerprintHex(),report.clientFingerprintHex());assertEquals(expiry,report.expiresAt());assertEquals(port,report.selectedLocal().getPort());
-                    assertEquals(1,report.sentFrames());assertEquals(2,report.receivedFrames());
+                    assertEquals(1,report.sentFrames());assertEquals(1,report.receivedFrames());
                     byte[] replay=StatelessAdmissionValidatorTest.binding(client.credentials.localUfrag()+":"+client.ufrag,client.credentials.icePwd());
                     try(DatagramSocket socket=new DatagramSocket(new InetSocketAddress(bind,0))) {socket.send(new DatagramPacket(replay,replay.length,bind,port));await(()->gate.stats().rejected()>0);}
                     assertEquals(0,gate.stats().active());assertEquals(0,playerValidations.get());
@@ -144,9 +144,9 @@ class NativeDiagnosticHostTest {
         }
     }
 
-    @Test @Timeout(40) void wrongIdentityAuthUnexpectedChannelsAndWithdrawalNeverQualify() throws Exception {
+    @Test @Timeout(40) void wrongIdentityPingUnexpectedChannelsAndWithdrawalNeverQualify() throws Exception {
         var identity=identity();
-        for(String mode:List.of("dtls","auth","extra-channel","text","withdraw","empty-keys","empty-endpoints","generation")) {
+        for(String mode:List.of("dtls","ping","extra-channel","text","withdraw","empty-keys","empty-endpoints","generation")) {
             InetAddress bind=InetAddress.getByName("127.0.0.1");int port=port(bind);
             long expiry=(System.currentTimeMillis()+15000)/1000*1000;
             Context context=new Context("https://provider.example","test-host",id(),1);
@@ -164,7 +164,7 @@ class NativeDiagnosticHostTest {
                     if(!mode.equals("dtls")) {
                         await(()->client.channels[0].isOpen()&&client.channels[1].isOpen());
                         switch(mode) {
-                            case "auth" -> client.start(true);
+                            case "ping" -> client.start(true);
                             case "extra-channel" -> client.peer.createDataChannel("unexpected");
                             case "text" -> client.channels[0].sendMessage("invalid diagnostic text");
                             case "withdraw" -> gate.replacePolicy(new DiagnosticHostPolicy(context,List.of(new Key("D002","other-test-only-secret-at-least32bytes",0,expiry+10000)),Set.of(target),expiry+10000));
@@ -260,7 +260,7 @@ class NativeDiagnosticHostTest {
         } finally {for(Client client:clients)client.close();endpoint.close().awaitUninterruptibly();endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
     }
 
-    @Test @Timeout(35) void retainedFailedAuthAttemptsStayBoundedAndAreNotReissued() throws Exception {
+    @Test @Timeout(35) void retainedFailedPingAttemptsStayBoundedAndAreNotReissued() throws Exception {
         var identity=identity();InetAddress bind=InetAddress.getByName("127.0.0.1");int port=port(bind);
         long expiry=(System.currentTimeMillis()+30000)/1000*1000;Context context=new Context("https://provider.example","test-host",id(),1);Key key=new Key("D001","test-only-diagnostic-secret-32-bytes",0,expiry+10000);
         var endpoint=new NativeAdmissionServerChannel(identity,(request,now)->{fail("player fallback");return null;},AdmissionGate.Limits.defaults());var group=new DefaultEventLoopGroup(1);

@@ -19,10 +19,7 @@ import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCod
 public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     /** Trusted local job input, NOT signed-job or target-ownership evidence. Expiry/attempt must never be reissued. */
     public record Job(Context context, String attemptIdHex, DiagnosticHostPolicy.Endpoint target,
-                      String hostFingerprintHex, long expiresAt, boolean ping) {
-        public Job(Context context, String attemptIdHex, DiagnosticHostPolicy.Endpoint target, String hostFingerprintHex, long expiresAt) {
-            this(context, attemptIdHex, target, hostFingerprintHex, expiresAt, false);
-        }
+                      String hostFingerprintHex, long expiresAt) {
         public Job {
             Objects.requireNonNull(context); Objects.requireNonNull(target); unhex(attemptIdHex,16); unhex(hostFingerprintHex,32);
             integer(expiresAt,1000,0xffffffffL * 1000); if (expiresAt % 1000 != 0) throw invalid();
@@ -38,9 +35,9 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     /** Must return promptly, with a bounded HTTP body; may not perform blocking IO on the calling worker. */
     @FunctionalInterface public interface Signaling { CompletionStage<String> exchange(Request request); }
     public enum Reason { COMPLETE, CANCELLED, EXPIRED, WITHDRAWN, GATHERING, SIGNALING, ANSWER, TRANSPORT, PROTOCOL, SELECTED_PATH, CLEANUP }
-    /** Local evidence only. Without ping, authSent does not prove host AUTH verification. */
+    /** Success requires the original ping to be echoed by the pinned host. */
     public record Result(Job job, boolean success, Reason reason, boolean answerVerified, boolean transportEstablished,
-                         boolean authSent, boolean pingVerified, boolean cleanupComplete,
+                         boolean pingVerified, boolean cleanupComplete,
                          String offerDigestHex, String clientFingerprintHex, InetSocketAddress selectedLocal,
                          InetSocketAddress selectedRemote, int sentFrames, int sentBytes,
                          int receivedFrames, int receivedBytes, long completedAt) { }
@@ -109,7 +106,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         if (!started.compareAndSet(false,true)) throw new IllegalStateException("Diagnostic attempt already used");
         Reason reason = Reason.GATHERING; DiagnosticExchange exchange = null;
         InetSocketAddress selectedLocal = null, selectedRemote = null;
-        boolean answerVerified = false, transportEstablished = false, authSent = false, complete = false, cleanup = false;
+        boolean answerVerified = false, transportEstablished = false, complete = false, cleanup = false;
         String offerHash = null, fingerprint = null;
         CompletableFuture<String> pending = null; StunUdpMuxMonitor monitor = null; boolean discoveryClean = true;
         try {
@@ -194,21 +191,17 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             await(() -> connected.get() && channels[0].isOpen() && channels[1].isOpen(), true);
             for (int i = 0; i < 2; i++) validateChannel(channels[i],i);
             transportEstablished = true;
-            CandidatePair establishedPair = selectedPair(nativePeer); // No AUTH is sent to an invalid selected destination.
+            CandidatePair establishedPair = selectedPair(nativePeer); // No PING is sent to an invalid selected destination.
             selectedLocal = numeric(establishedPair.local().getHostString(),establishedPair.local().getPort());
             selectedRemote = numeric(establishedPair.remote().getHostString(),establishedPair.remote().getPort());
             reason = Reason.PROTOCOL;
-            byte[] auth = DiagnosticAssertionCodec.encodeAuth(job.attemptIdHex,assertion);
-            try { checkHandshake(); send(0,auth); authSent = true; } finally { Arrays.fill(auth,(byte)0); }
-            if (job.ping()) {
-                checkHandshake(); exchange = new DiagnosticExchange(job.attemptIdHex,false,this::send); exchange.start();
-                while (!exchange.complete()) { drain(exchange); if (!exchange.complete()) pause(false); }
-            }
+            checkHandshake(); exchange = new DiagnosticExchange(job.attemptIdHex,false,this::send); exchange.start();
+            while (!exchange.complete()) { drain(exchange); if (!exchange.complete()) pause(false); }
             check(); reason = Reason.SELECTED_PATH;
             CandidatePair pair = selectedPair(nativePeer);
             selectedLocal = numeric(pair.local().getHostString(),pair.local().getPort());
             selectedRemote = numeric(pair.remote().getHostString(),pair.remote().getPort());
-            check(); complete = !job.ping() || exchange.complete(); reason = Reason.COMPLETE;
+            check(); complete = exchange.complete(); reason = Reason.COMPLETE;
         } catch (HandshakeTimeout timeout) { reason = answerVerified && !transportEstablished ? Reason.TRANSPORT : Reason.EXPIRED; }
         catch (Failed failure) { reason = failure.reason; }
         catch (InterruptedException interrupted) { cancelled.set(true); reason = Reason.CANCELLED; Thread.currentThread().interrupt(); }
@@ -232,7 +225,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         if (complete && cleanup) { try { check(); } catch (RuntimeException withdrawn) { complete = false; reason = withdrawn instanceof Failed failure ? failure.reason : Reason.WITHDRAWN; } }
         boolean success = complete && cleanup && !protocolFailed.get();
         if (!success && reason == Reason.COMPLETE) reason = Reason.PROTOCOL;
-        return new Result(job,success,reason,answerVerified,transportEstablished,authSent,exchange != null && exchange.complete(),cleanup,
+        return new Result(job,success,reason,answerVerified,transportEstablished,exchange != null && exchange.complete(),cleanup,
             offerHash,fingerprint,selectedLocal,selectedRemote,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
             currentWall);
     }

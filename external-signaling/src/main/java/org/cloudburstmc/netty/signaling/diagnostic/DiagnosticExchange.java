@@ -7,7 +7,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
-/** One optional reliable PING/PONG after signed AUTH; no completion or receipt exchange. */
+/** One reliable PING/PONG on the admitted, pinned DTLS connection. */
 public final class DiagnosticExchange {
     public static final int FRAME_BYTES = 56, PING = 2, PONG = 3;
     @FunctionalInterface public interface Sender { void send(int channel, byte[] ownedFrame); }
@@ -18,11 +18,10 @@ public final class DiagnosticExchange {
     private int sentFrames, sentBytes, receivedFrames, receivedBytes;
     private boolean started, received, failed;
 
-    /** Host callers must have verified AUTH. Prober callers must have sent AUTH on this ordered channel. */
+    /** Callers must validate admission, pinned DTLS and the selected endpoint before starting. */
     public DiagnosticExchange(String attemptIdHex, boolean host, Sender sender) {
         unhex(attemptIdHex,16); this.attempt=attemptIdHex; this.host=host; this.sender=java.util.Objects.requireNonNull(sender);
-        if (host) { receivedFrames=1; receivedBytes=217; }
-        else { new SecureRandom().nextBytes(nonce); sentFrames=1; sentBytes=217; }
+        if (!host) new SecureRandom().nextBytes(nonce);
     }
     public synchronized void start() {
         if (started || failed) throw invalid(); started=true;

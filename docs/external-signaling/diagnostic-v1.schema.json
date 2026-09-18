@@ -224,11 +224,6 @@
           "pattern": "^[A-Za-z0-9+/]{32}$"
         }
       }
-    },
-    "authFrame": {
-      "type": "string",
-      "pattern": "^004e584450010100[0-9a-f]{418}$",
-      "description": "Exactly217 bytes as lowercase hex; attempt/key/signature semantics require runtime checks."
     }
   }
 }

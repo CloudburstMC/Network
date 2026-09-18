@@ -14,7 +14,7 @@ public final class VerifiedDiagnosticAdmission implements AutoCloseable {
     private final byte[] secret, contextDigest, binding;
     private final Clock clock;
     private final long deadlineNanos;
-    private boolean used, closed;
+    private boolean closed;
     VerifiedDiagnosticAdmission(Context context, Claims claims, Credentials credentials, String remoteUfrag, byte[] secret,
                                 byte[] contextDigest, byte[] binding, Clock clock, long deadlineNanos) {
         this.context = context; this.claims = claims; this.credentials = credentials; this.remoteUfrag = remoteUfrag;
@@ -28,15 +28,6 @@ public final class VerifiedDiagnosticAdmission implements AutoCloseable {
     synchronized boolean verifies(DiagnosticAssertionCodec.Assertion proof) {
         return usable() && MessageDigest.isEqual(binding, identity(secret, contextDigest, proof.publicPoint()))
                 && DiagnosticAssertionCodec.verify(context, claims, remoteUfrag, proof) && usable();
-    }
-    /** One AUTH verification, before any challenge. Call only after pinned DTLS and exact channels. */
-    public synchronized DiagnosticPrincipal authenticate(byte[] frame) {
-        if (used || !usable()) return null; used = true;
-        try {
-            DiagnosticAssertionCodec.Assertion proof = DiagnosticAssertionCodec.decodeAuth(frame, claims.attemptIdHex());
-            if (!verifies(proof)) return null;
-            return new DiagnosticPrincipal(context, claims);
-        } catch (RuntimeException invalid) { return null; } finally { close(); }
     }
     /** Key revocation and pending-peer cancellation must close this retained verification lease. */
     @Override public synchronized void close() { closed = true; Arrays.fill(secret, (byte) 0); Arrays.fill(binding, (byte) 0); }

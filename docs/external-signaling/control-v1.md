@@ -46,6 +46,6 @@ Reporting frequency, socket keepalive, authorization deadlines and UDP STUN refr
 
 ## Connectivity diagnostics
 
-A probe uses normal-strength signed admission and Minecraft-compatible WebRTC settings to establish ICE, DTLS and SCTP. A small data-channel ping/pong is optional corroboration. No Minecraft login, diagnostic ownership installation protocol, dual-party completion journal or delivery receipt is required for a connectivity verdict. Record the attempted family/candidate revision, observed stage, timestamp and bounded failure reason. Preserve isolation from gameplay and resource limits.
+A probe uses normal-strength signed admission and Minecraft-compatible WebRTC settings to establish ICE, DTLS and SCTP. One reliable data-channel PING/PONG verifies the round trip, after which the prober closes. No additional application frames are exchanged. No Minecraft login, diagnostic ownership installation protocol, dual-party completion journal or delivery receipt is required for a connectivity verdict. Record the attempted family/candidate revision, observed stage, timestamp and bounded failure reason. Preserve isolation from gameplay and resource limits.
 
 This contract does not establish deployment readiness. Regional transport checks, IPv4/IPv6 coverage, connection rotation, fleet capacity and game-client regression results must be verified against the deployed provider and host versions.

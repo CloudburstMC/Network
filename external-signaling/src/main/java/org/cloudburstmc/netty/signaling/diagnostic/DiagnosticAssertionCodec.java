@@ -43,16 +43,6 @@ public final class DiagnosticAssertionCodec {
         try { Signature verifier = Signature.getInstance("SHA384withECDSAinP1363Format"); verifier.initVerify(publicKey(assertion.publicPoint())); verifier.update(transcript(context, claims, remoteUfrag)); return verifier.verify(assertion.signature()); }
         catch (GeneralSecurityException | RuntimeException e) { return false; }
     }
-    public static byte[] encodeAuth(String attemptIdHex, Assertion assertion) {
-        return concat(new byte[]{0, 78, 88, 68, 80, 1, 1, 0}, unhex(attemptIdHex, 16), assertion.publicPoint(), assertion.signature());
-    }
-    public static Assertion decodeAuth(byte[] input, String attemptIdHex) {
-        if (input.length != 217) throw invalid();
-        byte[] b = input.clone();
-        if (b.length != 217 || !Arrays.equals(Arrays.copyOf(b, 8), new byte[]{0, 78, 88, 68, 80, 1, 1, 0}) || !Arrays.equals(Arrays.copyOfRange(b, 8, 24), unhex(attemptIdHex, 16))) throw invalid();
-        return new Assertion(Arrays.copyOfRange(b, 24, 121), Arrays.copyOfRange(b, 121, 217));
-    }
-    /** Checks the exact offer; never normalizes incompatible SCTP values or rewrites SDP. */
     public static void validateOffer(byte[] input, Claims c, String remoteUfrag) {
         if (input.length == 0 || input.length > 16384) throw invalid(); byte[] bytes = input.clone(); String text;
         try { text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString(); }

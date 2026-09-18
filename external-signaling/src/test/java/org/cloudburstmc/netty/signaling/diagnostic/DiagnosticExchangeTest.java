@@ -18,13 +18,14 @@ class DiagnosticExchangeTest {
         void deliver(Frame frame) { (frame.toHost ? host : prober).receive(frame.channel, frame.bytes); }
         void drain() { int count = 0; while (!queue.isEmpty()) { assertTrue(++count < 50); deliver(queue.remove()); } }
     }
-    @Test void hostIsPassiveAndOnlyEchoProvesTheOptionalRoundTrip() {
+    @Test void hostIsPassiveAndOnlyEchoProvesTheRoundTrip() {
         Pair pair=new Pair(); assertEquals(1,pair.queue.size()); assertEquals(0,pair.host.sentFrames());
         Frame ping=pair.queue.remove();assertTrue(ping.toHost);assertEquals(0,ping.channel);
         pair.deliver(ping);assertFalse(pair.prober.complete());assertEquals(1,pair.queue.size());assertFalse(pair.host.complete());
         pair.deliver(pair.queue.remove());assertTrue(pair.prober.complete());assertTrue(pair.queue.isEmpty());
         assertEquals(1,pair.host.sentFrames());assertEquals(56,pair.host.sentBytes());
-        assertEquals(2,pair.prober.sentFrames());assertEquals(273,pair.prober.sentBytes());
+        assertEquals(1,pair.prober.sentFrames());assertEquals(56,pair.prober.sentBytes());
+        assertEquals(1,pair.host.receivedFrames());assertEquals(56,pair.host.receivedBytes());
     }
     @Test void missingPongNeverQualifiesAndThereIsNoRetryOrCompletion() {
         Pair pair=new Pair();pair.deliver(pair.queue.remove());pair.queue.clear();assertFalse(pair.prober.complete());

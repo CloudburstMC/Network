@@ -18,7 +18,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     public record Result(Context context, String keyId, String attemptId, String offerDigestHex, String clientFingerprintHex, long expiresAt,
                          DiagnosticHostPolicy.Endpoint target, boolean success, String reason,
                          InetSocketAddress selectedLocal, InetSocketAddress selectedRemote,
-                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, boolean authenticated, long completedAt,
+                         int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, long completedAt,
                          boolean cleanupComplete) { }
     public record Stats(int active, int pending, int retainedAttempts, int liveNativePeers, long rejected, long droppedResults) { }
     private record Incoming(int channel, byte[] bytes) { }
@@ -34,13 +34,11 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         final DataChannel[] channel = new DataChannel[2];
         Runnable requireCurrent;
         PeerConnection peer;
-        DiagnosticPrincipal principal;
         DiagnosticExchange exchange;
         boolean settled, created, wantsClose, complete;
         volatile boolean closing;
         String reason = "incomplete";
         String phase = "channels";
-        byte[] auth;
         long completeNanos;
         InetSocketAddress selectedLocal, selectedRemote, gatheredLocal;
         Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos) {
@@ -78,7 +76,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     }
     public synchronized Stats stats() {
         int pending = 0, nativePeers = uncleaned.size();
-        for (Session session : sessions.values()) { if (session.principal == null) pending++; if (session.created) nativePeers++; }
+        for (Session session : sessions.values()) { if (!session.complete) pending++; if (session.created) nativePeers++; }
         return new Stats(sessions.size(), pending, used.size(), nativePeers, rejected, droppedResults);
     }
     public synchronized Throwable failure() { return closeFailure; }
@@ -245,36 +243,32 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             if (session.closing || session.wantsClose) continue;
             if (!authorized(session, now)) { stop(session, "expired_or_withdrawn"); continue; }
             if (session.protocolFailed.get()) { stop(session, "invalid_diagnostic_protocol"); continue; }
-            if (session.failed.get()) { stop(session, session.complete ? "authenticated" : "transport_failed"); continue; }
-            if (session.principal == null && lastNanos - session.handshakeDeadlineNanos >= 0) { stop(session, "handshake_timeout"); continue; }
+            if (session.failed.get()) { stop(session, session.complete ? "pong_sent" : "transport_failed"); continue; }
+            if (!session.complete && lastNanos - session.handshakeDeadlineNanos >= 0) { stop(session, "handshake_timeout"); continue; }
             try {
                 DataChannel channel;
                 while ((channel = session.channels.poll()) != null) installChannel(session, channel);
-                Incoming incoming;
-                while ((incoming = session.messages.poll()) != null) {
-                    if (session.exchange == null) {
-                        if (incoming.channel != 0 || session.auth != null || incoming.bytes.length != 217) throw invalid();
-                        session.auth = incoming.bytes;
-                        break; // Verify AUTH before consuming any queued ping.
-                    } else session.exchange.receive(incoming.channel, incoming.bytes);
-                }
-                if (session.exchange == null && session.auth != null && bothChannels(session) && session.connected.get()) {
-                    session.phase = "authentication";
+                if (session.exchange == null && bothChannels(session) && session.connected.get()) {
+                    session.phase = "selected_path";
                     if (!authorized(session, observe())) throw invalid();
-                    session.principal = session.admission.authenticate(session.auth); Arrays.fill(session.auth, (byte)0); session.auth = null;
-                    if (session.principal == null || !authorized(session, observe())) throw invalid();
+                    capture(session); // Validate the actual pinned transport before sending a pong.
                     session.exchange = new DiagnosticExchange(session.admission.claims().attemptIdHex(), true, (index, bytes) -> {
                         if (!authorized(session, observe()) || session.closing || bytes.length > MAX_FRAME_BYTES) throw invalid();
                         session.channel[index].sendMessage(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip());
                     });
                     session.exchange.start();
-                    session.phase = "selected_path"; capture(session);
-                    session.complete = true; session.completeNanos = lastNanos;
                     session.phase = "ping";
                 }
-                // No completion handshake: observe authenticated transport, echo optional pings, then clean up.
-                // A short optional-ping window avoids retaining an idle diagnostic peer.
-                if (session.complete && lastNanos - session.completeNanos >= 1_000_000_000L) stop(session, "authenticated");
+                if (session.exchange != null) {
+                    Incoming incoming;
+                    while ((incoming = session.messages.poll()) != null) {
+                        session.exchange.receive(incoming.channel, incoming.bytes);
+                        session.complete = true;
+                        session.completeNanos = lastNanos;
+                    }
+                }
+                // The client closes as soon as it verifies the pong. Bound hosts whose client disappears.
+                if (session.complete && lastNanos - session.completeNanos >= 1_000_000_000L) stop(session, "pong_sent");
             } catch (RuntimeException invalid) { stop(session, "invalid_" + session.phase); }
         }
     }
@@ -318,8 +312,8 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     private void stop(Session session, String reason) {
         if (session.closing) return;
         session.wantsClose = true; session.reason = reason;
-        if (!reason.equals("authenticated")) session.complete = false;
-        session.admission.close(); if (session.auth != null) { Arrays.fill(session.auth, (byte)0); session.auth = null; }
+        if (!reason.equals("pong_sent")) session.complete = false;
+        session.admission.close();
         if (!session.settled) return; // The listener owns any in-progress prepare until completion settles.
         session.closing = true;
         if (session.peer == null) { finished(session, null); return; }
@@ -340,7 +334,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             Result result = new Result(session.admission.context(), session.key.keyId(), claims.attemptIdHex(), claims.offerDigestHex(), claims.clientFingerprintHex(), claims.expiresAt(), DiagnosticHostPolicy.Endpoint.from(claims), success,
                 failure != null ? "native_cleanup_failed" : session.complete && !success ? "observation_invalidated" : session.reason,
                 session.selectedLocal, session.selectedRemote, exchange == null ? 0 : exchange.sentFrames(), exchange == null ? 0 : exchange.sentBytes(),
-                session.receivedFrames.get(), session.receivedBytes.get(), session.principal != null, now, failure == null);
+                session.receivedFrames.get(), session.receivedBytes.get(), now, failure == null);
             if (!results.offer(result)) droppedResults++;
         }
         completeTermination();

@@ -36,7 +36,6 @@ for (const vector of fixture.vectors) {
   const encrypted = cat(cipher.update(plain), cipher.final(), cipher.getAuthTag());
   assert.equal(header + b64(cat(nonce, encrypted)), vector.localUfrag);
   assert.equal(b64(hmac(cat(domain("ice"), contextDigest, utf8(vector.localUfrag))).subarray(0, 24)), vector.icePwd);
-  assert.equal(cat(Buffer.from([0, 78, 88, 68, 80, 1, 1, 0]), hex(c.attemptIdHex), hex(vector.publicPointHex), hex(vector.signatureHex)).toString("hex"), vector.authHex);
   assert.equal(vector.localUfrag.length, 8 + Math.ceil((156 + c.clientIcePwd.length) * 4 / 3));
   assert(vector.localUfrag.length <= 256); byName.set(vector.name, { key, transcript });
 }

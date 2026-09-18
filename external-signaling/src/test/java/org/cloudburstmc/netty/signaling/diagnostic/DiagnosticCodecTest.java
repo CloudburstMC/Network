@@ -36,13 +36,12 @@ class DiagnosticCodecTest {
             JsonObject v = entry.getAsJsonObject(); Claims c = GSON.fromJson(v.get("claims"), Claims.class); var proof = assertion(v); String remote = value(v, "remoteUfrag");
             assertEquals(value(v, "assertionTranscriptHex"), hex(DiagnosticAssertionCodec.transcript(context, c, remote)));
             assertTrue(DiagnosticAssertionCodec.verify(context, c, remote, proof));
-            assertEquals(value(v, "authHex"), hex(DiagnosticAssertionCodec.encodeAuth(c.attemptIdHex(), proof)));
             Credentials result = issueWithNonce(context, key, c, remote, utf8(value(v, "offer")), proof, parent, clock, unhex(value(v, "nonceHex"), 12));
             assertEquals(value(v, "localUfrag"), result.localUfrag()); assertEquals(value(v, "icePwd"), result.icePwd()); assertEquals(ufragLength(c.clientIcePwd().length()), result.localUfrag().length());
             try (var a = DiagnosticAdmissionCodec.open(context, key, result.localUfrag(), remote, parent, clock)) {
                 assertNotNull(a); assertEquals(c, a.claims()); assertEquals(result, a.credentials());
-                DiagnosticPrincipal principal = a.authenticate(unhex(value(v, "authHex"), 217)); assertNotNull(principal); assertEquals("connectivity-check", principal.purpose());
-                assertNull(a.authenticate(unhex(value(v, "authHex"), 217)));
+                assertTrue(a.verifies(proof));
+                a.close(); assertFalse(a.verifies(proof));
             }
             var privateKey = KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(unhex(FIXTURE.get("privateKeyPkcs8Hex").getAsString(), 185)));
             var newProof = DiagnosticAssertionCodec.sign(context, c, remote, new KeyPair(DiagnosticAssertionCodec.publicKey(proof.publicPoint()), privateKey));
@@ -61,7 +60,7 @@ class DiagnosticCodecTest {
             var credentials=issue(context,key,c,value("remoteUfrag"),utf8(offer),proof,parent,clock);
             try(var opened=DiagnosticAdmissionCodec.open(context,key,credentials.localUfrag(),value("remoteUfrag"),parent,clock)) {
                 assertNotNull(opened);assertEquals(c,opened.claims());assertTrue(opened.verifies(proof));
-                assertNotNull(opened.authenticate(DiagnosticAssertionCodec.encodeAuth(c.attemptIdHex(),proof)));
+                opened.close(); assertFalse(opened.verifies(proof));
             }
             final String exactOffer=offer;
             assertThrows(IllegalArgumentException.class,()->new Claims(c.expiresAt(),c.clientFingerprintHex(),c.clientIcePwd(),c.attemptIdHex(),c.offerDigestHex(),9,family,c.targetAddressHex(),1,ASSISTED_PROFILE));
@@ -109,20 +108,19 @@ class DiagnosticCodecTest {
         assertThrows(IllegalArgumentException.class, () -> issueWithNonce(context, key, claims, value("remoteUfrag"), utf8(value("offer")), new DiagnosticAssertionCodec.Assertion(assertion(vector).publicPoint(), signature), parent, clock, unhex(value("nonceHex"), 12)));
         assertThrows(IllegalArgumentException.class, () -> issueWithNonce(context, key, claims, value("remoteUfrag"), utf8(value("offer") + "a=changed:x\r\n"), assertion(vector), parent, clock, unhex(value("nonceHex"), 12)));
     }
-    @Test void authenticationRequiresExactFrameKeyAndSignatureOnce() {
-        for (int offset : new int[]{0, 7, 8, 30, 150}) try (var admission = open()) {
-            assertNotNull(admission); byte[] frame = unhex(value("authHex"), 217); frame[offset] ^= 1;
-            assertNull(admission.authenticate(frame)); assertNull(admission.authenticate(unhex(value("authHex"), 217)));
+    @Test void assistedProofRequiresBoundKeyAndSignature() {
+        for (boolean wrongKey : new boolean[]{false, true}) try (var admission = open()) {
+            var proof = assertion(vector); byte[] point = proof.publicPoint(), signature = proof.signature();
+            if (wrongKey) point[10] ^= 1; else signature[10] ^= 1;
+            assertFalse(admission.verifies(new DiagnosticAssertionCodec.Assertion(point, signature)));
         }
-        try (var admission = open()) { assertNotNull(admission); assertNull(admission.authenticate(new byte[218])); }
-        var proof = assertion(vector); byte[] point = proof.publicPoint(); point[10] ^= 1; assertTrue(DiagnosticAssertionCodec.verify(context, claims, value("remoteUfrag"), proof));
     }
     @Test void revocationCloseAndMonotonicExpiryRejectWallRollback() {
         AtomicLong wall = new AtomicLong(now), nanos = new AtomicLong(1_000_000_000);
         try (var admission = DiagnosticAdmissionCodec.open(context, key, value("localUfrag"), value("remoteUfrag"), parent, new Clock(wall::get, nanos::get))) {
-            assertNotNull(admission); wall.addAndGet(-1000); nanos.addAndGet(30_000_000_000L); assertNull(admission.authenticate(unhex(value("authHex"), 217)));
+            assertNotNull(admission); wall.addAndGet(-1000); nanos.addAndGet(30_000_000_000L); assertFalse(admission.verifies(assertion(vector)));
         }
-        var admission = open(); assertNotNull(admission); admission.close(); assertNull(admission.authenticate(unhex(value("authHex"), 217)));
+        var admission = open(); assertNotNull(admission); admission.close(); assertFalse(admission.verifies(assertion(vector)));
     }
     @Test void incompatibleGatheredOffersAreRejectedWithoutRewrite() {
         for (String[] replace : new String[][]{{"sctp-port:5000", "sctp-port:5001"}, {"max-message-size:262144", "max-message-size:0"}, {" udp ", " tcp "}, {"198.51.100.2", "2001:db8::2"}, {"a=mid:0", "a=mid:0\r\na=mid:0"}, {"a=end-of-candidates", "a=incomplete"}, {"a=mid:0", "a=mid:0\r\na=identity:x"}}) {
@@ -134,7 +132,7 @@ class DiagnosticCodecTest {
         var generator = java.security.KeyPairGenerator.getInstance("EC"); generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
         var proof = DiagnosticAssertionCodec.sign(context, claims, value("remoteUfrag"), generator.generateKeyPair());
         assertTrue(DiagnosticAssertionCodec.verify(context, claims, value("remoteUfrag"), proof));
-        try (var admission = open()) { assertNotNull(admission); assertNull(admission.authenticate(DiagnosticAssertionCodec.encodeAuth(claims.attemptIdHex(), proof))); }
+        try (var admission = open()) { assertNotNull(admission); assertFalse(admission.verifies(proof)); }
     }
     @Test void slowIssuerCannotMintPastItsFixedDeadline() {
         AtomicLong reads = new AtomicLong();

@@ -16,7 +16,7 @@ There is no installation acknowledgement, owner-epoch protocol, completion uploa
 or completion receipt. Local observations do not alter serving state or health.
 `NXD1` is quarantined even when malformed or diagnostics are disabled, so it cannot
 fall through to the player validator. Signed permit, exact ICE credentials, pinned
-DTLS and the detached ES384 AUTH bind the original offer, attempt, target and expiry.
+DTLS bind the original offer, attempt, target and expiry.
 For profile 1, only the received numeric source tuple is reconstructed into remote SDP. Profile 2 requires a verified proactive WebSocket offer and assertion, scoped to a locally enabled assisted family; incoming stateless admission cannot enable it. No incoming DNS, STUN/TURN/TCP configuration is installed.
 
 Diagnostics use ordinary ICE peers. Profile 1 validates one exact selected destination. Profile 2 starts with the authenticated peer candidate from the signed offer and permits same-family public peer-reflexive endpoints learned through authenticated ICE checks. The probe applies one signed fresh host candidate so ICE runs in both directions. A shared per-attempt gatherer serves player and diagnostic assistance; its STUN monitor stops at the original deadline or completion, without restarting background warming. Attempts last at
@@ -28,16 +28,14 @@ Key/context/endpoint withdrawal cancels it. Empty keys/endpoints retain replay h
 
 Exactly two channels use the Minecraft transport profile: `ReliableDataChannel`
 ordered/reliable, and `UnreliableDataChannel` unordered with maxRetransmits 0. Both
-have empty protocol and zero lifetime override. The host checks connection, channel
-properties and local fingerprint/ICE identity before accepting the
-217-byte signed AUTH on reliable. It creates only `DiagnosticPrincipal`; there is no
-player child, player identity verifier, login, gameplay or player pipeline event.
+have empty protocol and zero lifetime override. The host checks the connection, channel properties, selected endpoint and local
+fingerprint/ICE identity before processing PING. The remote DTLS fingerprint is
+pinned by the admitted offer. No player child, login or gameplay pipeline is created.
 
-## Optional ping/pong
+## Single ping/pong
 
-The host sends no application message until it receives authenticated PING. The
-prober may finish after submitting AUTH, or request one random ping on reliable.
-Reliable AUTH and PING are ordered; the unreliable channel needs no application exchange.
+The host sends no application message until it receives PING on the admitted
+reliable channel. The prober sends one random nonce; the host echoes it once.
 
 Every PING/PONG is exactly 56 bytes:
 
@@ -51,26 +49,23 @@ Every PING/PONG is exactly 56 bytes:
 | 8 | 16 | Original attempt ID |
 | 24 | 32 | Random PING nonce or exact echoed nonce |
 
-The prober generates one random nonce and checks its exact echo. No application
-retry, second-channel ping, completion handshake or transcript digest is required.
-Kind 4 and PING/PONG on unreliable are invalid. Including AUTH, the prober sends
-two frames (273 bytes) and the host sends one (56 bytes). The hard receive bounds
-remain 12 frames, 1024 bytes and 256 bytes per frame. Public PING/PONG bytes are in
+The prober checks the exact attempt ID and random nonce, then immediately closes.
+Each side sends one 56-byte application frame. There is no AUTH, application retry,
+completion handshake or receipt. Invalid kinds, wrong attempts, duplicates and
+frames on the unreliable channel are rejected. Public bytes are in
 `diagnostic-exchange-v1.fixtures.json`.
 
 ## Evidence and cleanup
 
-The host reports its own AUTH verification; it cannot claim its PONG was delivered.
-After authentication it allows one second for an optional PING within the original
-deadline, then closes. The prober's `pingVerified` requires its original PONG. Without ping, its result
-claims transport establishment and AUTH submission only, not remote application
-verification. Neither result is gameplay proof or universal NAT classification.
+Only the prober can report a verified round trip. The host records that it submitted
+a pong; it cannot claim delivery. The host closes on client disconnect and retains
+a one-second fallback deadline after sending PONG. The original attempt and
+handshake deadlines cover clients that never send a valid PING.
 
-Success requires the authorized UDP family and endpoint (including authenticated
-peer-reflexive selection for profile 2), and actual native cleanup. Clock expiry,
-withdrawal or protocol failure prevents qualification. Failed cleanup retains the
-native reservation and makes the host gate unavailable. Local results are bounded
-to 32 queued observations with a dropped-result count; no durable journal is required.
+The selected UDP family and endpoint must match the authorized attempt. Expiry,
+withdrawal or protocol failure prevents qualification. Cleanup always closes the
+native peer; failure retains the capacity reservation and makes the gate unavailable.
+Local results are bounded to 32 observations with a dropped-result count.
 
 The signed admission and signed answer contracts remain in `diagnostic-v1.md` and
 `diagnostic-answer-v1.md`. A regional workload still needs trusted target permission,

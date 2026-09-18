@@ -41,7 +41,7 @@ class NativeAssistedDiagnosticTest {
             catalog=new DiagnosticAnswerCodec.Catalog(context.providerOrigin(),0,expiry+10000,List.of(new DiagnosticAnswerCodec.VerificationKey("provider-diagnostic","answer",hex(Arrays.copyOfRange(encoded,encoded.length-97,encoded.length)),0,expiry+10000)));
             var target=DiagnosticHostPolicy.Endpoint.assisted(bind instanceof Inet6Address ? 6 : 4,7);
             policy=new DiagnosticHostPolicy(context,List.of(key),Set.of(target),expiry+10000);
-            job=new NativeDiagnosticProbeAttempt.Job(context,NativeDiagnosticProbeAttemptTest.id(),target,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT),expiry,true);
+            job=new NativeDiagnosticProbeAttempt.Job(context,NativeDiagnosticProbeAttemptTest.id(),target,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT),expiry);
             host=new NativeAdmissionServerChannel(identity,(request,now)->{players.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
             new ServerBootstrap().group(group).channelFactory(()->host).childHandler(new ChannelInitializer<Channel>() {
                 protected void initChannel(Channel channel) { players.incrementAndGet(); }
@@ -78,12 +78,12 @@ class NativeAssistedDiagnosticTest {
         for(String numeric:List.of("127.0.0.1","::1")) try(var f=new Fixture(numeric);var stun=new StunServer(f.bind);var attempt=f.attempt(stun.address())) {
             var result=attempt.run(f::respond);
             assertTrue(result.success(),result.toString());assertTrue(result.answerVerified());assertTrue(result.transportEstablished());
-            assertTrue(result.authSent());assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
+            assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
             assertEquals(f.hostPort,result.selectedRemote().getPort());assertEquals(f.probePort,result.selectedLocal().getPort());
             assertEquals(new InetSocketAddress(f.bind,f.probePort),stun.observed.get());
             var reports=new ArrayList<NativeDiagnosticHostGate.Result>();
             NativeDiagnosticProbeAttemptTest.await(()->{reports.addAll(f.gate.pollResults());return !reports.isEmpty();});
-            assertEquals(1,reports.size());assertTrue(reports.get(0).success(),reports.toString());assertTrue(reports.get(0).authenticated());
+            assertEquals(1,reports.size());assertTrue(reports.get(0).success(),reports.toString());
             assertEquals(result.offerDigestHex(),reports.get(0).offerDigestHex());assertEquals(f.job.target(),reports.get(0).target());
             assertEquals(0,f.players.get());assertTrue(f.host.pollEvents().isEmpty());assertEquals(0,f.gate.stats().liveNativePeers());
         }
@@ -144,7 +144,7 @@ class NativeAssistedDiagnosticTest {
             NativeDiagnosticProbeAttemptTest.await(() -> { reports.addAll(f.gate.pollResults()); return !reports.isEmpty(); });
             assertEquals(1, reports.size());
             var report = reports.get(0);
-            assertTrue(report.success(), report.toString()); assertTrue(report.authenticated());
+            assertTrue(report.success(), report.toString());
             assertEquals(new InetSocketAddress(f.bind, f.probePort), report.selectedRemote());
             assertNotEquals(advertised.getLocalPort(), report.selectedRemote().getPort());
             assertEquals(0, f.players.get()); assertTrue(f.host.pollEvents().isEmpty());
@@ -286,7 +286,7 @@ class NativeAssistedDiagnosticTest {
                     DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()), utf8(answer),
                             new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()), () -> f.catalog, DiagnosticAnswerCodec.Options.system())));
             assertTrue(result.success(), result.toString());
-            assertTrue(result.transportEstablished()); assertTrue(result.authSent()); assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
+            assertTrue(result.transportEstablished());  assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
             assertEquals(nat.probeExternal.getLocalSocketAddress(), result.selectedLocal());
             assertNotEquals(advertised.getLocalPort(), result.selectedLocal().getPort());
             assertNotEquals(f.probePort, result.selectedLocal().getPort());

@@ -41,8 +41,7 @@ class NativeDiagnosticProbeAttemptTest {
         final AtomicBoolean authorized=new AtomicBoolean(true); final AtomicInteger players=new AtomicInteger(),signalingCalls=new AtomicInteger();
         final NativeAdmissionServerChannel host; final DefaultEventLoopGroup group=new DefaultEventLoopGroup(1);
         final NativeDiagnosticHostGate gate; final DiagnosticHostPolicy policy; final NativeDiagnosticProbeAttempt.Job job;
-        Fixture(String address,int duration) throws Exception { this(address,duration,true); }
-        Fixture(String address,int duration,boolean ping) throws Exception {
+        Fixture(String address,int duration) throws Exception {
             bind=InetAddress.getByName(address);port=port(bind);localPort=port(bind);int family=bind instanceof Inet6Address?6:4;
             expiry=(System.currentTimeMillis()+duration)/1000*1000;
             permit=new Key("D001","random-test-permit-"+id(),0,expiry+10000);
@@ -50,7 +49,7 @@ class NativeDiagnosticProbeAttemptTest {
             catalog.set(new DiagnosticAnswerCodec.Catalog(context.providerOrigin(),0,expiry+10000,List.of(new DiagnosticAnswerCodec.VerificationKey("provider-diagnostic","provider-key",hex(Arrays.copyOfRange(encoded,encoded.length-97,encoded.length)),0,expiry+10000))));
             var target=new DiagnosticHostPolicy.Endpoint(family,DiagnosticAdmissionCodec.address(family,address),port,7);
             policy=new DiagnosticHostPolicy(context,List.of(permit),Set.of(target),expiry+10000);
-            job=new NativeDiagnosticProbeAttempt.Job(context,id(),target,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT),expiry,ping);
+            job=new NativeDiagnosticProbeAttempt.Job(context,id(),target,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT),expiry);
             host=new NativeAdmissionServerChannel(identity,(request,now)->{players.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
             new ServerBootstrap().group(group).channelFactory(()->host).childHandler(new ChannelInitializer<Channel>(){protected void initChannel(Channel channel){players.incrementAndGet();}}).bind(bind,port).sync();
             gate=host.enableDiagnostics(policy).toCompletableFuture().get(3,TimeUnit.SECONDS);
@@ -69,27 +68,19 @@ class NativeDiagnosticProbeAttemptTest {
         CompletionStage<String> respond(NativeDiagnosticProbeAttempt.Request request) {return CompletableFuture.completedFuture(sign(request,job.hostFingerprintHex(),bind.getHostAddress(),port));}
         public void close() throws Exception {host.close().awaitUninterruptibly();host.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
     }
-    @Test @Timeout(25) void bothFamiliesVerifyOptionalPongsAndActualCleanup() throws Exception {
+    @Test @Timeout(25) void bothFamiliesExchangeExactlyOnePingPongAndClose() throws Exception {
         for(String address:List.of("127.0.0.1","::1"))try(Fixture fixture=new Fixture(address,20000);var attempt=fixture.attempt()) {
             var result=attempt.run(fixture::respond);
             assertTrue(result.success(),result.toString());assertEquals(NativeDiagnosticProbeAttempt.Reason.COMPLETE,result.reason());
-            assertTrue(result.answerVerified());assertTrue(result.transportEstablished());assertTrue(result.authSent());assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
+            assertTrue(result.answerVerified());assertTrue(result.transportEstablished());assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
             assertEquals(fixture.job,result.job());assertEquals(fixture.localPort,result.selectedLocal().getPort());assertEquals(fixture.port,result.selectedRemote().getPort());
             assertEquals(fixture.bind,result.selectedLocal().getAddress());assertEquals(fixture.bind,result.selectedRemote().getAddress());
-            assertEquals(2,result.sentFrames());assertEquals(1,result.receivedFrames());
+            assertEquals(1,result.sentFrames());assertEquals(56,result.sentBytes());
+            assertEquals(1,result.receivedFrames());assertEquals(56,result.receivedBytes());
             attempt.termination().toCompletableFuture().get(1,TimeUnit.SECONDS);assertThrows(IllegalStateException.class,()->attempt.run(fixture::respond));
             var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{reports.addAll(fixture.gate.pollResults());return !reports.isEmpty();});
-            assertEquals(1,reports.size());assertTrue(reports.get(0).success(),reports.toString());assertTrue(reports.get(0).authenticated());
+            assertEquals(1,reports.size());assertTrue(reports.get(0).success(),reports.toString());
             assertEquals(result.offerDigestHex(),reports.get(0).offerDigestHex());assertEquals(0,fixture.players.get());assertEquals(0,fixture.gate.stats().liveNativePeers());assertEquals(1,fixture.signalingCalls.get());
-        }
-    }
-    @Test @Timeout(25) void noPingReportsTransportAndAuthSubmissionWithoutClaimingRemoteVerification() throws Exception {
-        for(String address:List.of("127.0.0.1","::1"))try(Fixture fixture=new Fixture(address,15000,false);var attempt=fixture.attempt()) {
-            var result=attempt.run(fixture::respond);
-            assertTrue(result.success(),result.toString());assertTrue(result.answerVerified());assertTrue(result.transportEstablished());
-            assertTrue(result.authSent());assertFalse(result.pingVerified());assertFalse(result.job().ping());assertTrue(result.cleanupComplete());
-            assertEquals(1,result.sentFrames());assertEquals(217,result.sentBytes());assertEquals(0,result.receivedFrames());assertEquals(0,fixture.players.get());
-            await(()->fixture.gate.stats().liveNativePeers()==0);
         }
     }
     @Test @Timeout(25) void providerAnswerFailuresSendNoPeerPacketsOrAdmission() throws Exception {
@@ -123,7 +114,7 @@ class NativeDiagnosticProbeAttemptTest {
     @Test @Timeout(20) void installedHostWithdrawalAfterAnswerCannotQualify() throws Exception {
         try(Fixture fixture=new Fixture("::1",4000);var attempt=fixture.attempt()) {
             var result=attempt.run(request->{String wire=fixture.respond(request).toCompletableFuture().join();fixture.gate.replacePolicy(new DiagnosticHostPolicy(fixture.context,List.of(),Set.of(),fixture.expiry+10000));return CompletableFuture.completedFuture(wire);});
-            assertFalse(result.success());assertTrue(result.answerVerified());assertFalse(result.authSent());assertTrue(result.cleanupComplete());assertFalse(result.pingVerified());assertEquals(0,fixture.gate.stats().liveNativePeers());assertEquals(0,fixture.players.get());
+            assertFalse(result.success());assertTrue(result.answerVerified());assertTrue(result.cleanupComplete());assertFalse(result.pingVerified());assertEquals(0,fixture.gate.stats().liveNativePeers());assertEquals(0,fixture.players.get());
         }
     }
     @Test @Timeout(20) void signedButWrongActualDtlsIdentityFailsBothFamilies() throws Exception {
@@ -131,7 +122,7 @@ class NativeDiagnosticProbeAttemptTest {
             var expected=new NativeDiagnosticProbeAttempt.Job(fixture.job.context(),fixture.job.attemptIdHex(),fixture.job.target(),"00".repeat(32),fixture.expiry);
             try(var attempt=new NativeDiagnosticProbeAttempt(expected,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.catalog::get,fixture.authorized::get,Clock.system(),true)) {
                 var result=attempt.run(request->CompletableFuture.completedFuture(fixture.sign(request,expected.hostFingerprintHex(),fixture.bind.getHostAddress(),fixture.port)));
-                assertFalse(result.success(),result.toString());assertTrue(result.answerVerified());assertFalse(result.transportEstablished());assertFalse(result.authSent());assertFalse(result.pingVerified());assertFalse(result.pingVerified());assertTrue(result.cleanupComplete());
+                assertFalse(result.success(),result.toString());assertTrue(result.answerVerified());assertFalse(result.transportEstablished());assertFalse(result.pingVerified());assertFalse(result.pingVerified());assertTrue(result.cleanupComplete());
                 assertTrue(fixture.host.nativeStats()[0]>0);assertEquals(0,fixture.players.get());
             }
         }
@@ -230,7 +221,7 @@ class NativeDiagnosticProbeAttemptTest {
                     };
                     assertEquals(expected,result.reason(),change);assertFalse(result.success(),change);
                     assertTrue(result.answerVerified(),change);assertFalse(result.transportEstablished(),change);
-                    assertFalse(result.authSent(),change);assertFalse(result.pingVerified(),change);assertTrue(result.cleanupComplete(),change);
+                    assertFalse(result.pingVerified(),change);assertTrue(result.cleanupComplete(),change);
                     assertEquals(fixture.expiry,result.job().expiresAt(),change);
                     if(change.equals("handshake")){assertTrue(result.completedAt()<fixture.expiry);}
                     assertEquals(0,fixture.players.get(),change);
