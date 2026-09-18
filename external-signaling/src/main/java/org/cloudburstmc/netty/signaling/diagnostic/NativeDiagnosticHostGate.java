@@ -305,7 +305,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             boolean remoteAllowed = session.requireCurrent == null ? remote.equals(session.remote) : assistedRemoteAllowed(session, remote);
             if (!remoteAllowed || !(boundLocal || session.requireCurrent != null && local.equals(session.gatheredLocal)) ||
                     (local.getAddress() instanceof Inet6Address ? 6 : 4) != session.admission.claims().family() ||
-                    IceCandidate.parse(pair.localCandidate()).transport() != IceCandidate.Transport.UDP || IceCandidate.parse(pair.remoteCandidate()).transport() != IceCandidate.Transport.UDP) throw invalid();
+                    !"udp".equals(pair.localTransport()) || !"udp".equals(pair.remoteTransport())) throw invalid();
             session.selectedLocal = local; session.selectedRemote = remote;
         } catch (UnknownHostException malformed) { throw invalid(); }
     }

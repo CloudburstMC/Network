@@ -233,17 +233,16 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         CandidatePair pair = nativePeer.selectedCandidatePair();
         InetSocketAddress selectedLocal = numeric(pair.local().getHostString(),pair.local().getPort());
         InetSocketAddress selectedRemote = numeric(pair.remote().getHostString(),pair.remote().getPort());
-        IceCandidate localCandidate = IceCandidate.parse(pair.localCandidate());
         var localScope = EndpointAddress.scope(selectedLocal.getAddress());
         // A NAT may expose a different mapping to the peer than to the discovery server.
         boolean assistedLocal = job.target.assisted() && (selectedLocal.equals(gatheredLocal)
-                || localCandidate.type() == IceCandidate.Type.PEER_REFLEXIVE
+                || "prflx".equals(pair.localType())
                 && (localScope == EndpointAddress.Scope.PUBLIC || loopbackTest && localScope == EndpointAddress.Scope.LOOPBACK));
         if (!(selectedLocal.equals(bind) || assistedLocal) || (target != null ? !selectedRemote.equals(target)
                 : EndpointAddress.scope(selectedRemote.getAddress()) != EndpointAddress.Scope.PUBLIC && !(loopbackTest && EndpointAddress.scope(selectedRemote.getAddress()) == EndpointAddress.Scope.LOOPBACK)) || family(selectedLocal.getAddress()) != job.target.family()
                 || family(selectedRemote.getAddress()) != job.target.family()
-                || localCandidate.transport() != IceCandidate.Transport.UDP
-                || IceCandidate.parse(pair.remoteCandidate()).transport() != IceCandidate.Transport.UDP) throw new Failed(Reason.SELECTED_PATH);
+                || !"udp".equals(pair.localTransport())
+                || !"udp".equals(pair.remoteTransport())) throw new Failed(Reason.SELECTED_PATH);
         return pair;
     }
     private void installChannels(PeerConnection value) {
