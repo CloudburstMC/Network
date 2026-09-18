@@ -256,6 +256,10 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return;
         }
 
+        if (reliableChannel.isClosed()) {
+            return;
+        }
+
         ByteBuf framed = payload.retainedDuplicate();
         int totalLength = framed.readableBytes();
 
