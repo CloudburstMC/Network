@@ -120,95 +120,119 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                                  @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
         IdentityKeyVerifier identityVerifier = player == null ? null
                 : TransportIdentityBinding.forPlayer(player);
-        PeerConnectionConfiguration rtcConfig =
-                bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
-                        .withDisableAutoNegotiation(true)
-                        .withIceServers(
-                                this.signaling.getIceServers().stream().map(IceServerInfo::toUris).flatMap(List::stream)
-                                        .toList());
+        PeerConnection allocatedPeer = null;
+        ScheduledFuture<?> timeoutTask = null;
+        boolean handedOff = false;
+        try {
+            PeerConnectionConfiguration rtcConfig =
+                    bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
+                            .withDisableAutoNegotiation(true)
+                            .withIceServers(
+                                    this.signaling.getIceServers().stream().map(IceServerInfo::toUris).flatMap(List::stream)
+                                            .toList());
 
-        ServerPeerConnectionObserver observer =
-                new ServerPeerConnectionObserver(connectionId, remoteNetworkId, offerSdp, clientAddress);
-        PeerConnection pc = PeerConnection.createPeer(rtcConfig);
-        observer.setPeerConnection(pc);
+            ServerPeerConnectionObserver observer =
+                    new ServerPeerConnectionObserver(connectionId, remoteNetworkId, offerSdp, clientAddress);
+            PeerConnection pc = PeerConnection.createPeer(rtcConfig);
+            allocatedPeer = pc;
+            observer.setPeerConnection(pc);
 
-        NetherNetChildChannel child = new NetherNetChildChannel(this,
-                pc, clientAddress == null ? new InetSocketAddress(0) : clientAddress, localAddress);
-        child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
-        if (player != null) {
-            child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
-            TransportIdentityBinding.install(child, identityVerifier);
-        }
-        observer.setChildChannel(child);
-
-        child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
-
-        int handshakeTimeoutSeconds =
-                this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
-        ScheduledFuture<?> timeoutTask = eventLoop().schedule(() -> {
-            if (!child.isActive()) {
-                log.warn("Connection {} timed out during handshake ({}s)", Long.toUnsignedString(connectionId),
-                        handshakeTimeoutSeconds);
-                child.close();
-                pc.close();
+            NetherNetChildChannel child = new NetherNetChildChannel(this,
+                    pc, clientAddress == null ? new InetSocketAddress(0) : clientAddress, localAddress);
+            child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
+            if (player != null) {
+                child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
+                TransportIdentityBinding.install(child, identityVerifier);
             }
-        }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
-        observer.setHandshakeTimeout(timeoutTask);
+            observer.setChildChannel(child);
 
-        observer.register(pc);
+            child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
 
-        signaling.setSignalHandler(connectionId, (signal) -> {
-            String[] parts = signal.split(" ", 3);
-            if (parts.length < 3) {
-                return;
-            }
-            String type = parts[0];
-            String data = parts[2];
-
-            switch (type) {
-                case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
-                    log.trace("Applying Remote Candidate for {}: {}", Long.toUnsignedString(connectionId), data);
+            int handshakeTimeoutSeconds =
+                    this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
+            timeoutTask = eventLoop().schedule(() -> {
+                if (!child.isActive()) {
                     try {
-                        pc.addRemoteCandidate(data);
-                    } catch (Exception e) {
-                        log.debug("Failed to apply ICE candidate for {} (Connection likely closed): {}",
-                                Long.toUnsignedString(connectionId), e.toString());
+                        if (child.isRegistered()) {
+                            child.close();
+                        } else {
+                            child.unsafe().closeForcibly();
+                        }
+                    } finally {
+                        try {
+                            abandon(connectionId, null, pc);
+                        } finally {
+                            if (identityVerifier != null) identityVerifier.close();
+                        }
+                    }
+                    log.warn("Connection {} timed out during handshake ({}s)", Long.toUnsignedString(connectionId),
+                            handshakeTimeoutSeconds);
+                }
+            }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
+            observer.setHandshakeTimeout(timeoutTask);
+
+            observer.register(pc);
+
+            signaling.setSignalHandler(connectionId, (signal) -> {
+                String[] parts = signal.split(" ", 3);
+                if (parts.length < 3) {
+                    return;
+                }
+                String type = parts[0];
+                String data = parts[2];
+
+                switch (type) {
+                    case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
+                        log.trace("Applying Remote Candidate for {}: {}", Long.toUnsignedString(connectionId), data);
+                        try {
+                            pc.addRemoteCandidate(data);
+                        } catch (Exception e) {
+                            log.debug("Failed to apply ICE candidate for {} (Connection likely closed): {}",
+                                    Long.toUnsignedString(connectionId), e.toString());
+                        }
+                    }
+                    case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
+                        log.debug("Received CONNECT_ERROR for {}", Long.toUnsignedString(connectionId));
+                        child.close();
                     }
                 }
-                case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
-                    log.debug("Received CONNECT_ERROR for {}", Long.toUnsignedString(connectionId));
-                    child.close();
-                }
-            }
-        });
+            });
 
-        try {
-            pc.setRemoteDescription(offerSdp, SessionDescriptionType.OFFER);
-            log.trace("Remote description set for {}", Long.toUnsignedString(connectionId));
-            pc.setLocalDescription("answer");
-        } catch (Exception e) {
-            log.error("Failed to negotiate answer for {}", Long.toUnsignedString(connectionId), e);
-            abandon(connectionId, timeoutTask, pc);
-            return;
-        }
-
-        // Anything without trickle answers once from onGatheringStateChange instead
-        if (signaling.usesTrickleIce()) {
-            log.trace("Sending Answer SDP for {}", Long.toUnsignedString(connectionId));
             try {
-                signaling.sendSignal(
-                        remoteNetworkId,
-                        NetherNetConstants.buildSignalConnectResponse(connectionId,
-                                serverIdentity.augmentAnswer(pc.localDescription()))
-                );
-            } catch (JoseException e) {
-                log.error("Failed to send Answer SDP for {}", Long.toUnsignedString(connectionId), e);
-                abandon(connectionId, timeoutTask, pc);
+                pc.setRemoteDescription(offerSdp, SessionDescriptionType.OFFER);
+                log.trace("Remote description set for {}", Long.toUnsignedString(connectionId));
+                pc.setLocalDescription("answer");
+            } catch (Exception e) {
+                log.error("Failed to negotiate answer for {}", Long.toUnsignedString(connectionId), e);
                 return;
             }
-        }
 
-        pipeline().fireChannelRead(child);
+            // Anything without trickle answers once from onGatheringStateChange instead
+            if (signaling.usesTrickleIce()) {
+                log.trace("Sending Answer SDP for {}", Long.toUnsignedString(connectionId));
+                try {
+                    signaling.sendSignal(
+                            remoteNetworkId,
+                            NetherNetConstants.buildSignalConnectResponse(connectionId,
+                                    serverIdentity.augmentAnswer(pc.localDescription()))
+                    );
+                } catch (JoseException e) {
+                    log.error("Failed to send Answer SDP for {}", Long.toUnsignedString(connectionId), e);
+                    return;
+                }
+            }
+
+            pipeline().fireChannelRead(child);
+            handedOff = true;
+        } finally {
+            if (!handedOff) {
+                try {
+                    abandon(connectionId, timeoutTask, allocatedPeer);
+                } finally {
+                    if (identityVerifier != null) identityVerifier.close();
+                }
+            }
+        }
     }
 
     /**
@@ -219,11 +243,18 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * @param timeoutTask  The handshake timeout to cancel.
      * @param pc           The peer connection to close.
      */
-    private void abandon(long connectionId, ScheduledFuture<?> timeoutTask, PeerConnection pc) {
-        timeoutTask.cancel(false);
-        signaling.removeSignalHandler(connectionId);
-        NetherNetChannel.deregisterAll(pc);
-        pc.close();
+    private void abandon(long connectionId, @Nullable ScheduledFuture<?> timeoutTask, @Nullable PeerConnection pc) {
+        if (pc == null) return;
+        try {
+            if (timeoutTask != null) timeoutTask.cancel(false);
+            signaling.removeSignalHandler(connectionId);
+        } finally {
+            try {
+                NetherNetChannel.deregisterAll(pc);
+            } finally {
+                pc.close();
+            }
+        }
     }
 
     /**
@@ -232,10 +263,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private class ServerPeerConnectionObserver {
         private final long connectionId;
         private final String remoteNetworkId;
-        private NetherNetChildChannel child;
+        private volatile NetherNetChildChannel child;
 
-        private DataChannel reliable;
-        private DataChannel unreliable;
+        private volatile DataChannel reliable;
+        private volatile DataChannel unreliable;
 
         private ScheduledFuture<?> handshakeTimeout;
 
@@ -362,12 +393,21 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             String label = dataChannel.label();
             log.debug("Received Data Channel: {}", label);
 
-            if (NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label)) {
-                this.reliable = dataChannel;
-            } else if (NetherNetConstants.UNRELIABLE_CHANNEL_LABEL.equals(label)) {
-                this.unreliable = dataChannel;
+            boolean accepted = false;
+            synchronized (this) {
+                if (NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label) && reliable == null) {
+                    reliable = dataChannel;
+                    accepted = true;
+                } else if (NetherNetConstants.UNRELIABLE_CHANNEL_LABEL.equals(label) && unreliable == null) {
+                    unreliable = dataChannel;
+                    accepted = true;
+                }
             }
-
+            if (!accepted) {
+                // Unknown and duplicate channels have no consumer; delete their native queues now.
+                dataChannel.close();
+                return;
+            }
             checkDataChannels();
         }
 
