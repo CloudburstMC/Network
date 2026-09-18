@@ -181,7 +181,9 @@ class MaintainedCandidatePublisherTest {
                 new ConnectivityCheck("vin1", 4, "discovered", endpoint("8.8.8.8", 19132), ConnectivityOutcome.NOT_ESTABLISHED, h.wall, h.wall + 60000),
                 new ConnectivityCheck("lim1", 4, "discovered", endpoint("8.8.4.4", 19132), ConnectivityOutcome.NOT_ESTABLISHED, h.wall, h.wall + 60000)), h.wall);
             assertEquals(List.of(endpoint("8.8.8.8", 19132)), published(h));
-            h.advance(1000);
+            h.advance(60001);
+            h.publisher.reportDirectChecks(List.of(), h.wall);
+            assertEquals(List.of(endpoint("8.8.8.8", 19132)), published(h), "Expiry alone cannot undo a successful regional result");
             h.publisher.reportDirectChecks(List.of(new ConnectivityCheck("lim1", 4, "discovered", endpoint("8.8.8.8", 19132), ConnectivityOutcome.NOT_ESTABLISHED, h.wall, h.wall + 60000)), h.wall);
             assertTrue(published(h).isEmpty());
             assertEquals(2, h.publisher.refresh().probeCandidates().candidates().size());

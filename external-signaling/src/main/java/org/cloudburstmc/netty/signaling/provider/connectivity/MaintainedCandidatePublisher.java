@@ -26,7 +26,6 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     private record CheckKey(String region, String method, InetSocketAddress target) { }
     private final Map<CheckKey, ConnectivityCheck> checks = new HashMap<>();
     private final boolean assistedJoins;
-    private long feedbackTime;
     private final Map<Family, InetSocketAddress> servers = new EnumMap<>(Family.class);
     private final Set<Integer> assistedFamilies;
     private volatile long mappingRevision = 1;
@@ -118,7 +117,6 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     /** Only current, public, directly tested endpoints affect offers. Assistance is never disabled by a probe. */
     public synchronized void reportDirectChecks(List<ConnectivityCheck> reports, long nowMillis) {
         requireOpen();
-        feedbackTime = Math.max(feedbackTime, nowMillis);
         for (var check : reports) {
             if (check.target() == null || check.checkedAt() > nowMillis || check.expiresAt() <= nowMillis
                     || check.method().equals("per_join") || check.outcome() == ConnectivityOutcome.UNKNOWN
@@ -136,10 +134,10 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     }
     private boolean failed(InetSocketAddress endpoint) {
         var matching = checks.values().stream().filter(c -> endpoint.equals(c.target())).toList();
-        // A successful region proves a usable path even when another region fails. A negative decision
-        // survives feedback expiry; only recovery or replacement of the actual endpoint clears it.
+        // A successful region proves a usable path even when another region fails. The latest terminal decision
+        // per region survives feedback expiry; only another result or endpoint replacement changes it.
         return matching.stream().anyMatch(c -> c.outcome() == ConnectivityOutcome.NOT_ESTABLISHED)
-                && matching.stream().noneMatch(c -> c.outcome() == ConnectivityOutcome.ESTABLISHED && c.expiresAt() > feedbackTime);
+                && matching.stream().noneMatch(c -> c.outcome() == ConnectivityOutcome.ESTABLISHED);
     }
     private static int number(Family family) { return family == Family.IPV4 ? 4 : 6; }
     private void requireOpen() { if (closed) throw new IllegalStateException("Candidate publisher closed"); }
