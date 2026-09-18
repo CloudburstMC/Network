@@ -90,7 +90,7 @@ public final class ProviderBench {
                 ProviderClient.ControlTransport.valueOf(System.getProperty("providerControlTransport", "HTTP").toUpperCase(Locale.ROOT)));
         var client = new ProviderClient(config, new ProviderStateStore(state), transport,
                 () -> new ServerStatus("Java bench", 1234, "fixture-only", "Fixture", 2, 50, 0),
-                () -> new ProviderClient.Health(true, true, 100, 0.02, "nethernet", "java-conformance"), System.err::println);
+                () -> new ProviderClient.Health(true, true, 100, 0.02, "nethernet", "java-conformance"), diagnostic -> System.err.println(diagnostic.level() + ": " + diagnostic.message()));
         try {
             JsonObject registration = client.start().get(30, TimeUnit.SECONDS);
             String extensionsFile = System.getProperty("providerExtensionsFile");

@@ -19,6 +19,15 @@ A pool attachment may have no public address. Public endpoints can change withou
 changing the runtime identity. `Health` accepts an optional `PlayerCount` with actual
 connected players and sample time, separate from the public `ServerStatus` supplier.
 
+`ProviderClient` diagnostics use `Consumer<ProviderDiagnostic>`; integrations must route
+its `DEBUG`, `INFO` and `WARN` levels to the matching logger methods and hide debug by
+default. This replaces the string-only callback, so update the library and its
+consumer together. Each failing background operation warns once, sends retries to
+debug, and reports recovery at info only after that operation succeeds. HTTP fallback
+does not mark the live WebSocket connection as recovered. Player assisted-join failures
+remain individual warnings; background diagnostic attempts remain debug observations
+until their completed regional results are reported by the host integration.
+
 `ProtocolExtensions` carries bounded optional metadata. Applications explicitly interpret
 known namespaces and invoke only their advertised same-origin operations. The core never
 performs product account/claim actions or stages individual joins from provider control.

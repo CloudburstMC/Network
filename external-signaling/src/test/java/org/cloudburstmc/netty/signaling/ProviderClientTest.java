@@ -18,6 +18,38 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderClientTest {
     @Test
+    void repeatedStatusReadFailuresRecoverOnlyWhenStatusCanBeRead(@TempDir Path path) throws Exception {
+        try (var stub = new IndependentProviderStub()) {
+            var broken = new java.util.concurrent.atomic.AtomicBoolean();
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            var client = new ProviderClient(new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example"),
+                    new ProviderStateStore(path), new FakeTransport(), () -> {
+                        if (broken.get()) throw new IllegalStateException("private failure details");
+                        return new ServerStatus("Example", 1234, "fixture", "", 1, 40, 0);
+                    }, () -> new ProviderClient.Health(true, true, 100, 0, "nethernet", "fixture"), logs::add);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                broken.set(true);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(1, logs.stream().filter(e -> e.level() == ProviderDiagnostic.Level.WARN
+                        && e.message().equals(ProviderLog.Operation.SERVER_STATUS.failure)).count());
+                assertTrue(logs.stream().anyMatch(e -> e.level() == ProviderDiagnostic.Level.DEBUG
+                        && e.message().equals(ProviderLog.Operation.SERVER_STATUS.failure)));
+                assertFalse(logs.stream().anyMatch(e -> e.message().equals(ProviderLog.Operation.SERVER_STATUS.recovery)));
+                broken.set(false);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(1, logs.stream().filter(e -> e.level() == ProviderDiagnostic.Level.INFO
+                        && e.message().equals(ProviderLog.Operation.SERVER_STATUS.recovery)).count());
+                assertTrue(logs.stream().noneMatch(e -> e.message().contains("private failure details")));
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void anUnusableAdmissionKeyIsNotPersistedAndTheHostStartsAgain(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Key host",

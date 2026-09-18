@@ -39,6 +39,7 @@ final class ProviderWebSocket implements AutoCloseable {
         return thread;
     });
     private final java.util.function.Function<org.cloudburstmc.netty.signaling.control.AssistedJoin, CompletionStage<AssistedAnswer>> assisted;
+    private final java.util.function.Consumer<org.cloudburstmc.netty.signaling.control.AssistedJoin> failedAssistedJoin;
     private int assistedInFlight;
     private Connection current;
     private long retryAt;
@@ -54,10 +55,12 @@ final class ProviderWebSocket implements AutoCloseable {
         Connection(String binding) { this.binding = binding; }
     }
 
-    ProviderWebSocket(HttpClient http, URI endpoint) { this(http, endpoint, null); }
+    ProviderWebSocket(HttpClient http, URI endpoint) { this(http, endpoint, null, ignored -> { }); }
     ProviderWebSocket(HttpClient http, URI endpoint,
-                      java.util.function.Function<org.cloudburstmc.netty.signaling.control.AssistedJoin, CompletionStage<AssistedAnswer>> assisted) {
+                      java.util.function.Function<org.cloudburstmc.netty.signaling.control.AssistedJoin, CompletionStage<AssistedAnswer>> assisted,
+                      java.util.function.Consumer<org.cloudburstmc.netty.signaling.control.AssistedJoin> failedAssistedJoin) {
         this.assisted = assisted;
+        this.failedAssistedJoin = failedAssistedJoin;
         this.http = http;
         this.endpoint = endpoint;
         io.setRemoveOnCancelPolicy(true);
@@ -134,7 +137,12 @@ final class ProviderWebSocket implements AutoCloseable {
                 CompletionStage<AssistedAnswer> work;
                 try { work = assisted.apply(join); }
                 catch (Throwable failure) { work = CompletableFuture.failedFuture(failure); }
+                var failureReported = new java.util.concurrent.atomic.AtomicBoolean();
+                Runnable reportFailure = () -> {
+                    if (failureReported.compareAndSet(false, true)) failedAssistedJoin.accept(join);
+                };
                 work.handle((guard, failure) -> {
+                    if (failure != null) reportFailure.run();
                     JsonObject reply = new JsonObject(); reply.addProperty("kind", "assisted-join-result");
                     reply.addProperty("id",join.id()); reply.addProperty("accepted",failure == null);
                     if (failure == null) reply.addProperty("answer", guard.sdp());
@@ -147,6 +155,7 @@ final class ProviderWebSocket implements AutoCloseable {
                     });
                 }).thenCompose(stage -> stage).whenComplete((ignored,failure) -> {
                     synchronized (ProviderWebSocket.this) { assistedInFlight--; }
+                    if (failure != null) reportFailure.run();
                 });
                 return CompletableFuture.completedFuture(null);
             }

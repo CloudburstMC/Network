@@ -187,7 +187,7 @@ public final class ProviderClient implements AutoCloseable {
     private final ProviderTransport transport;
     private final Supplier<ServerStatus> statusSupplier;
     private final Supplier<Health> healthSupplier;
-    private final Consumer<String> diagnostics;
+    private final ProviderLog diagnostics;
     private final String origin;
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "nethernet-provider");
@@ -243,13 +243,13 @@ public final class ProviderClient implements AutoCloseable {
 
     public ProviderClient(Configuration config, ProviderStateStore store, ProviderTransport transport,
                           Supplier<ServerStatus> statusSupplier, Supplier<Health> healthSupplier,
-                          Consumer<String> diagnostics) {
+                          Consumer<ProviderDiagnostic> diagnostics) {
         this.config = config;
         this.store = store;
         this.transport = transport;
         this.statusSupplier = statusSupplier;
         this.healthSupplier = healthSupplier;
-        this.diagnostics = diagnostics;
+        this.diagnostics = new ProviderLog(diagnostics);
         this.origin = ProviderCrypto.origin(config.provider());
     }
 
@@ -311,14 +311,16 @@ public final class ProviderClient implements AutoCloseable {
                 } catch (Exception e) {
                     nextHeartbeat = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
                     nextStatusUpdate = nextHeartbeat;
-                    diagnostics.accept("provider_status_unavailable: " + safeFailure(e));
+                    diagnostics.failed(ProviderLog.Operation.STATUS);
+                    diagnostics.detail(ProviderLog.Operation.STATUS, safeFailure(e));
                 }
                 if (System.nanoTime() >= nextOutcomes) {
                     try {
                         flushEvents();
                     } catch (Exception e) {
                         nextOutcomes = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                        diagnostics.accept("provider_events_unavailable: " + safeFailure(e));
+                        diagnostics.failed(ProviderLog.Operation.EVENTS);
+                        diagnostics.detail(ProviderLog.Operation.EVENTS, safeFailure(e));
                     }
                 }
             }, 1000, 1000, TimeUnit.MILLISECONDS);
@@ -694,7 +696,8 @@ public final class ProviderClient implements AutoCloseable {
                         }
                     } catch (Exception e) {
                         nextStatusUpdate = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                        diagnostics.accept("provider_status_unavailable: " + safeFailure(e));
+                        diagnostics.failed(ProviderLog.Operation.STATUS);
+                        diagnostics.detail(ProviderLog.Operation.STATUS, safeFailure(e));
                     }
                 }
             });
@@ -843,11 +846,12 @@ public final class ProviderClient implements AutoCloseable {
             ServerStatus status = null;
             try {
                 status = currentStatus();
+                diagnostics.recovered(ProviderLog.Operation.SERVER_STATUS);
                 if (status != null) {
                     body.add("serverStatus", JSON.toJsonTree(status));
                 }
             } catch (RuntimeException failure) {
-                diagnostics.accept("status_refresh_failed");
+                diagnostics.failed(ProviderLog.Operation.SERVER_STATUS);
             }
             long requestStarted = System.nanoTime();
             var captured = profileSnapshot;
@@ -983,6 +987,7 @@ public final class ProviderClient implements AutoCloseable {
                 }
             }
             if (!again) {
+                diagnostics.recovered(ProviderLog.Operation.STATUS);
                 return;
             }
         } catch (ProviderTransport.HostProfileSnapshotChangedException replaced) {
@@ -1050,9 +1055,10 @@ public final class ProviderClient implements AutoCloseable {
             }
             snapshot.requireCurrent();
             transport.reportConnectivityChecks(snapshot.candidateRevision(), parsed).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            diagnostics.recovered(ProviderLog.Operation.CONNECTIVITY);
         } catch (Exception unavailable) {
             // Optional observations must not undo a successful ordinary heartbeat or change host serving state.
-            diagnostics.accept("provider_connectivity_feedback_unavailable");
+            diagnostics.failed(ProviderLog.Operation.CONNECTIVITY);
         }
     }
 
@@ -1178,6 +1184,7 @@ public final class ProviderClient implements AutoCloseable {
         // Dropped by position, and only once the exchange is done, so no view spans the request
         pending.asList().subList(0, sent).clear();
         save();
+        diagnostics.recovered(ProviderLog.Operation.EVENTS);
     }
 
     /**
@@ -1416,7 +1423,7 @@ public final class ProviderClient implements AutoCloseable {
                 } catch (IOException | ExecutionException | TimeoutException failure) {
                     // Retry the SAME signed operation over HTTPS; neither intent nor body is replaced.
                     ambiguous |= state.has("pendingWebSocketOperation");
-                    diagnostics.accept("provider_websocket_unavailable");
+                    diagnostics.failed(ProviderLog.Operation.WEBSOCKET);
                 }
             }
             boolean usedWebSocket = response != null;
@@ -1473,6 +1480,7 @@ public final class ProviderClient implements AutoCloseable {
             JsonObject result = JsonParser.parseString(text).getAsJsonObject();
             if (signed) lastControlCarrier = usedWebSocket ? "websocket" : "http";
             if (signed) clearWebSocketPending();
+            if (usedWebSocket) diagnostics.recovered(ProviderLog.Operation.WEBSOCKET);
             return result;
         }
         throw new IOException("Provider retry limit exceeded");
@@ -1513,7 +1521,7 @@ public final class ProviderClient implements AutoCloseable {
                 throw new IOException("Unsupported provider WebSocket capability");
             trusted(httpEndpoint);
             websocketEndpoint = endpoint;
-            websocket = new ProviderWebSocket(http, endpoint, config.assistedJoins() ? this::assistedJoin : null);
+            websocket = new ProviderWebSocket(http, endpoint, config.assistedJoins() ? this::assistedJoin : null, diagnostics::assistedJoinFailed);
         } catch (IllegalArgumentException | NullPointerException failure) {
             throw new IOException("Invalid provider WebSocket capability", failure);
         }
@@ -1585,7 +1593,7 @@ public final class ProviderClient implements AutoCloseable {
         try {
             store.write(state);
         } catch (IOException failure) {
-            diagnostics.accept("provider_persistence_failed");
+            diagnostics.failed(ProviderLog.Operation.STORAGE);
             stop();
             throw failure;
         }
@@ -1621,7 +1629,7 @@ public final class ProviderClient implements AutoCloseable {
                     flushEvents();
                 }
             } catch (Exception e) {
-                diagnostics.accept("provider_drain_unavailable");
+                diagnostics.failed(ProviderLog.Operation.DRAIN);
             } finally {
                 closed = true;
                 started = false;
@@ -1632,12 +1640,12 @@ public final class ProviderClient implements AutoCloseable {
                 try {
                     transport.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
                 } catch (Exception e) {
-                    diagnostics.accept("transport_close_failed");
+                    diagnostics.failed(ProviderLog.Operation.TRANSPORT_CLOSE);
                 }
                 try {
                     store.close();
                 } catch (Exception e) {
-                    diagnostics.accept("provider_state_close_failed");
+                    diagnostics.failed(ProviderLog.Operation.STATE_CLOSE);
                 }
                 executor.shutdown();
                 stopped.complete(null);

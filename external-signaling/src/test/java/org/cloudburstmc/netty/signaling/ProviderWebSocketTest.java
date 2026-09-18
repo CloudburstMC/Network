@@ -53,6 +53,44 @@ class ProviderWebSocketTest {
     }
 
     @Test
+    void websocketFailuresStayQuietDuringHttpFallbackAndRecoverOnce(@TempDir Path path) throws Exception {
+        try (var provider = new Provider()) {
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            provider.rejectUpgrade = true;
+            var client = new ProviderClient(new ProviderClient.Configuration(URI.create(provider.stub.origin), "nxs-admission-v1",
+                    "WebSocket host", ProviderClient.NEW_SERVICE, ProviderClient.BEARER_TOKEN, "independent-provider-token",
+                    null, null, Map.of(), ProviderClient.ControlTransport.AUTO), new ProviderStateStore(path),
+                    new ProviderClientTest.FakeTransport(), () -> null,
+                    () -> new ProviderClient.Health(true, true, 20, 0, "nethernet", "fixture"), logs::add);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+                while (logs.stream().noneMatch(e -> e.level() == ProviderDiagnostic.Level.DEBUG
+                        && e.message().equals(ProviderLog.Operation.WEBSOCKET.failure)) && System.nanoTime() < deadline) {
+                    client.readiness().get(10, TimeUnit.SECONDS);
+                    Thread.sleep(100);
+                }
+                assertEquals("http", client.lastControlCarrier());
+                assertEquals(1, logs.stream().filter(e -> e.level() == ProviderDiagnostic.Level.WARN
+                        && e.message().equals(ProviderLog.Operation.WEBSOCKET.failure)).count());
+                assertTrue(logs.stream().anyMatch(e -> e.level() == ProviderDiagnostic.Level.DEBUG
+                        && e.message().equals(ProviderLog.Operation.WEBSOCKET.failure)));
+                assertFalse(logs.stream().anyMatch(e -> e.message().equals(ProviderLog.Operation.WEBSOCKET.recovery)));
+                provider.rejectUpgrade = false;
+                deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+                while (!client.lastControlCarrier().equals("websocket") && System.nanoTime() < deadline) {
+                    client.readiness().get(10, TimeUnit.SECONDS);
+                    Thread.sleep(100);
+                }
+                assertEquals("websocket", client.lastControlCarrier());
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(1, logs.stream().filter(e -> e.level() == ProviderDiagnostic.Level.INFO
+                        && e.message().equals(ProviderLog.Operation.WEBSOCKET.recovery)).count());
+            } finally { client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
     void recoveredStartupRetainsCommittedKeysAndRepublishesChangedProfile(@TempDir Path rootDirectory) throws Exception {
         for (var mode : List.of(ProviderClient.ControlTransport.AUTO, ProviderClient.ControlTransport.HTTP)) try (Provider provider = new Provider()) {
             Path directory = rootDirectory.resolve(mode.name());
@@ -381,10 +419,11 @@ class ProviderWebSocketTest {
                     guard.run(); var result = new CompletableFuture<String>(); nativeResult.set(result); started.add(join); return result;
                 }
             };
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
             ProviderClient client = new ProviderClient(new ProviderClient.Configuration(URI.create(provider.stub.origin), "nxs-admission-v1",
                     "assisted", ProviderClient.NEW_SERVICE, ProviderClient.BEARER_TOKEN, "independent-provider-token", null, null,
                     Map.of(), ProviderClient.ControlTransport.AUTO, false, "discovered", true), new ProviderStateStore(directory), transport,
-                    () -> null, () -> new ProviderClient.Health(true,true,10,0,"nethernet","test"), message -> {});
+                    () -> null, () -> new ProviderClient.Health(true,true,10,0,"nethernet","test"), logs::add);
             try {
                 client.start().get(20,TimeUnit.SECONDS);
                 var scheduled = ProviderClient.class.getDeclaredField("nextHeartbeat"); scheduled.setAccessible(true);
@@ -429,6 +468,8 @@ class ProviderWebSocketTest {
                     assertFalse(denied.get("accepted").getAsBoolean(), "Retained mode cannot extend either authority deadline");
                     assertTrue(started.isEmpty(), "Expired authority must not reach the native transport");
                 }
+                assertEquals(2, logs.stream().filter(e -> e.level() == ProviderDiagnostic.Level.WARN
+                        && e.message().equals("A player could not connect using an assisted join.")).count());
                 authorityField.set(client, originalAuthority);
                 join.addProperty("id","cd".repeat(16));
                 provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
