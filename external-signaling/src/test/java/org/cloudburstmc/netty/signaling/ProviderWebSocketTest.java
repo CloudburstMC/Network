@@ -406,7 +406,8 @@ class ProviderWebSocketTest {
                 join.addProperty("cpk",Base64.getEncoder().encodeToString(generator.generateKeyPair().getPublic().getEncoded()));
                 join.addProperty("localUfrag","assistedHost"); join.addProperty("localPassword","h".repeat(32));
                 join.addProperty("offer","v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=setup:actpass\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=ice-ufrag:assistedClient\r\na=ice-pwd:"+"c".repeat(128)+"\r\na=fingerprint:sha-256 "+String.join(":",Collections.nCopies(32,"AA"))+"\r\na=candidate:1 1 UDP 123 127.0.0.1 19132 typ host\r\n");
-                provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
+                join.add("kind", join.remove("kind")); // JSON members can arrive in any order.
+                provider.socket.writeAndFlush(new TextWebSocketFrame(" \n" + new GsonBuilder().setPrettyPrinting().create().toJson(join)));
                 assertNotNull(started.poll(5,TimeUnit.SECONDS)); nativeResult.get().complete("actual-prepared-answer");
                 JsonObject reply = provider.assistedReplies.poll(5,TimeUnit.SECONDS); assertNotNull(reply);
                 assertTrue(reply.get("accepted").getAsBoolean()); assertEquals("actual-prepared-answer",reply.get("answer").getAsString());

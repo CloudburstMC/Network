@@ -44,33 +44,19 @@ class EndpointConnectivityControllerTest {
     }
     static EndpointSelection automatic(List<Candidate> hints) { return select(endpoint("::", 19133), List.of(), hints); }
 
-    @Test void explicitEndpointsDisableStunAcrossBothFamiliesEvenAfterFailedChecks() {
+    @Test void explicitEndpointsDisableStunAcrossBothFamilies() {
         var f = new Fixture(select(endpoint("::", 19133), List.of(endpoint("8.8.8.8", 40000)), List.of()));
-        var check = f.controller.beginDirectCheck(Family.IPV4);
-        assertTrue(f.controller.completeDirectCheck(check, CheckOutcome.FAILED));
         assertEquals(State.CONFIGURED, f.state(Family.IPV4));
         assertEquals(State.DISABLED_BY_CONFIG, f.state(Family.IPV6));
         assertEquals(0, f.opens);
         f.controller.close();
     }
 
-    @Test void directChecksAreCorrelatedAndUnknownDoesNotStartStun() {
+    @Test void publicLocalCandidatesSuppressStunForTheirFamilies() {
         var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST),
                 hint("2606:4700:4700::1111", Provenance.SERVER_PROPERTIES))));
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV6));
-        assertEquals(0, f.opens);
-        var old = f.controller.beginDirectCheck(Family.IPV4);
-        var check = f.controller.beginDirectCheck(Family.IPV4);
-        assertFalse(f.controller.completeDirectCheck(old, CheckOutcome.FAILED));
-        assertTrue(f.controller.completeDirectCheck(check, CheckOutcome.UNKNOWN));
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
-        assertEquals(0, f.opens);
-        assertFalse(f.controller.completeDirectCheck(check, CheckOutcome.FAILED));
-        f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.FAILED);
-        f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV6), CheckOutcome.SUCCEEDED);
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
-        assertEquals(State.DIRECT_CHECK_SUCCEEDED, f.state(Family.IPV6));
+        assertEquals(State.PUBLIC_DIRECT, f.state(Family.IPV4));
+        assertEquals(State.PUBLIC_DIRECT, f.state(Family.IPV6));
         assertEquals(0, f.opens);
         f.controller.close();
     }
@@ -167,52 +153,6 @@ class EndpointConnectivityControllerTest {
         f.controller.close();
     }
 
-    @Test void lateDirectCompletionCannotStartFallbackOrExtendAReport() {
-        var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST))));
-        var late = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
-        f.clock.addAndGet(Duration.ofSeconds(10).toNanos());
-        assertFalse(f.controller.completeDirectCheck(late, CheckOutcome.FAILED));
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
-        assertNull(f.monitors.get(Family.IPV4));
-        var current = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
-        f.clock.addAndGet(Duration.ofSeconds(9).toNanos());
-        assertTrue(f.controller.completeDirectCheck(current, CheckOutcome.SUCCEEDED));
-        var report = f.snapshot().families().get(Family.IPV4);
-        assertEquals(current.expiresAtNanos(), report.directCheckExpiresAtNanos().orElseThrow());
-        assertEquals(CheckOutcome.SUCCEEDED, report.directCheckAt(f.clock.get()));
-        f.clock.addAndGet(Duration.ofSeconds(1).toNanos());
-        assertEquals(CheckOutcome.UNKNOWN, report.directCheckAt(f.clock.get()));
-        var expired = f.snapshot().families().get(Family.IPV4);
-        assertEquals(CheckOutcome.UNKNOWN, expired.directCheck());
-        assertEquals(State.AWAITING_DIRECT_CHECK, expired.state());
-        assertTrue(expired.directCheckExpiresAtNanos().isEmpty());
-        assertThrows(IllegalArgumentException.class, () -> f.controller.beginDirectCheck(Family.IPV4, Duration.ofMinutes(6)));
-        assertThrows(IllegalArgumentException.class, () -> f.controller.beginDirectCheck(Family.IPV4, Duration.ZERO));
-        f.controller.close();
-    }
-
-    @Test void retainedSuccessKeepsItsOriginalDeadlineAndMaterialChangeFencesOutstandingChecks() {
-        var f = new Fixture(automatic(List.of(hint("8.8.8.8", Provenance.NATIVE_HOST))));
-        var positive = f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(10));
-        assertTrue(f.controller.completeDirectCheck(positive, CheckOutcome.SUCCEEDED));
-        f.clock.addAndGet(Duration.ofSeconds(5).toNanos());
-        assertFalse(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.FAILED));
-        assertFalse(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.UNKNOWN));
-        assertTrue(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4, Duration.ofSeconds(1)), CheckOutcome.SUCCEEDED));
-        assertEquals(positive.expiresAtNanos(), f.snapshot().families().get(Family.IPV4).directCheckExpiresAtNanos().orElseThrow());
-        var pending = f.controller.beginDirectCheck(Family.IPV4);
-        f.controller.invalidateDirectChecks();
-        assertFalse(f.controller.completeDirectCheck(pending, CheckOutcome.SUCCEEDED));
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
-        assertNull(f.monitors.get(Family.IPV4));
-        assertTrue(f.controller.completeDirectCheck(f.controller.beginDirectCheck(Family.IPV4), CheckOutcome.FAILED));
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
-        f.controller.invalidateDirectChecks();
-        assertEquals(State.AWAITING_DIRECT_CHECK, f.state(Family.IPV4));
-        assertNull(f.monitors.get(Family.IPV4), "Direct failure never opens STUN for a public host family");
-        f.controller.close();
-    }
-
     @Test void stoppedWarmLaneCannotRestartFromServerRefresh() {
         var f = new Fixture(automatic(List.of()));
         f.snapshot(); var monitor = f.monitors.get(Family.IPV4);
@@ -240,7 +180,7 @@ class EndpointConnectivityControllerTest {
         assertThrows(IllegalStateException.class, f.controller::close);
         assertFalse(monitor.closed);
         assertTrue(f.snapshot().families().values().stream().allMatch(s -> s.state() == State.CLOSED
-                && s.freshStunEndpoint().isEmpty() && s.directCheck() == CheckOutcome.UNKNOWN));
+                && s.freshStunEndpoint().isEmpty()));
         f.controller.close();
         assertTrue(monitor.closed);
         assertEquals(4, monitor.closeCalls);

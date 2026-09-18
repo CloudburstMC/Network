@@ -177,7 +177,6 @@ class ProviderRuntimeConfigurationTest {
             var selected = runtime(dir, settings);
             assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
             assertFalse(selected.nativeHostOptions().containsKey("stunServers"));
-            assertFalse(selected.nativeHostOptions().containsKey("controlMode"));
         }
     }
 }

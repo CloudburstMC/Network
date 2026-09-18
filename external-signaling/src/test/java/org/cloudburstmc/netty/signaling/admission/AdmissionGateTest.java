@@ -4,81 +4,13 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class AdmissionGateTest extends AdmissionFixture {
     final InetSocketAddress other = new InetSocketAddress("127.0.0.1", 23451);
-
-    @Test
-    void enableChecksTheImmutableDeadlineAfterAcquiringItsGateLock() throws Exception {
-        var nanos = new java.util.concurrent.atomic.AtomicLong(10);
-        var gate = new AdmissionGate(new AdmissionGate.Limits(2, 2, 1, 1000), validator(), false, nanos::get);
-        assertThrows(IllegalArgumentException.class, () -> gate.stage(10));
-        assertThrows(IllegalArgumentException.class, () -> gate.stage(300_000_000_011L));
-        var token = gate.stage(20);
-        var attempting = new CountDownLatch(1);
-        var executor = Executors.newSingleThreadExecutor();
-        Future<Boolean> result;
-        try {
-            synchronized (gate) {
-                result = executor.submit(() -> { attempting.countDown(); return gate.enable(token); });
-                assertTrue(attempting.await(2, TimeUnit.SECONDS));
-                nanos.set(20);
-            }
-            assertFalse(result.get(2, TimeUnit.SECONDS));
-            assertFalse(gate.isServing());
-        } finally { executor.shutdownNow(); }
-    }
-
-    @Test
-    void controlledGateIsClosedBeforeFirstReservationAndOnlyCurrentTokenEnables() {
-        var gate = new AdmissionGate(new AdmissionGate.Limits(2, 2, 1, 1000), validator(), false);
-        assertFalse(gate.isServing());
-        assertNull(gate.reserve(request(), now, 0));
-        assertEquals(0, gate.stats().claims());
-        var old = gate.stage(System.nanoTime() + 30_000_000_000L);
-        var current = gate.stage(System.nanoTime() + 30_000_000_000L);
-        assertFalse(gate.enable(old));
-        assertTrue(gate.enable(current));
-        assertFalse(gate.enable(current), "single-use token");
-        assertNotNull(gate.reserve(request(), now, 0));
-    }
-
-    @Test
-    void stagingCancelsUnreadyReservationsWithoutReleasingCapacityUntilTeardown() throws Exception {
-        var gate = new AdmissionGate(new AdmissionGate.Limits(2, 4, 2, 1000), validator());
-        var established = gate.reserve(request(), now, 0);
-        assertTrue(gate.ready(established));
-        var pending = gate.reserve(new AdmissionRequest(anotherToken(), remote, other), now, 0);
-        assertNotNull(pending);
-        var stage = gate.stage(System.nanoTime() + 30_000_000_000L);
-        assertNotNull(gate.admission(established), "existing admitted identity survives");
-        assertNull(gate.admission(pending));
-        assertFalse(gate.ready(pending));
-        assertEquals(2, gate.stats().sessions(), "native work still owns its reservation until finish");
-        assertTrue(gate.enable(stage));
-        assertFalse(gate.ready(pending), "reenabling cannot revive old pending work");
-        assertTrue(gate.finish(pending));
-        assertEquals(1, gate.stats().sessions());
-        assertTrue(gate.finish(established));
-    }
-
-    @Test
-    void drainCloseAndOtherGateTokensCannotEnable() {
-        var gate = gate();
-        var another = gate();
-        assertFalse(gate.enable(another.stage(System.nanoTime() + 30_000_000_000L)));
-        var staged = gate.stage(System.nanoTime() + 30_000_000_000L);
-        gate.drain();
-        assertFalse(gate.enable(staged));
-        assertThrows(IllegalStateException.class, () -> gate.stage(System.nanoTime() + 30_000_000_000L));
-        var otherStage = another.stage(System.nanoTime() + 30_000_000_000L);
-        another.close();
-        assertFalse(another.enable(otherStage));
-        assertThrows(IllegalStateException.class, () -> another.stage(System.nanoTime() + 30_000_000_000L));
-    }
 
     AdmissionGate gate() {
         return new AdmissionGate(new AdmissionGate.Limits(2, 2, 1, 1000), validator());
@@ -280,7 +212,9 @@ class AdmissionGateTest extends AdmissionFixture {
     @Test
     void drainingRejectsNewReservations() {
         var gate = gate();
+        assertTrue(gate.isServing());
         gate.drain();
+        assertFalse(gate.isServing());
         assertNull(gate.reserve(request(), now, 0));
         assertEquals(0, gate.stats().claims());
         assertEquals(1, gate.stats().capacityRejected());

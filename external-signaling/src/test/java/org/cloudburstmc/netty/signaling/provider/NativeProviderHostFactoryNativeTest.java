@@ -41,7 +41,7 @@ class NativeProviderHostFactoryNativeTest {
                 var host = new NativeProviderHostFactory().open(bootstrap, new InetSocketAddress(InetAddress.getByName(ip), port), options).toCompletableFuture().get(10, TimeUnit.SECONDS);
                 try {
                     var nativeHost = (org.cloudburstmc.netty.signaling.admission.NativeProviderTransport) host.transport();
-                    assertTrue(nativeHost.supportsDiagnosticAdmission()); assertFalse(nativeHost.supportsNativeIdentityCapture());
+                    assertTrue(nativeHost.supportsDiagnosticAdmission());
                     assertEquals(0, nativeHost.candidatePublicationVersion()); assertTrue(nativeHost.channel().isServing());
                     nativeHost.installTicketKeys(List.of(new ProviderTransport.TicketKey("A001", "public-test-only-player-admission-secret"))).toCompletableFuture().get(5, TimeUnit.SECONDS);
                     var snapshot = nativeHost.captureHostProfile().toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -119,14 +119,14 @@ class NativeProviderHostFactoryNativeTest {
             }
         } finally { group.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly(); }
     }
-    @Test void actualListenerPublishesOnlyConfiguredEndpointOnBothFamiliesAndControlModes(@TempDir Path directory) throws Exception {
+    @Test void actualListenerPublishesOnlyConfiguredEndpointOnBothFamilies(@TempDir Path directory) throws Exception {
         var group = new DefaultEventLoopGroup(2);
         try {
-            for (String bindAddress : List.of("127.0.0.1", "::1")) for (boolean controlled : List.of(false)) {
+            for (String bindAddress : List.of("127.0.0.1", "::1")) {
                 int port;
                 try (var reservation = new DatagramSocket(new InetSocketAddress(InetAddress.getByName(bindAddress), 0))) { port = reservation.getLocalPort(); }
                 var options = new HashMap<String, String>();
-                options.put("stateDirectory", directory.resolve((bindAddress.equals("::1") ? "v6" : "v4") + controlled).toString());
+                options.put("stateDirectory", directory.resolve((bindAddress.equals("::1") ? "v6" : "v4")).toString());
                 options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
                 String configuredAddress = bindAddress.equals("::1") ? "2606:4700:4700::1111" : "8.8.8.8";
                 int forwardedPort = bindAddress.equals("::1") ? 39133 : 29133;

@@ -34,7 +34,7 @@ class NativeDiagnosticConfigurationTest {
         final AtomicReference<List<InetSocketAddress>> advertised = new AtomicReference<>();
         final AtomicInteger children = new AtomicInteger();
         Host(String address) throws Exception { this(address,true); }
-        Host(String address, boolean controlled) throws Exception {
+        Host(String address, boolean drained) throws Exception {
             bind = InetAddress.getByName(address); port = port(bind);
             var fixture = new NativeDiagnosticHostTest(); fixture.directory=directory; identity=fixture.identity();
             advertised.set(List.of(new InetSocketAddress(bind,port)));
@@ -44,12 +44,15 @@ class NativeDiagnosticConfigurationTest {
                         protected void channelRead0(ChannelHandlerContext ctx,ByteBuf bytes) {ctx.writeAndFlush(bytes.retain());}
                     });
                 } });
-            transport=(controlled ? NativeProviderTransport.openControlledVersion2(bootstrap,new InetSocketAddress(bind,port),snapshot(port),directory.resolve("host.crt"),directory.resolve("host.key"),AdmissionGate.Limits.defaults())
-                : NativeProviderTransport.open(bootstrap,new InetSocketAddress(bind,port),advertised::get,directory.resolve("host.crt"),directory.resolve("host.key"),AdmissionGate.Limits.defaults()))
+            transport=NativeProviderTransport.open(bootstrap,new InetSocketAddress(bind,port),advertised::get,directory.resolve("host.crt"),directory.resolve("host.key"),AdmissionGate.Limits.defaults())
                 .toCompletableFuture().get(5,TimeUnit.SECONDS);
+            if (drained) transport.channel().drainAdmissions();
             transport.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001","test-player-secret-of-at-least32bytes"))).toCompletableFuture().get();
         }
-        NativeCandidateSnapshot snapshot(int selectedPort) { return NativeCandidateSnapshot.hosts(List.of(new InetSocketAddress(bind,selectedPort))); }
+        void remap(int selectedPort) throws Exception {
+            advertised.set(List.of(new InetSocketAddress(bind,selectedPort)));
+            transport.captureHostProfile().toCompletableFuture().get();
+        }
         DiagnosticHostPolicy policy(long endpointExpiry) throws Exception {
             var snapshot=transport.captureHostProfile().toCompletableFuture().get();
             var profile=snapshot.profile();
@@ -87,9 +90,9 @@ class NativeDiagnosticConfigurationTest {
             assertThrows(IllegalArgumentException.class,()->host.transport.pollDiagnosticResults(33));
         }
     }
-    @Test @Timeout(25) void ordinaryTransportSupportsDiagnosticsWithoutControlledStateOrVersionTwo() throws Exception {
+    @Test @Timeout(25) void ordinaryTransportSupportsDiagnosticsWhileServing() throws Exception {
         for(String address:List.of("127.0.0.1","::1"))try(Host host=new Host(address,false)) {
-            assertFalse(host.transport.supportsNativeIdentityCapture());assertFalse(host.transport.hostProfile().toCompletableFuture().get().has("version"));
+            assertFalse(host.transport.hostProfile().toCompletableFuture().get().has("version"));
             assertTrue(host.transport.channel().isServing());
             long expiry=(System.currentTimeMillis()+15000)/1000*1000;var policy=host.policy(expiry+1000);host.configure(policy);
             try(Client client=host.client(expiry)) {
@@ -141,7 +144,7 @@ class NativeDiagnosticConfigurationTest {
             var overCapacity=host.transport.configureDiagnostics(policy).toCompletableFuture();
             assertThrows(ExecutionException.class,()->overCapacity.get(1,TimeUnit.SECONDS));
             try {
-                switch(change){case "disable"->host.transport.disableDiagnostics();case "remap"->host.transport.replaceCandidates(host.snapshot(host.port+1));case "close"->host.transport.close();}
+                switch(change){case "disable"->host.transport.disableDiagnostics();case "remap"->host.remap(host.port+1);case "close"->host.transport.close();}
             } finally {release.countDown();}
             assertThrows(ExecutionException.class,()->queued.get(5,TimeUnit.SECONDS),change);assertEquals(0,host.children.get());
         }
@@ -153,7 +156,7 @@ class NativeDiagnosticConfigurationTest {
                 host.connect(client,policy);await(()->client.channels[0].isOpen()&&client.channels[1].isOpen());
                 switch(change) {
                     case "disable"->host.transport.disableDiagnostics().toCompletableFuture().get();
-                    case "remap"->{host.transport.replaceCandidates(host.snapshot(host.port+1));host.transport.replaceCandidates(host.snapshot(host.port));}
+                    case "remap"->{host.remap(host.port+1);host.remap(host.port);}
                     case "generation"->host.configure(new DiagnosticHostPolicy(new Context(policy.context().providerOrigin(),policy.context().hostId(),policy.context().incarnation(),2),policy.keys(),policy.endpoints(),policy.expiresAt()));
                     case "key"->host.configure(new DiagnosticHostPolicy(policy.context(),List.of(),policy.endpoints(),policy.expiresAt()));
                 }
@@ -200,15 +203,13 @@ class NativeDiagnosticConfigurationTest {
         }
     }
     @Test @Timeout(25) void localConfigurationAndWithdrawalPreserveExistingPlayer() throws Exception {
-        try(Host host=new Host("127.0.0.1");PeerConnection player=PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(InetAddress.getLoopbackAddress()).withDisableAutoNegotiation(true))) {
-            var update=host.transport.beginAdmissionUpdate(System.nanoTime()+TimeUnit.SECONDS.toNanos(30));
-            host.transport.installTicketKeys(update,List.of(new ProviderTransport.TicketKey("K001",TestSignalingProvider.SECRET))).toCompletableFuture().get();
-            assertEquals(ProviderTransport.ApplyResult.APPLIED,host.transport.commitAdmissionUpdate(update,()->{}).toCompletableFuture().get());
+        try(Host host=new Host("127.0.0.1",false);PeerConnection player=PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(InetAddress.getLoopbackAddress()).withDisableAutoNegotiation(true))) {
+            host.transport.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001",TestSignalingProvider.SECRET))).toCompletableFuture().get();
             long expiry=(System.currentTimeMillis()+20000)/1000*1000;AtomicInteger echoes=new AtomicInteger();
             var reliable=player.createDataChannel("ReliableDataChannel");player.createDataChannel("UnreliableDataChannel",DataChannelInitSettings.DEFAULT.withReliability(DataChannelReliability.DEFAULT.withUnordered(true).withUnreliable(true).withMaxRetransmits(0)));
             reliable.onMessage.register(DataChannelCallback.Message.handleBinary((channel,bytes)->{if(bytes.remaining()==2&&bytes.get()==0&&bytes.get()==42)echoes.incrementAndGet();}));
             player.setLocalDescription("offer","playerFixture","p".repeat(24));
-            var answer=TestSignalingProvider.answer(player.localDescription(),host.identity.fingerprint(),host.port,expiry,NativeProviderTransport.audience(host.transport.captureNativeIdentity().incarnation()),false);
+            var answer=TestSignalingProvider.answer(player.localDescription(),host.identity.fingerprint(),host.port,expiry,NativeProviderTransport.audience(host.transport.hostProfile().toCompletableFuture().get().getAsJsonObject("statelessAdmission").get("incarnation").getAsString()),false);
             player.setRemoteDescription(answer.sdp(),SessionDescriptionType.ANSWER);await(reliable::isOpen);
             reliable.sendMessage(ByteBuffer.allocateDirect(2).put((byte)0).put((byte)42).flip());await(()->echoes.get()==1);
             var policy=host.policy(expiry+1000);host.configure(policy);

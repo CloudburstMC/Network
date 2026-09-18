@@ -50,8 +50,6 @@ public final class NativeProviderTransport implements ProviderTransport {
     private final String incarnation;
     private final Supplier<List<InetSocketAddress>> advertisedAddresses;
     private final ScheduledFuture<?> retireTask;
-    private final boolean controlled;
-    private final boolean version2;
     private final boolean fixedCandidates;
     private NativeCandidateSnapshot candidateSnapshot;
     private List<NativeCandidateSnapshot.Candidate> ordinaryCandidateOrder = List.of();
@@ -64,7 +62,6 @@ public final class NativeProviderTransport implements ProviderTransport {
     private volatile long publicationVersion;
     private boolean connectivityFeedbackPending;
     private volatile List<Epoch> epochs = List.of();
-    private Update update;
     private volatile boolean draining;
     private volatile boolean closed;
     private NativeDiagnosticHostGate diagnosticGate;
@@ -80,22 +77,13 @@ public final class NativeProviderTransport implements ProviderTransport {
         long now = Math.max(System.currentTimeMillis(), Math.addExact(diagnosticAnchorMillis, elapsed / 1_000_000));
         return diagnosticTime.accumulateAndGet(now, Math::max);
     }
-    private static final class Update implements AdmissionUpdate {
-        private final AdmissionGate.Staging nativeUpdate;
-        private boolean installed;
-        private boolean committing;
-        private Update(AdmissionGate.Staging nativeUpdate) { this.nativeUpdate = nativeUpdate; }
-    }
-
     private NativeProviderTransport(NativeAdmissionServerChannel channel, StatelessAdmissionValidator validator,
                                     String incarnation, Supplier<List<InetSocketAddress>> advertisedAddresses,
-                                    boolean controlled, NativeCandidateSnapshot candidates) {
+                                    NativeCandidateSnapshot candidates) {
         this.channel = channel;
         this.validator = validator;
         this.incarnation = incarnation;
         this.advertisedAddresses = advertisedAddresses;
-        this.controlled = controlled;
-        this.version2 = controlled && candidates != null;
         this.fixedCandidates = candidates != null;
         this.candidateSnapshot = candidates;
         retireTask = channel.eventLoop()
@@ -127,26 +115,7 @@ public final class NativeProviderTransport implements ProviderTransport {
                                                                 Supplier<List<InetSocketAddress>> advertised,
                                                                 Path certificate, Path privateKey,
                                                                 AdmissionGate.Limits limits) {
-        return open(bootstrap, bind, advertised, certificate, privateKey, limits, false);
-    }
-
-    /**
-     * Opt-in controlled listener. Admission is disabled before bind and remains disabled through key installation
-     * and durable application storage, until an explicit current update is committed. Legacy open is unchanged.
-     */
-    public static CompletionStage<NativeProviderTransport> openControlled(ServerBootstrap bootstrap,
-            InetSocketAddress bind, Supplier<List<InetSocketAddress>> advertised, Path certificate, Path privateKey,
-            AdmissionGate.Limits limits) {
-        return open(bootstrap, bind, advertised, certificate, privateKey, limits, true);
-    }
-
-    /** Explicit controlled v2 publication. Empty endpoints permit binding; STUN publication needs a later lease protocol. */
-    public static CompletionStage<NativeProviderTransport> openControlledVersion2(ServerBootstrap bootstrap,
-            InetSocketAddress bind, NativeCandidateSnapshot candidates, Path certificate, Path privateKey,
-            AdmissionGate.Limits limits) {
-        try { requirePublishableCandidates(candidates); }
-        catch (RuntimeException invalid) { return CompletableFuture.failedFuture(invalid); }
-        return open(bootstrap, bind, null, certificate, privateKey, limits, true, candidates);
+        return open(bootstrap, bind, advertised, certificate, privateKey, limits, null);
     }
 
     /** Explicit maintained publication, on the already bound gameplay mux. No STUN server discovery occurs here. */
@@ -163,7 +132,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         Objects.requireNonNull(selection);
         var servers = Map.copyOf(numericStunServers);
         var direct = NativeCandidateSnapshot.hosts(selection.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
-        return open(bootstrap, selection.bind(), null, certificate, privateKey, limits, false, direct).thenCompose(transport -> {
+        return open(bootstrap, selection.bind(), null, certificate, privateKey, limits, direct).thenCompose(transport -> {
             var controller = selection.configured() || assistedJoins
                     ? CompletableFuture.<org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController>completedFuture(null)
                     : transport.channel.enableConnectivity(selection, servers, Duration.ofMinutes(5));
@@ -183,13 +152,7 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     private static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
             Supplier<List<InetSocketAddress>> advertised, Path certificate, Path privateKey,
-            AdmissionGate.Limits limits, boolean controlled) {
-        return open(bootstrap, bind, advertised, certificate, privateKey, limits, controlled, null);
-    }
-
-    private static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
-            Supplier<List<InetSocketAddress>> advertised, Path certificate, Path privateKey,
-            AdmissionGate.Limits limits, boolean controlled, NativeCandidateSnapshot candidates) {
+            AdmissionGate.Limits limits, NativeCandidateSnapshot candidates) {
         CompletableFuture<NativeProviderTransport> result = new CompletableFuture<>();
         try {
             if (candidates == null) checkedEndpoints(advertised.get());
@@ -198,10 +161,10 @@ public final class NativeProviderTransport implements ProviderTransport {
             new SecureRandom().nextBytes(nonce);
             String incarnation = HexFormat.of().formatHex(nonce);
             var validator = new StatelessAdmissionValidator(audience(incarnation), 60_000);
-            var endpoint = new NativeAdmissionServerChannel(identity, validator, limits, true, !controlled);
+            var endpoint = new NativeAdmissionServerChannel(identity, validator, limits, true);
             bootstrap.clone().channelFactory(() -> endpoint).bind(bind).addListener(future -> {
                 if (future.isSuccess()) {
-                    result.complete(new NativeProviderTransport(endpoint, validator, incarnation, advertised, controlled, candidates));
+                    result.complete(new NativeProviderTransport(endpoint, validator, incarnation, advertised, candidates));
                 } else {
                     endpoint.close();
                     validator.clear();
@@ -226,16 +189,6 @@ public final class NativeProviderTransport implements ProviderTransport {
         return channel;
     }
 
-    /** Replace semantic endpoint material without rotating native identity, keys or established peers. */
-    public synchronized boolean replaceCandidates(NativeCandidateSnapshot next) {
-        if (candidatePublisher != null) throw new IllegalStateException("Maintained publisher owns endpoint replacement");
-        requirePublishableCandidates(next);
-        return replaceCandidateMaterial(next);
-    }
-
-    private boolean replaceCandidateMaterial(NativeCandidateSnapshot next) {
-        return replaceCandidateMaterial(next, false, !candidateSnapshot.equals(next));
-    }
     private boolean replaceCandidateMaterial(NativeCandidateSnapshot next, boolean diagnosticChanged, boolean identityChanged) {
         if (!fixedCandidates || closed || draining || !channel.isActive()) throw new IllegalStateException("Native listener unavailable");
         if (candidateSnapshot.equals(next) && !diagnosticChanged && !identityChanged) return false;
@@ -248,7 +201,6 @@ public final class NativeProviderTransport implements ProviderTransport {
         if (diagnosticGate != null && diagnosticPolicy != null) {
             diagnosticGate.retainEndpoints(Set.of());
         }
-        if (update != null) invalidateUpdate();
         return true;
     }
 
@@ -449,25 +401,9 @@ public final class NativeProviderTransport implements ProviderTransport {
         return diagnosticGate == null ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(diagnosticGate.stats().droppedResults());
     }
 
-    private static void requirePublishableCandidates(NativeCandidateSnapshot value) {
-        Objects.requireNonNull(value, "candidates");
-        if (value.candidates().stream().anyMatch(candidate -> candidate.type() != NativeCandidateSnapshot.Type.HOST))
-            throw new IllegalArgumentException("STUN candidate publication requires a bounded candidate lease");
-    }
-
     @Override
     public CompletionStage<JsonObject> hostProfile() {
         return captureHostProfile().thenApply(HostProfileSnapshot::profile);
-    }
-
-    @Override public boolean supportsNativeIdentityCapture() { return controlled && version2; }
-
-    @Override public NativeIdentitySnapshot captureNativeIdentity() {
-        if (!supportsNativeIdentityCapture()) throw new UnsupportedOperationException("Issued native ownership requires controlled version 2");
-        var snapshot = new NativeIdentitySnapshot(incarnation, () -> {
-            if (closed || draining || !channel.isActive()) throw new IllegalStateException("Native listener identity retired");
-        });
-        snapshot.requireCurrent(); return snapshot;
     }
 
     @Override public boolean supportsAssistedJoins() { return true; }
@@ -533,7 +469,6 @@ public final class NativeProviderTransport implements ProviderTransport {
         capability.addProperty("incarnation", incarnation);
 
         JsonObject profile = new JsonObject();
-        if (version2) profile.addProperty("version", 2);
         profile.add("candidates", candidates);
         profile.add("statelessAdmission", capability);
         profile.addProperty("credentialKeyId", keyId);
@@ -608,86 +543,6 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     @Override
     public synchronized CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
-        if (controlled) invalidateUpdate();
-        return installOwnedKeys(keys);
-    }
-
-    @Override
-    public boolean supportsAdmissionStaging() { return controlled; }
-
-    @Override
-    public AdmissionUpdate beginAdmissionUpdate(long deadlineNanos) {
-        if (!controlled) throw new UnsupportedOperationException("Listener was not opened controlled");
-        // Validate the caller's fixed bound before lock contention; never create a new relative deadline here.
-        long remaining = deadlineNanos - System.nanoTime();
-        if (remaining <= 0 || remaining > 300_000_000_000L) throw new IllegalArgumentException("Admission deadline");
-        synchronized (this) {
-            if (closed || draining || !channel.isActive()) throw new IllegalStateException("Native endpoint unavailable");
-            update = new Update(channel.stageAdmissions(deadlineNanos));
-            return update;
-        }
-    }
-
-    @Override
-    public synchronized CompletionStage<Void> installTicketKeys(AdmissionUpdate expected, List<TicketKey> keys) {
-        if (!current(expected)) return CompletableFuture.failedFuture(new IllegalStateException("Stale admission update"));
-        if (update.installed || update.committing) {
-            invalidateUpdate();
-            return CompletableFuture.failedFuture(new IllegalStateException("One key snapshot per admission update"));
-        }
-        update.installed = true;
-        CompletionStage<Void> installed = installOwnedKeys(keys);
-        // installOwnedKeys is synchronous; no callback or native continuation can renew this token.
-        if (installed.toCompletableFuture().isCompletedExceptionally()) invalidateUpdate();
-        return installed;
-    }
-
-    @Override
-    public CompletionStage<ApplyResult> commitAdmissionUpdate(AdmissionUpdate expected, Runnable requireCurrent) {
-        synchronized (this) {
-            if (!current(expected) || update.committing) return CompletableFuture.completedFuture(ApplyResult.REJECTED);
-            if (!update.installed) {
-                invalidateUpdate();
-                return CompletableFuture.completedFuture(ApplyResult.REJECTED);
-            }
-            // Freeze the staged contents before invoking application code outside the lock.
-            update.committing = true;
-        }
-        // Never run application/coordinator code under a transport/native monitor.
-        try {
-            Objects.requireNonNull(requireCurrent, "Current authority guard").run();
-        } catch (RuntimeException failure) {
-            synchronized (this) { if (current(expected)) invalidateUpdate(); }
-            return CompletableFuture.failedFuture(failure);
-        }
-        synchronized (this) {
-            // A guard may reenter and replace, close or drain this transport; no old token can undo it.
-            if (!current(expected)) return CompletableFuture.completedFuture(ApplyResult.REJECTED);
-            long now = System.currentTimeMillis();
-            Set<String> installed = validator.keyIds();
-            boolean eligible = epochs.stream().anyMatch(e -> e.notBefore() <= now && e.retireAfter() > now
-                    && installed.contains(e.id()));
-            if (!eligible) {
-                invalidateUpdate();
-                return CompletableFuture.completedFuture(ApplyResult.REJECTED);
-            }
-            boolean enabled = channel.enableAdmissions(update.nativeUpdate);
-            update = null;
-            return CompletableFuture.completedFuture(enabled ? ApplyResult.APPLIED : ApplyResult.REJECTED);
-        }
-    }
-
-    private boolean current(AdmissionUpdate expected) {
-        return controlled && expected != null && expected == update && !closed && !draining
-                && channel.currentAdmissionUpdate(update.nativeUpdate);
-    }
-
-    private void invalidateUpdate() {
-        update = null;
-        channel.disableAdmissions();
-    }
-
-    private CompletionStage<Void> installOwnedKeys(List<TicketKey> keys) {
         if (closed) {
             return CompletableFuture.failedFuture(new IllegalStateException("Native endpoint closed"));
         }
@@ -717,15 +572,10 @@ public final class NativeProviderTransport implements ProviderTransport {
         }
 
         return switch (state) {
-            // Observe only: neither legacy permanent drain nor controlled staging can be bypassed here.
+            // A serving observation cannot reopen a permanently drained listener.
             case "serving" -> CompletableFuture.completedFuture(!closed && !draining && channel.isServing()
                     ? ApplyResult.APPLIED : ApplyResult.REJECTED);
-            case "draining" -> {
-                if (!controlled) yield drain().thenApply(ignored -> ApplyResult.APPLIED);
-                invalidateUpdate();
-                yield CompletableFuture.completedFuture(!closed && !draining && channel.isActive()
-                        ? ApplyResult.APPLIED : ApplyResult.REJECTED);
-            }
+            case "draining" -> drain().thenApply(ignored -> ApplyResult.APPLIED);
             case "closed" -> close().thenApply(ignored -> ApplyResult.APPLIED);
             default -> CompletableFuture.completedFuture(ApplyResult.REJECTED);
         };
@@ -754,7 +604,6 @@ public final class NativeProviderTransport implements ProviderTransport {
 
     @Override
     public synchronized CompletionStage<Void> drain() {
-        if (controlled) invalidateUpdate();
         draining = true;
         disableDiagnostics();
         if (candidateTask != null) candidateTask.cancel(false);
@@ -766,7 +615,6 @@ public final class NativeProviderTransport implements ProviderTransport {
     @Override
     public synchronized CompletionStage<Void> close() {
         if (!closed) {
-            if (controlled) invalidateUpdate();
             closed = true;
             draining = true;
             ++diagnosticMutation;

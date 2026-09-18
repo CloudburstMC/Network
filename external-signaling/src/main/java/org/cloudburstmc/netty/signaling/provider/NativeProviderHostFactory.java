@@ -109,7 +109,6 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
                 throw new IllegalArgumentException("Provider stateDirectory required");
             }
 
-            if (options.containsKey("controlMode")) throw new IllegalArgumentException("Obsolete provider control mode");
             String publication = options.get("candidatePublication");
             String assisted = options.getOrDefault("assistedJoins", "false");
             if (!Set.of("true", "false").contains(assisted)) throw new IllegalArgumentException("assistedJoins must be a boolean");

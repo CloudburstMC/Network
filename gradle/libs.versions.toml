@@ -1,7 +1,6 @@
 [versions]
 netty = "4.1.130.Final"
-# Temporary source-qualified TeamZiax package while the canonical native changes are upstreamed.
-libdatachannel = "0.24.5.0-teamziax-connectivity-8d2d2c0f7f07-SNAPSHOT"
+libdatachannel = "0.24.5.0-SNAPSHOT"
 gson = "2.13.2"
 jose4j = "0.9.6"
 junit = "5.9.2"

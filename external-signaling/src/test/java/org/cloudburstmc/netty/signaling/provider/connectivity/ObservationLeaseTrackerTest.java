@@ -41,8 +41,7 @@ class ObservationLeaseTrackerTest {
     }
     private static EndpointConnectivityController.FamilySnapshot lane(EndpointConnectivityController.Observation observation,
                                                                     EndpointConnectivityController.State state) {
-        return new EndpointConnectivityController.FamilySnapshot(state, EndpointConnectivityController.CheckOutcome.UNKNOWN,
-                OptionalLong.empty(), List.of(), Optional.ofNullable(observation),
+        return new EndpointConnectivityController.FamilySnapshot(state, List.of(), Optional.ofNullable(observation),
                 state == EndpointConnectivityController.State.STUN_FRESH ? Optional.of(observation.mapped()) : Optional.empty());
     }
     @Test void repeatedSuccessAndFailedRefreshRetainIdenticalDatesAndOriginalDeadline() {

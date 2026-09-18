@@ -8,18 +8,12 @@ import com.google.gson.JsonPrimitive;
 import com.google.gson.Strictness;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
-import org.cloudburstmc.netty.signaling.ProviderCrypto;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.nio.ByteBuffer;
-import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.ArrayList;
-import java.util.List;
 
 /** Bounded candidate JSON parsing; never use this for an opaque operation's original body. */
 final class ControlJson {
@@ -97,63 +91,8 @@ final class ControlJson {
         return value.getAsLong();
     }
 
-    static int version(JsonObject object) {
-        if (number(object, "version") != 1) throw invalid("version");
-        return 1;
-    }
-
-    static JsonObject object(JsonObject object, String field) {
-        JsonElement value = object.get(field);
-        if (value == null || !value.isJsonObject()) throw invalid(field);
-        return value.getAsJsonObject();
-    }
-
-    static List<String> strings(JsonObject object, String field) {
-        JsonElement value = object.get(field);
-        if (value == null || !value.isJsonArray()) throw invalid(field);
-        List<String> result = new ArrayList<>();
-        for (JsonElement item : value.getAsJsonArray()) {
-            if (!item.isJsonPrimitive() || !item.getAsJsonPrimitive().isString()) throw invalid(field);
-            result.add(item.getAsString());
-        }
-        return List.copyOf(result);
-    }
-
     static void safe(long number, boolean positive) {
         if (number < (positive ? 1 : 0) || number > MAX_SAFE_INTEGER) throw invalid("safe integer");
-    }
-
-    static void identifier(String value) {
-        if (value == null || !value.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")) throw invalid("identifier");
-    }
-
-    static void opaque(String value) {
-        if (value == null || !value.matches("[A-Za-z0-9_-]{16,128}")) throw invalid("opaque identifier");
-    }
-
-    static void audience(String value) {
-        ControlOrigin.requireCanonical(value);
-    }
-
-    static byte[] base64(String value, int maximum, boolean emptyAllowed) {
-        if (value == null || value.length() > (maximum * 4L + 2) / 3
-                || !(emptyAllowed ? value.matches("[A-Za-z0-9_-]*") : value.matches("[A-Za-z0-9_-]+"))) throw invalid("base64url");
-        byte[] bytes = Base64.getUrlDecoder().decode(value);
-        if (bytes.length > maximum || !ProviderCrypto.base64(bytes).equals(value)) throw invalid("base64url");
-        return bytes;
-    }
-
-    static void digest(String value) {
-        if (base64(value, 32, false).length != 32) throw invalid("digest");
-    }
-
-    static void utf8(byte[] value) {
-        try {
-            StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(value));
-        } catch (java.nio.charset.CharacterCodingException failure) {
-            throw invalid("UTF-8");
-        }
     }
 
     static IllegalArgumentException invalid(String reason) {

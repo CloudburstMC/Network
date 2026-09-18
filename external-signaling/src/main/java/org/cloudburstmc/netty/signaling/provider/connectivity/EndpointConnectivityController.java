@@ -16,9 +16,8 @@ import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSel
  * before its listener and must not use an old snapshot beyond its monotonic freshness deadline.
  */
 public final class EndpointConnectivityController implements AutoCloseable {
-    public enum CheckOutcome { UNKNOWN, SUCCEEDED, FAILED }
     public enum State {
-        CONFIGURED, DISABLED_BY_CONFIG, UNSUPPORTED_FAMILY, AWAITING_DIRECT_CHECK, DIRECT_CHECK_SUCCEEDED,
+        CONFIGURED, DISABLED_BY_CONFIG, UNSUPPORTED_FAMILY, PUBLIC_DIRECT,
         STUN_STOPPED, STUN_NOT_CONFIGURED, STUN_PENDING, STUN_FAILED, STUN_FRESH, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED, CLOSED
     }
     public enum TransactionState { PENDING, SUCCEEDED, FAILED }
@@ -45,35 +44,15 @@ public final class EndpointConnectivityController implements AutoCloseable {
     /** The factory must inherit the listener's exact bind address and fixed port. No utility socket. */
     public interface MonitorFactory { Monitor open(InetSocketAddress numericServer); }
 
-    /** Opaque correlation token; only the currently outstanding token is accepted, exactly once. */
-    public static final class DirectCheck {
-        private final Family family;
-        private final List<EndpointSelection.Candidate> candidates;
-        private final long expiresAtNanos;
-        private DirectCheck(Family family, List<EndpointSelection.Candidate> candidates, long expiresAtNanos) {
-            this.family = family; this.candidates = candidates; this.expiresAtNanos = expiresAtNanos;
-        }
-        public Family family() { return family; }
-        public List<EndpointSelection.Candidate> candidates() { return candidates; }
-        /** Fixed at request creation; accepting a response never extends its original validity. */
-        public long expiresAtNanos() { return expiresAtNanos; }
-    }
-
     public record Observation(InetSocketAddress server, InetSocketAddress mapped, TransactionState transactionState,
                               long monitorEpoch, long mappingRevision, long successfulResponses,
                               long failedTransactions, long lastSuccessAgeMillis, long freshUntilNanos) {
         /** Uses the same monotonic clock as this controller; freshness is never a reachability verdict. */
         public boolean freshAt(long nowNanos) { return lastSuccessAgeMillis >= 0 && nowNanos - freshUntilNanos < 0; }
     }
-    public record FamilySnapshot(State state, CheckOutcome directCheck, OptionalLong directCheckExpiresAtNanos,
-                                 List<EndpointSelection.Candidate> directCandidates,
+    public record FamilySnapshot(State state, List<EndpointSelection.Candidate> directCandidates,
                                  Optional<Observation> observation, Optional<InetSocketAddress> freshStunEndpoint) {
         public FamilySnapshot { directCandidates = List.copyOf(directCandidates); }
-        /** Rechecks a retained report using the controller's monotonic clock. This is not universal reachability. */
-        public CheckOutcome directCheckAt(long nowNanos) {
-            return directCheckExpiresAtNanos.isPresent() && nowNanos - directCheckExpiresAtNanos.getAsLong() < 0
-                    ? directCheck : CheckOutcome.UNKNOWN;
-        }
     }
     /** Revision changes only when the available endpoint set changes, not on unchanged STUN refreshes. */
     public record Snapshot(long candidateRevision, Map<Family, FamilySnapshot> families) {
@@ -82,10 +61,6 @@ public final class EndpointConnectivityController implements AutoCloseable {
 
     private static final class Lane {
         final List<EndpointSelection.Candidate> direct;
-        CheckOutcome result = CheckOutcome.UNKNOWN;
-        long resultExpiresAtNanos;
-        boolean fallbackChosen;
-        DirectCheck pendingCheck;
         InetSocketAddress server;
         Monitor monitor;
         long epoch;
@@ -122,58 +97,6 @@ public final class EndpointConnectivityController implements AutoCloseable {
         for (Family family : Family.values()) lanes.put(family, new Lane(selection.candidates(family), numericServers.get(family)));
     }
 
-    public synchronized DirectCheck beginDirectCheck(Family family) {
-        return beginDirectCheck(family, Duration.ofSeconds(30));
-    }
-
-    /** Bounds both request completion and the resulting report, measured from this call. */
-    public synchronized DirectCheck beginDirectCheck(Family family, Duration validity) {
-        requireOpen();
-        if (validity.isNegative() || validity.isZero() || validity.compareTo(Duration.ofMinutes(5)) > 0) {
-            throw new IllegalArgumentException("Direct-check validity must be positive and at most five minutes");
-        }
-        Lane lane = lanes.get(Objects.requireNonNull(family));
-        if (lane.direct.isEmpty()) throw new IllegalStateException("No direct candidates to check");
-        // A new check supersedes old asynchronous work without withdrawing a previous successful result.
-        return lane.pendingCheck = new DirectCheck(family, lane.direct, nanoTime.getAsLong() + validity.toNanos());
-    }
-
-    public synchronized boolean completeDirectCheck(DirectCheck check, CheckOutcome outcome) {
-        Objects.requireNonNull(check); Objects.requireNonNull(outcome);
-        Lane lane = lanes.get(check.family);
-        if (closed || lane.pendingCheck != check) return false;
-        lane.pendingCheck = null;
-        long now = nanoTime.getAsLong();
-        if (now - check.expiresAtNanos >= 0) return false;
-        if (lane.result == CheckOutcome.SUCCEEDED && now - lane.resultExpiresAtNanos < 0) {
-            // Regional observations can arrive out of order. A still-fresh success wins until
-            // its original deadline; only another success with a later original deadline extends it.
-            if (outcome != CheckOutcome.SUCCEEDED) return false;
-            if (check.expiresAtNanos - lane.resultExpiresAtNanos > 0)
-                lane.resultExpiresAtNanos = check.expiresAtNanos;
-            return true;
-        }
-        lane.result = outcome;
-        lane.resultExpiresAtNanos = check.expiresAtNanos;
-        if (outcome == CheckOutcome.FAILED) lane.fallbackChosen = true;
-        if (outcome == CheckOutcome.SUCCEEDED) {
-            lane.fallbackChosen = false;
-            stop(lane);
-            lane.failed = false;
-        }
-        return true;
-    }
-
-    /** A new native/candidate revision retires reports and outstanding checks, but keeps chosen STUN warm. */
-    synchronized void invalidateDirectChecks() {
-        requireOpen();
-        for (Lane lane : lanes.values()) {
-            lane.result = CheckOutcome.UNKNOWN;
-            lane.resultExpiresAtNanos = 0;
-            lane.pendingCheck = null;
-        }
-    }
-
     /** Explicit bounded DNS/provider rotation seam. A replacement withdraws the old observation immediately. */
     public synchronized void replaceStunServer(Family family, InetSocketAddress numericServer) {
         requireOpen();
@@ -199,15 +122,10 @@ public final class EndpointConnectivityController implements AutoCloseable {
     }
 
     private FamilySnapshot sample(Family family, Lane lane) {
-        if (lane.result != CheckOutcome.UNKNOWN && nanoTime.getAsLong() - lane.resultExpiresAtNanos >= 0) {
-            // Reporting expiry does not destroy an already selected/maintained NAT mapping.
-            lane.result = CheckOutcome.UNKNOWN;
-        }
         State inactive = closed ? State.CLOSED : selection.configured()
                 ? (lane.direct.isEmpty() ? State.DISABLED_BY_CONFIG : State.CONFIGURED)
                 : !selection.socketFamilies().contains(family) ? State.UNSUPPORTED_FAMILY : lane.failed ? State.MONITOR_FAILED
-                : lane.result == CheckOutcome.SUCCEEDED ? State.DIRECT_CHECK_SUCCEEDED
-                : !lane.direct.isEmpty() ? State.AWAITING_DIRECT_CHECK
+                : !lane.direct.isEmpty() ? State.PUBLIC_DIRECT
                 : lane.stopped ? State.STUN_STOPPED
                 : lane.server == null ? State.STUN_NOT_CONFIGURED : null;
         if (inactive != null) return view(lane, inactive, null);
@@ -245,9 +163,7 @@ public final class EndpointConnectivityController implements AutoCloseable {
     }
 
     private FamilySnapshot view(Lane lane, State state, Observation observation) {
-        CheckOutcome direct = closed ? CheckOutcome.UNKNOWN : lane.result;
-        return new FamilySnapshot(state, direct, direct == CheckOutcome.UNKNOWN ? OptionalLong.empty()
-                : OptionalLong.of(lane.resultExpiresAtNanos), closed ? List.of() : lane.direct,
+        return new FamilySnapshot(state, closed ? List.of() : lane.direct,
                 Optional.ofNullable(observation), Optional.ofNullable(lane.fresh));
     }
 
@@ -287,7 +203,6 @@ public final class EndpointConnectivityController implements AutoCloseable {
         closed = true;
         RuntimeException failure = null;
         for (Lane lane : lanes.values()) {
-            lane.pendingCheck = null;
             try { stop(lane); } catch (RuntimeException e) { if (failure == null) failure = e; else failure.addSuppressed(e); }
         }
         if (failure != null) throw failure;

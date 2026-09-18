@@ -16,9 +16,8 @@ import java.util.concurrent.CompletionException;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NativeProviderHostFactoryTest {
-    @Test void obsoleteDiagnosticInstallationOptionsFailBeforeIdentity(@TempDir Path directory) {
-        for (Map<String, String> selected : List.of(Map.of("diagnosticAdmission", "unknown"), Map.of("diagnosticAdmission", "install-v1"),
-                Map.of("diagnosticAdmission", "install-v1", "controlMode", "nethernet-control-v1"))) {
+    @Test void invalidDiagnosticOptionsFailBeforeIdentity(@TempDir Path directory) {
+        for (Map<String, String> selected : List.of(Map.of("diagnosticAdmission", "unknown"), Map.of("diagnosticAdmission", "install-v1"))) {
             var options = new HashMap<>(selected); options.put("stateDirectory", directory.resolve("identity").toString());
             assertThrows(CompletionException.class, () -> new NativeProviderHostFactory().open(new ServerBootstrap(), endpoint("127.0.0.1", 19133), options).toCompletableFuture().join());
             assertFalse(Files.exists(directory.resolve("identity")));
@@ -98,10 +97,10 @@ class NativeProviderHostFactoryTest {
         }
     }
 
-    @Test void policyIsIndependentOfControlModeAndAbsentPolicyPreservesAdditiveBehavior() throws Exception {
+    @Test void absentPolicyPreservesAdditiveBehavior() throws Exception {
         var endpointJson = "[{\"address\":\"8.8.8.8\",\"port\":29133}]";
         var bind = endpoint("1.1.1.1", 19133);
-        var options = new HashMap<>(strict(endpointJson)); options.put("controlMode", "nethernet-control-v1");
+        var options = strict(endpointJson);
         assertEquals(List.of(endpoint("8.8.8.8", 29133)), NativeProviderHostFactory.endpointSource(bind, options).get().advertised());
         var legacy = NativeProviderHostFactory.endpointSource(bind, Map.of("advertisedEndpoints", endpointJson)).get().advertised();
         assertEquals(2, legacy.size()); assertTrue(legacy.contains(bind)); assertTrue(legacy.contains(endpoint("8.8.8.8", 29133)));

@@ -123,7 +123,7 @@ final class ProviderWebSocket implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         try {
-            if (text.startsWith("{\"kind\":\"assisted-join\",")) {
+            if (isAssistedJoin(text)) {
                 if (assisted == null || assistedInFlight >= 32) throw new IOException("Assisted joins unavailable");
                 var join = org.cloudburstmc.netty.signaling.control.AssistedJoin.decode(text);
                 if (!connection.binding.equals(join.instanceId() + ":" + join.generation())) throw new IOException("Assisted owner mismatch");
@@ -162,6 +162,19 @@ final class ProviderWebSocket implements AutoCloseable {
     }
 
     private record Parsed(String id, Reply reply) { }
+
+    /** Select the decoder without making JSON whitespace or member order part of the protocol. */
+    private static boolean isAssistedJoin(String wire) throws IOException {
+        try (JsonReader reader = new JsonReader(new StringReader(wire))) {
+            reader.setStrictness(Strictness.STRICT);
+            reader.beginObject();
+            while (reader.hasNext()) {
+                if (reader.nextName().equals("kind")) return string(reader).equals("assisted-join");
+                reader.skipValue();
+            }
+            return false;
+        }
+    }
 
     /** Closed, shallow carrier envelope; the operation body remains an untouched string. */
     private static Parsed parse(String wire) throws IOException {

@@ -34,37 +34,16 @@ classifier candidate filtering uses. Publication does not test network reachabil
 configure port forwarding. An IPv6 wildcard listener accepts IPv4 and IPv6 with the
 pinned native stack; a concrete IPv6 bind does not imply IPv4 coverage.
 
-Controlled integrations can explicitly call `NativeProviderTransport.openControlledVersion2`
-with a `NativeCandidateSnapshot`, then call `replaceCandidates` as endpoint material changes.
-This is a separate API opt-in; the existing factory and all unversioned overloads retain
-1–32 candidates. A v2 profile includes `version: 2` and allows 0–32 candidates. Empty startup
-binds the gameplay listener before discovery; withdrawing the final candidate preserves its
-incarnation, certificate, admission keys and established peers. The controlled application
-reports `acceptingPlayers: false` for an empty advertisement while truthfully acknowledging
-its native serving state. This withdraws new endpoint discovery; it does not revoke already
-issued tickets or prove network reachability.
+`openMaintained` can bind before discovering an endpoint and maintains reflexive candidates
+on the gameplay UDP socket. Candidate snapshots retain their original expiry and ownership
+through profile publication. A changed mapping withdraws the old candidate; existing peers,
+keys and the native identity survive. A fresh successful probe is required before publishing
+a maintained mapping to players. Configured endpoints suppress automatic discovery.
 
-Candidate snapshots own resolved numeric UDP endpoints, derive IPv4/IPv6 family, and carry
-`HOST` or `SRFLX` type. Canonical ordering and the material revision ignore input order and
-duplicates. Unchanged replacements preserve ownership; A → B → A creates new ownership even
-though A has the same deterministic material revision. `captureHostProfile` returns immutable
-profile bytes and a nonblocking ownership guard, retained through asynchronous publication,
-native staging, durable storage and readiness confirmation. The synchronization carrier retains
-that guard through its own journal save and signing, checks it immediately before actual
-HTTPS/WebSocket sends, and guards response delivery and signed readiness confirmation. A
-failed guard preserves any durable original intent for strong reconciliation. Controlled WebSocket
-links must implement `sendText(wire, requireCurrent)`: lifecycle, readiness and authority messages
-retain their original guard through the bounded transport queue and check it immediately before
-the actual JDK send. A failed queued guard aborts that physical link and fails its remaining queue;
-it does not skip a frame or change the retained intent. Guards run outside the transport lock and
-transport ownership is checked again after any reentrant callback. Generic unguarded links cannot
-silently substitute for this handoff. Legacy adapters cannot return versioned profiles through the
-default capture method without providing that guard.
-
-`SRFLX` is representable for later discovery work but is rejected by both v2 open and
-replacement publication until a bounded candidate lease protocol exists. This API does not
-start STUN, open another UDP socket or enable automatic mapped-candidate publication. Typed
-factory/platform hint integration and same-mux warm STUN remain separate work.
+`captureHostProfile` returns immutable profile bytes and a nonblocking ownership guard.
+The client retains that guard through persistence and the HTTPS or WebSocket send queue,
+then rechecks it before processing the response. Replacing endpoint material invalidates old
+snapshots even when an address changes back to its previous value.
 
 All endpoints share one admission incarnation. The first authenticated source tuple
 owns its ticket, including when several address families are advertised; subsequent

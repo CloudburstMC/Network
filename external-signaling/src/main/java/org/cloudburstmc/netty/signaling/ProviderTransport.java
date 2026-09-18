@@ -32,35 +32,6 @@ import java.util.concurrent.CompletionStage;
 public interface ProviderTransport {
     enum ApplyResult {PENDING, APPLIED, REJECTED}
 
-    /** Opaque, single-use handle owned by one live transport instance. */
-    interface AdmissionUpdate { }
-
-    /** Controlled transports start with new player admission disabled, before binding. */
-    default boolean supportsAdmissionStaging() { return false; }
-
-    /**
-     * Disable new player admission synchronously; existing peers survive. Supply an absolute System.nanoTime
-     * deadline at most 300 seconds ahead. Capture nanoTime before reading the remaining authority lifetime;
-     * add that bounded remaining duration to the captured value so a pause cannot extend the deadline.
-     */
-    default AdmissionUpdate beginAdmissionUpdate(long deadlineNanos) {
-        throw new UnsupportedOperationException("Admission staging unavailable");
-    }
-
-    /** Install one owned key snapshot while this update remains disabled; required even when keys are unchanged. */
-    default CompletionStage<Void> installTicketKeys(AdmissionUpdate update, List<TicketKey> keys) {
-        throw new UnsupportedOperationException("Admission staging unavailable");
-    }
-
-    /**
-     * Call only after durable application storage completes. The nonblocking guard must throw if current
-     * authority/application ownership is lost. It runs synchronously before the final native-instance fence;
-     * it must not wait for other threads. Failure consumes this update and leaves admission disabled.
-     */
-    default CompletionStage<ApplyResult> commitAdmissionUpdate(AdmissionUpdate update, Runnable requireCurrent) {
-        throw new UnsupportedOperationException("Admission staging unavailable");
-    }
-
     /**
      * Existing PublishHostProfileRequest, exported from actual bound native metadata.
      */
@@ -118,23 +89,6 @@ public interface ProviderTransport {
         public long publicationVersion() { return publicationVersion; }
         public void requireCurrent() { current.run(); }
     }
-
-    /** Native listener lifetime, independent of endpoint material, ticket keys and control sockets. */
-    final class NativeIdentitySnapshot {
-        private final String incarnation;
-        private final Runnable current;
-        public NativeIdentitySnapshot(String incarnation, Runnable requireCurrent) {
-            if (incarnation == null || !incarnation.matches("[0-9a-f]{32}")) throw new IllegalArgumentException("Invalid native incarnation");
-            this.incarnation = incarnation; current = Objects.requireNonNull(requireCurrent);
-        }
-        public String incarnation() { return incarnation; }
-        public void requireCurrent() { current.run(); }
-    }
-
-    default boolean supportsNativeIdentityCapture() { return false; }
-
-    /** Bounded nonblocking capture; unsupported adapters cannot opt into issued native ownership. */
-    default NativeIdentitySnapshot captureNativeIdentity() { throw new UnsupportedOperationException("Native identity capture unavailable"); }
 
     /** Cheap local publication counter; freshness changes do not change candidateRevision. */
     default long candidatePublicationVersion() { return 0; }
@@ -222,7 +176,7 @@ public interface ProviderTransport {
     default List<JsonObject> pollEvents(int maximum) {
         if (maximum < 0 || maximum > 256) throw new IllegalArgumentException("Invalid outcome poll bound");
         if (maximum == 0) return List.of();
-        throw new UnsupportedOperationException("Bounded outcome polling is required for controlled mode");
+        throw new UnsupportedOperationException("Bounded outcome polling unavailable");
     }
 
     CompletionStage<Void> drain();

@@ -21,14 +21,6 @@ class NativeCandidateSnapshotTest {
                 new NativeCandidateSnapshot(List.of(new NativeCandidateSnapshot.Candidate(v4.endpoint(), NativeCandidateSnapshot.Type.SRFLX)))))
             assertNotEquals(first.materialRevision(), changed.materialRevision());
     }
-    @Test void srflxCannotOpenPublicationBeforeCandidateLeaseSupportExists() {
-        var mapped = new NativeCandidateSnapshot(List.of(new NativeCandidateSnapshot.Candidate(
-                new InetSocketAddress("8.8.8.8", 19132), NativeCandidateSnapshot.Type.SRFLX)));
-        var failure = assertThrows(java.util.concurrent.CompletionException.class, () -> NativeProviderTransport.openControlledVersion2(
-                null, null, mapped, null, null, null).toCompletableFuture().join());
-        assertInstanceOf(IllegalArgumentException.class, failure.getCause());
-        assertTrue(failure.getCause().getMessage().contains("candidate lease"), "reject before binding or loading identity");
-    }
     @Test void boundedResolvedConcreteEndpointsOnly() {
         for (var invalid : List.of(new InetSocketAddress("0.0.0.0", 19132), new InetSocketAddress("::", 19132),
                 new InetSocketAddress("127.0.0.1", 0), InetSocketAddress.createUnresolved("host.invalid", 19132)))
