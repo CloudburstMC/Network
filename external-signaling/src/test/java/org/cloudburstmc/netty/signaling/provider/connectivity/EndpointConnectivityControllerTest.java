@@ -153,19 +153,6 @@ class EndpointConnectivityControllerTest {
         f.controller.close();
     }
 
-    @Test void stoppedWarmLaneCannotRestartFromServerRefresh() {
-        var f = new Fixture(automatic(List.of()));
-        f.snapshot(); var monitor = f.monitors.get(Family.IPV4);
-        f.controller.stopStun(Family.IPV4);
-        assertTrue(monitor.closed);
-        assertEquals(State.STUN_STOPPED, f.state(Family.IPV4));
-        f.controller.replaceStunServer(Family.IPV4, SERVERS.get(Family.IPV4));
-        assertEquals(State.STUN_STOPPED, f.state(Family.IPV4));
-        assertEquals(2, f.opens);
-        assertFalse(f.monitors.get(Family.IPV6).closed);
-        f.controller.close();
-    }
-
     @Test void failedCloseRetainsOwnedHandleWithoutFreshEndpointOrDuplicateMonitor() {
         var f = new Fixture(automatic(List.of()));
         f.snapshot(); var monitor = f.monitors.get(Family.IPV4);

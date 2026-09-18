@@ -105,7 +105,7 @@ public final class EndpointSelection {
         if (candidate.endpoint().getPort() != bind.getPort()) {
             throw new IllegalArgumentException("Local candidate must use the fixed gameplay mux port");
         }
-        if (EndpointAddress.scope(candidate.endpoint().getAddress()) == EndpointAddress.Scope.PUBLIC
+        if (EndpointAddress.advertisable(candidate.endpoint().getAddress(), false)
                 && families.contains(Family.of(candidate.endpoint().getAddress()))) {
             // A concrete socket only owns that interface; other interfaces are not listener candidates.
             if (!bind.getAddress().isAnyLocalAddress() && candidate.provenance() == Provenance.LOCAL_INTERFACE
@@ -126,5 +126,8 @@ public final class EndpointSelection {
     public List<Candidate> candidates() { return candidates; }
     public List<Candidate> candidates(Family family) {
         return candidates.stream().filter(c -> Family.of(c.endpoint().getAddress()) == family).toList();
+    }
+    public List<Candidate> publicCandidates(Family family) {
+        return candidates(family).stream().filter(c -> EndpointAddress.scope(c.endpoint().getAddress()) == EndpointAddress.Scope.PUBLIC).toList();
     }
 }

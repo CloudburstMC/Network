@@ -292,6 +292,8 @@ public final class IndependentProviderStub implements AutoCloseable {
         ok.addProperty("accepted", true);
         switch (path) {
             case "/example/heartbeat" -> {
+                if (!body.has("appliedStateRevision")) throw new Failure(400, "legacy_state_field_required");
+                appliedRevision = body.get("appliedStateRevision").getAsLong();
                 lastHeartbeat = body;
                 heartbeats++;
                 if (body.has("installedKeyIds")) {

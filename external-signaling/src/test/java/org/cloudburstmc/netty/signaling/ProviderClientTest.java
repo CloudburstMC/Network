@@ -520,6 +520,7 @@ class ProviderClientTest {
     @Test
     void outcomeOutageBacksOffWhileHeartbeatsContinue(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.extensionMetadata = JsonParser.parseString("{\"org.nethernet.connectivity\":{\"version\":1,\"critical\":false,\"data\":{}}}").getAsJsonObject();
             FakeTransport host = new FakeTransport();
             stub.failOutcomes = true;
             var client = new ProviderClient(
@@ -556,6 +557,28 @@ class ProviderClientTest {
             assertEquals("2001:db8::1234", stub.events.get(0).get("remoteAddress").getAsString());
             assertEquals(54321, stub.events.get(0).get("remotePort").getAsInt());
             assertFalse(stub.events.get(0).has("sdp"));
+        }
+    }
+
+    @Test
+    void olderProviderReceivesOriginalOutcomeFields(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            var client = new ProviderClient(
+                    new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example"),
+                    new ProviderStateStore(path), host, () -> null,
+                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "fixture"), ignored -> { });
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(1, stub.appliedRevision, "Legacy heartbeat acknowledgement is retained");
+                host.events.add(JsonParser.parseString("""
+                        {"ticketId":"fixture-ticket","stage":"ticket.data_channels_open",
+                         "occurredAt":"2026-09-07T00:00:00Z","remoteAddress":"8.8.8.8","remotePort":54321}
+                        """).getAsJsonObject());
+                eventually(() -> !stub.events.isEmpty());
+                assertEquals(Set.of("ticketId", "stage", "occurredAt"), stub.events.get(0).keySet());
+            } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
         }
     }
 

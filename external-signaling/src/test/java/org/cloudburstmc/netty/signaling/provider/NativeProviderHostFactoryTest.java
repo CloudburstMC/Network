@@ -23,9 +23,9 @@ class NativeProviderHostFactoryTest {
             assertFalse(Files.exists(directory.resolve("identity")));
         }
     }
-    @Test void maintainedPathAllowsEmptyBindFirstAndPreservesConfiguredEndpoints() throws Exception {
+    @Test void maintainedPathRetainsPrivateFallbackAndPreservesConfiguredEndpoints() throws Exception {
         var empty = NativeProviderHostFactory.maintainedSelection(endpoint("10.0.0.1", 19133), strict("[]"));
-        assertTrue(empty.candidates().isEmpty());
+        assertEquals(List.of(endpoint("10.0.0.1", 19133)), empty.candidates().stream().map(c -> c.endpoint()).toList());
         var options = new HashMap<>(strict("[{\"address\":\"2606:4700:4700::1111\",\"port\":39133}]"));
         var explicit = NativeProviderHostFactory.maintainedSelection(endpoint("0.0.0.0", 19133), options);
         assertEquals(List.of(endpoint("2606:4700:4700::1111", 39133)), explicit.candidates().stream().map(c -> c.endpoint()).toList());

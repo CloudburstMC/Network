@@ -166,7 +166,7 @@ class ProviderWebSocketTest {
                 client.start().get(20, TimeUnit.SECONDS);
                 assertTrue(provider.websocketOps.contains("heartbeat"));
                 assertEquals("websocket", client.lastControlCarrier());
-                assertFalse(provider.stub.lastHeartbeat.has("appliedStateRevision"));
+                assertTrue(provider.stub.lastHeartbeat.has("appliedStateRevision"));
                 assertFalse(provider.httpOps.contains("/v1/nxs/heartbeat"));
                 assertTrue(provider.httpOps.contains("/v1/nxs/register"));
                 assertTrue(provider.httpOps.contains("/v1/nxs/complete"));

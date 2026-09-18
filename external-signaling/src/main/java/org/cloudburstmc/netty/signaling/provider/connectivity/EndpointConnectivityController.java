@@ -18,7 +18,7 @@ import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSel
 public final class EndpointConnectivityController implements AutoCloseable {
     public enum State {
         CONFIGURED, DISABLED_BY_CONFIG, UNSUPPORTED_FAMILY, PUBLIC_DIRECT,
-        STUN_STOPPED, STUN_NOT_CONFIGURED, STUN_PENDING, STUN_FAILED, STUN_FRESH, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED, CLOSED
+        STUN_NOT_CONFIGURED, STUN_PENDING, STUN_FAILED, STUN_FRESH, STUN_INELIGIBLE, STUN_STALE, MONITOR_FAILED, CLOSED
     }
     public enum TransactionState { PENDING, SUCCEEDED, FAILED }
 
@@ -65,7 +65,6 @@ public final class EndpointConnectivityController implements AutoCloseable {
         Monitor monitor;
         long epoch;
         boolean failed;
-        boolean stopped;
         InetSocketAddress fresh;
         Lane(List<EndpointSelection.Candidate> direct, InetSocketAddress server) { this.direct = direct; this.server = server; }
     }
@@ -94,7 +93,7 @@ public final class EndpointConnectivityController implements AutoCloseable {
         }
         maxAgeNanos = maxObservationAge.toNanos();
         numericServers.forEach(EndpointConnectivityController::checkServer);
-        for (Family family : Family.values()) lanes.put(family, new Lane(selection.candidates(family), numericServers.get(family)));
+        for (Family family : Family.values()) lanes.put(family, new Lane(selection.configured() ? selection.candidates(family) : selection.publicCandidates(family), numericServers.get(family)));
     }
 
     /** Explicit bounded DNS/provider rotation seam. A replacement withdraws the old observation immediately. */
@@ -105,14 +104,6 @@ public final class EndpointConnectivityController implements AutoCloseable {
         stop(lane);
         lane.server = numericServer;
         lane.failed = false;
-    }
-
-    /** A verified failed warm path retires its monitor; later sampling must not restart it. */
-    public synchronized void stopStun(Family family) {
-        requireOpen();
-        Lane lane = lanes.get(family);
-        lane.stopped = true;
-        stop(lane);
     }
 
     public synchronized Snapshot snapshot() {
@@ -126,7 +117,6 @@ public final class EndpointConnectivityController implements AutoCloseable {
                 ? (lane.direct.isEmpty() ? State.DISABLED_BY_CONFIG : State.CONFIGURED)
                 : !selection.socketFamilies().contains(family) ? State.UNSUPPORTED_FAMILY : lane.failed ? State.MONITOR_FAILED
                 : !lane.direct.isEmpty() ? State.PUBLIC_DIRECT
-                : lane.stopped ? State.STUN_STOPPED
                 : lane.server == null ? State.STUN_NOT_CONFIGURED : null;
         if (inactive != null) return view(lane, inactive, null);
         try {

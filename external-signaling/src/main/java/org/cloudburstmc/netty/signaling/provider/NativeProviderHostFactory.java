@@ -61,8 +61,10 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             // A configured set never invokes interface discovery, even for an omitted family.
             var selected = external.isEmpty() ? EndpointSelection.discover(bind, external, List.of())
                     : EndpointSelection.select(bind, external, List.of());
-            if (selected.candidates().isEmpty()) throw new IOException("No public local UDP endpoints; configure explicit advertised endpoints for external forwarding");
-            return new ProviderEndpoint(selected.bind(), selected.candidates().stream().map(EndpointSelection.Candidate::endpoint).toList());
+            var candidates = selected.candidates().stream().filter(c -> selected.configured()
+                    || EndpointAddress.scope(c.endpoint().getAddress()) == EndpointAddress.Scope.PUBLIC).toList();
+            if (candidates.isEmpty()) throw new IOException("No public local UDP endpoints; configure explicit advertised endpoints for external forwarding");
+            return new ProviderEndpoint(selected.bind(), candidates.stream().map(EndpointSelection.Candidate::endpoint).toList());
         };
     }
 

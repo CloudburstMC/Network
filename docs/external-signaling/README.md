@@ -60,7 +60,9 @@ Report `healthy` and `acceptingPlayers` independently on every heartbeat. A heal
 
 The game server owns its serving state. The provider may stop routing new
 players to it, but never sends a serve/drain/close instruction. Only assisted
-player joins may be unsolicited, and those require WebSocket transport.
+player joins may be unsolicited, and those require WebSocket transport. Legacy
+`appliedStateRevision`/`desiredState` fields remain as compatibility acknowledgements
+and echoes; they do not control the listener.
 
 For a replacement admission key, include a fresh `keyRequestId`. Save and install
 the returned key, then immediately heartbeat with the updated profile and

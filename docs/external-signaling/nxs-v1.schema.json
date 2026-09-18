@@ -498,31 +498,21 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 9007199254740991,
-                "description": "Original native STUN observation expiry in Unix milliseconds; required only for srflx. Retries and heartbeat/profile renewal must not extend it."
+                "description": "Optional deadline for a server-reflexive candidate, in Unix milliseconds. When absent, the host refreshes its current candidates under the heartbeat lease."
               }
             },
             "allOf": [
               {
                 "if": {
-                  "properties": {
-                    "type": {
-                      "const": "srflx"
-                    }
-                  },
-                  "required": [
-                    "type"
-                  ]
-                },
-                "then": {
                   "required": [
                     "expiresAt"
                   ]
                 },
-                "else": {
-                  "not": {
-                    "required": [
-                      "expiresAt"
-                    ]
+                "then": {
+                  "properties": {
+                    "type": {
+                      "const": "srflx"
+                    }
                   }
                 }
               }
@@ -655,7 +645,13 @@
           "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
         },
         "candidateLeases": false,
-        "nativeOwnerClaim": false
+        "nativeOwnerClaim": false,
+        "appliedStateRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Legacy v1 compatibility acknowledgement; send zero initially and acknowledge only a response matching the host-owned state."
+        }
       },
       "allOf": [
         {
@@ -724,7 +720,8 @@
         "activeKeyId",
         "leaseGeneration",
         "readiness",
-        "retirements"
+        "retirements",
+        "desiredState"
       ],
       "properties": {
         "accepted": {
@@ -754,7 +751,11 @@
           "maximum": 9007199254740991
         },
         "readiness": {
-          "$ref": "#/$defs/readiness"
+          "type": "object",
+          "required": [
+            "routable",
+            "reasons"
+          ]
         },
         "checkIn": {
           "$ref": "#/$defs/checkIn"
@@ -799,6 +800,24 @@
               }
             }
           }
+        },
+        "desiredState": {
+          "type": "object",
+          "required": [
+            "revision",
+            "state"
+          ],
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "state": {
+              "$ref": "#/$defs/hostState"
+            }
+          },
+          "description": "Legacy v1 compatibility echo of the reported host state. Providers must not use it to control the listener."
         }
       }
     },

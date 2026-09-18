@@ -1,4 +1,4 @@
-# Canonical origins for the draft control profile
+# Canonical origins for the optional control transport
 
 The optional control profile uses this explicit ASCII grammar for every signed
 audience and trusted expected origin. Validation accepts the original string or
@@ -49,5 +49,5 @@ See [Java IDN](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java
 contains explicit adversarial cases and deterministic IPv6 cases generated with
 an independent WHATWG serializer. Every accepted vector must retain its exact
 WHATWG origin bytes and be a usable JDK URI host. The tests also apply the same
-profile through active frames, lifecycle intents, bootstrap and HTTP carriers.
+profile through WebSocket and assisted-join validation.
 Existing cryptographic golden fixture files and signed bytes remain unchanged.

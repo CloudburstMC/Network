@@ -228,6 +228,7 @@ public final class ProviderClient implements AutoCloseable {
                                      long deadlineNanos, long expiresAt) { }
     private volatile AssistedAuthority assistedAuthority;
     private volatile boolean assistedMode;
+    private long appliedStateRevision;
     private String hostState = "serving";
     private String installedKeyId;
     private List<ProviderTransport.TicketKey> installedTicketKeys = List.of();
@@ -808,7 +809,6 @@ public final class ProviderClient implements AutoCloseable {
                 var data = new JsonObject();
                 data.addProperty("diagnostics", diagnosticsAdvertised);
                 data.addProperty("candidateRevision", profileSnapshot.candidateRevision());
-                data.add("probeCandidates", profileSnapshot.probeCandidates());
                 var assistedFamilies = new JsonArray();
                 if (config.assistedJoins()) profileSnapshot.assistedFamilies().stream().sorted().forEach(assistedFamilies::add);
                 data.add("assistedFamilies", assistedFamilies);
@@ -837,6 +837,8 @@ public final class ProviderClient implements AutoCloseable {
             body.addProperty("clockUnixMillis", snapshotClock);
             body.addProperty("checkInVersion", 1);
             body.addProperty("state", hostState);
+            // Keep the v1 field for older providers; acknowledging an echo never controls the listener.
+            body.addProperty("appliedStateRevision", appliedStateRevision);
             body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
             ServerStatus status = null;
             try {
@@ -973,6 +975,13 @@ public final class ProviderClient implements AutoCloseable {
                 }
             }
             // Serving state belongs to this host. Provider routing decisions never command its listener.
+            if (response.has("desiredState") && response.get("desiredState").isJsonObject()) {
+                JsonObject echo = response.getAsJsonObject("desiredState");
+                if (echo.has("state") && hostState.equals(echo.get("state").getAsString()) && echo.has("revision")) {
+                    long revision = echo.get("revision").getAsBigDecimal().longValueExact();
+                    if (revision >= appliedStateRevision && revision <= 9007199254740991L) appliedStateRevision = revision;
+                }
+            }
             if (!again) {
                 return;
             }
@@ -1001,8 +1010,7 @@ public final class ProviderClient implements AutoCloseable {
             JsonObject candidate = item.getAsJsonObject();
             String type = candidate.get("type").getAsString();
             if (!"udp".equals(candidate.get("protocol").getAsString()) || !Set.of("host", "srflx").contains(type)) return false;
-            if (type.equals("srflx") && (!candidate.has("expiresAt")
-                    || candidate.get("expiresAt").getAsBigDecimal().longValueExact() <= System.currentTimeMillis())) return false;
+            if (candidate.has("expiresAt") && candidate.get("expiresAt").getAsBigDecimal().longValueExact() <= System.currentTimeMillis()) return false;
         }
         return true;
     }
@@ -1105,7 +1113,7 @@ public final class ProviderClient implements AutoCloseable {
                 int family = address instanceof java.net.Inet6Address ? 6 : 4;
                 var endpoint = new DiagnosticHostPolicy.Endpoint(family, DiagnosticAdmissionCodec.address(family, address.getHostAddress()),
                         candidate.get("port").getAsBigDecimal().intValueExact(), snapshot.candidateRevision());
-                long endpointExpiry = "srflx".equals(candidate.get("type").getAsString())
+                long endpointExpiry = candidate.has("expiresAt")
                         ? Math.min(expiresAt, candidate.get("expiresAt").getAsBigDecimal().longValueExact()) : expiresAt;
                 if (endpointExpiry <= System.currentTimeMillis()) throw new IOException("Diagnostic endpoint expired");
                 endpointExpiries.merge(endpoint, endpointExpiry, Math::min);
@@ -1154,7 +1162,16 @@ public final class ProviderClient implements AutoCloseable {
         save();
         int sent = Math.min(100, pending.size());
         JsonArray batch = new JsonArray();
-        pending.asList().subList(0, sent).forEach(batch::add);
+        var connectivity = ProtocolExtensions.copy(discovery).getAsJsonObject(CONNECTIVITY_EXTENSION);
+        boolean observedEndpoints = connectivity != null && connectivity.get("version").getAsInt() == 1;
+        for (var event : pending.asList().subList(0, sent)) {
+            var wire = event.getAsJsonObject().deepCopy();
+            if (!observedEndpoints) {
+                wire.remove("remoteAddress");
+                wire.remove("remotePort");
+            }
+            batch.add(wire);
+        }
         JsonObject body = new JsonObject();
         body.add("events", batch);
         signed("outcomes", "POST", body);

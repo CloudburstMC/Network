@@ -1,12 +1,12 @@
 # NXS control transport
 
-NXS uses one host lifecycle over HTTPS and an optional WebSocket carrier. Both carriers use the same seven operations:
+NXS uses seven host operations over HTTPS and an optional WebSocket carrier:
 
 `register`, `complete`, `heartbeat`, `outcomes`, `rotate`, `retire`, `deregister`.
 
 ## Ownership
 
-The game server owns its actual serving state, bound socket, candidate observations, installed keys, local health and player counts. Warden owns registration, authorization, issued admission material and routing eligibility. Warden can stop routing players to a server; it does not tell the game listener to serve, drain or close. Regional probes supply independent external-connectivity observations.
+The game server owns its actual serving state, bound socket, candidate observations, installed keys, local health and player counts. The provider owns registration, authorization, issued admission material and routing eligibility. The provider can stop routing players to a server; it does not tell the game listener to serve, drain or close. Regional probes supply independent external-connectivity observations.
 
 The only unsolicited control-plane exchange is an authorized assisted player join, exclusively over WebSocket. Ordinary joins remain stateless. There is no generic remote-command or desired-serving-state channel.
 
@@ -34,13 +34,28 @@ The response contains the request's idempotency key as `id`, the actual HTTP `st
 
 The current adapter bounds complete UTF-8 messages to 524,288 bytes, original bodies to the existing NXS body limit, and queued operations to four per connection. These are transport bounds, not permission to increase original operation limits. Literal `ping` receives `pong`; this verifies socket liveness only and never renews authorization or commits a heartbeat.
 
-Ordinary hosts can use HTTPS or WSS. Assisted mode requires a live, authenticated, addressable WebSocket and bounded offer/answer/cancellation handling. An ordinary Worker socket cannot later be found by an unrelated request; an assisted socket must be owned by the designated Durable Object. The client advertises assistance only when explicitly enabled in host configuration and supported by its native transport. It advertises every eligible family immediately; connectivity observations never enable or disable assistance. Assistance defaults to off. It accepts assisted joins only while its authority and owning connection remain current.
+Ordinary hosts can use HTTPS or WSS. Assisted mode requires a live, authenticated, addressable WebSocket and bounded offer/answer/cancellation handling. The provider must be able to deliver a join request to the current host connection. How it locates that connection is an implementation choice. The client advertises assistance only when explicitly enabled in host configuration and supported by its native transport. It advertises every eligible family immediately; connectivity observations never enable or disable assistance. Assistance defaults to off. It accepts assisted joins only while its authority and owning connection remain current.
+
+## Assisted joins
+
+After the host opts in, the provider sends one `assisted-join` frame containing
+`kind`, `version: 1`, `id`, `instanceId`, `generation`, `incarnation`, `keyId`,
+`hostFingerprint`, `expiresAt`, `networkId`, `cpk`, `localUfrag`, `localPassword`
+and the client's SDP `offer`. The identity, incarnation, installed key and
+fingerprint must match the current host. Player attempts expire within 30 seconds.
+
+The host returns `{kind:"assisted-join-result",id,accepted:true,answer}` with its
+SDP answer, or `{kind:"assisted-join-result",id,accepted:false}` on failure.
+It uses the existing gameplay socket and admission credentials. No activation,
+acknowledgement or completion operation is added. Expiry or connection replacement
+cancels local work; late results are discarded. Hosts bound concurrent attempts
+and never create a separate long-lived listener per join.
 
 ## Failure and expiry
 
 Reconnect after graceful close, abrupt loss or detected blackhole with bounded backoff and jitter. Reuse the same identity and reconcile non-repeatable operations. Do not replay expired assisted offers. Superseded sockets cannot change current state or deliver a result for a different attempt.
 
-Cached authority has a fixed maximum age of five minutes. Reconnect, ping/pong and re-reading the same cached snapshot cannot extend it. Key publication/retirement must accommodate delayed visibility. Ordinary observations should avoid strong database commits; key and identity mutations still require their authoritative checks. Both carriers use the existing operation authentication. Provider storage choices and fleet capacity require separate deployment validation.
+Cached authority has a fixed maximum age of five minutes. Reconnect, ping/pong and re-reading the same cached snapshot cannot extend it. Key publication/retirement must accommodate delayed visibility. Key and identity mutations retain their authorization and replay checks. Both carriers use the existing operation authentication. Provider storage choices and fleet capacity require separate deployment validation.
 
 Reporting frequency, socket keepalive, authorization deadlines and UDP STUN refresh are independent. A long report interval never suspends needed UDP maintenance.
 

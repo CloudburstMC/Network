@@ -14,7 +14,6 @@ import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSel
 import static org.junit.jupiter.api.Assertions.*;
 
 class MaintainedCandidatePublisherTest {
-    static final String INCARNATION = "0123456789abcdef0123456789abcdef";
     static InetSocketAddress endpoint(String ip, int port) {
         try { return new InetSocketAddress(EndpointAddress.parse(ip), port); }
         catch (Exception failure) { throw new AssertionError(failure); }
@@ -29,7 +28,7 @@ class MaintainedCandidatePublisherTest {
             var controller = new EndpointConnectivityController(selection, servers, Duration.ofMinutes(5), server -> {
                 var monitor = new Monitor(server); monitors.put(Family.of(server.getAddress()), monitor); return monitor;
             }, () -> nanos);
-            publisher = new MaintainedCandidatePublisher(selection, controller, new ObservationLeaseTracker(INCARNATION, () -> wall, () -> nanos));
+            publisher = new MaintainedCandidatePublisher(selection, controller, () -> nanos);
             publisher.configureStunServers(servers);
         }
         void advance(long millis) { wall += millis; nanos += millis * 1000000; }
@@ -60,113 +59,86 @@ class MaintainedCandidatePublisherTest {
     static ConnectivityCheck check(Harness h, int family, String method, String ip, int port, ConnectivityOutcome outcome) {
         return new ConnectivityCheck(family, method, endpoint(ip, port), outcome, h.wall, h.wall + 60000);
     }
-    @Test void pendingMappingsNeedExactWarmProofAndKeepFamiliesIndependent() {
-        try (var h = new Harness(List.of())) {
-            h.both(); var pending = h.publisher.refresh();
-            assertTrue(pending.candidates().candidates().isEmpty());
-            assertEquals(2, pending.probeCandidates().candidates().size());
-            assertEquals(Set.of(4, 6), pending.assistedFamilies(), "Assistance capability is available before probe feedback");
-            assertEquals(Set.of(4, 6), h.publisher.assistedStunServers().keySet());
-            h.publisher.reportDirectChecks(List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.ESTABLISHED)), h.wall);
-            var promoted = h.publisher.refresh();
-            assertEquals(pending.mappingRevision(), promoted.mappingRevision());
-            assertEquals(List.of(endpoint("8.8.8.8", 43000)), promoted.candidates().candidates().stream().map(NativeCandidateSnapshot.Candidate::endpoint).toList());
-            h.publisher.reportDirectChecks(List.of(check(h, 6, "warm_stun", "2606:4700:4700::1001", 43001, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
-            var failed = h.publisher.refresh();
-            assertEquals(promoted.mappingRevision(), failed.mappingRevision());
-            assertEquals(Set.of(4, 6), failed.assistedFamilies(), "Probe failure does not select assistance");
-            assertEquals(1, failed.probeCandidates().candidates().size());
-            assertTrue(h.monitors.get(Family.IPV6).closed);
-            var stopped = h.monitors.get(Family.IPV6);
-            assertEquals(Set.of(4, 6), h.publisher.assistedStunServers().keySet());
-            assertEquals(stopped.server, h.publisher.assistedStunServers().get(6));
-            assertSame(stopped, h.monitors.get(Family.IPV6), "Per-attempt configuration cannot replace background monitor");
+    static EndpointSelection.Candidate local(String ip) {
+        return new EndpointSelection.Candidate(endpoint(ip, 19132), EndpointSelection.Provenance.LOCAL_INTERFACE);
+    }
+    static List<InetSocketAddress> published(Harness h) {
+        return h.publisher.refresh().candidates().candidates().stream().map(NativeCandidateSnapshot.Candidate::endpoint).toList();
+    }
+    @Test void publishesLatestStunImmediatelyAndAddsPrivateFallbackOnFailure() {
+        try (var h = new Harness(List.of(local("10.0.0.8"), local("fd00::8")))) {
+            assertEquals(List.of(endpoint("10.0.0.8", 19132), endpoint("fd00::8", 19132)), published(h));
+            h.both();
+            assertEquals(List.of(endpoint("8.8.8.8", 43000), endpoint("2606:4700:4700::1001", 43001)), published(h));
+            h.publisher.reportDirectChecks(List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
+            assertEquals(3, published(h).size());
+            assertTrue(published(h).contains(endpoint("10.0.0.8", 19132)));
+            assertFalse(published(h).contains(endpoint("fd00::8", 19132)));
             assertFalse(h.monitors.get(Family.IPV4).closed);
-            h.advance(70000); h.monitors.get(Family.IPV4).success("8.8.8.8", 43000);
-            assertEquals(promoted.candidates(), h.publisher.refresh().candidates(), "Same mapping stays warm after proof expiry");
-            assertTrue(h.monitors.get(Family.IPV6).closed, "Failed warm path cannot silently restart");
-            assertSame(stopped, h.monitors.get(Family.IPV6));
-            assertEquals(Set.of(4, 6), h.publisher.assistedStunServers().keySet());
-            assertEquals(stopped.server, h.publisher.assistedStunServers().get(6));
-        }
-    }
-    @Test void wrongEndpointStageUnknownAndExpiredEvidenceCannotPromote() {
-        try (var h = new Harness(List.of())) {
-            h.both(); h.publisher.refresh();
-            h.publisher.reportDirectChecks(List.of(
-                check(h, 4, "per_join", "8.8.8.8", 43000, ConnectivityOutcome.ESTABLISHED),
-                check(h, 4, "defined", "8.8.8.8", 43000, ConnectivityOutcome.ESTABLISHED),
-                check(h, 4, "warm_stun", "8.8.8.8", 43001, ConnectivityOutcome.ESTABLISHED),
-                check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.UNKNOWN),
-                check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.UNAVAILABLE),
-                new ConnectivityCheck(4, "warm_stun", endpoint("8.8.8.8", 43000), ConnectivityOutcome.ESTABLISHED, h.wall - 2000, h.wall - 1)), h.wall);
-            assertTrue(h.publisher.refresh().candidates().candidates().isEmpty());
-            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
-        }
-    }
-    @Test void directFeedbackCannotChangeAssistanceCapabilitiesOrStartStun() {
-        var direct = new EndpointSelection.Candidate(endpoint("8.8.8.8", 19132), EndpointSelection.Provenance.LOCAL_INTERFACE);
-        try (var h = new Harness(List.of(direct))) {
-            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
-            for (var outcome : ConnectivityOutcome.values()) {
-                h.publisher.reportDirectChecks(List.of(check(h, 4, "discovered", "8.8.8.8", 19132, outcome)), h.wall);
-                assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
-                assertEquals(Set.of(Family.IPV6), h.monitors.keySet());
-                assertEquals(Set.of(6), h.publisher.assistedStunServers().keySet(), "Public Direct family never gathers STUN");
-                h.advance(1000);
-            }
-        }
-    }
-    @Test void stoppedOrBrokenWarmMonitorCannotChangeAssistanceCapabilities() {
-        try (var h = new Harness(List.of())) {
-            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
-            h.monitors.get(Family.IPV4).broken = true;
-            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
-            assertTrue(h.monitors.get(Family.IPV4).closed);
-        }
-    }
-    @Test void remapAbaAndExpiryWithdrawPromotedMappingWithoutRenewingOldCapture() {
-        try (var h = new Harness(List.of())) {
-            h.both(); var original = h.publisher.refresh();
+            h.advance(1000);
             h.publisher.reportDirectChecks(List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.ESTABLISHED)), h.wall);
-            assertEquals(1, h.publisher.refresh().candidates().candidates().size());
+            assertEquals(2, published(h).size());
+            assertTrue(h.monitors.values().stream().noneMatch(m -> m.closed));
+        }
+    }
+    @Test void ignoresUnrelatedAssistedAndExpiredFeedback() {
+        try (var h = new Harness(List.of(local("10.0.0.8")))) {
+            h.both(); var first = h.publisher.refresh();
+            h.publisher.reportDirectChecks(List.of(
+                    check(h, 4, "per_join", "8.8.8.8", 43000, ConnectivityOutcome.NOT_ESTABLISHED),
+                    check(h, 4, "defined", "8.8.8.8", 43000, ConnectivityOutcome.NOT_ESTABLISHED),
+                    check(h, 4, "warm_stun", "8.8.8.8", 43001, ConnectivityOutcome.NOT_ESTABLISHED),
+                    check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.UNKNOWN),
+                    new ConnectivityCheck(4, "warm_stun", endpoint("8.8.8.8", 43000), ConnectivityOutcome.NOT_ESTABLISHED, h.wall - 2000, h.wall - 1)), h.wall);
+            assertEquals(first.candidates(), h.publisher.refresh().candidates());
+            first.requireCurrent();
+        }
+    }
+    @Test void remapClearsOldFailureAndExpiryRestoresPrivateFallbackWithoutStoppingWarming() {
+        try (var h = new Harness(List.of(local("10.0.0.8")))) {
+            h.both(); var original = h.publisher.refresh();
+            h.publisher.reportDirectChecks(List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
+            assertEquals(3, published(h).size());
             h.monitors.get(Family.IPV4).success("8.8.4.4", 43002);
-            assertTrue(h.publisher.refresh().candidates().candidates().isEmpty());
+            assertEquals(2, published(h).size());
             assertThrows(IllegalStateException.class, original::requireCurrent);
             h.monitors.get(Family.IPV4).success("8.8.8.8", 43000);
-            assertTrue(h.publisher.refresh().candidates().candidates().isEmpty());
-            var retained = h.publisher.refresh(); h.advance(270001);
+            var retained = h.publisher.refresh();
+            assertTrue(retained.mappingRevision() > original.mappingRevision());
+            h.advance(300001);
             assertThrows(IllegalStateException.class, retained::requireCurrent);
+            assertEquals(List.of(endpoint("10.0.0.8", 19132)), published(h));
+            h.both();
+            assertEquals(2, published(h).size());
+            assertTrue(h.monitors.values().stream().noneMatch(m -> m.closed));
         }
     }
-    @Test void explicitAssistanceKeepsPerJoinDiscoveryWithoutBackgroundWarming() {
-        var selection = EndpointSelection.select(endpoint("::", 19132), List.of(), List.of());
-        try (var publisher = new MaintainedCandidatePublisher(selection, null, new ObservationLeaseTracker(INCARNATION))) {
-            assertTrue(publisher.needsStunServers());
+    @Test void publicFamilyDoesNotNeedStunAndPrivateFallbackDoesNotChangeAssistance() {
+        try (var h = new Harness(List.of(local("8.8.8.8"), local("10.0.0.8")))) {
+            assertEquals(List.of(endpoint("8.8.8.8", 19132)), published(h));
+            h.publisher.reportDirectChecks(List.of(check(h, 4, "discovered", "8.8.8.8", 19132, ConnectivityOutcome.NOT_ESTABLISHED)), h.wall);
+            assertEquals(2, published(h).size());
+            assertEquals(Set.of(Family.IPV6), h.monitors.keySet());
+            assertEquals(Set.of(4, 6), h.publisher.refresh().assistedFamilies());
+        }
+    }
+    @Test void configuredEndpointsRemainExactAndDisableAutomaticStun() {
+        var explicit = endpoint("10.0.0.8", 29132);
+        var selection = EndpointSelection.select(endpoint("::", 19132), List.of(explicit), List.of(local("8.8.8.8")));
+        try (var publisher = new MaintainedCandidatePublisher(selection, null)) {
+            assertFalse(publisher.needsStunServers());
+            assertEquals(List.of(new NativeCandidateSnapshot.Candidate(explicit, NativeCandidateSnapshot.Type.HOST)), publisher.refresh().candidates().candidates());
+            assertTrue(publisher.refresh().assistedFamilies().isEmpty());
+        }
+    }
+    @Test void assistanceCanUseLocalFallbackWithoutBackgroundWarming() {
+        var selection = EndpointSelection.select(endpoint("::", 19132), List.of(), List.of(local("10.0.0.8")));
+        try (var publisher = new MaintainedCandidatePublisher(selection, null)) {
             var server = endpoint("1.1.1.1", 3478);
             publisher.configureStunServers(Map.of(Family.IPV4, server));
-            var publication = publisher.refresh();
-            assertEquals(Set.of(4, 6), publication.assistedFamilies());
-            assertTrue(publication.candidates().candidates().isEmpty());
-            assertTrue(publication.probeCandidates().candidates().isEmpty());
+            assertEquals(1, publisher.refresh().candidates().candidates().size());
             assertEquals(Map.of(4, server), publisher.assistedStunServers());
-        }
-    }
-    @Test void configuredPrivateEndpointsSuppressPublicAssistanceAndAllStun() {
-        for (String address : List.of("10.0.0.8", "8.8.8.8")) {
-            var endpoint = endpoint(address, 19132);
-            var selection = EndpointSelection.select(endpoint("::", 19132), List.of(endpoint), List.of());
-            try (var publisher = new MaintainedCandidatePublisher(selection, null, new ObservationLeaseTracker(INCARNATION))) {
-                assertFalse(publisher.needsStunServers());
-                publisher.configureStunServers(Map.of(Family.IPV4, endpoint("1.1.1.1", 3478)));
-                assertEquals(address.startsWith("10.") ? Set.of() : Set.of(4), publisher.refresh().assistedFamilies(),
-                        "Configured assistance is bounded to public configured endpoint families before feedback");
-                long now = System.currentTimeMillis();
-                publisher.reportDirectChecks(List.of(new ConnectivityCheck(4, "defined", endpoint, ConnectivityOutcome.NOT_ESTABLISHED, now, now + 60000)), now);
-                assertEquals(address.startsWith("10.") ? Set.of() : Set.of(4), publisher.refresh().assistedFamilies());
-                assertTrue(publisher.assistedStunServers().isEmpty(), "Explicit endpoints suppress per-attempt STUN too");
-                assertEquals(List.of(endpoint), publisher.refresh().candidates().candidates().stream().map(NativeCandidateSnapshot.Candidate::endpoint).toList());
-            }
+            assertEquals(Set.of(4, 6), publisher.refresh().assistedFamilies());
         }
     }
 }

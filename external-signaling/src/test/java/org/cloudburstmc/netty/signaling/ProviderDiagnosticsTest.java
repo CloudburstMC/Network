@@ -23,7 +23,7 @@ class ProviderDiagnosticsTest {
         final List<DiagnosticHostPolicy> policies = new CopyOnWriteArrayList<>();
         volatile long revision = 1, publicationVersion = 1, deadline, expiry;
         volatile int port = 19133;
-        volatile boolean empty, pending;
+        volatile boolean empty;
         Set<Integer> assistedFamilies = Set.of();
         volatile List<ProviderTransport.StunServer> stunServers = List.of();
         public CompletionStage<Void> configureStunServers(List<ProviderTransport.StunServer> servers) {
@@ -50,7 +50,6 @@ class ProviderDiagnosticsTest {
             long captured = revision, originalExpiry = expiry, version = publicationVersion;
             return hostProfile().thenApply(profile -> {
                 var probes = profile.getAsJsonArray("candidates").deepCopy();
-                if (pending) profile.add("candidates", new JsonArray());
                 return new HostProfileSnapshot(profile, captured, version, probes, assistedFamilies, () -> {
                 if (revision != captured || closed.isDone() || originalExpiry > 0 && System.currentTimeMillis() >= originalExpiry) throw new IllegalStateException("stale snapshot");
                 });
@@ -132,7 +131,7 @@ class ProviderDiagnosticsTest {
                 var extension = f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE);
                 assertEquals(Set.of("version", "critical", "data"), extension.keySet());
                 var data = extension.getAsJsonObject("data");
-                assertEquals(Set.of("diagnostics", "candidateRevision", "method", "probeCandidates", "assistedFamilies"), data.keySet());
+                assertEquals(Set.of("diagnostics", "candidateRevision", "method", "assistedFamilies"), data.keySet());
                 assertEquals("defined", data.get("method").getAsString());
                 assertEquals(1, data.get("candidateRevision").getAsLong());
                 int applications = transport.policies.size();
@@ -148,19 +147,19 @@ class ProviderDiagnosticsTest {
         }
     }
 
-    @Test @Timeout(30) void discoveryConfiguresStunAndPendingMappingGetsOnlyDiagnosticAuthority() throws Exception {
+    @Test @Timeout(30) void discoveryConfiguresStunAndPublishesTheMappingWithoutDuplicateProbeTargets() throws Exception {
         try (var f = new Fixture()) {
             f.provider.extensionMetadata = JsonParser.parseString("{\"org.nethernet.connectivity\":{\"version\":1,\"critical\":false,\"data\":{\"stunServers\":[{\"host\":\"stun.example\",\"port\":3478}]}}}").getAsJsonObject();
-            var transport = new Transport(); transport.srflx = true; transport.pending = true;
+            var transport = new Transport(); transport.srflx = true;
             transport.expiry = System.currentTimeMillis() + 180000;
             var client = f.client(directory, transport, true, "discovered");
             try {
                 client.start().get(20, TimeUnit.SECONDS);
                 assertEquals(List.of(new ProviderTransport.StunServer("stun.example", 3478)), transport.stunServers);
-                assertTrue(transport.captureHostProfile().toCompletableFuture().get().profile().getAsJsonArray("candidates").isEmpty());
+                assertEquals(1, transport.captureHostProfile().toCompletableFuture().get().profile().getAsJsonArray("candidates").size());
                 var data = f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE).getAsJsonObject("data");
                 assertTrue(data.get("diagnostics").getAsBoolean());
-                assertEquals(1, data.getAsJsonArray("probeCandidates").size());
+                assertFalse(data.has("probeCandidates"));
                 assertTrue(data.getAsJsonArray("assistedFamilies").isEmpty());
                 assertEquals(Set.of(transport.expiry), new HashSet<>(transport.policies.get(transport.policies.size() - 1).endpointExpiries().values()));
             } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
@@ -193,15 +192,15 @@ class ProviderDiagnosticsTest {
         }
     }
 
-    @Test @Timeout(30) void disabledOptInAndUnboundedReflexiveCandidatesDoNotAdvertiseOrInstall() throws Exception {
+    @Test @Timeout(30) void diagnosticOptInSupportsExistingV1ReflexiveCandidateShape() throws Exception {
         for (boolean enabled : List.of(false, true)) {
             try (var f = new Fixture()) {
                 var transport = new Transport(); transport.srflx = enabled;
                 var client = f.client(directory.resolve(Boolean.toString(enabled)), transport, enabled, "discovered");
                 try {
                     client.start().get(20, TimeUnit.SECONDS);
-                    assertTrue(transport.policies.isEmpty());
-                    assertFalse(f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE)
+                    assertEquals(!enabled, transport.policies.isEmpty());
+                    assertEquals(enabled, f.provider.lastHeartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE)
                             .getAsJsonObject("data").get("diagnostics").getAsBoolean());
                 } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
             }

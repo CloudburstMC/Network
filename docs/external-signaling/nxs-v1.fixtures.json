@@ -118,7 +118,8 @@
         "protocol": 1234,
         "level": "world"
       },
-      "acceptingPlayers": true
+      "acceptingPlayers": true,
+      "appliedStateRevision": 0
     }
   }
 }

@@ -219,7 +219,7 @@ endpoint alongside the runtime.
 Required fields: `healthy,acceptingPlayers,capacity,load,protocolVersion,clockUnixMillis,
 checkInVersion,state,gameOutcomes`.
 Optional fields: `build,region,serverStatus,hostProfile,hostProfileRevision,
-installedKeyIds,keyRequestId,extensions`.
+installedKeyIds,keyRequestId,appliedStateRevision,extensions`.
 
 - `healthy` is application health. `acceptingPlayers` is explicit willingness to accept new players; false while draining or closed. A serving host may pause acceptance and later report true without changing lifecycle. Neither field is derived from player counts. Report acceptance changes promptly.
 - `capacity` is an integer from 0 to 1000000; `load` is a finite number from 0 to 1.
@@ -228,9 +228,13 @@ installedKeyIds,keyRequestId,extensions`.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
   rejection, otherwise `unavailable`.
 - Serving state is reported by the game server. The provider may stop routing
-  players to it, but never returns a desired serving state or requests an
-  application acknowledgement. Only assisted player joins can be unsolicited,
-  and those require WebSocket transport.
+  players to it, but cannot command its listener. Only assisted player joins
+  can be unsolicited, and those require WebSocket transport.
+- For compatibility with older v1 peers, send `appliedStateRevision: 0` initially.
+  Providers return `desiredState: {revision,state}` echoing the reported state,
+  with revision at least 1 and no lower than the submitted acknowledgement.
+  Hosts may acknowledge a matching state; they must not apply a remote command.
+  Updated providers also accept omission of the legacy acknowledgement.
 - `clockUnixMillis` is an increasing snapshot clock within the generation and
   must be within 30000 milliseconds of provider time.
 - `region` cannot change authorized placement. `serverStatus` contains
@@ -273,14 +277,13 @@ Each candidate contains `foundation,component,protocol,priority,address,port,typ
 Publish 0–32 candidates. An empty array withdraws advertised routes without draining the listener or established peers. Foundations match `[A-Za-z0-9._:-]{1,32}`; component is
 1, protocol is `udp`, priority is 1–2147483647, port is 1–65535, and type is
 `host`, `srflx` or `relay`. Addresses are IP literals.
-A `srflx` candidate additionally requires `expiresAt`, the original same-mux STUN
-observation's expiry in Unix milliseconds, at most five minutes ahead. Other
-candidate types omit it. Reusing a profile, retrying a heartbeat, rotating a key,
-or refreshing provider caches cannot extend that expiry; only a genuinely newer
-native observation can. Providers exclude expired candidates whenever selecting
-or releasing a join answer, including candidates loaded from a cache. Delayed
-retries may retain expired metadata, but cannot make it routable again.
-Publish only reachable UDP candidates that are explicitly chosen for advertisement.
+Publish the latest same-socket STUN mapping as an ordinary `srflx` candidate.
+No new candidate field is required. The host keeps warming independently of
+heartbeat timing and republishes when the mapping changes or becomes unavailable.
+Providers use the heartbeat lease to bound retained profiles. If a host supplies
+an optional `expiresAt` on a `srflx` candidate, providers also honor that deadline;
+other candidate types omit it.
+The game server chooses which usable UDP candidates to advertise.
 The bind address and the advertised address serve different purposes. A host can
 bind to all interfaces, but it cannot advertise wildcard `0.0.0.0` or `::`.
 The deployment or provider must establish reachability through NAT or a relay;
@@ -356,6 +359,11 @@ Request: `{events:[{ticketId,stage,occurredAt,reason?}]}` with at most 100 event
 The ticket ID derives from the authenticated admission carrier, never from an
 unauthenticated packet. The provider scopes correlation to the signed instance.
 No provider-specific routing decision ID is required.
+When discovery advertises `org.nethernet.connectivity` version 1, events may also
+include the observed client `remoteAddress` (numeric IP) and `remotePort` (1–65535)
+as a pair. Use the actual transport observation; omit the pair when unavailable.
+Hosts omit these optional fields for older providers so the base outcome remains
+compatible. This reports the client endpoint, not a candidate publication command.
 
 Required stages are `ticket.data_channels_open` and `ticket.failed` for observed
 transport attempts, plus `ticket.game_joined`/`ticket.game_rejected` when
@@ -540,20 +548,42 @@ Provider discovery supplies STUN configuration through `org.nethernet.connectivi
 
 The host resolves up to two discovered servers off the native event loop, selecting a numeric server for each supported family. Explicit advertised endpoints suppress local discovery and STUN for all families, including omitted ones. An absent or empty server list leaves mapping discovery unavailable; there is no embedding-platform fallback.
 
-The host owns connectivity selection independently for IPv4 and IPv6. A public `host` candidate uses Direct (`defined` or `discovered`) and never starts STUN. A family without a public host candidate can start same-mux STUN. Its mapping is initially a diagnostic target only; an exact fresh `warm_stun` success promotes it to player candidates and keeps it warm. Warm failure stops that family's monitor and withdraws the mapping.
+The host owns candidate publication independently for IPv4 and IPv6. Explicit
+advertised endpoints remain the complete configured set. Otherwise publish public
+local addresses and the latest fresh same-mux STUN mapping immediately. When no
+public address is available, or a matching connectivity check fails, include
+private local addresses on the gameplay port as well. A failed check does not
+stop warming, remove a fresh mapping, or control the game listener. A replacement
+mapping discards feedback for the old mapping; newer successful feedback can
+remove the private fallback. Private addresses are not regional probe targets.
 
 Assisted joining is explicitly configured on or off by the host and defaults to off. When on, every eligible family is advertised immediately; no probe verdict enables or disables assistance. Background STUN warming is disabled in this mode; provider-advertised STUN endpoints remain available for bounded per-join discovery. Explicit endpoints constrain assistance to their public families and suppress discovery and STUN; private-only explicit endpoints do not opt into public assistance. Failed connectivity feedback can be logged with a suggestion to enable assistance, without changing configuration.
 
 New hosts always include both arrays in the ordinary authenticated heartbeat extension; optional decoding permits older fixtures:
 
 ```json
-{"version":1,"critical":false,"data":{"diagnostics":false,"candidateRevision":1,"method":"discovered","probeCandidates":[],"assistedFamilies":[]}}
+{"version":1,"critical":false,"data":{"diagnostics":false,"candidateRevision":1,"method":"discovered","assistedFamilies":[]}}
 ```
 
-`probeCandidates` carries the full intended Direct and Warm diagnostic set, using the existing ICE candidate shape and original `srflx` expiry. Pending mappings are absent from `hostProfile.candidates` until proven. `assistedFamilies` is the host's authoritative list of families requiring WebSocket assistance; providers must not infer additional families from expired or missing reports. The global `method` is a presentation summary only (`defined`, `discovered`, `warm_stun` or `per_join`). Incarnation, fingerprint and player endpoints remain in `hostProfile`. The native `candidateRevision` advances when an observed mapping or native endpoint identity changes, including an ABA replacement. Promotion and withdrawal preserve that revision so stage evidence remains associated; a separate local snapshot fence invalidates their previous policy immediately. Same-mapping expiry refresh and ordinary heartbeat do not advance the revision.
+Connectivity checks use `hostProfile.candidates`; there is no separate pending
+mapping or promotion stage. `assistedFamilies` is the host's authoritative list
+of families enabled for WebSocket assistance. The global `method` is a presentation
+summary (`defined`, `discovered`, `warm_stun` or `per_join`). Incarnation,
+fingerprint and endpoints remain in `hostProfile`. The native `candidateRevision`
+changes with candidate material or native mapping identity, including ABA
+replacement. Same-mapping STUN refresh and ordinary heartbeats retain the revision.
+
 
 Diagnostic admission remains an explicit local opt-in. After a successful heartbeat the host installs the gate using existing admission keys, registration generation and current diagnostic targets. Authority lasts at most five minutes, bounded by any shorter check-in lease, key retirement and original mapping expiry. A subsequent ordinary heartbeat sets `diagnostics:true` only while that installation remains current. Pending-only or assisted-only families can authorize diagnostics without publishing player candidates. Assisted diagnostics use the separate signed connectivity-check purpose over the existing live authenticated WebSocket, without retaining a stale target. Queueing, retries, failed heartbeats and retained connectivity choices cannot extend authority. Draining and closing disable diagnostics while player serving state stays host-owned.
 
-Provider feedback uses the same envelope with `{method,candidateRevision,checks}`. Up to eighteen checks retain separate region, family and stage observations: `{region,family,method,target?,outcome,checkedAt,expiresAt}`. The target is an exact numeric `{address,port}`; a failed Assisted attempt can omit it. Outcomes are `established`, `not-established`, `unknown` and `unavailable`. Hosts only use fresh feedback matching their current revision, expected stage and exact target to promote or withdraw warm mappings. Assisted success cannot promote a Direct or Warm path. Newer matching evidence supersedes older evidence, with failure winning equal timestamps; absence or expiry does not undo warm mapping promotion while native ownership remains valid. Feedback never changes the configured assistance choice. Native mapping ownership and every incoming join still require their own fresh bounded authority.
+Provider feedback uses the same envelope with `{method,candidateRevision,checks}`.
+Up to eighteen checks retain separate region, family and method observations:
+`{region,family,method,target?,outcome,checkedAt,expiresAt}`. A target is an exact
+numeric `{address,port}`; an assisted failure may omit it. Outcomes are
+`established`, `not-established`, `unknown` and `unavailable`. The host may use
+fresh feedback matching its current revision and target to add private fallback
+addresses. Newer evidence supersedes older evidence; failure wins equal timestamps.
+Feedback never changes the configured assistance choice or the listener state.
+
 
 Native refresh, expiry and replacement continue independently of control requests. The client promptly publishes material changes and coalesces freshness updates. This adds no operation, lease document, completion journal or persistent connectivity state. Ordinary registration recovery resolves an ambiguous WebSocket operation before fresh state is sent.

@@ -33,16 +33,16 @@ class EndpointSelectionTest {
                 List.of(InetSocketAddress.createUnresolved("example.com", 19133)), List.of()));
     }
 
-    @Test void publicLocalHintsAreDeterministicAndFamilyAware() {
+    @Test void localHintsRetainPrivateFallbackAndAreDeterministicAndFamilyAware() {
         var hints = List.of(hint("8.8.8.8", Provenance.NATIVE_HOST), hint("8.8.8.8", Provenance.SERVER_PROPERTIES),
                 hint("2606:4700:4700::1111", Provenance.LOCAL_INTERFACE), hint("10.0.0.1", Provenance.LOCAL_INTERFACE),
                 hint("fd00::1", Provenance.NATIVE_HOST));
         var dual = select(endpoint("::", 19133), List.of(), hints);
         assertFalse(dual.configured());
-        assertEquals(2, dual.candidates().size());
-        assertEquals(Provenance.SERVER_PROPERTIES, dual.candidates(Family.IPV4).get(0).provenance());
-        assertEquals(1, select(endpoint("0.0.0.0", 19133), List.of(), hints).candidates().size());
-        assertTrue(select(endpoint("192.168.1.1", 19133), List.of(), List.of()).candidates().isEmpty());
+        assertEquals(4, dual.candidates().size());
+        assertEquals(Provenance.SERVER_PROPERTIES, dual.publicCandidates(Family.IPV4).get(0).provenance());
+        assertEquals(2, select(endpoint("0.0.0.0", 19133), List.of(), hints).candidates().size());
+        assertEquals(1, select(endpoint("192.168.1.1", 19133), List.of(), List.of()).candidates().size());
         assertEquals(Provenance.LOCAL_BIND, select(endpoint("8.8.8.8", 19133), List.of(), hints).candidates().get(0).provenance());
     }
 

@@ -4,8 +4,6 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
-import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
-import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
@@ -121,24 +119,16 @@ class NativeMaintainedCandidateTest {
         }
     }
 
-    private static long minimumExpiry(ProviderTransport.HostProfileSnapshot snapshot) {
-        var candidates = snapshot.probeCandidates();
-        if (candidates.size() != 2) return 0;
-        long result = Long.MAX_VALUE;
-        for (var value : candidates) {
-            var candidate = value.getAsJsonObject();
-            assertEquals("srflx", candidate.get("type").getAsString());
-            result = Math.min(result, candidate.get("expiresAt").getAsLong());
-        }
-        return result;
-    }
-
-    private static ProviderTransport.HostProfileSnapshot awaitMaintained(NativeProviderTransport transport, long afterExpiry, int port) throws Exception {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+    private static ProviderTransport.HostProfileSnapshot awaitMaintained(NativeProviderTransport transport, int port) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(35);
         do {
             var capture = transport.captureHostProfile().toCompletableFuture().get();
-            if (minimumExpiry(capture) > afterExpiry && capture.probeCandidates().asList().stream()
-                    .allMatch(value -> value.getAsJsonObject().get("port").getAsInt() == port)) return capture;
+            var candidates = capture.profile().getAsJsonArray("candidates");
+            if (candidates.size() == 2 && candidates.asList().stream().allMatch(value -> {
+                var candidate = value.getAsJsonObject();
+                assertFalse(candidate.has("expiresAt"), "STUN uses the existing candidate wire shape");
+                return candidate.get("port").getAsInt() == port && candidate.get("type").getAsString().equals("srflx");
+            })) return capture;
             Thread.sleep(20);
         } while (System.nanoTime() < deadline);
         throw new AssertionError("Native maintained publication did not advance");
@@ -148,76 +138,37 @@ class NativeMaintainedCandidateTest {
     void maintainedMuxRenewsAndRemapsWithoutControlTrafficOrReinstallingPeers() throws Exception {
         var responders = Executors.newFixedThreadPool(2);
         try (var stun4 = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0)); var stun6 = new DatagramSocket(new InetSocketAddress("::1", 0));
-             var host = new Host(Map.of(EndpointSelection.Family.IPV4, (InetSocketAddress) stun4.getLocalSocketAddress(), EndpointSelection.Family.IPV6, (InetSocketAddress) stun6.getLocalSocketAddress()))) {
+             var host = new Host(Map.of(EndpointSelection.Family.IPV4, (InetSocketAddress) stun4.getLocalSocketAddress(), EndpointSelection.Family.IPV6, (InetSocketAddress) stun6.getLocalSocketAddress()), List.of("10.0.0.8", "fd00::8"))) {
             var v4 = responders.submit(() -> { maintainedResponses(stun4, host.port); return null; });
             var v6 = responders.submit(() -> { maintainedResponses(stun6, host.port); return null; });
             host.transport.installTicketKeys(KEYS).toCompletableFuture().get();
             // No publisher/heartbeat call drives the monitor or samples its native observations.
             Thread.sleep(1200);
             assertTrue(host.transport.candidatePublicationVersion() > 1);
-            var first = awaitMaintained(host.transport, 0, 43000);
-            assertFalse(first.profile().has("version"));
-            assertTrue(first.profile().getAsJsonArray("candidates").isEmpty(), "Unproven mappings are diagnostic only");
+            var first = awaitMaintained(host.transport, 43000);
             String incarnation = first.profile().getAsJsonObject("statelessAdmission").get("incarnation").getAsString();
-            var endpoints = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
-            for (var value : first.probeCandidates()) {
-                var candidate = value.getAsJsonObject();
-                var address = InetAddress.getByName(candidate.get("address").getAsString());
-                int family = address instanceof Inet4Address ? 4 : 6;
-                endpoints.put(new DiagnosticHostPolicy.Endpoint(family, DiagnosticAdmissionCodec.address(family, address.getHostAddress()),
-                        candidate.get("port").getAsInt(), first.candidateRevision()), candidate.get("expiresAt").getAsLong());
-            }
-            long policyExpiry = System.currentTimeMillis() + 299000;
-            var context = new DiagnosticAdmissionCodec.Context("https://provider.example", "maintained-host", incarnation, 1);
-            var keys = List.of(new DiagnosticAdmissionCodec.Key("K001", TestSignalingProvider.SECRET, 0, 9007199254740991L));
-            assertThrows(ExecutionException.class, () -> host.transport.configureDiagnostics(
-                    new DiagnosticHostPolicy(context, keys, endpoints.keySet(), policyExpiry)).toCompletableFuture().get());
-            host.transport.configureDiagnostics(new DiagnosticHostPolicy(context, keys, endpoints.keySet(), policyExpiry, endpoints))
-                    .toCompletableFuture().get();
-            long checkedAt = System.currentTimeMillis();
-            var proof = new ArrayList<ProviderTransport.ConnectivityCheck>();
-            for (var value : first.probeCandidates()) {
-                var candidate = value.getAsJsonObject();
-                var target = new InetSocketAddress(candidate.get("address").getAsString(), candidate.get("port").getAsInt());
-                proof.add(new ProviderTransport.ConnectivityCheck(target.getAddress() instanceof Inet4Address ? 4 : 6,
-                        "warm_stun", target, ProviderTransport.ConnectivityOutcome.ESTABLISHED, checkedAt, checkedAt + 10000));
-            }
-            host.transport.reportConnectivityChecks(first.candidateRevision(), proof).toCompletableFuture().get();
-            long pendingRevision = first.candidateRevision();
-            var pendingCapture = first;
-            first = awaitMaintained(host.transport, 0, 43000);
-            assertEquals(pendingRevision, first.candidateRevision(), "Promotion preserves the original stage association");
-            assertThrows(IllegalStateException.class, pendingCapture::requireCurrent);
-            assertEquals(2, first.profile().getAsJsonArray("candidates").size());
+            assertEquals(2, first.profile().getAsJsonArray("candidates").size(), "Mapping publication needs no regional proof");
             try (var player4 = new ConnectedPlayer(host, "127.0.0.1", 55000); var player6 = new ConnectedPlayer(host, "::1", 55000)) {
-                var second = awaitMaintained(host.transport, minimumExpiry(first), 43000);
-                first.requireCurrent(); assertEquals(first.candidateRevision(), second.candidateRevision());
-                assertTrue(second.publicationVersion() > first.publicationVersion());
                 player4.exchange(); player6.exchange();
-                var remapped = awaitMaintained(host.transport, minimumExpiry(second), 43001);
+                var remapped = awaitMaintained(host.transport, 43001);
                 assertThrows(IllegalStateException.class, first::requireCurrent);
-                assertThrows(IllegalStateException.class, second::requireCurrent);
                 assertTrue(remapped.candidateRevision() > first.candidateRevision());
-                assertTrue(remapped.profile().getAsJsonArray("candidates").isEmpty(), "New mappings need new warm proof");
                 assertEquals(incarnation, remapped.profile().getAsJsonObject("statelessAdmission").get("incarnation").getAsString());
                 assertEquals("K001", remapped.profile().get("credentialKeyId").getAsString());
                 assertTrue(host.transport.channel().isServing());
                 assertEquals(2, host.transport.channel().creationAttempts());
-                player4.exchange(); player6.exchange();
                 long failedAt = System.currentTimeMillis();
                 var failure = new ArrayList<ProviderTransport.ConnectivityCheck>();
-                for (var value : remapped.probeCandidates()) {
+                for (var value : remapped.profile().getAsJsonArray("candidates")) {
                     var candidate = value.getAsJsonObject();
                     var target = new InetSocketAddress(candidate.get("address").getAsString(), candidate.get("port").getAsInt());
                     failure.add(new ProviderTransport.ConnectivityCheck(target.getAddress() instanceof Inet4Address ? 4 : 6,
                             "warm_stun", target, ProviderTransport.ConnectivityOutcome.NOT_ESTABLISHED, failedAt, failedAt + 10000));
                 }
                 host.transport.reportConnectivityChecks(remapped.candidateRevision(), failure).toCompletableFuture().get();
-                var assisted = host.transport.captureHostProfile().toCompletableFuture().get();
-                assertEquals(remapped.candidateRevision(), assisted.candidateRevision());
-                assertEquals(Set.of(4, 6), assisted.assistedFamilies());
-                assertTrue(assisted.probeCandidates().isEmpty());
-                assertTrue(assisted.profile().getAsJsonArray("candidates").isEmpty());
+                var after = host.transport.captureHostProfile().toCompletableFuture().get();
+                assertTrue(after.candidateRevision() > remapped.candidateRevision());
+                assertEquals(4, after.profile().getAsJsonArray("candidates").size(), "A failed check adds private addresses alongside the fresh mappings");
                 assertThrows(IllegalStateException.class, remapped::requireCurrent);
                 player4.exchange(); player6.exchange();
             }
