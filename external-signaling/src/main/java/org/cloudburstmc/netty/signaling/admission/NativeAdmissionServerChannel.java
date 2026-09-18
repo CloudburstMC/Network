@@ -148,11 +148,14 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 settled.completeExceptionally(stopped);
             }
         });
-        return CompletableFuture.completedFuture(new IceUdpMuxListener.Acceptance(
-                PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
-                        .withMaxMessageSize(NetherNetFrameDecoder.MESSAGE_LIMIT),
-                a.remoteDescription(), a.localPassword(), identity.certificate(), identity.privateKey(), null,
-                Runnable::run, peer -> initialize(reservation, a, peer), Instant.ofEpochMilli(a.expiresAt())));
+        return CompletableFuture.completedFuture(IceUdpMuxListener.Acceptance
+                .builder(a.remoteDescription(), a.localPassword())
+                .configuration(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
+                        .withMaxMessageSize(NetherNetFrameDecoder.MESSAGE_LIMIT))
+                .identity(new tel.schich.libdatachannel.DtlsIdentity(identity.certificate(), identity.privateKey()))
+                .initialize(peer -> initialize(reservation, a, peer))
+                .expiresAt(Instant.ofEpochMilli(a.expiresAt()))
+                .build());
     }
 
     /**

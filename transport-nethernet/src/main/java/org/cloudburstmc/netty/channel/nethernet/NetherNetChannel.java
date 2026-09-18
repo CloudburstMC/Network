@@ -190,12 +190,11 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return;
         }
 
-        if (metrics != null) {
-            metrics.messagesIn(1);
-            metrics.bytesIn(packet.readableBytes());
-        }
-
         try {
+            if (metrics != null) {
+                metrics.messagesIn(1);
+                metrics.bytesIn(packet.readableBytes());
+            }
             eventLoop().execute(() -> {
                 if (!isOpen() || (assembler != reliableAssembler && assembler != unreliableAssembler)) {
                     packet.release();
