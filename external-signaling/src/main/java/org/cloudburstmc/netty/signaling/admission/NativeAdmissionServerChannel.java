@@ -152,7 +152,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 .builder(a.remoteDescription(), a.localPassword())
                 .configuration(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
                         .withMaxMessageSize(NetherNetFrameDecoder.MESSAGE_LIMIT))
-                .identity(new tel.schich.libdatachannel.DtlsIdentity(identity.certificate(), identity.privateKey()))
+                .identity(new DtlsIdentity(identity.certificate(), identity.privateKey()))
                 .initialize(peer -> initialize(reservation, a, peer))
                 .expiresAt(Instant.ofEpochMilli(a.expiresAt()))
                 .build());
