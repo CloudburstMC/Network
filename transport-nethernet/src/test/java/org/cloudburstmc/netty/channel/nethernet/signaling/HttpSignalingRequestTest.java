@@ -119,6 +119,14 @@ class HttpSignalingRequestTest {
     }
 
     @Test
+    void servesNoStatusWhenTheHostDoesNotTakeNetherNet() throws Exception {
+        // The endpoint reads as absent, which is what sends the client back to RakNet
+        this.start(this.builder().setMotdProvider((host, client) -> null));
+
+        assertEquals(404, this.status("GET", "/v1/join", null));
+    }
+
+    @Test
     void answersWithAnErrorWhenTheMotdProviderFails() throws Exception {
         this.start(this.builder().setMotdProvider((host, client) -> {
             throw new IllegalStateException("no status today");

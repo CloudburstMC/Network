@@ -325,6 +325,14 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                     return;
                 }
 
+                // A host with no status to give is not serving NetherNet here. A client reads the
+                // 404 as the endpoint not being there at all and falls back to RakNet if supports it.
+                if (motd == null) {
+                    log.debug("Declined NetherNet for {} from {}", host, remoteAddress);
+                    respondEmptyWithStatus(ctx, HttpResponseStatus.NOT_FOUND, keepAlive);
+                    return;
+                }
+
                 respondWithString(ctx, motd.toJson(), "application/json", keepAlive);
                 return;
             }
@@ -718,12 +726,15 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * <p>
          * Called on the event loop, so don't block in here. The discovery-only fields of
          * {@link PongData} are ignored, as they have no place in the status response.
+         * <p>
+         * Answering null serves no status at all, which is how a host says it does not take
+         * NetherNet for this request. A join sent anyway still reaches the {@link PlayerFilter}.
          *
          * @param host          The host header from the join request, which may be used to identify the server
          * @param remoteAddress The address the status request came from
-         * @return The MOTD to advertise
+         * @return The MOTD to advertise, or null to leave the client to its other transport
          */
-        PongData getMotd(String host, InetSocketAddress remoteAddress);
+        @Nullable PongData getMotd(String host, InetSocketAddress remoteAddress);
     }
 
     /**
@@ -1022,7 +1033,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the provider called for each status request.
+         * Sets the provider called for each status request, which answers null to leave a
+         * client to its other transport.
          * Defaults to {@link PongData#DEFAULT}.
          *
          * @param motdProvider The provider to call
