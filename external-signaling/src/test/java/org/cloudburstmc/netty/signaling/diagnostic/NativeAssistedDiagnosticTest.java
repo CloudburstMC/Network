@@ -89,6 +89,122 @@ class NativeAssistedDiagnosticTest {
         }
     }
 
+    @Test @Timeout(20) void privateIpv4HostOfferConnectsThroughLearnedPublicSourceWithoutClientStun() throws Exception {
+        InetAddress privateAddress = NetworkInterface.networkInterfaces().flatMap(NetworkInterface::inetAddresses)
+                .filter(address -> address instanceof Inet4Address
+                        && org.cloudburstmc.netty.util.nethernet.EndpointAddress.scope(address)
+                        == org.cloudburstmc.netty.util.nethernet.EndpointAddress.Scope.PRIVATE).findFirst().orElse(null);
+        Assumptions.assumeTrue(privateAddress != null, "Requires a private IPv4 interface for the NAT-side bind");
+        int probePort = NativeDiagnosticProbeAttemptTest.port(privateAddress);
+        try (var f = new Fixture("127.0.0.1");
+             var relay = new PrivateClientRelay(new InetSocketAddress(f.bind, f.hostPort), new InetSocketAddress(privateAddress, probePort));
+             var attempt = new NativeDiagnosticProbeAttempt(f.job, new InetSocketAddress(privateAddress, probePort),
+                     () -> f.catalog, f.authorized::get, Clock.system(), true)) {
+            var result = attempt.run(request -> {
+                assertTrue(new String(request.offer(), java.nio.charset.StandardCharsets.UTF_8)
+                        .contains(" " + privateAddress.getHostAddress() + " " + probePort + " typ host"));
+                return f.host.assistDiagnostic(f.join(request), () -> {}, Map.of(), Map.of(4, relay.address())).thenApply(answer -> {
+                    assertFalse(relay.clientSent.get(), "No transport traffic before the signed host answer");
+                    return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()),
+                            utf8(answer), new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()),
+                            () -> f.catalog, DiagnosticAnswerCodec.Options.system());
+                });
+            });
+            assertTrue(result.success(), result.toString()); assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
+            assertEquals(relay.address(), result.attemptedRemote()); assertEquals(relay.address(), result.selectedRemote());
+            assertTrue(relay.clientSent.get()); assertTrue(relay.forwarded.get() > 4);
+            var reports = new ArrayList<NativeDiagnosticHostGate.Result>();
+            NativeDiagnosticProbeAttemptTest.await(() -> { reports.addAll(f.gate.pollResults()); return !reports.isEmpty(); });
+            assertTrue(reports.get(0).success(), reports.toString());
+            assertEquals(relay.address(), reports.get(0).selectedRemote(), "Host learns the authenticated public source, not the private offer");
+            assertEquals(0, f.players.get()); assertEquals(0, f.gate.stats().liveNativePeers());
+        }
+    }
+
+    /** Translates a private client socket to a loopback public-side fixture, without any client STUN discovery. */
+    static final class PrivateClientRelay implements AutoCloseable {
+        final DatagramSocket socket;
+        final AtomicBoolean clientSent = new AtomicBoolean();
+        final AtomicInteger forwarded = new AtomicInteger();
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final Thread thread;
+        PrivateClientRelay(InetSocketAddress host, InetSocketAddress client) throws Exception {
+            socket = new DatagramSocket(new InetSocketAddress(host.getAddress(), 0));
+            thread = new Thread(() -> {
+                try {
+                    while (!socket.isClosed()) {
+                        byte[] bytes = new byte[2048]; var packet = new DatagramPacket(bytes, bytes.length); socket.receive(packet);
+                        boolean fromClient = client.equals(packet.getSocketAddress());
+                        if (!fromClient && !host.equals(packet.getSocketAddress())) throw new IllegalStateException("Unexpected relay source");
+                        if (fromClient) clientSent.set(true);
+                        else if (!clientSent.get()) throw new IllegalStateException("Host dialled the relay before authenticated inbound ICE");
+                        socket.send(new DatagramPacket(bytes, packet.getLength(), fromClient ? host : client)); forwarded.incrementAndGet();
+                    }
+                } catch (Throwable problem) { if (!socket.isClosed()) failure.set(problem); }
+            }, "test-private-client-nat"); thread.setDaemon(true); thread.start();
+        }
+        InetSocketAddress address() { return (InetSocketAddress) socket.getLocalSocketAddress(); }
+        public void close() throws Exception { socket.close(); thread.join(2000); assertFalse(thread.isAlive()); assertNull(failure.get()); }
+    }
+
+    @Test @Timeout(20) void assistedTransportTimeoutRetainsVerifiedPeerWithoutInventingSelectedPair() throws Exception {
+        for (String numeric : List.of("127.0.0.1", "::1")) try (var f = new Fixture(numeric, 60000);
+                var silent = new DatagramSocket(new InetSocketAddress(f.bind, 0))) {
+            AtomicLong elapsed = new AtomicLong();
+            Clock clock = new Clock(System::currentTimeMillis, () -> System.nanoTime() + elapsed.get());
+            var destination = (InetSocketAddress) silent.getLocalSocketAddress();
+            try (var attempt = new NativeDiagnosticProbeAttempt(f.job, new InetSocketAddress(f.bind, f.probePort),
+                    () -> f.catalog, f.authorized::get, clock, true)) {
+                var executor = Executors.newSingleThreadExecutor();
+                try {
+                    var pending = executor.submit(() -> attempt.run(request -> f.host.assistDiagnostic(f.join(request), () -> {},
+                            Map.of(), Map.of(f.job.target().family(), destination)).thenApplyAsync(answer -> {
+                            // Retire the proactive host peer so its ICE cannot race the silent destination.
+                            f.host.close().awaitUninterruptibly();
+                            try { f.host.termination().toCompletableFuture().get(3, TimeUnit.SECONDS); }
+                            catch (Exception failure) { throw new CompletionException(failure); }
+                            return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()),
+                                    utf8(answer), new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()),
+                                    () -> f.catalog, DiagnosticAnswerCodec.Options.system());
+                            })));
+                    silent.setSoTimeout(3000); silent.receive(new DatagramPacket(new byte[2048], 2048));
+                    elapsed.set(TimeUnit.SECONDS.toNanos(16));
+                    var result = pending.get(3, TimeUnit.SECONDS);
+                    assertFalse(result.success()); assertEquals(NativeDiagnosticProbeAttempt.Reason.TRANSPORT, result.reason());
+                    assertTrue(result.answerVerified()); assertFalse(result.transportEstablished()); assertTrue(result.cleanupComplete());
+                    assertEquals(destination, result.attemptedRemote()); assertNull(result.selectedLocal()); assertNull(result.selectedRemote());
+                } finally { executor.shutdownNow(); assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS)); }
+            }
+        }
+    }
+
+    @Test @Timeout(20) void signedPrivateServerReflexiveAndNonIpv4HostOffersCreateNoPeer() throws Exception {
+        for (String[] candidate : List.of(new String[]{"127.0.0.1", "10.0.0.1", "srflx"},
+                new String[]{"::1", "fc00::1", "host"}, new String[]{"127.0.0.1", "169.254.169.254", "host"})) {
+            try (var f = new Fixture(candidate[0]); var attempt = f.attempt(null)) {
+                var proofKey = NativeDiagnosticProbeAttemptTest.keyPair();
+                var result = attempt.run(original -> {
+                    String sdp = new String(original.offer(), java.nio.charset.StandardCharsets.UTF_8);
+                    sdp = sdp.replaceAll("(?m)(^a=candidate:[^\\r\\n]*? UDP [0-9]+ )[^ ]+", "$1" + candidate[1])
+                            .replace("typ host", "typ " + candidate[2]);
+                    var c = original.claims();
+                    var claims = new Claims(c.expiresAt(), c.clientFingerprintHex(), c.clientIcePwd(), c.attemptIdHex(),
+                            hex(digest(utf8(sdp))), c.candidateRevision(), c.family(), c.targetAddressHex(), c.targetPort(), c.profile());
+                    var proof = DiagnosticAssertionCodec.sign(f.context, claims, original.ufrag(), proofKey);
+                    var request = new NativeDiagnosticProbeAttempt.Request(f.context, claims, original.ufrag(), utf8(sdp), proof);
+                    return f.host.assistDiagnostic(f.join(request), () -> {}).handle((answer, failure) -> {
+                        assertNotNull(failure, Arrays.toString(candidate));
+                        assertEquals(0, f.gate.stats().active()); assertEquals(0, f.gate.stats().liveNativePeers());
+                        return "rejected before native peer creation";
+                    });
+                });
+                assertFalse(result.success()); assertFalse(result.answerVerified()); assertNull(result.attemptedRemote());
+                assertTrue(result.cleanupComplete()); assertEquals(0, f.players.get());
+                assertTrue(f.gate.stats().rejected() > 0); assertEquals(0, f.gate.stats().active()); assertEquals(0, f.gate.stats().liveNativePeers());
+            }
+        }
+    }
+
     @Test @Timeout(35) void changedBindingProofExpiryAndWithdrawalCreateNoDiagnosticOrPlayerPeer() throws Exception {
         for(String mode:List.of("generation","fingerprint","expiry","offer","assertion","withdraw","player-purpose"))
             try(var f=new Fixture("127.0.0.1");var attempt=f.attempt(null)) {

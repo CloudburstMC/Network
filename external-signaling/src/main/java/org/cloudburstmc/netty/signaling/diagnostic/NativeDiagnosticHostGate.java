@@ -142,11 +142,14 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             Claims claims = admission.claims();
             var remote = DiagnosticAssertionCodec.candidate(utf8(join.offer()),claims,remoteUfrag);
             var scope = EndpointAddress.scope(remote.getAddress());
+            boolean privateIpv4Host = claims.family() == 4 && scope == EndpointAddress.Scope.PRIVATE
+                    && join.offer().lines().filter(line -> line.startsWith("a=candidate:")).findFirst().orElseThrow().split(" ")[7].equals("host");
             if (claims.profile() != ASSISTED_PROFILE || !claims.attemptIdHex().equals(join.id()) || claims.expiresAt() != join.expiresAt()
                     || !admission.credentials().icePwd().equals(join.localPassword()) || !admission.verifies(join.diagnosticAssertion())
                     || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims))
                     || used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote))
-                    || (scope != EndpointAddress.Scope.PUBLIC && !(listenerAddress.getAddress().isLoopbackAddress() && scope == EndpointAddress.Scope.LOOPBACK))) throw invalid();
+                    || (scope != EndpointAddress.Scope.PUBLIC && !privateIpv4Host
+                    && !(listenerAddress.getAddress().isLoopbackAddress() && scope == EndpointAddress.Scope.LOOPBACK))) throw invalid();
             long remaining = claims.expiresAt() - now;
             if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS) throw invalid();
             session = new Session(admission,key,remote,nanos+remaining*1_000_000L,
@@ -159,7 +162,12 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                     .withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE), Runnable::run,
                     identity.certificate(),identity.privateKey());
             session.created = true; session.settled = true;
-            session.peer.setRemoteDescription(join.offer(),SessionDescriptionType.OFFER);
+            // A private client address is not a diagnostic destination. Wait for an
+            // authenticated incoming check to discover its public peer-reflexive tuple.
+            String remoteDescription = privateIpv4Host ? String.join("\r\n", join.offer().lines()
+                    .filter(line -> !line.startsWith("a=candidate:") && !line.startsWith("a=remote-candidates:")
+                            && !line.equals("a=end-of-candidates")).toList()) + "\r\n" : join.offer();
+            session.peer.setRemoteDescription(remoteDescription,SessionDescriptionType.OFFER);
             session.peer.setLocalDescription("answer",join.localUfrag(),join.localPassword());
             initialize(session,session.peer);
             if (!authorized(session,observe())) throw invalid();

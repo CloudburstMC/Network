@@ -35,11 +35,12 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     /** Must return promptly, with a bounded HTTP body; may not perform blocking IO on the calling worker. */
     @FunctionalInterface public interface Signaling { CompletionStage<String> exchange(Request request); }
     public enum Reason { COMPLETE, CANCELLED, EXPIRED, WITHDRAWN, GATHERING, SIGNALING, ANSWER, TRANSPORT, PROTOCOL, SELECTED_PATH, CLEANUP }
-    /** Success requires the original ping to be echoed by the pinned host. */
+    /** Success requires the original ping to be echoed by the pinned host.
+     * attemptedRemote is the verified answer destination, retained even without an established selected pair. */
     public record Result(Job job, boolean success, Reason reason, boolean answerVerified, boolean transportEstablished,
                          boolean pingVerified, boolean cleanupComplete,
                          String offerDigestHex, String clientFingerprintHex, InetSocketAddress selectedLocal,
-                         InetSocketAddress selectedRemote, int sentFrames, int sentBytes,
+                         InetSocketAddress selectedRemote, InetSocketAddress attemptedRemote, int sentFrames, int sentBytes,
                          int receivedFrames, int receivedBytes, long completedAt) { }
     private record Incoming(int channel, byte[] bytes) { }
     private static final class Failed extends RuntimeException {
@@ -105,7 +106,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         Objects.requireNonNull(signaling);
         if (!started.compareAndSet(false,true)) throw new IllegalStateException("Diagnostic attempt already used");
         Reason reason = Reason.GATHERING; DiagnosticExchange exchange = null;
-        InetSocketAddress selectedLocal = null, selectedRemote = null;
+        InetSocketAddress selectedLocal = null, selectedRemote = null, attemptedRemote = null;
         boolean answerVerified = false, transportEstablished = false, complete = false, cleanup = false;
         String offerHash = null, fingerprint = null;
         CompletableFuture<String> pending = null; StunUdpMuxMonitor monitor = null; boolean discoveryClean = true;
@@ -145,7 +146,11 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                     candidate = numeric(mapping.mappedAddress(),mapping.mappedPort());
                 }
                 var scope = EndpointAddress.scope(candidate.getAddress());
-                if (family(candidate.getAddress()) != job.target.family() || (scope != EndpointAddress.Scope.PUBLIC && !(loopbackTest && scope == EndpointAddress.Scope.LOOPBACK)))
+                // An IPv4 client behind NAT offers its host address and learns the host's
+                // public destination from the assisted answer. It need not run client STUN.
+                boolean privateIpv4Host = job.target.family() == 4 && monitor == null && scope == EndpointAddress.Scope.PRIVATE;
+                if (family(candidate.getAddress()) != job.target.family() || (scope != EndpointAddress.Scope.PUBLIC
+                        && !privateIpv4Host && !(loopbackTest && scope == EndpointAddress.Scope.LOOPBACK)))
                     throw new Failed(Reason.GATHERING);
                 gatheredLocal = candidate;
                 String original = field(offerText,"a=candidate:");
@@ -175,19 +180,19 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                 try {
                     checkHandshake();
                     String sdp = new String(answer,StandardCharsets.UTF_8);
-                    if (job.target.assisted()) {
-                        String[] answerCandidate = field(sdp,"a=candidate:").split(" ");
-                        InetSocketAddress endpoint = numeric(answerCandidate[4],Integer.parseInt(answerCandidate[5]));
-                        var scope = EndpointAddress.scope(endpoint.getAddress());
-                        if (family(endpoint.getAddress()) != job.target.family()
-                                || (scope != EndpointAddress.Scope.PUBLIC && !(loopbackTest && scope == EndpointAddress.Scope.LOOPBACK)))
-                            throw new Failed(Reason.ANSWER);
-                    }
-                    checkHandshake(); nativePeer.setRemoteDescription(sdp,SessionDescriptionType.ANSWER);
+                    String[] answerCandidate = field(sdp,"a=candidate:").split(" ");
+                    InetSocketAddress endpoint = numeric(answerCandidate[4],Integer.parseInt(answerCandidate[5]));
+                    var scope = EndpointAddress.scope(endpoint.getAddress());
+                    if (family(endpoint.getAddress()) != job.target.family()
+                            || (scope != EndpointAddress.Scope.PUBLIC && !(loopbackTest && scope == EndpointAddress.Scope.LOOPBACK)))
+                        throw new Failed(Reason.ANSWER);
+                    checkHandshake();
+                    answerVerified = true; attemptedRemote = endpoint;
+                    nativePeer.setRemoteDescription(sdp,SessionDescriptionType.ANSWER);
                 }
                 finally { Arrays.fill(answer,(byte)0); }
             }
-            answerVerified = true; reason = Reason.TRANSPORT;
+            reason = Reason.TRANSPORT;
             await(() -> connected.get() && channels[0].isOpen() && channels[1].isOpen(), true);
             for (int i = 0; i < 2; i++) validateChannel(channels[i],i);
             transportEstablished = true;
@@ -226,7 +231,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         boolean success = complete && cleanup && !protocolFailed.get();
         if (!success && reason == Reason.COMPLETE) reason = Reason.PROTOCOL;
         return new Result(job,success,reason,answerVerified,transportEstablished,exchange != null && exchange.complete(),cleanup,
-            offerHash,fingerprint,selectedLocal,selectedRemote,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
+            offerHash,fingerprint,selectedLocal,selectedRemote,attemptedRemote,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
             currentWall);
     }
     private CandidatePair selectedPair(PeerConnection nativePeer) {

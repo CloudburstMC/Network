@@ -75,6 +75,7 @@ class NativeDiagnosticProbeAttemptTest {
             assertTrue(result.answerVerified());assertTrue(result.transportEstablished());assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
             assertEquals(fixture.job,result.job());assertEquals(fixture.localPort,result.selectedLocal().getPort());assertEquals(fixture.port,result.selectedRemote().getPort());
             assertEquals(fixture.bind,result.selectedLocal().getAddress());assertEquals(fixture.bind,result.selectedRemote().getAddress());
+            assertEquals(result.selectedRemote(),result.attemptedRemote());
             assertEquals(1,result.sentFrames());assertEquals(56,result.sentBytes());
             assertEquals(1,result.receivedFrames());assertEquals(56,result.receivedBytes());
             attempt.termination().toCompletableFuture().get(1,TimeUnit.SECONDS);assertThrows(IllegalStateException.class,()->attempt.run(fixture::respond));
@@ -94,6 +95,7 @@ class NativeDiagnosticProbeAttemptTest {
                 return CompletableFuture.completedFuture(wire);
             });
             assertFalse(result.success(),mode);assertFalse(result.answerVerified(),mode);assertFalse(result.transportEstablished(),mode);assertTrue(result.cleanupComplete(),mode);assertFalse(result.pingVerified(),mode);
+            assertNull(result.attemptedRemote(),mode);
             assertEquals(0,fixture.host.nativeStats()[0],mode);assertEquals(0,fixture.gate.stats().active(),mode);assertEquals(0,fixture.players.get(),mode);
         }
     }
@@ -221,6 +223,8 @@ class NativeDiagnosticProbeAttemptTest {
                     };
                     assertEquals(expected,result.reason(),change);assertFalse(result.success(),change);
                     assertTrue(result.answerVerified(),change);assertFalse(result.transportEstablished(),change);
+                    assertEquals(new InetSocketAddress(fixture.bind,fixture.port),result.attemptedRemote(),change);
+                    assertNull(result.selectedRemote(),change);
                     assertFalse(result.pingVerified(),change);assertTrue(result.cleanupComplete(),change);
                     assertEquals(fixture.expiry,result.job().expiresAt(),change);
                     if(change.equals("handshake")){assertTrue(result.completedAt()<fixture.expiry);}
