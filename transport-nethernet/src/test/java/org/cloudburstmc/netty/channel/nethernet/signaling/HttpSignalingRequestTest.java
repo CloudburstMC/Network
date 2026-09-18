@@ -2,8 +2,10 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
+import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetHTTPSignaling.JoinRefusal;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -134,9 +136,31 @@ class HttpSignalingRequestTest {
 
     @Test
     void refusesAnOfferTheFilterTurnsAway() throws Exception {
-        this.start(this.builder().setPlayerFilter((host, player) -> false));
+        this.start(this.builder().setPlayerFilter((host, player) -> JoinRefusal.REJECTED));
 
-        assertEquals(403, this.status("POST", "/v1/join/42", TestOffers.selfSigned()));
+        HttpResponse<String> response = this.send("POST", "/v1/join/42", TestOffers.selfSigned());
+
+        assertEquals(403, response.statusCode());
+        assertTrue(response.body().isEmpty(), "a refusal carries no body of its own");
+    }
+
+    @Test
+    void refusesAnOfferTheFilterHasNoRoomFor() throws Exception {
+        // A host with no room says so itself, rather than turning the player away as denied
+        this.start(this.builder().setPlayerFilter((host, player) -> JoinRefusal.FULL));
+
+        assertEquals(503, this.status("POST", "/v1/join/42", TestOffers.selfSigned()));
+    }
+
+    @Test
+    void letsAHostAnswerARefusalOfItsOwn() throws Exception {
+        // A host is not held to the refusals this signaling raises
+        this.start(this.builder()
+                .setPlayerFilter((host, player) -> new JoinRefusal(HttpResponseStatus.TOO_MANY_REQUESTS)));
+
+        assertEquals(429, this.status("POST", "/v1/join/42", TestOffers.selfSigned()));
+        assertThrows(IllegalArgumentException.class, () -> new JoinRefusal(HttpResponseStatus.OK),
+                "any status but a 2xx, which would tell the client the join worked");
     }
 
     @Test
@@ -151,10 +175,11 @@ class HttpSignalingRequestTest {
 
     @Test
     void refusesAnOfferWithNothingBehindTheSignaling() throws Exception {
-        // Bound, but no transport is listening for connections yet
+        // Bound, but no transport is listening for connections yet, which is not the host
+        // being full
         this.start(this.builder());
 
-        assertEquals(503, this.status("POST", "/v1/join/42", TestOffers.selfSigned()));
+        assertEquals(500, this.status("POST", "/v1/join/42", TestOffers.selfSigned()));
     }
 
     @Test
@@ -370,6 +395,12 @@ class HttpSignalingRequestTest {
                 "the second is refused rather than opening another peer connection");
     }
 
+    /** The refusal a turned away offer carries, for a future nobody is going to wait on. */
+    private static JoinRefusal refusalOf(java.util.concurrent.CompletableFuture<String> refused) {
+        Throwable cause = assertThrows(java.util.concurrent.ExecutionException.class, refused::get).getCause();
+        return ((NetherNetHTTPSignaling.OfferRejected) cause).refusal();
+    }
+
     /** Retries until the allowance frees up, since a peer closing is not instant on this side. */
     private Socket eventuallyKept() throws Exception {
         for (int attempt = 0; ; attempt++) {
@@ -394,6 +425,7 @@ class HttpSignalingRequestTest {
         var first = this.signaling.acceptOffer("same-id", offer, null, "example.test");
         var duplicate = this.signaling.acceptOffer("same-id", offer, null, "example.test");
         assertTrue(duplicate.isCompletedExceptionally(), "a duplicate cannot replace a pending answer");
+        assertEquals(JoinRefusal.DUPLICATE, refusalOf(duplicate), "and it is not refused as a full host");
         assertEquals(1, created.get(), "only the original offer may allocate a peer");
         this.signaling.sendFullSdp("same-id", ANSWER);
         assertTrue(first.get(2, java.util.concurrent.TimeUnit.SECONDS).startsWith("v=0"));
@@ -405,7 +437,7 @@ class HttpSignalingRequestTest {
         this.start(this.builder().setMaxPendingJoins(2).setPlayerFilter((host, player) -> {
             try { bothValidated.await(3, java.util.concurrent.TimeUnit.SECONDS); }
             catch (Exception failure) { throw new IllegalStateException(failure); }
-            return true;
+            return null;
         }));
         var created = new java.util.concurrent.atomic.AtomicInteger();
         this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
