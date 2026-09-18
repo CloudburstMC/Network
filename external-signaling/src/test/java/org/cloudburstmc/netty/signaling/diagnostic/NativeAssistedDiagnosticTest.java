@@ -90,11 +90,26 @@ class NativeAssistedDiagnosticTest {
     }
 
     @Test @Timeout(20) void privateIpv4HostOfferConnectsThroughLearnedPublicSourceWithoutClientStun() throws Exception {
-        InetAddress privateAddress = NetworkInterface.networkInterfaces().flatMap(NetworkInterface::inetAddresses)
+        // Prefer the interface the kernel actually uses for outbound traffic. Enumerating
+        // the first private address can pick an inactive Docker bridge on a CI runner.
+        InetAddress privateAddress;
+        try (var route = new DatagramSocket()) {
+            route.connect(new InetSocketAddress(InetAddress.getByName("192.0.2.1"), 9));
+            privateAddress = route.getLocalAddress(); // UDP connect selects a route; it sends no packet.
+        }
+        if (!(privateAddress instanceof Inet4Address)
+                || org.cloudburstmc.netty.util.nethernet.EndpointAddress.scope(privateAddress)
+                != org.cloudburstmc.netty.util.nethernet.EndpointAddress.Scope.PRIVATE) {
+            privateAddress = NetworkInterface.networkInterfaces().filter(network -> {
+                try { return network.isUp() && !network.isLoopback(); }
+                catch (SocketException unavailable) { return false; }
+            }).flatMap(NetworkInterface::inetAddresses)
                 .filter(address -> address instanceof Inet4Address
                         && org.cloudburstmc.netty.util.nethernet.EndpointAddress.scope(address)
                         == org.cloudburstmc.netty.util.nethernet.EndpointAddress.Scope.PRIVATE).findFirst().orElse(null);
+        }
         Assumptions.assumeTrue(privateAddress != null, "Requires a private IPv4 interface for the NAT-side bind");
+        InetAddress clientAddress = privateAddress;
         int probePort = NativeDiagnosticProbeAttemptTest.port(privateAddress);
         try (var f = new Fixture("127.0.0.1");
              var relay = new PrivateClientRelay(new InetSocketAddress(f.bind, f.hostPort), new InetSocketAddress(privateAddress, probePort));
@@ -102,7 +117,7 @@ class NativeAssistedDiagnosticTest {
                      () -> f.catalog, f.authorized::get, Clock.system(), true)) {
             var result = attempt.run(request -> {
                 assertTrue(new String(request.offer(), java.nio.charset.StandardCharsets.UTF_8)
-                        .contains(" " + privateAddress.getHostAddress() + " " + probePort + " typ host"));
+                        .contains(" " + clientAddress.getHostAddress() + " " + probePort + " typ host"));
                 return f.host.assistDiagnostic(f.join(request), () -> {}, Map.of(), Map.of(4, relay.address())).thenApply(answer -> {
                     assertFalse(relay.clientSent.get(), "No transport traffic before the signed host answer");
                     return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()),
@@ -110,7 +125,10 @@ class NativeAssistedDiagnosticTest {
                             () -> f.catalog, DiagnosticAnswerCodec.Options.system());
                 });
             });
-            assertTrue(result.success(), result.toString()); assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
+            assertTrue(result.success(), () -> result + "; privateBind=" + clientAddress.getHostAddress()
+                    + "; clientSent=" + relay.clientSent.get() + "; forwarded=" + relay.forwarded.get()
+                    + "; host=" + f.gate.stats() + "; relayFailure=" + relay.failure.get());
+            assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
             assertEquals(relay.address(), result.attemptedRemote()); assertEquals(relay.address(), result.selectedRemote());
             assertTrue(relay.clientSent.get()); assertTrue(relay.forwarded.get() > 4);
             var reports = new ArrayList<NativeDiagnosticHostGate.Result>();
@@ -118,6 +136,8 @@ class NativeAssistedDiagnosticTest {
             assertTrue(reports.get(0).success(), reports.toString());
             assertEquals(relay.address(), reports.get(0).selectedRemote(), "Host learns the authenticated public source, not the private offer");
             assertEquals(0, f.players.get()); assertEquals(0, f.gate.stats().liveNativePeers());
+            System.out.println("private-assisted PASS privateBind=" + clientAddress.getHostAddress()
+                    + " forwarded=" + relay.forwarded.get() + " learnedPublicSource=true clientStun=false");
         }
     }
 
