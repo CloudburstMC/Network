@@ -59,8 +59,9 @@ a live lease, usable profile and acknowledged installed key.
 Report `healthy` and `acceptingPlayers` independently on every heartbeat. A healthy draining host reports false acceptance and continues reporting its actual remaining players. A serving host can pause and resume acceptance without changing lifecycle.
 
 The game server owns its serving state. The provider may stop routing new
-players to it, but never sends a serve/drain/close instruction. Only assisted
-player joins may be unsolicited, and those require WebSocket transport. Legacy
+players to it, but never sends a serve/drain/close instruction. Only explicitly
+enabled assisted joins (players or connectivity checks) may be unsolicited, and
+those require WebSocket transport. Legacy
 `appliedStateRevision`/`desiredState` fields remain as compatibility acknowledgements
 and echoes; they do not control the listener.
 
@@ -126,28 +127,12 @@ choose account provisioning or attachment. Anonymous hosts create new services.
 Geyser exposes only signaling mode, advertised endpoints, token, provider origin
 and registration metadata; see the [Geyser configuration](https://github.com/teamziax/GeyserNetherNet/blob/nxs-dev/PROVIDER.md).
 
-### Host decisions after connectivity checks
+### Optional connectivity
 
-The game server owns publication. Each fresh terminal check is associated with its
-region, method, and exact public endpoint. A pass in one region can keep that
-endpoint available even when a different region fails; unknown/unavailable results
-are not network failures. Without assisted joins, a failed public endpoint is
-withheld from player offers. Its probe target and listener remain active so a
-successful maintenance check can restore it. Expiry alone does not restore a failed
-endpoint. A replacement STUN mapping is a new endpoint and is offered immediately.
-Configured endpoints follow the same rule; configuration still limits which
-endpoints are eligible and disables automatic discovery.
-
-With assistance explicitly enabled, regional failures do not disable the family or
-remove its public candidates. Per-join STUN discovers a peer for each attempt, and
-clients with different NAT/firewall behavior can still connect. A discovered peer
-from a failed assisted attempt is diagnostic evidence, not a maintained public
-candidate. Private candidates remain available for reachable LAN/VPN clients.
-
-`candidateRevision` identifies the probe endpoint material. A publication-only
-change advances the local `publicationVersion` and invalidates captured player
-profiles without invalidating unchanged recovery targets. Disabling background
-STUN warming does not disable publication policy, diagnostics, or recovery checks.
-Adapters should log each completed regional result and explain the current offer
-decision, including when assistance remains possible or a public endpoint is
-withheld. Neither these checks nor offer changes close established sessions.
+The host publishes fresh endpoints immediately and uses completed regional checks
+to adjust subsequent offers. Assistance is an explicit host choice; checks never
+enable it or change the listener's serving state. See the
+[connectivity extension](wire-reference.md#optional-connectivity-observation) for
+publication and feedback fields, and [diagnostics](diagnostic-v1.md) for signed
+admission and the single PING/PONG exchange. These extensions add no registration
+or heartbeat operations.

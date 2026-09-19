@@ -30,7 +30,7 @@ until their completed regional results are reported by the host integration.
 
 `ProtocolExtensions` carries bounded optional metadata. Applications explicitly interpret
 known namespaces and invoke only their advertised same-origin operations. The core never
-performs product account/claim actions or stages individual joins from provider control.
+performs product account/claim actions. Assisted joins require explicit host opt-in.
 
 `NativeProviderTransport` publishes its UDP endpoints and certificate fingerprint
 before accepting clients. Its supplier overload of `open` refreshes a deduplicated
@@ -46,8 +46,10 @@ pinned native stack; a concrete IPv6 bind does not imply IPv4 coverage.
 `openMaintained` can bind before discovering an endpoint and maintains reflexive candidates
 on the gameplay UDP socket. Candidate snapshots retain their original expiry and ownership
 through profile publication. A changed mapping withdraws the old candidate; existing peers,
-keys and the native identity survive. A fresh successful probe is required before publishing
-a maintained mapping to players. Configured endpoints suppress automatic discovery.
+keys and the native identity survive. Fresh mappings are published immediately.
+Completed connectivity checks can withhold failed public endpoints from player offers while preserving recovery probes
+and STUN warming. Configured endpoints suppress automatic discovery; see the
+[publication policy](../docs/external-signaling/wire-reference.md#optional-connectivity-observation).
 
 `captureHostProfile` returns immutable profile bytes and a nonblocking ownership guard.
 The client retains that guard through persistence and the HTTPS or WebSocket send queue,
@@ -66,32 +68,26 @@ selected by the `libdatachannel` version in `gradle/libs.versions.toml`. Its nat
 classifier resolves at that same version, so headers and native binaries cannot skew
 apart. Native tests prove transport conformance, not stock-client gameplay.
 
-### Assisted player joins
+### Assisted joins and diagnostics
 
-The existing `ProviderRuntimeConfiguration.Settings` and `ProviderClient.Configuration`
-accept a final `assistedJoins` boolean, defaulting to `false` in existing constructors.
-It requires `ControlTransport.AUTO` and the existing `NativeProviderTransport`; it
-uses that gameplay listener, DTLS identity, admission capacity and CPK verifier.
-Wrappers must delegate `supportsAssistedJoins()`, `assistedFallbackReadyFamilies()`
-and `assistedJoin(join, requireCurrent)` without replacing the original guard/future.
-No second registration, native listener or command channel is added.
+`ProviderRuntimeConfiguration.Settings` and `ProviderClient.Configuration` accept
+`assistedJoins`, defaulting to `false`. It requires `ControlTransport.AUTO` and
+`NativeProviderTransport`, reusing the gameplay listener, identity, capacity and
+CPK verifier. Wrappers must delegate `supportsAssistedJoins()`,
+`assistedFallbackReadyFamilies()` and `assistedJoin(join, requireCurrent)` with the
+original guard and future. Assistance uses per-join discovery instead of background
+warming; connectivity feedback never changes the configured choice. The
+[WebSocket reference](../docs/external-signaling/control-v1.md) defines the exchange.
 
-The host configuration controls assistance; connectivity checks never enable or disable
-it. With `assistedJoins=false`, maintained candidates can still use background STUN
-warming, and a fresh successful check is required before offering a warmed mapping.
-With `assistedJoins=true`, supported address families use per-join assistance and
-bounded per-join STUN discovery instead of background warming. Configured endpoints
-remain authoritative. Assisted mode advertises `per_join` in the existing signed
-connectivity extension and upgrades with `nxs-assisted: 1`; the provider may reject
-this optional capability if not configured.
+Diagnostics are independently opt-in through `diagnosticAdmission`. After a
+successful heartbeat, `ProviderClient` configures `DiagnosticHostPolicy` through
+`NativeProviderTransport.configureDiagnostics`; `disableDiagnostics` revokes it.
+The policy bounds trusted context, up to eight keys, 32 concrete endpoint/revision
+targets and two assisted families with original deadlines. Lower-level callers use
+`NativeAdmissionServerChannel.enableDiagnostics(policy)`.
 
-An `assisted-join` carries the authenticated full offer, player CPK and identity,
-original host context, fixed expiry and host ICE credentials. The transport creates
-the peer before any inbound client packet and sends outbound ICE on the same gameplay
-UDP mux. Returning STUN attaches to that already-owned peer. The actual native answer
-is returned only while the original native/profile/key/deadline guard remains live.
-Pending joins are bounded at 32 and preserve their original expiry. Established peers
-use the existing gameplay child and two data channels; no game-login bypass exists.
-IPv4/IPv6 tests cover ICE/DTLS/SCTP, CPK association and two-way reliable/unreliable
-bytes, including a client with no host candidates. They do not establish universal
-NAT traversal or a stock game login.
+`NativeDiagnosticProbeAttempt` performs one caller-authorized check on a bounded
+worker. Its `Signaling.exchange(Request)` callback supplies the provider-signed
+answer. The runner verifies it before starting transport and retains capacity until
+native termination. Wire formats, PING/PONG and cleanup requirements are in the
+[diagnostic reference](../docs/external-signaling/diagnostic-v1.md).

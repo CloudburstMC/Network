@@ -1,112 +1,240 @@
-# Draft NXS diagnostic admission v1
+# NXS connectivity diagnostics
 
-This is an opt-in codec specification, derived from the existing NXS1 compact admission design. It does not change NXS1 player bytes, Minecraft CPK verification, discovery or public routes. The codec itself owns no native listener, workload authentication, game pipeline or regional executor. The default-off listener consumer and its bounded attempt lifecycle are specified in `diagnostic-host-v1.md`; that consumer has no public facade or regional executor. Standalone provider-signed answer creation/verification is specified in `diagnostic-answer-v1.md`; live wiring before transport remains a required integration gate.
+An opt-in diagnostic establishes ICE, pinned DTLS and SCTP on the gameplay UDP
+socket, exchanges one reliable PING/PONG, then closes. Its `NXD1` admission is
+separate from `NXS1` player admission and never creates a player child or login
+pipeline. Ordinary NXS registration and heartbeat install the host's diagnostic
+context; assisted checks use the existing WebSocket exchange.
 
-Network owns the neutral Java primitives under `signaling/diagnostic`. The matching TypeScript primitives are available only through `@warden/protocol/diagnostic-v1`; neither default package index advertises them. The original NXS1 implementation and provenance remain intact. Initial source baselines: Network `e10d6e3d4e926ed4c090979798a8c07adc41cc3f`; Warden `76636efea70c30ce98acd0b5d72530dbee1c3811`. Native Minecraft-profile/Chromium fixtures are supporting interoperability evidence, not signed diagnostic admission or gameplay evidence.
+## Attempt and authorization
 
-## Trust and fixed attempt
+The caller authorizes one immutable attempt: provider/host context, candidate
+revision, family, target, expected host fingerprint, profile and absolute expiry.
+Generate its ID from 16 random bytes. Attempts last at most 60 seconds, with
+15 seconds for gathering, signing, signaling and channel establishment. Wall and
+monotonic deadlines prevent retries or clock rollback from extending expiry.
 
-Before any offer, an authenticated workload claims an authorized job whose immutable target, region, host incarnation/generation, candidate revision, attempt ID, bounds profile and absolute expiry are fixed. Generate an attempt ID from 16 random bytes (128 bits), not a UUIDv4 with 122 random bits. Duplicate claims/results need durable idempotency and bounded retry traffic. Registration is not ownership of a target IP: the facade and executor still need target authorization, source identity and SSRF/routing policy. This cryptographic codec performs numeric syntax and family checks only; documentation/private addresses remain usable in isolated tests.
+The provider validates workload and target authorization, the complete offer and
+its detached assertion before issuing a permit and signed answer. Parent
+authority and key retirement must cover the original deadline. The prober gets
+only per-attempt credentials; reusable host admission secrets and provider
+signing keys remain with their owners. Keep SDP, credentials and assertions out
+of logs. Numeric address validation alone does not authorize a target.
 
-For profile 1, the prober completes gathering on a dedicated UDP socket with no external STUN/TURN, validates the actual offer profile and signs the detached assertion with a fresh P-384 key. Its workload identity and lease must be verified by the facade. `issue` additionally checks the exact offer and the detached signature before minting. It refuses issuance if the fixed expiry is no longer covered by the parent authority or key retirement; it never silently shortens or extends the signed expiry. Wall and monotonic deadlines bound crypto completion; nonfinite or backward final monotonic readings are rejected. Input byte lengths are checked before copying offers and nonces. The ephemeral assertion key is unrelated to a Minecraft identity or host admission key.
+## Context and admission bytes
 
-A stateless attempt sends no offer/candidates or per-attempt peer command to the host before the first incoming UDP admission packet. The facade can mint from the authorized background host profile. A provider-signed answer must bind its exact SDP bytes/digest, pinned host DTLS fingerprint, offer digest, attempt, context, endpoint/revision/family, profile and expiry. The prober must verify that answer before applying remote SDP/starting transport. Existing player answer assertions bind fingerprints but do not supply this entire diagnostic response contract. A Warden-owned provider signer can attest the approved host identity; no provider service-account private key belongs on a game server or prober.
+Integers are unsigned big endian; JavaScript-visible 64-bit values are positive
+safe integers, at most `9007199254740991`. Hex is lowercase and base64 uses
+`A-Z a-z 0-9 + /`, without padding and with canonical unused bits.
 
-## Canonical context and compact carrier
+Context contains an HTTPS provider origin (the [canonical-origin
+profile](control-v1.md#canonical-origins), at most 256 bytes), host ID matching
+`[A-Za-z0-9_-]{1,128}`, 16-byte incarnation and generation. Its encoding is:
 
-All integers are unsigned, big endian. JavaScript-visible 64-bit values must be positive safe integers, at most `9007199254740991`. All hex is lowercase; ICE text uses ASCII `A-Z a-z 0-9 + /`, without padding.
-
-The installed context is `(canonical HTTPS provider origin, opaque ASCII host ID, incarnation16, generation8)`. Host IDs match `[A-Za-z0-9_-]{1,128}`. Origin length is at most256 characters. It uses the strict shared control-origin grammar, restricted to HTTPS: no normalization, punycode/trailing-dot relaxation, invalid ports or alternate IPv6 spellings. Java reuses ControlOrigin; the protocol-owned TypeScript grammar copy has explicit source provenance and checks all274 shared origin fixtures. Canonical context bytes are:
-
-```
+```text
 UTF8("nxs-diagnostic-context-v1\0")
 || uint16(length(originUTF8)) || originUTF8
 || uint16(length(hostIdUTF8)) || hostIdUTF8
 || incarnation16 || uint64(generation)
 ```
 
-`contextDigest` is the complete SHA-256 of these bytes. Incarnation/generation are installed trusted context, not selected by an incoming permit. Candidate remaps, control reconnects or writer/key rotation must not rotate a live gameplay incarnation. A new canonical generation/context rejects old new-admission attempts without tearing down established player peers.
+`D` is SHA-256 of these bytes. Context comes from trusted host configuration;
+an incoming permit cannot select it. Reconnecting control or replacing candidates
+does not rotate the gameplay incarnation.
 
-The carrier is `NXD1` + four uppercase alphanumeric key-ID characters + unpadded base64(nonce12 + ciphertext + GCM-tag16). It is an authenticated encrypted capability, matching NXS1's symmetric admission strength; it is not an asymmetric signature carried in ICE. Detached offer and answer signatures supply asymmetric proofs. All derivations have diagnostic-only domains; an NXS1 or WDA2 token cannot select diagnostics and NXD1 cannot select player admission.
+The ICE username is `NXD1` + four uppercase alphanumeric key-ID characters +
+base64(nonce12 + ciphertext + GCM-tag16). The encrypted plaintext is:
 
-| Plaintext offset | Bytes | Value |
+| Offset | Bytes | Value |
 | --- | ---: | --- |
 | 0 | 4 | Absolute expiry, whole Unix seconds |
-| 4 | 32 | Client DTLS SHA-256 certificate fingerprint |
+| 4 | 32 | Client DTLS SHA-256 fingerprint |
 | 36 | 16 | Secret HMAC binding of canonical ephemeral P-384 key |
 | 52 | 16 | Random attempt ID |
-| 68 | 32 | SHA-256 of the exact complete offer bytes |
+| 68 | 32 | SHA-256 of exact complete offer bytes |
 | 100 | 8 | Candidate revision |
-| 108 | 1 | Profile 1: `0x01` IPv4 / `0x81` IPv6. Profile 2: `0x02` IPv4 / `0x82` IPv6; all other values rejected |
-| 109 | 16 | Numeric target address; IPv4 is twelve zero octets plus its four address octets |
-| 125 | 2 | Target UDP port; profile 2 uses 0 with an all-zero target address |
+| 108 | 1 | Profile/family: `0x01` direct IPv4, `0x81` direct IPv6, `0x02` assisted IPv4, `0x82` assisted IPv6 |
+| 109 | 16 | Numeric target address; IPv4 has twelve zero bytes followed by four address bytes |
+| 125 | 2 | Target UDP port; assisted profile uses zero address and port |
 | 127 | 1 | Client ICE password byte length |
-| 128 | 22..30 | Client ICE password |
+| 128 | 22–30 | Client ICE password |
 
-IPv6 uses all16 octets; IPv4-mapped IPv6, zone IDs, hostname lookup and ambiguous IPv4 decimal representations are rejected. Endpoint equality uses family + packed octets + port. The host behind NAT cannot observe its public destination directly: it must compare the authenticated endpoint/revision to its current eligible candidate set on this exact gameplay listener; the prober separately verifies its actual selected remote tuple/family. A stale revision result never updates a newer candidate's readiness.
+Compare endpoints by family, packed address and port. Reject mapped IPv6, zone
+IDs, hostname lookup and ambiguous IPv4 decimals. Username length is
+`8 + ceil((156 + passwordBytes) * 4 / 3)`: passwords of 22, 24 and 30 bytes produce
+246, 248 and 256 characters. Passwords need at least 128 random bits. This bound
+belongs to diagnostics; NXS1 player passwords retain their existing limits.
 
-The length is `8 + ceil((156 + passwordBytes) * 4 / 3)`. Password lengths22,24,30 produce246,248,256 characters;31 would produce258 and is rejected. This limitation applies only to the new controlled prober profile. NXS1 player passwords remain22..91. Measured Chromium151 offers use24. Do not rewrite an incompatible offer or assume that every libwebrtc API accepts arbitrary ICE credentials. ICE passwords require at least128 bits of random generator output; callers own secure generation. [RFC8445 section5.3](https://www.rfc-editor.org/rfc/rfc8445.html#section-5.3)
+Admission secrets are valid UTF-8, 32–256 encoded bytes, used directly rather than
+base64-decoded. AES-256-GCM uses a fresh random 12-byte nonce and 128-bit tag.
+With `H` = HMAC-SHA256 under that secret:
 
-## Cryptography and detached proof
-
-Secrets are valid UTF-8,32..256 encoded bytes; they are not base64-decoded. AES-256-GCM uses a fresh cryptographically random12-byte nonce and128-bit tag. Let `H` be HMAC-SHA256 under the admission secret, and `D` the context digest:
-
-```
+```text
 AES key = H(UTF8("nxs-diagnostic-aead-v1\0") || D)
 GCM AAD = UTF8("nxs-diagnostic-admission-v1\0") || header8 || 0x00 || D || 0x00 || remoteUfragASCII
 server ICE password = base64(first24(H(UTF8("nxs-diagnostic-ice-v1\0") || D || fullLocalUfragASCII)))
 key binding = first16(H(UTF8("nxs-diagnostic-identity-v1\0") || D || canonicalSPKI))
 ```
 
-The canonical public key is the validated97-byte uncompressed P-384 point prefixed with DER hex `3076301006072a8648ce3d020106052b81040022036200`. Detached signatures use ES384 with fixed96-byte IEEE-P1363 `r || s`, never variable DER. The signed transcript is:
+The canonical SPKI is DER prefix `3076301006072a8648ce3d020106052b81040022036200`
+followed by the validated 97-byte uncompressed P-384 point. Detached offer
+assertions use ES384, with a 96-byte IEEE-P1363 `r || s` signature over:
 
-```
+```text
 UTF8("nxs-diagnostic-assertion-v1\0") || D
-|| complete encoded plaintext, with the16-byte key-binding slot set to zero
+|| complete plaintext with its 16-byte key-binding slot zeroed
 || uint16(remoteUfragASCII.length) || remoteUfragASCII
 ```
 
-This covers exact offer hash, target, generation/context, family, attempt, fixed expiry and closed bounds profile. The provider verifies this assertion before issuance. The assisted host also verifies the forwarded assertion before creating a peer. It does not claim to reconstruct the gathered offer from the minimal stateless ICE description. The facade validates that the complete offer really matches the carried transport fields/hash; the host relies on that issuer attestation and checks the actual pinned DTLS peer. There is no unused offer hash or fabricated Minecraft verifier.
+`remoteUfrag` is 4–256 ICE characters. The issuer verifies the exact offer and
+assertion before minting; the assisted host also verifies the forwarded assertion.
+Direct admission relies on the issuer's attestation, authenticated first-STUN
+credentials and the client DTLS pin. The ephemeral assertion key is separate from
+Minecraft identity. Diagnostic domains prevent interchange with player tokens.
 
-The proof establishes possession when the assertion was signed, with possession of the separately pinned DTLS private key established by transport. It is not a fresh host-nonce proof of the assertion key. Captured public assertions alone cannot pass DTLS as another certificate.
+## Profiles
 
-## Direct and assisted profiles
+Both profiles use UDP, one bundled application/mid 0, full ICE, offer setup
+`actpass`, answer setup `active`, SCTP port 5000 and maximum message size 262144.
+Gathering finishes before the single offer; no later trickle updates are allowed.
+SDP is at most 16,384 UTF-8 bytes, with one numeric candidate of the attempt's
+family and valid media/candidate ports. Bounded `generation`, `network-id`,
+`network-cost` and matching `ufrag` candidate extensions are accepted.
+`ice-options:trickle` capability alone does not mean gathering is incomplete.
+Reject ICE-lite, relay/TCP and incompatible or ambiguous transport attributes.
 
-Profile1 is immutable: SCTP port5000, SDP maximum message size262144, UDP, one bundled application/mid0, offer setup `actpass`, full ICE (ice-lite rejected), a media port1..65535, one selected numeric host candidate of the job family, full gathering before the single offer, no trickle updates. Normal candidate extensions `generation`, `network-id`, `network-cost` and matching `ufrag` are bounded and accepted. `ice-options:trickle` capability advertisement alone does not imply trickle execution; only a complete offer is accepted, and the adapter must prohibit later updates. SDP cannot prove the actual gathering state or socket binding; the prober must enforce both through its API. Never rewrite incompatible SCTP values to fit. Channel/profile settings follow the published Minecraft guide. [Mojang transport profile](https://mojang.github.io/bedrock-protocol-docs/guides/nether-net-onboarding-guide/#6-webrtc-peerconnection-configuration)
+**Profile 1 (direct)** binds one exact target address, port and candidate revision.
+The probe gathers on a dedicated socket without external STUN/TURN. The host
+receives no per-attempt offer or command before the client's first STUN packet;
+it reconstructs remote SDP from the authenticated observed source. The host
+compares the permit's target with its current eligible candidates on that listener.
+The prober binds a numeric same-family address and port; its selected local tuple
+and remote destination must match that bind and the signed target. Production
+probe targets must be public; the native test constructor also permits loopback.
 
-Profile 2 retains the same signed carrier, deadline, channel and ping/pong requirements. It uses an all-zero target address and port 0, plus the original candidate revision and explicit family. The host must have locally enabled assistance for that family. The signed offer contains one numeric host or server-reflexive candidate. An IPv4 probe behind NAT may offer its private host address without client-side STUN; private server-reflexive candidates and private IPv6 candidates are rejected. The probe may discover its public mapping using a provider-advertised STUN endpoint on its actual UDP mux; this bounded discovery stops with the attempt.
+**Profile 2 (assisted)** signs a zero target address/port, original revision and
+explicit family. The provider forwards the exact offer and assertion using
+`assisted-join` with `purpose: "connectivity-check"`. Replace player `networkId`
+and `cpk` with `assertion: {publicPointHex, signatureBase64}`; the point is the
+97-byte key above and the signature is its 96-byte P1363 proof. Other host context,
+credential and expiry fields follow the [WebSocket envelope](control-v1.md#assisted-joins).
+The host must have locally enabled assistance for this family. Incoming stateless
+admission cannot enable profile 2.
 
-The provider forwards the exact offer and detached assertion over the existing authenticated `assisted-join` WebSocket exchange with `purpose: "connectivity-check"`. It carries the original token/password and host epoch fields, but no player CPK or network ID. The host verifies admission and proof before allocating a diagnostic peer. For a public probe candidate it sends ICE toward the probe. For a private IPv4 host candidate it removes that candidate from the native remote description and waits for authenticated inbound ICE to learn the public peer-reflexive source; it never sends diagnostic traffic to the offered private address. Incoming stateless admission rejects profile 2. Its signed answer carries one fresh same-family public candidate. If the host has no public direct candidate, it gathers its mapping on the same socket for this attempt only. Public reciprocal candidates allow both peers to send ICE to open their NAT filters; a private-only IPv4 probe instead initiates toward the fresh host candidate and may fail when the host requires a reciprocal public candidate. The prober verifies public scope before applying the signed answer and checks selected family and pinned DTLS identity. This works without a surviving warm-STUN mapping. No player channel or gameplay pipeline is created.
+An assisted offer has one host or server-reflexive candidate. A private IPv4 host
+candidate is permitted: the host removes it from native remote SDP and waits for
+authenticated incoming ICE to learn the public source. It never dials that private
+address. Private server-reflexive and private IPv6 candidates are rejected.
+Optional mapping discovery uses a numeric same-family provider-advertised STUN
+server on the attempt's own socket and stops with the attempt.
 
-The offering peer creates exactly `ReliableDataChannel` (ordered/reliable) and `UnreliableDataChannel` (unordered, maxRetransmits0). Negotiated labels, uniqueness and reliability must be checked before sending PING or PONG. The maximum SCTP message262144 remains distinct from the much smaller application-frame policy.
+The assisted answer contains one fresh public same-family host or server-reflexive
+candidate. If needed, the host gathers it on the gameplay socket for this attempt.
+The prober validates public scope before installing the signed answer; selected
+pairs may use authenticated same-family public peer-reflexive mappings. A private
+IPv4 prober initiates toward the public host candidate. This can still fail when
+the host's NAT requires reciprocal traffic toward a public prober candidate.
 
-After pinned DTLS and both channels, the prober sends exactly one PING with a fresh
-32-byte random nonce on `ReliableDataChannel`. The host returns exactly one PONG
-with the same attempt ID and nonce. The prober verifies that echo and immediately
-closes the connection. Each application frame is 56 bytes. There is no AUTH frame,
-application retry, completion message or delivery receipt. The unused unreliable
-channel is opened only to retain the Minecraft transport profile.
+## Provider-signed answer
 
-The host authorizes the connection using the encrypted admission permit, first-STUN
-integrity and the client DTLS fingerprint carried in that permit. The provider
-has already validated the exact offer and detached assertion before issuing it.
-The assisted path additionally verifies the assertion forwarded over the control
-connection. A diagnostic never creates a player identity or gameplay pipeline.
+The expected host fingerprint comes from the authorized job. The provider signs
+the exact answer bytes in this compact ASCII JSON field order:
 
-Expiry, cancellation, key revocation and endpoint withdrawal still close the peer.
-The prober reports success only after the matching PONG; cleanup is performed on
-every outcome. Framing and native execution are described in `diagnostic-host-v1.md`.
+```json
+{"version":1,"kind":"diagnostic-answer","keyId":"provider-key-id","expiresAt":1788484830000,"requestDigestHex":"...","answerSdpBase64":"...","answerDigestHex":"...","signatureBase64":"..."}
+```
 
-## Integration requirements and remaining delivery gates
+`expiresAt` is the original attempt deadline in milliseconds. `requestDigestHex`
+is SHA-256 of the detached assertion transcript; `answerDigestHex` is SHA-256 of
+the exact SDP bytes. Digests are 64 lowercase hex digits. Key IDs match
+`[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}`. Base64 is canonical and unpadded; the ES384
+signature is 96-byte P1363. The signed transcript is:
 
-- Verify workload/lease/target authority before issuance; fixed expiry must be covered at mint completion. Publish no reusable admission secret to a prober. Keep offers, ICE passwords, assertions and permit responses out of ordinary logs.
-- Add signed answer verification before applying remote SDP. A configured certificate string alone is not verified transport identity.
-- Branch on a verified diagnostic admission before constructing/emitting `AdmittedNetherNetChildChannel` or installing any `TransportIdentityBinding`, `AdmissionPrincipal`, Geyser login/game/outcome/accounting pipeline. No always-true `IdentityKeyVerifier` and no `acceptForwardedIdentity` bypass.
-- Share native session/pending/replay and actual teardown accounting with players; enforce a small diagnostic quota (the staged host gate caps four active and sixteen retained attempts; an executor can choose a smaller scheduling quota). Disabled/saturated checker capacity is unavailable/unknown, not a false reachability failure. Retain reservations until native teardown really completes.
-- Replay identity is context + attempt, not merely a hash of ciphertext: reminting with another nonce must not allocate another peer for the same retained attempt. The issuer fixes one attempt expiry; keep bounded replay metadata through that deadline. Controller reconnect does not clear it.
-- Numeric targets and selected UDP endpoints must match the signed family and scope. Profile 1 requires the original tuple; profile 2 applies the provider-signed public same-family candidate and permits authenticated peer-reflexive selection. Per-attempt discovery shares the peer socket without changing the independent STUN monitor.
-- Report transport establishment and verification of the original PONG. Record the verified answer destination as `attemptedRemote` before installing the answer, and retain it on transport failure. This is separate from `selectedLocal` and `selectedRemote`, which describe an established ICE pair. Preserve stale selected-path evidence without changing serving state. Distinguish target failure, checker failure, stale state and quota exhaustion.
-- Run fresh first-contact checks before any host traffic to that checker IP. A successful probe contaminates that source; another source port is insufficient. Two regions corroborate reachability but cannot prove acceptance from arbitrary sources.
-- Add actual native NXD1 rejection/acceptance, zero game/login promotion, dual-stack exact selected-pair, wrong DTLS/channel/offer/authority, replay, revocation and cleanup tests. The codec fixtures prove interoperability only; the separate opt-in host-gate tests exercise actual local native admission and teardown. Native/platform publication and real stock-client world-entry/gameplay gates remain separate.
+```text
+UTF8("nxs-diagnostic-answer-v1\0")
+|| uint16(keyIdASCII.length) || keyIdASCII
+|| uint64(fixedExpiresAtMillis)
+|| requestDigest32 || answerDigest32 || uint32(exactSdpByteLength)
+```
 
-The shared JSON contains public test secrets/private keys/nonces, explicitly marked never for deployment. Eight shared vectors cover both families, password22/24/30 and assisted profile 2. Fresh Java ES384 signatures are separately verified in Node/TypeScript, in addition to both implementations reproducing identical carrier/ICE-password/transcript bytes.
+Reject noncanonical JSON (including reordered/duplicate/unknown fields, whitespace,
+escaped aliases or numeric alternatives), nested values and bodies over 24,576
+bytes. Verify the signature, exact request/answer hashes, expected host DTLS pin
+and profile before applying SDP. The answer has one completed numeric host/srflx
+candidate, NXD1 username and 32-character ICE password. Direct answers match the
+original target; assisted answers supply the fresh same-family candidate.
+
+The caller supplies a trusted local catalog: provider origin, `notBefore`,
+`expiresAt` and one to eight unique keys. Each key has family `provider-diagnostic`,
+ID, canonical P-384 public point, `validFrom` and `validUntil`. The origin must
+match the context, and catalog/key validity must cover the full attempt. The
+signer self-verifies against that key. Before delivery, re-read the catalog and
+require the same selected key material/window and sufficient parent validity.
+Unrelated key changes are harmless. Never derive catalog trust from answer fields.
+
+Java's `VerifiedDiagnosticAnswer.takeSdp()` supplies an owned copy once, after
+rechecking catalog/key, cancellation, wall and monotonic expiry. Apply it
+immediately. Closing, reentrant consumption or changed authority prevents release;
+the transport continues enforcing the deadline and expected host fingerprint.
+Catalog readers must be bounded synchronous local reads.
+
+## Single PING/PONG and cleanup
+
+The offering peer creates exactly `ReliableDataChannel` (ordered/reliable) and
+`UnreliableDataChannel` (unordered, maxRetransmits 0), both with empty protocol and
+zero lifetime override. Validate labels, uniqueness, reliability, selected endpoint
+and pinned identity before exchanging application data. Both channels must open;
+the unreliable channel carries no application frames.
+
+The prober sends one fresh random 32-byte nonce on the reliable channel. The host
+echoes it once. Each frame is exactly 56 bytes:
+
+| Offset | Bytes | Value |
+| --- | ---: | --- |
+| 0 | 1 | NetherNet marker 0 |
+| 1 | 4 | ASCII `NXDP` |
+| 5 | 1 | Version 1 |
+| 6 | 1 | 2 PING or 3 PONG |
+| 7 | 1 | 0 reliable |
+| 8 | 16 | Original attempt ID |
+| 24 | 32 | PING nonce or exact echo |
+
+Only the prober reports success, after verifying the PONG's attempt/nonce and
+completing native cleanup. It then closes immediately. The host records PONG
+submission and closes on disconnect, with a one-second fallback. Wrong kinds,
+attempts, nonces, duplicates or unreliable-channel frames fail the check.
+
+The local diagnostic policy bounds context, keys, endpoints/revisions, assisted
+families and deadlines. Withdrawal, revocation, cancellation or expiry closes
+attempts without renewing them. Four active diagnostics share native capacity
+with players; sixteen used context/attempt IDs remain through their original
+expiry, including across policy refresh or control reconnect. Reminting a token
+with a new nonce cannot allocate the same attempt twice. Bad initial STUN
+integrity neither allocates a peer nor consumes a valid permit. `NXD1` never falls
+through to the player validator, even when disabled or malformed.
+
+`NativeDiagnosticProbeAttempt` runs once on a caller-owned bounded worker. Native
+close starts immediately on cancellation; cleanup waits up to five seconds. If
+`cleanupComplete` is false, retain the capacity reservation until `termination()`
+settles. A blocked signaling callback still occupies its worker. Host cleanup
+failure similarly retains capacity and makes the gate unavailable.
+
+Results retain the verified answer destination as `attemptedRemote` even on
+transport failure; `selectedLocal`/`selectedRemote` describe an established pair.
+Distinguish target failure from stale authorization, unavailable checker capacity
+and cleanup failure. Host observations are bounded to 32 with a dropped count.
+A first-contact claim additionally requires independent source-history evidence;
+IPv4 and IPv6 are separate observations.
+
+## Schemas and fixtures
+
+[Admission schema](diagnostic-v1.schema.json) and
+[answer schema](diagnostic-answer-v1.schema.json) describe structured values;
+runtime checks enforce cryptographic, canonical-byte and transport constraints.
+Shared public [admission](diagnostic-v1.fixtures.json),
+[answer](diagnostic-answer-v1.fixtures.json) and
+[PING/PONG](diagnostic-exchange-v1.fixtures.json) vectors cover wire interoperability.
+Their secrets, private keys and nonces are test data only. Java and Node independently
+verify the cryptographic fixtures. `:external-signaling:nativeAdmissionTest`
+exercises local native admission, exchange and teardown; it does not establish
+regional reachability or stock-client gameplay.

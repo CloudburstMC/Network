@@ -228,8 +228,8 @@ installedKeyIds,keyRequestId,appliedStateRevision,extensions`.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
   rejection, otherwise `unavailable`.
 - Serving state is reported by the game server. The provider may stop routing
-  players to it, but cannot command its listener. Only assisted player joins
-  can be unsolicited, and those require WebSocket transport.
+  players to it, but cannot command its listener. Only explicitly enabled assisted joins
+  (players or connectivity checks) can be unsolicited, and those require WebSocket transport.
 - For compatibility with older v1 peers, send `appliedStateRevision: 0` initially.
   Providers return `desiredState: {revision,state}` echoing the reported state,
   with revision at least 1 and no lower than the submitted acknowledgement.
@@ -540,50 +540,57 @@ from these checks.
 
 ### Optional connectivity observation
 
-Provider discovery supplies STUN configuration through `org.nethernet.connectivity`:
+The noncritical `org.nethernet.connectivity` version 1 extension carries discovery,
+heartbeat capability and regional feedback. Discovery supplies STUN servers:
 
 ```json
 {"version":1,"critical":false,"data":{"stunServers":[{"host":"stun.cloudflare.com","port":3478}]}}
 ```
 
-The host resolves up to two discovered servers off the native event loop, selecting a numeric server for each supported family. Explicit advertised endpoints suppress local discovery and STUN for all families, including omitted ones. An absent or empty server list leaves mapping discovery unavailable; there is no embedding-platform fallback.
+Resolve up to two servers off the native event loop, choosing a numeric address
+per supported family. Without configured endpoints, prefer public local addresses,
+then discover STUN mappings on the gameplay socket. Publish fresh mappings
+immediately and maintain them independently of heartbeat timing. Explicit endpoints
+are the complete eligible set and suppress automatic discovery and STUN for all
+families. An absent/empty server list leaves STUN discovery unavailable.
 
-The host owns candidate publication independently for IPv4 and IPv6. Explicit
-advertised endpoints remain the complete configured set. Otherwise publish public
-local addresses and the latest fresh same-mux STUN mapping immediately. When no
-public address is available, or a matching connectivity check fails, include
-private local addresses on the gameplay port as well. A failed check does not
-stop warming, remove a fresh mapping, or control the game listener. A replacement
-mapping discards feedback for the old mapping; newer successful feedback can
-remove the private fallback. Private addresses are not regional probe targets.
-
-Assisted joining is explicitly configured on or off by the host and defaults to off. When on, every eligible family is advertised immediately; no probe verdict enables or disables assistance. Background STUN warming is disabled in this mode; provider-advertised STUN endpoints remain available for bounded per-join discovery. Explicit endpoints constrain assistance to their public families and suppress discovery and STUN; private-only explicit endpoints do not opt into public assistance. Failed connectivity feedback can be logged with a suggestion to enable assistance, without changing configuration.
-
-New hosts always include both arrays in the ordinary authenticated heartbeat extension; optional decoding permits older fixtures:
+Host heartbeats report:
 
 ```json
 {"version":1,"critical":false,"data":{"diagnostics":false,"candidateRevision":1,"method":"discovered","assistedFamilies":[]}}
 ```
 
-Connectivity checks use `hostProfile.candidates`; there is no separate pending
-mapping or promotion stage. `assistedFamilies` is the host's authoritative list
-of families enabled for WebSocket assistance. The global `method` is a presentation
-summary (`defined`, `discovered`, `warm_stun` or `per_join`). Incarnation,
-fingerprint and endpoints remain in `hostProfile`. The native `candidateRevision`
-changes with candidate material or native mapping identity, including ABA
-replacement. Same-mapping STUN refresh and ordinary heartbeats retain the revision.
+`assistedFamilies` is the authoritative list of locally enabled families (4/6).
+Assistance defaults off and requires WebSocket; when enabled it uses bounded
+per-join discovery instead of background warming. Configured endpoints restrict
+assistance to their public families. Probe verdicts never change this choice.
+`method` summarizes `defined`, `discovered`, `warm_stun` or `per_join`.
+`candidateRevision` changes with candidate material or native mapping ownership,
+including replacement with the same address; unchanged STUN refreshes retain it.
+Host incarnation, fingerprint and advertised candidates remain in `hostProfile`.
 
+Provider feedback uses `{method,candidateRevision,checks}`. Up to eighteen checks
+retain `{region,family,method,target?,outcome,checkedAt,expiresAt}`. A target is an
+exact numeric `{address,port}`; an assisted failure may omit it. Outcomes are
+`established`, `not-established`, `unknown` and `unavailable`. Accept fresh results
+only for the current revision and endpoint. Newer results replace older ones per
+region/method/target; failure wins equal timestamps, while inconclusive results
+leave the previous decision intact.
 
-Diagnostic admission remains an explicit local opt-in. After a successful heartbeat the host installs the gate using existing admission keys, registration generation and current diagnostic targets. Authority lasts at most five minutes, bounded by any shorter check-in lease, key retirement and original mapping expiry. A subsequent ordinary heartbeat sets `diagnostics:true` only while that installation remains current. Pending-only or assisted-only families can authorize diagnostics without publishing player candidates. Assisted diagnostics use the separate signed connectivity-check purpose over the existing live authenticated WebSocket, without retaining a stale target. Queueing, retries, failed heartbeats and retained connectivity choices cannot extend authority. Draining and closing disable diagnostics while player serving state stays host-owned.
+Without assistance, failed public endpoints are withheld from player offers
+unless another region has a successful result for that endpoint. Keep those
+endpoints eligible for recovery probes and keep STUN warming; a subsequent success
+can restore them. Observation expiry alone does not change the last decision.
+Mapping replacement discards the old mapping's feedback. With assistance enabled,
+failed public candidates remain available. Automatic discovery also includes
+private local candidates when no public address exists or a matching check fails.
+Private addresses remain useful for LAN/VPN clients but are not regional targets.
+Publication changes leave established sessions intact.
 
-Provider feedback uses the same envelope with `{method,candidateRevision,checks}`.
-Up to eighteen checks retain separate region, family and method observations:
-`{region,family,method,target?,outcome,checkedAt,expiresAt}`. A target is an exact
-numeric `{address,port}`; an assisted failure may omit it. Outcomes are
-`established`, `not-established`, `unknown` and `unavailable`. The host may use
-fresh feedback matching its current revision and target to add private fallback
-addresses. Newer evidence supersedes older evidence; failure wins equal timestamps.
-Feedback never changes the configured assistance choice or the listener state.
-
-
-Native refresh, expiry and replacement continue independently of control requests. The client promptly publishes material changes and coalesces freshness updates. This adds no operation, lease document, completion journal or persistent connectivity state. Ordinary registration recovery resolves an ambiguous WebSocket operation before fresh state is sent.
+Diagnostic admission is a separate local opt-in. A successful heartbeat installs
+context, existing admission keys and current probe targets for at most five
+minutes, bounded by the check-in lease, key retirement and mapping expiry. Report
+`diagnostics:true` only while that installation is current. Withdrawn player
+offers may remain diagnostic targets; assisted-only families need no published
+player candidate. Retries cannot extend authority; drain/close disable diagnostics.
+See [diagnostics](diagnostic-v1.md) for admission, signatures and the exchange.
