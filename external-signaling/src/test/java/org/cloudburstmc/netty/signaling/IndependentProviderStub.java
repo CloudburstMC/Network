@@ -15,7 +15,10 @@ import java.util.concurrent.*;
  */
 public final class IndependentProviderStub implements AutoCloseable {
     final HttpServer server;
-    final String origin;
+    String origin;
+    volatile Runnable heartbeatResponseHook = () -> { };
+    volatile Runnable heartbeatAttemptHook = () -> { };
+    String operationPrefix = "/example/";
     final Map<String, JsonObject> challenges = new HashMap<>(), keys = new HashMap<>(), placements = new HashMap<>();
     JsonObject registration;
     volatile JsonObject lastHeartbeat;
@@ -33,6 +36,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile String selectedMode;
     volatile int challengeDifficulty = -1;
     volatile JsonObject extensionMetadata;
+    volatile JsonArray heartbeatRetirements;
     volatile int extensionRequests, keyAcknowledgements;
     boolean draining;
     volatile String desiredState = "serving";
@@ -42,9 +46,16 @@ public final class IndependentProviderStub implements AutoCloseable {
     int epoch = 1, profileRevision;
     final List<String> operationsSeen = new CopyOnWriteArrayList<>();
 
-    public IndependentProviderStub() throws IOException {
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        origin = "http://127.0.0.1:" + server.getAddress().getPort();
+    public IndependentProviderStub() throws IOException { this(null); }
+
+    IndependentProviderStub(javax.net.ssl.SSLContext tls) throws IOException {
+        if (tls == null) server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        else {
+            var https = HttpsServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            https.setHttpsConfigurator(new HttpsConfigurator(tls));
+            server = https;
+        }
+        origin = (tls == null ? "http://127.0.0.1:" : "https://localhost:") + server.getAddress().getPort();
         server.createContext("/", this::handle);
         server.start();
     }
@@ -54,6 +65,7 @@ public final class IndependentProviderStub implements AutoCloseable {
         JsonObject response;
         try {
             response = dispatch(e);
+            if (e.getRequestURI().getPath().endsWith("/heartbeat")) heartbeatResponseHook.run();
         } catch (Failure f) {
             status = f.status;
             response = new JsonObject();
@@ -74,6 +86,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     private JsonObject dispatch(HttpExchange e) throws Exception {
         String path = e.getRequestURI().getPath(), raw =
                 new String(e.getRequestBody().readNBytes(65537), StandardCharsets.UTF_8);
+        if (path.startsWith(operationPrefix)) path = "/example/" + path.substring(operationPrefix.length());
         if (raw.length() > 65536) {
             throw new Failure(400, "payload_limit");
         }
@@ -89,7 +102,7 @@ public final class IndependentProviderStub implements AutoCloseable {
             JsonObject operations = new JsonObject();
             for (String op : List.of("register", "complete", "heartbeat", "outcomes", "rotate", "retire",
                     "deregister")) {
-                operations.addProperty(op, origin + "/example/" + op);
+                operations.addProperty(op, origin + operationPrefix + op);
             }
             if (extensionMetadata != null) {
                 d.add("extensions", extensionMetadata.deepCopy());
@@ -270,6 +283,7 @@ public final class IndependentProviderStub implements AutoCloseable {
             }
             return registration.deepCopy();
         }
+        if (path.equals("/example/heartbeat")) heartbeatAttemptHook.run();
         if (path.equals("/example/heartbeat") && failHeartbeats-- > 0) {
             throw new Failure(503, "fixture_transient");
         }
@@ -278,6 +292,8 @@ public final class IndependentProviderStub implements AutoCloseable {
         ok.addProperty("accepted", true);
         switch (path) {
             case "/example/heartbeat" -> {
+                if (!body.has("appliedStateRevision")) throw new Failure(400, "legacy_state_field_required");
+                appliedRevision = body.get("appliedStateRevision").getAsLong();
                 lastHeartbeat = body;
                 heartbeats++;
                 if (body.has("installedKeyIds")) {
@@ -306,12 +322,9 @@ public final class IndependentProviderStub implements AutoCloseable {
                     request.add("keyId", requestedKey.get("keyId"));
                     ok.add("keyRequest", request);
                 }
+                JsonArray retirements = heartbeatRetirements;
+                if (retirements != null) ok.add("retirements", retirements.deepCopy());
                 draining = !body.get("state").getAsString().equals("serving");
-                long applied = body.get("appliedStateRevision").getAsLong();
-                if (applied > appliedRevision) {
-                    appliedRevision = applied;
-                    acknowledgements++;
-                }
                 JsonObject desired = new JsonObject();
                 desired.addProperty("revision", desiredRevision);
                 desired.addProperty("state", desiredState);

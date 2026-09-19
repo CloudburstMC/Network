@@ -141,6 +141,8 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
 
         try {
             if (isActive() && !activated) {
+                var selected = peerConnection.remoteAddress();
+                setRemoteAddress(new InetSocketAddress(org.cloudburstmc.netty.util.nethernet.EndpointAddress.parse(selected.getHostString()), selected.getPort()));
                 activated = true;
                 pipeline().fireChannelActive();
             }

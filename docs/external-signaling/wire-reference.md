@@ -217,9 +217,9 @@ endpoint alongside the runtime.
 ## `heartbeat`
 
 Required fields: `healthy,acceptingPlayers,capacity,load,protocolVersion,clockUnixMillis,
-checkInVersion,state,appliedStateRevision,gameOutcomes`.
+checkInVersion,state,gameOutcomes`.
 Optional fields: `build,region,serverStatus,hostProfile,hostProfileRevision,
-installedKeyIds,keyRequestId,extensions`.
+installedKeyIds,keyRequestId,appliedStateRevision,extensions`.
 
 - `healthy` is application health. `acceptingPlayers` is explicit willingness to accept new players; false while draining or closed. A serving host may pause acceptance and later report true without changing lifecycle. Neither field is derived from player counts. Report acceptance changes promptly.
 - `capacity` is an integer from 0 to 1000000; `load` is a finite number from 0 to 1.
@@ -227,10 +227,14 @@ installedKeyIds,keyRequestId,extensions`.
   serving in the same generation; a fresh endpoint requires recovery/completion.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
   rejection, otherwise `unavailable`.
-- `appliedStateRevision` is a nonnegative integer. A response carries
-  `desiredState: {revision,state}`. Reject unknown states or regressing revisions;
-  acknowledge only state that finished applying. Pending application triggers
-  a bounded earlier heartbeat. Receipt alone is not acknowledgement.
+- Serving state is reported by the game server. The provider may stop routing
+  players to it, but cannot command its listener. Only explicitly enabled assisted joins
+  (players or connectivity checks) can be unsolicited, and those require WebSocket transport.
+- For compatibility with older v1 peers, send `appliedStateRevision: 0` initially.
+  Providers return `desiredState: {revision,state}` echoing the reported state,
+  with revision at least 1 and no lower than the submitted acknowledgement.
+  Hosts may acknowledge a matching state; they must not apply a remote command.
+  Updated providers also accept omission of the legacy acknowledgement.
 - `clockUnixMillis` is an increasing snapshot clock within the generation and
   must be within 30000 milliseconds of provider time.
 - `region` cannot change authorized placement. `serverStatus` contains
@@ -270,10 +274,16 @@ each bound native endpoint. The fingerprint is `sha-256 ` followed by the
 certificate's digest bytes in colon-separated uppercase hex.
 
 Each candidate contains `foundation,component,protocol,priority,address,port,type`.
-Publish 1–32 candidates. Foundations match `[A-Za-z0-9._:-]{1,32}`; component is
+Publish 0–32 candidates. An empty array withdraws advertised routes without draining the listener or established peers. Foundations match `[A-Za-z0-9._:-]{1,32}`; component is
 1, protocol is `udp`, priority is 1–2147483647, port is 1–65535, and type is
 `host`, `srflx` or `relay`. Addresses are IP literals.
-Publish only reachable UDP candidates that are explicitly chosen for advertisement.
+Publish the latest same-socket STUN mapping as an ordinary `srflx` candidate.
+No new candidate field is required. The host keeps warming independently of
+heartbeat timing and republishes when the mapping changes or becomes unavailable.
+Providers use the heartbeat lease to bound retained profiles. If a host supplies
+an optional `expiresAt` on a `srflx` candidate, providers also honor that deadline;
+other candidate types omit it.
+The game server chooses which usable UDP candidates to advertise.
 The bind address and the advertised address serve different purposes. A host can
 bind to all interfaces, but it cannot advertise wildcard `0.0.0.0` or `::`.
 The deployment or provider must establish reachability through NAT or a relay;
@@ -349,6 +359,11 @@ Request: `{events:[{ticketId,stage,occurredAt,reason?}]}` with at most 100 event
 The ticket ID derives from the authenticated admission carrier, never from an
 unauthenticated packet. The provider scopes correlation to the signed instance.
 No provider-specific routing decision ID is required.
+When discovery advertises `dev.opencollab.nxs.connectivity` version 1, events may also
+include the observed client `remoteAddress` (numeric IP) and `remotePort` (1–65535)
+as a pair. Use the actual transport observation; omit the pair when unavailable.
+Hosts omit these optional fields for older providers so the base outcome remains
+compatible. This reports the client endpoint, not a candidate publication command.
 
 Required stages are `ticket.data_channels_open` and `ticket.failed` for observed
 transport attempts, plus `ticket.game_joined`/`ticket.game_rejected` when
@@ -396,6 +411,12 @@ data (AAD) is
 | 58 | 8 | NetherNet network ID, unsigned 64-bit |
 | 66 | 1 | Client ICE password length, 22–91 |
 | 67 | N | Client ICE password in ICE base64 alphabet |
+
+Network ID **zero is reserved for [diagnostics](diagnostic-v1.md)**. For zero,
+the identity-binding slot carries the attempt ID and a mandatory 59-byte target
+extension follows the password. Player issuers reject zero; nonzero admissions
+reject trailing diagnostic data. Hosts select the diagnostic handler only after
+AEAD verification, before any player reservation or pipeline event.
 
 ### Bind signaling identity to the game login
 
@@ -505,6 +526,10 @@ what claiming an account means or require other providers to implement it.
 lowercase domain-style labels and have at most 128 characters. Each value is
 `{version:positiveInteger,critical:boolean,data:object}`.
 
+Extensions defined by this specification use `dev.opencollab.nxs.*`, including
+`dev.opencollab.nxs.connectivity` and `dev.opencollab.nxs.websocket`.
+Provider-specific extensions use the provider's own reverse-DNS namespace.
+
 Pass through or ignore unknown optional extensions; never execute them
 automatically. Reject unsupported critical extensions before sending credentials
 or publishing readiness. An optional extension cannot change the core protocol rules.
@@ -522,3 +547,60 @@ admission fixtures. The Java tests consume the same schema/fixtures and exercise
 an independent provider with no product accounts. Native tests separately cover
 local admission and real UDP/ICE/DTLS/SCTP. Report stock-client gameplay separately
 from these checks.
+
+### Optional connectivity observation
+
+The noncritical `dev.opencollab.nxs.connectivity` version 1 extension carries discovery,
+heartbeat capability and regional feedback. Discovery supplies STUN servers:
+
+```json
+{"version":1,"critical":false,"data":{"stunServers":[{"host":"stun.cloudflare.com","port":3478}]}}
+```
+
+Resolve up to two servers off the native event loop, choosing a numeric address
+per supported family. Without configured endpoints, prefer public local addresses,
+then discover STUN mappings on the gameplay socket. Publish fresh mappings
+immediately and maintain them independently of heartbeat timing. Explicit endpoints
+are the complete eligible set and suppress automatic discovery and STUN for all
+families. An absent/empty server list leaves STUN discovery unavailable.
+
+Host heartbeats report:
+
+```json
+{"version":1,"critical":false,"data":{"diagnostics":false,"candidateRevision":1,"method":"discovered","assistedFamilies":[]}}
+```
+
+`assistedFamilies` is the authoritative list of locally enabled families (4/6).
+Assistance defaults off and requires WebSocket; when enabled it uses bounded
+per-join discovery instead of background warming. Configured endpoints restrict
+assistance to their public families. Probe verdicts never change this choice.
+`method` summarizes `defined`, `discovered`, `warm_stun` or `per_join`.
+`candidateRevision` changes with candidate material or native mapping ownership,
+including replacement with the same address; unchanged STUN refreshes retain it.
+Host incarnation, fingerprint and advertised candidates remain in `hostProfile`.
+
+Provider feedback uses `{method,candidateRevision,checks}`. Up to eighteen checks
+retain `{region,family,method,target?,outcome,checkedAt,expiresAt}`. A target is an
+exact numeric `{address,port}`; an assisted failure may omit it. Outcomes are
+`established`, `not-established`, `unknown` and `unavailable`. Accept fresh results
+only for the current revision and endpoint. Newer results replace older ones per
+region/method/target; failure wins equal timestamps, while inconclusive results
+leave the previous decision intact.
+
+Without assistance, failed public endpoints are withheld from player offers
+unless another region has a successful result for that endpoint. Keep those
+endpoints eligible for recovery probes and keep STUN warming; a subsequent success
+can restore them. Observation expiry alone does not change the last decision.
+Mapping replacement discards the old mapping's feedback. With assistance enabled,
+failed public candidates remain available. Automatic discovery also includes
+private local candidates when no public address exists or a matching check fails.
+Private addresses remain useful for LAN/VPN clients but are not regional targets.
+Publication changes leave established sessions intact.
+
+Diagnostic admission is a separate local opt-in. A successful heartbeat installs
+context, existing admission keys and current probe targets for at most five
+minutes, bounded by the check-in lease, key retirement and mapping expiry. Report
+`diagnostics:true` only while that installation is current. Withdrawn player
+offers may remain diagnostic targets; assisted-only families need no published
+player candidate. Retries cannot extend authority; drain/close disable diagnostics.
+See [diagnostics](diagnostic-v1.md) for admission, signatures and the exchange.

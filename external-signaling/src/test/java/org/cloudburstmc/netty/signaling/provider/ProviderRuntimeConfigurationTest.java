@@ -6,6 +6,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import org.cloudburstmc.netty.signaling.ProviderClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -13,6 +14,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -21,6 +23,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * rather than Warden, which is only a default a host may carry.
  */
 class ProviderRuntimeConfigurationTest {
+
+    @Test void assistedOptInUsesExistingAdapterAndRequiresAuto(@TempDir Path directory) throws Exception {
+        var settings = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "", List.of(), Map.of(),
+                ProviderClient.ControlTransport.AUTO, false, true, true);
+        assertTrue(ProviderRuntimeConfiguration.resolve(settings,directory,"0.0.0.0",19132,10,"test").clientConfiguration().assistedJoins());
+        var disabled = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "",List.of(),Map.of());
+        assertFalse(ProviderRuntimeConfiguration.resolve(disabled,directory,"0.0.0.0",19132,10,"test").clientConfiguration().assistedJoins());
+        var http = new ProviderRuntimeConfiguration.Settings("https://signal.example.net", "", List.of(), Map.of(),
+                ProviderClient.ControlTransport.HTTP, false, true, true);
+        assertTrue(assertThrows(IOException.class, () -> ProviderRuntimeConfiguration.resolve(http,directory,"0.0.0.0",19132,10,"test")).getMessage().contains("control-transport=auto"));
+    }
 
     private static final String PROVIDER = "https://signal.example.net";
 
@@ -51,6 +64,22 @@ class ProviderRuntimeConfigurationTest {
         assertEquals(dir.resolve("provider-state"), result.stateDirectory());
         assertEquals("automatic", result.clientConfiguration().registrationMode());
         assertEquals("anonymous-proof-of-work", result.clientConfiguration().authorizationScheme());
+        assertEquals(org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, result.clientConfiguration().controlTransport());
+        var automatic = runtime(dir, new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.AUTO));
+        assertEquals(org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.AUTO, automatic.clientConfiguration().controlTransport());
+    }
+
+    @Test
+    void diagnosticOptInAndMethodComeFromOrdinaryLocalSettings(@TempDir Path dir) throws Exception {
+        assertEquals(false, runtime(dir).clientConfiguration().diagnosticAdmission());
+        for (var endpoints : List.of(List.<String>of(), List.of("1.1.1.1:19132"))) {
+            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", endpoints, Map.of(),
+                    org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP, true);
+            var configured = runtime(dir, settings).clientConfiguration();
+            assertEquals(true, configured.diagnosticAdmission());
+            assertEquals(endpoints.isEmpty() ? "discovered" : "defined", configured.connectivityMethod());
+        }
     }
 
     @Test
@@ -131,4 +160,31 @@ class ProviderRuntimeConfigurationTest {
         assertEquals(65535,
                 ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 65535, 20, "Host").udpPort());
     }
+
+    @Test void explicitAssistanceReachesClientAndNativeHost(@TempDir Path dir) throws Exception {
+        for (boolean assisted : List.of(false, true)) {
+            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+                    ProviderClient.ControlTransport.AUTO, true, true, assisted);
+            var selected = runtime(dir, settings);
+            assertEquals(assisted, selected.clientConfiguration().assistedJoins());
+            assertEquals(Boolean.toString(assisted), selected.nativeHostOptions().get("assistedJoins"));
+        }
+    }
+    @Test void maintainedSettingsLeaveStunConfigurationToProviderDiscovery(@TempDir Path dir) throws Exception {
+        for (var endpoints : List.of(List.<String>of(), List.of("8.8.8.8:19133"))) {
+            var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", endpoints, Map.of(),
+                    ProviderClient.ControlTransport.HTTP, true, true);
+            var selected = runtime(dir, settings);
+            assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
+            assertFalse(selected.nativeHostOptions().containsKey("stunServers"));
+        }
+    }
+    @Test void disabledWarmingKeepsPublicationAndRecoveryPolicy(@TempDir Path dir) throws Exception {
+        var settings = new ProviderRuntimeConfiguration.Settings(PROVIDER, "", List.of(), Map.of(),
+            ProviderClient.ControlTransport.HTTP, true, false, false);
+        var selected = runtime(dir, settings);
+        assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
+        assertEquals("false", selected.nativeHostOptions().get("stunWarming"));
+    }
+
 }

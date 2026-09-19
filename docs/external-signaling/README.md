@@ -35,6 +35,11 @@ cannot start another generation or reveal its secrets again.
 Every live replica needs its own key and private state directory. Account/token
 issuance, ownership claims and fleet administration belong to the provider.
 
+The Java client defaults to HTTP. Its optional `controlTransport=AUTO` uses the
+noncritical `dev.opencollab.nxs.websocket` discovery extension when advertised. The
+same lifecycle signs and handles ordinary operations over either carrier;
+registration and recovery remain HTTPS. See [control transport](control-v1.md).
+
 ## 2. Heartbeat to the provider
 
 Send a signed `heartbeat` immediately after startup and whenever its returned
@@ -44,18 +49,21 @@ schedule says to check in. The request carries:
   and independent optional public server status.
 - `hostProfile` when endpoint details change; otherwise `hostProfileRevision`.
 - `installedKeyIds`, listing installed admission epochs with the active one last.
-- Local `state` (`serving`, `draining` or `closed`), the applied provider-state
-  revision, and whether the integration can report game outcomes.
+- Local `state` (`serving`, `draining` or `closed`) and whether the integration
+  can report game outcomes.
 
-The reply returns the accepted profile revision, readiness, lease/schedule,
-provider state and any admission-key updates. A host becomes routable only with
+The reply returns the accepted profile revision, readiness, lease/schedule
+and any admission-key updates. A host becomes routable only with
 a live lease, usable profile and acknowledged installed key.
 
 Report `healthy` and `acceptingPlayers` independently on every heartbeat. A healthy draining host reports false acceptance and continues reporting its actual remaining players. A serving host can pause and resume acceptance without changing lifecycle.
 
-Apply provider state before acknowledging its revision. `draining` stops new
-joins and preserves existing sessions; `closed` closes the transport. Provider
-routing and credential decisions take effect independently of host check-in.
+The game server owns its serving state. The provider may stop routing new
+players to it, but never sends a serve/drain/close instruction. Only explicitly
+enabled assisted joins (players or connectivity checks) may be unsolicited, and
+those require WebSocket transport. Legacy
+`appliedStateRevision`/`desiredState` fields remain as compatibility acknowledgements
+and echoes; they do not control the listener.
 
 For a replacement admission key, include a fresh `keyRequestId`. Save and install
 the returned key, then immediately heartbeat with the updated profile and
@@ -118,3 +126,13 @@ Hosts can request automatic registration: the provider uses token authority to
 choose account provisioning or attachment. Anonymous hosts create new services.
 Geyser exposes only signaling mode, advertised endpoints, token, provider origin
 and registration metadata; see the [Geyser configuration](https://github.com/teamziax/GeyserNetherNet/blob/nxs-dev/PROVIDER.md).
+
+### Optional connectivity
+
+The host publishes fresh endpoints immediately and uses completed regional checks
+to adjust subsequent offers. Assistance is an explicit host choice; checks never
+enable it or change the listener's serving state. See the
+[connectivity extension](wire-reference.md#optional-connectivity-observation) for
+publication and feedback fields, and [diagnostics](diagnostic-v1.md) for signed
+admission and the single PING/PONG exchange. These extensions add no registration
+or heartbeat operations.

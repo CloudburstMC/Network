@@ -95,6 +95,81 @@ class NativeAdmissionIntegrationTest {
 
     @Test
     @Timeout(30)
+    void rotatedEpochsAcceptBeforeOriginalCutoffButOnlyNewEpochAtAndAfterIt() throws Exception {
+        var id = identity();
+        var group = new DefaultEventLoopGroup(1);
+        long cutoff = System.currentTimeMillis() + 2_000;
+        var now = new AtomicLong(cutoff - 1);
+        var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
+        String newSecret = "replacement-fixture-secret-32-bytes-minimum";
+        validator.installKeys(List.of(
+                new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET, 0, cutoff),
+                new StatelessAdmissionValidator.TicketKey("K002", newSecret)));
+        // Only the validator's existing wall-clock argument is controlled. UDP, integrity checks,
+        // native peer allocation and cleanup use the real gameplay listener.
+        var endpoint = new NativeAdmissionServerChannel(id,
+                (request, ignored) -> validator.validate(request, now.get()), AdmissionGate.Limits.defaults());
+        int port;
+        try (var available = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
+            port = available.getLocalPort();
+        }
+        try {
+            new ServerBootstrap().group(group).channelFactory(() -> endpoint)
+                    .childHandler(new ChannelInitializer<Channel>() {
+                        @Override
+                        protected void initChannel(Channel channel) { }
+                    }).bind("127.0.0.1", port).sync();
+            long expectedCreations = 0;
+            for (long instant : new long[]{cutoff - 1, cutoff, cutoff + 1}) {
+                now.set(instant);
+                for (String keyId : List.of("K001", "K002")) {
+                    boolean accepted = keyId.equals("K002") || instant < cutoff;
+                    String ufrag = "rotation" + keyId + instant;
+                    // Each attempt has a distinct token/source tuple; an already admitted peer cannot
+                    // turn this into a test of replay reuse instead of a new admission.
+                    String offer = "a=ice-ufrag:" + ufrag + "\r\na=ice-pwd:" + "p".repeat(32)
+                            + "\r\na=fingerprint:" + id.fingerprint() + "\r\n";
+                    var answer = TestSignalingProvider.answer(offer, id.fingerprint(), port,
+                            cutoff + 30_000, TestSignalingProvider.AUDIENCE, false, keyId,
+                            keyId.equals("K001") ? TestSignalingProvider.SECRET : newSecret);
+                    byte[] request = nominatedBinding(answer.token() + ":" + ufrag, answer.password());
+                    long invalidBefore = endpoint.admissionStats().invalid();
+                    try (var socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
+                        socket.setSoTimeout(accepted ? 2_000 : 250);
+                        socket.send(new DatagramPacket(request, request.length,
+                                new InetSocketAddress("127.0.0.1", port)));
+                        var response = new DatagramPacket(new byte[2048], 2048);
+                        if (accepted) {
+                            socket.receive(response);
+                            assertEquals(0x0101, Short.toUnsignedInt(ByteBuffer.wrap(response.getData()).getShort()));
+                            assertArrayEquals(Arrays.copyOfRange(request, 8, 20),
+                                    Arrays.copyOfRange(response.getData(), 8, 20));
+                            long expected = ++expectedCreations;
+                            await(() -> endpoint.creationAttempts() == expected);
+                        } else {
+                            assertThrows(SocketTimeoutException.class, () -> socket.receive(response));
+                            await(() -> endpoint.admissionStats().invalid() > invalidBefore);
+                        }
+                        assertEquals(expectedCreations, endpoint.creationAttempts(), keyId + " at " + instant);
+                    }
+                }
+            }
+            assertEquals(4, expectedCreations);
+            validator.retireKeys(cutoff);
+            assertEquals(Set.of("K002"), validator.keyIds());
+        } finally {
+            endpoint.close().awaitUninterruptibly();
+            endpoint.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
+            validator.clear();
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+        try (var released = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
+            assertEquals(port, released.getLocalPort());
+        }
+    }
+
+    @Test
+    @Timeout(30)
     void dualStackWildcardAcceptsBothFamiliesAndRetainsSingleTicketOwnership() throws Exception {
         var id = identity();
         var group = new DefaultEventLoopGroup(1);
@@ -208,6 +283,18 @@ class NativeAdmissionIntegrationTest {
                                     "a=candidate:1 1 UDP 2130706431 ::1 " + port + " typ host\r\na=end-of-candidates");
                     client.setRemoteDescription(sdp, SessionDescriptionType.ANSWER);
                     await(() -> opened.get() == 2);
+                    var events = new ArrayList<JsonObject>();
+                    var ownedHost = host;
+                    await(() -> {
+                        events.addAll(ownedHost.pollEvents());
+                        return events.stream().anyMatch(e -> e.get("stage").getAsString().equals("ticket.data_channels_open"));
+                    });
+                    var connected = events.stream().filter(e -> e.get("stage").getAsString().equals("ticket.data_channels_open"))
+                            .findFirst().orElseThrow();
+                    assertEquals(InetAddress.getByName(ip), InetAddress.getByName(connected.get("remoteAddress").getAsString()));
+                    assertEquals(client.selectedCandidatePair().local().getPort(), connected.get("remotePort").getAsInt());
+                    assertTrue(events.stream().filter(e -> e.get("stage").getAsString().equals("ticket.ice_seen"))
+                            .allMatch(e -> !e.has("remoteAddress") && !e.has("remotePort")), "No selected endpoint is invented before connection");
                     assertTrue(client.closeAndAwait(Duration.ofSeconds(5)));
                 }
             }
@@ -658,6 +745,8 @@ class NativeAdmissionIntegrationTest {
                                     id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
             assertTrue(transport.hostProfile().toCompletableFuture().isCompletedExceptionally());
+            assertEquals(ProviderTransport.ApplyResult.APPLIED,
+                    transport.applyState("serving").toCompletableFuture().get());
             transport.installTicketKeys(
                     List.of(new ProviderTransport.TicketKey("K001",
                             TestSignalingProvider.SECRET))).toCompletableFuture().get();
@@ -682,7 +771,11 @@ class NativeAdmissionIntegrationTest {
                     transport.hostProfile().toCompletableFuture().get().get("credentialKeyId").getAsString());
             transport.drain().toCompletableFuture().get();
             assertTrue(transport.hostProfile().toCompletableFuture().isCompletedExceptionally());
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    transport.applyState("serving").toCompletableFuture().get());
             transport.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    transport.applyState("serving").toCompletableFuture().get());
             transport =
                     NativeProviderTransport.open(bootstrap, new InetSocketAddress("127.0.0.1", 49196), id.certificate(),
                                     id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
@@ -694,6 +787,11 @@ class NativeAdmissionIntegrationTest {
                     .get("incarnation").getAsString();
             assertNotEquals(incarnation, restarted);
             assertNotEquals(NativeProviderTransport.audience(incarnation), NativeProviderTransport.audience(restarted));
+            assertEquals(ProviderTransport.ApplyResult.APPLIED,
+                    transport.applyState("serving").toCompletableFuture().get());
+            transport.channel().drainAdmissions();
+            assertEquals(ProviderTransport.ApplyResult.REJECTED,
+                    transport.applyState("serving").toCompletableFuture().get());
             assertEquals(0, transport.channel().nativeStats()[2]);
             NativeDiagnostics.assertCreations(creations, 0);
         } finally {
