@@ -23,7 +23,7 @@ import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCod
 @Tag("native")
 class NativeDiagnosticConfigurationTest {
     @TempDir Path directory;
-    final Key diagnosticKey = new Key("D001", "test-diagnostic-install-secret-32bytes", 0, System.currentTimeMillis()+300_000);
+    final Key diagnosticKey = new Key("K001", TestSignalingProvider.SECRET, 0, System.currentTimeMillis()+300_000);
 
     final class Host implements AutoCloseable {
         final DefaultEventLoopGroup group = new DefaultEventLoopGroup(1);
@@ -47,7 +47,7 @@ class NativeDiagnosticConfigurationTest {
             transport=NativeProviderTransport.open(bootstrap,new InetSocketAddress(bind,port),advertised::get,directory.resolve("host.crt"),directory.resolve("host.key"),AdmissionGate.Limits.defaults())
                 .toCompletableFuture().get(5,TimeUnit.SECONDS);
             if (drained) transport.channel().drainAdmissions();
-            transport.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001","test-player-secret-of-at-least32bytes"))).toCompletableFuture().get();
+            transport.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001",TestSignalingProvider.SECRET))).toCompletableFuture().get();
         }
         void remap(int selectedPort) throws Exception {
             advertised.set(List.of(new InetSocketAddress(bind,selectedPort)));
@@ -64,7 +64,7 @@ class NativeDiagnosticConfigurationTest {
         void configure(DiagnosticHostPolicy policy) throws Exception { transport.configureDiagnostics(policy).toCompletableFuture().get(5,TimeUnit.SECONDS); }
         Client client(long expiry) throws Exception { return new Client(bind,expiry); }
         void connect(Client client,DiagnosticHostPolicy policy) throws Exception {
-            client.connect(identity,policy.context(),diagnosticKey,bind instanceof Inet6Address?6:4,bind.getHostAddress(),port,false,policy.endpoints().iterator().next().candidateRevision(),null,null);
+            client.connect(identity,policy.context(),diagnosticKey,bind instanceof Inet6Address?6:4,bind.getHostAddress(),port,false,policy.endpoints().iterator().next().candidateRevision());
         }
         public void close() throws Exception {
             transport.close().toCompletableFuture().get(6,TimeUnit.SECONDS);

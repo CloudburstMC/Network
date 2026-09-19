@@ -2,6 +2,7 @@
 package org.cloudburstmc.netty.signaling.diagnostic;
 
 import org.cloudburstmc.netty.signaling.admission.NativeHostIdentity;
+import org.cloudburstmc.netty.signaling.admission.VerifiedAdmission;
 import org.cloudburstmc.netty.signaling.control.AssistedJoin;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import tel.schich.libdatachannel.*;
@@ -11,7 +12,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
-/** Explicit diagnostic consumer; never constructs a player child, principal, CPK verifier or pipeline event. */
+/** Explicit diagnostic consumer; never constructs a player child, principal or pipeline event. */
 public final class NativeDiagnosticHostGate implements AutoCloseable {
     public record Result(Context context, String keyId, String attemptId, String offerDigestHex, String clientFingerprintHex, long expiresAt,
                          DiagnosticHostPolicy.Endpoint target, boolean success, String reason,
@@ -20,7 +21,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                          boolean cleanupComplete) { }
     public record Stats(int active, int pending, int retainedAttempts, int liveNativePeers, long rejected, long droppedResults) { }
     private static final class Session {
-        final VerifiedDiagnosticAdmission admission;
+        final Admission admission;
         final Key key;
         final InetSocketAddress remote;
         final long deadlineNanos, handshakeDeadlineNanos;
@@ -34,7 +35,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         String phase = "channels";
         long completeNanos;
         InetSocketAddress selectedLocal, selectedRemote, gatheredLocal;
-        Session(VerifiedDiagnosticAdmission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos) {
+        Session(Admission admission, Key key, InetSocketAddress remote, long deadlineNanos, long handshakeDeadlineNanos) {
             this.admission = admission; this.key = key; this.remote = remote; this.deadlineNanos = deadlineNanos;
             this.handshakeDeadlineNanos = handshakeDeadlineNanos;
         }
@@ -89,21 +90,25 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     public CompletionStage<Void> termination() { return termination.minimalCompletionStage(); }
 
     /** Same-listener hook. Native code verifies the first STUN integrity before this acceptance creates a peer. */
-    public synchronized IceUdpMuxListener.Acceptance admit(IceUdpMuxListener.Request request) {
+    public IceUdpMuxListener.Acceptance admit(IceUdpMuxListener.Request request) { return admit(request,null); }
+    /** Takes ownership of a token already verified by the shared player/diagnostic admission path. */
+    public synchronized IceUdpMuxListener.Acceptance admit(IceUdpMuxListener.Request request, VerifiedAdmission verified) {
         long now = observe(), nanos = lastNanos;
         prune(now);
         if (closed || closeFailure != null || clockFailed || now >= policy.expiresAt() || sessions.size() >= 4 || used.size() >= 16 ||
-                request.localUfrag().length() < 8 || !request.localUfrag().startsWith("NXD1")) { rejected++; return null; }
+                request.localUfrag().length() < 8 || !request.localUfrag().startsWith("NXS1")) { if (verified!=null) verified.identityVerifier().close(); rejected++; return null; }
         Key key = policy.key(request.localUfrag().substring(4, 8));
-        if (key == null) { rejected++; return null; }
-        VerifiedDiagnosticAdmission admission = open(policy.context(), key, request.localUfrag(), request.remoteUfrag(), policy.expiresAt(), clock);
+        if (key == null) { if (verified!=null) verified.identityVerifier().close(); rejected++; return null; }
+        Admission admission = verified == null
+                ? open(policy.context(), key, request.localUfrag(), request.remoteUfrag(), policy.expiresAt(), clock)
+                : verified(policy.context(), key, verified, policy.expiresAt(), clock);
         if (admission == null) { rejected++; return null; }
         try {
             Claims claims = admission.claims();
             InetSocketAddress remote = new InetSocketAddress(EndpointAddress.parse(request.remoteAddress()), request.remotePort());
             int family = remote.getAddress() instanceof Inet6Address ? 6 : 4;
             if (claims.profile() != PROFILE || family != claims.family() || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims)) ||
-                    used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote)) || !admission.usable()) throw invalid();
+                    used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote))) throw invalid();
             long remaining = claims.expiresAt() - now;
             if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS) throw invalid();
             Session session = new Session(admission, key, remote, nanos + remaining * 1_000_000L,
@@ -114,7 +119,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                 .configuration(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE))
                 .identity(new DtlsIdentity(identity.certificate(), identity.privateKey()))
                 .expiresAt(Instant.ofEpochMilli(claims.expiresAt())).initialize(peer -> initialize(session, peer)).build();
-        } catch (RuntimeException | UnknownHostException invalid) { admission.close(); rejected++; return null; }
+        } catch (RuntimeException | UnknownHostException invalid) { rejected++; return null; }
     }
     /** Authenticated WebSocket path only; never accepts a profile2 permit from an unknown inbound packet. */
     public synchronized String assist(AssistedJoin join, Runnable requireCurrent) {
@@ -128,17 +133,17 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         Key key = policy.key(join.keyId());
         if (key == null) throw invalid();
         String remoteUfrag = AssistedJoin.parseOffer(join.offer()).ufrag();
-        VerifiedDiagnosticAdmission admission = open(policy.context(),key,join.localUfrag(),remoteUfrag,policy.expiresAt(),clock);
+        Admission admission = open(policy.context(),key,join.localUfrag(),remoteUfrag,policy.expiresAt(),clock);
         if (admission == null) throw invalid();
         Session session = null;
         try {
             Claims claims = admission.claims();
-            var remote = DiagnosticAssertionCodec.candidate(utf8(join.offer()),claims,remoteUfrag);
+            var remote = DiagnosticSdp.offer(utf8(join.offer()),claims,remoteUfrag).endpoint(claims.family());
             var scope = EndpointAddress.scope(remote.getAddress());
             boolean privateIpv4Host = claims.family() == 4 && scope == EndpointAddress.Scope.PRIVATE
                     && join.offer().lines().filter(line -> line.startsWith("a=candidate:")).findFirst().orElseThrow().split(" ")[7].equals("host");
             if (claims.profile() != ASSISTED_PROFILE || !claims.attemptIdHex().equals(join.id()) || claims.expiresAt() != join.expiresAt()
-                    || !admission.credentials().icePwd().equals(join.localPassword()) || !admission.verifies(join.diagnosticAssertion())
+                    || !admission.credentials().icePwd().equals(join.localPassword())
                     || claims.expiresAt() > policy.endpointExpiry(DiagnosticHostPolicy.Endpoint.from(claims))
                     || used.containsKey(claims.attemptIdHex()) || sessions.values().stream().anyMatch(s -> s.remote.equals(remote))
                     || (scope != EndpointAddress.Scope.PUBLIC && !privateIpv4Host
@@ -166,8 +171,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
             if (!authorized(session,observe())) throw invalid();
             return session.peer.localDescription();
         } catch (RuntimeException failure) {
-            if (session == null) admission.close();
-            else { session.settled = true; stop(session,"assisted_failed"); }
+            if (session != null) { session.settled = true; stop(session,"assisted_failed"); }
             rejected++; throw failure;
         }
     }
@@ -198,7 +202,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         Session session = sessions.get(join.id());
         if (session != null && session.admission.credentials().localUfrag().equals(join.localUfrag())) stop(session, "assisted_answer_failed");
     }
-    /** Trusted same-mux gatherer capture, before the signed answer is exposed. */
+    /** Trusted same-mux gatherer capture, before the provider returns the answer. */
     public synchronized void assistedAnswerCandidate(AssistedJoin join, InetSocketAddress candidate) {
         requireAssistedCurrent(join);
         Session session = sessions.get(join.id());
@@ -285,7 +289,6 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         if (session.closing) return;
         session.wantsClose = true; session.reason = reason;
         if (!reason.equals("pong_sent")) session.complete = false;
-        session.admission.close();
         if (!session.settled) return; // The listener owns any in-progress prepare until completion settles.
         session.closing = true;
         if (session.peer == null) { finished(session, null); return; }
@@ -331,10 +334,9 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
     private void completeTermination() {
         if (closed && sessions.isEmpty()) { if (closeFailure == null) termination.complete(null); else termination.completeExceptionally(closeFailure); }
     }
-    private static String remoteDescription(VerifiedDiagnosticAdmission admission, InetSocketAddress remote) {
+    private static String remoteDescription(Admission admission, InetSocketAddress remote) {
         String fingerprint = HexFormat.ofDelimiter(":").withUpperCase().formatHex(unhex(admission.claims().clientFingerprintHex(), 32));
-        return "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:" + admission.remoteUfrag() +
-            "\r\na=ice-pwd:" + admission.claims().clientIcePwd() + "\r\na=fingerprint:sha-256 " + fingerprint +
-            "\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 " + remote.getAddress().getHostAddress() + " " + remote.getPort() + " typ host\r\na=end-of-candidates\r\n";
+        return VerifiedAdmission.remoteDescription(admission.remoteUfrag(),admission.claims().clientIcePwd(),"sha-256 "+fingerprint,SCTP_PORT,MAX_MESSAGE_SIZE)
+                + "a=candidate:1 1 UDP 2130706431 " + remote.getAddress().getHostAddress() + " " + remote.getPort() + " typ host\r\na=end-of-candidates\r\n";
     }
 }

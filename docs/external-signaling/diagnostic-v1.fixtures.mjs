@@ -1,53 +1,33 @@
-// Independent Node built-in crypto verification; imports neither Java nor TypeScript codec implementations.
+// Independent Node verification of the shared NXS1 diagnostic envelope.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createCipheriv, createHash, createHmac, createPublicKey, verify } from "node:crypto";
-
-const fixture = JSON.parse(readFileSync(new URL("diagnostic-v1.fixtures.json", import.meta.url), "utf8"));
-const utf8 = value => Buffer.from(value, "utf8"), hex = value => Buffer.from(value, "hex");
-const domain = value => utf8(`nxs-diagnostic-${value}-v1\0`);
-const sha = bytes => createHash("sha256").update(bytes).digest();
-const hmac = bytes => createHmac("sha256", utf8(fixture.key.secret)).update(bytes).digest();
-const b64 = bytes => bytes.toString("base64").replace(/=+$/, "");
-const cat = (...parts) => Buffer.concat(parts);
-const u64 = value => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(value)); return b; };
-const lp = value => { const b = utf8(value), length = Buffer.alloc(2); length.writeUInt16BE(b.length); return cat(length, b); };
-const context = fixture.context;
-const contextDigest = sha(cat(domain("context"), lp(context.providerOrigin), lp(context.hostId), hex(context.incarnation), u64(context.generation)));
-assert.equal(contextDigest.toString("hex"), fixture.contextDigestHex);
-const byName = new Map();
-for (const vector of fixture.vectors) {
-  const c = vector.claims, plain = Buffer.alloc(128 + c.clientIcePwd.length);
-  plain.writeUInt32BE(c.expiresAt / 1000, 0); hex(c.clientFingerprintHex).copy(plain, 4);
-  hex(c.attemptIdHex).copy(plain, 52); hex(c.offerDigestHex).copy(plain, 68);
-  plain.writeBigUInt64BE(BigInt(c.candidateRevision), 100); plain[108] = c.profile | (c.family === 6 ? 128 : 0);
-  hex(c.targetAddressHex).copy(plain, 109); plain.writeUInt16BE(c.targetPort, 125);
-  plain[127] = c.clientIcePwd.length; utf8(c.clientIcePwd).copy(plain, 128);
-  assert.equal(sha(utf8(vector.offer)).toString("hex"), c.offerDigestHex);
-  const transcript = cat(domain("assertion"), contextDigest, plain, lp(vector.remoteUfrag));
-  assert.equal(transcript.toString("hex"), vector.assertionTranscriptHex);
-  const spki = cat(hex("3076301006072a8648ce3d020106052b81040022036200"), hex(vector.publicPointHex));
-  const key = createPublicKey({ key: spki, format: "der", type: "spki" });
-  assert(verify("sha384", transcript, { key, dsaEncoding: "ieee-p1363" }, hex(vector.signatureHex)), vector.name);
-  hmac(cat(domain("identity"), contextDigest, spki)).subarray(0, 16).copy(plain, 36);
-  const header = "NXD1" + fixture.key.keyId, nonce = hex(vector.nonceHex);
-  const cipher = createCipheriv("aes-256-gcm", hmac(cat(domain("aead"), contextDigest)), nonce);
-  cipher.setAAD(cat(domain("admission"), utf8(header), Buffer.alloc(1), contextDigest, Buffer.alloc(1), utf8(vector.remoteUfrag)));
-  const encrypted = cat(cipher.update(plain), cipher.final(), cipher.getAuthTag());
-  assert.equal(header + b64(cat(nonce, encrypted)), vector.localUfrag);
-  assert.equal(b64(hmac(cat(domain("ice"), contextDigest, utf8(vector.localUfrag))).subarray(0, 24)), vector.icePwd);
-  assert.equal(vector.localUfrag.length, 8 + Math.ceil((156 + c.clientIcePwd.length) * 4 / 3));
-  assert(vector.localUfrag.length <= 256); byName.set(vector.name, { key, transcript });
+import { createDecipheriv, createHash, createHmac } from "node:crypto";
+const fixture=JSON.parse(readFileSync(new URL("diagnostic-v1.fixtures.json",import.meta.url),"utf8"));
+const audience=`nxs-stateless-host-v1/${fixture.context.incarnation}`;
+const hmac=value=>createHmac("sha256",Buffer.from(fixture.key.secret)).update(value).digest();
+const key=hmac(`nxs-stateless-aead-v1\0${audience}`);
+for(const v of fixture.vectors) {
+  const c=v.claims, header="NXS1"+fixture.key.keyId, envelope=Buffer.from(v.localUfrag.slice(8),"base64");
+  assert(v.localUfrag.startsWith(header));
+  assert.equal(envelope.toString("base64").replace(/=+$/,""),v.localUfrag.slice(8));
+  const decipher=createDecipheriv("aes-256-gcm",key,envelope.subarray(0,12));
+  decipher.setAAD(Buffer.from(`nxs-stateless-admission-v1\0${header}\0${audience}\0${v.remoteUfrag}`));
+  decipher.setAuthTag(envelope.subarray(-16));
+  const p=Buffer.concat([decipher.update(envelope.subarray(12,-16)),decipher.final()]);
+  assert.equal(p.readUInt32BE(0)*1000,c.expiresAt); assert.equal(p.subarray(4,36).toString("hex"),c.clientFingerprintHex);
+  assert.equal(p.readUInt16BE(36),5000);assert.equal(p.readUInt32BE(38),262144);
+  assert.equal(p.subarray(42,58).toString("hex"),c.attemptIdHex);assert.equal(p.readBigUInt64BE(58),0n);
+  const tail=67+p[66]; assert.equal(p.subarray(67,tail).toString(),c.clientIcePwd); assert.equal(p.length,tail+59);
+  assert.equal(p.subarray(tail,tail+32).toString("hex"),c.offerDigestHex);
+  assert.equal(createHash("sha256").update(v.offer).digest("hex"),c.offerDigestHex);
+  assert.equal(Number(p.readBigUInt64BE(tail+32)),c.candidateRevision);assert.equal(p[tail+40],c.profile|(c.family===6?128:0));
+  assert.equal(p.subarray(tail+41,tail+57).toString("hex"),c.targetAddressHex);assert.equal(p.readUInt16BE(tail+57),c.targetPort);
+  assert.equal(hmac(`nxs-stateless-ice-v1\0${audience}\0${v.localUfrag}`).subarray(0,24).toString("base64"),v.icePwd);
+  assert.equal(v.localUfrag.length,8+Math.ceil((154+c.clientIcePwd.length)*4/3));assert(v.localUfrag.length<=256);
 }
-const java = process.argv.slice(2).find(value => value.startsWith("--java="));
-let fresh = 0;
-if (java) {
-  const values = JSON.parse(readFileSync(java.slice(7), "utf8"));
-  assert.equal(values.length, fixture.vectors.length);
-  const names = new Set();
-  for (const value of values) {
-    const expected = byName.get(value.name); assert(expected); assert(!names.has(value.name)); names.add(value.name);
-    assert(verify("sha384", expected.transcript, { key: expected.key, dsaEncoding: "ieee-p1363" }, hex(value.signatureHex)), value.name); fresh++;
-  }
+const java=process.argv.slice(2).find(v=>v.startsWith("--java="));
+if(java) {
+ const actual=JSON.parse(readFileSync(java.slice(7),"utf8"));
+ assert.deepEqual(actual,fixture.vectors.map(({name,localUfrag,icePwd})=>({name,localUfrag,icePwd})));
 }
-console.log(`PASS ${fixture.vectors.length} independent diagnostic vectors; ${fresh} fresh Java signatures`);
+console.log(`PASS ${fixture.vectors.length} shared NXS diagnostic vectors${java?" and fresh Java output":""}`);

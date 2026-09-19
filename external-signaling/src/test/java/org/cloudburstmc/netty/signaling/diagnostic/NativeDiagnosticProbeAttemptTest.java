@@ -10,7 +10,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.net.*;
 import java.nio.file.Path;
 import java.security.*;
-import java.security.spec.ECGenParameterSpec;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -23,7 +22,6 @@ import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCod
 class NativeDiagnosticProbeAttemptTest {
     @TempDir Path directory;
     static String id() { byte[] value = new byte[16]; new SecureRandom().nextBytes(value); return hex(value); }
-    static KeyPair keyPair() throws Exception { KeyPairGenerator generator=KeyPairGenerator.getInstance("EC");generator.initialize(new ECGenParameterSpec("secp384r1"));return generator.generateKeyPair(); }
     static int port(InetAddress bind) throws Exception { try(var socket=new DatagramSocket(new InetSocketAddress(bind,0))){return socket.getLocalPort();} }
     static void await(BooleanSupplier condition) throws Exception { long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(!condition.getAsBoolean()&&System.nanoTime()<deadline)Thread.sleep(5);assertTrue(condition.getAsBoolean()); }
     NativeHostIdentity identity(String name) throws Exception {
@@ -36,8 +34,7 @@ class NativeDiagnosticProbeAttemptTest {
     final class Fixture implements AutoCloseable {
         final InetAddress bind; final int port, localPort; final long expiry;
         final Context context=new Context("https://provider.example","probe-host",id(),1);
-        final Key permit; final KeyPair provider=keyPair(); final NativeHostIdentity identity=identity("host");
-        final AtomicReference<DiagnosticAnswerCodec.Catalog> catalog=new AtomicReference<>();
+        final Key permit; final NativeHostIdentity identity=identity("host");
         final AtomicBoolean authorized=new AtomicBoolean(true); final AtomicInteger players=new AtomicInteger(),signalingCalls=new AtomicInteger();
         final NativeAdmissionServerChannel host; final DefaultEventLoopGroup group=new DefaultEventLoopGroup(1);
         final NativeDiagnosticHostGate gate; final DiagnosticHostPolicy policy; final NativeDiagnosticProbeAttempt.Job job;
@@ -45,25 +42,23 @@ class NativeDiagnosticProbeAttemptTest {
             bind=InetAddress.getByName(address);port=port(bind);localPort=port(bind);int family=bind instanceof Inet6Address?6:4;
             expiry=(System.currentTimeMillis()+duration)/1000*1000;
             permit=new Key("D001","random-test-permit-"+id(),0,expiry+10000);
-            byte[] encoded=provider.getPublic().getEncoded();
-            catalog.set(new DiagnosticAnswerCodec.Catalog(context.providerOrigin(),0,expiry+10000,List.of(new DiagnosticAnswerCodec.VerificationKey("provider-diagnostic","provider-key",hex(Arrays.copyOfRange(encoded,encoded.length-97,encoded.length)),0,expiry+10000))));
             var target=new DiagnosticHostPolicy.Endpoint(family,DiagnosticAdmissionCodec.address(family,address),port,7);
             policy=new DiagnosticHostPolicy(context,List.of(permit),Set.of(target),expiry+10000);
             job=new NativeDiagnosticProbeAttempt.Job(context,id(),target,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT),expiry);
-            host=new NativeAdmissionServerChannel(identity,(request,now)->{players.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
+            var validator=new StatelessAdmissionValidator(NativeProviderTransport.audience(context.incarnation()),60000);
+            validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey(permit.keyId(),permit.secret())));
+            host=new NativeAdmissionServerChannel(identity,validator,AdmissionGate.Limits.defaults());
             new ServerBootstrap().group(group).channelFactory(()->host).childHandler(new ChannelInitializer<Channel>(){protected void initChannel(Channel channel){players.incrementAndGet();}}).bind(bind,port).sync();
             gate=host.enableDiagnostics(policy).toCompletableFuture().get(3,TimeUnit.SECONDS);
         }
-        NativeDiagnosticProbeAttempt attempt() { return new NativeDiagnosticProbeAttempt(job,new InetSocketAddress(bind,localPort),catalog::get,authorized::get,Clock.system(),true); }
+        NativeDiagnosticProbeAttempt attempt() { return new NativeDiagnosticProbeAttempt(job,new InetSocketAddress(bind,localPort),authorized::get,Clock.system(),true); }
         String sign(NativeDiagnosticProbeAttempt.Request request,String fingerprint, String address,int targetPort) {
             signalingCalls.incrementAndGet();
             var claims=request.claims(); assertEquals(job.context(),request.context());assertEquals(job.attemptIdHex(),claims.attemptIdHex());assertEquals(job.expiresAt(),claims.expiresAt());
-            assertTrue(DiagnosticAssertionCodec.verify(context,claims,request.ufrag(),request.assertion()));
             byte[] owned=request.offer();byte original=owned[0];owned[0]^=1;assertEquals(original,request.offer()[0]);
-            var credentials=DiagnosticAdmissionCodec.issue(context,permit,claims,request.ufrag(),request.offer(),request.assertion(),permit.retireAt(),Clock.system());
+            var credentials=DiagnosticAdmissionCodec.issue(context,permit,claims,request.ufrag(),request.offer(),permit.retireAt(),Clock.system());
             String answer="v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:active\r\na=ice-ufrag:"+credentials.localUfrag()+"\r\na=ice-pwd:"+credentials.icePwd()+"\r\na=fingerprint:sha-256 "+HexFormat.ofDelimiter(":").withUpperCase().formatHex(HexFormat.of().parseHex(fingerprint))+"\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 "+address+" "+targetPort+" typ host\r\na=end-of-candidates\r\n";
-            var expected=new DiagnosticAnswerCodec.Expected(context,claims,request.ufrag(),fingerprint);
-            return DiagnosticAnswerCodec.sign(expected,utf8(answer),new DiagnosticAnswerCodec.Signer("provider-diagnostic","provider-key",provider.getPrivate()),catalog::get,DiagnosticAnswerCodec.Options.system());
+            return answer;
         }
         CompletionStage<String> respond(NativeDiagnosticProbeAttempt.Request request) {return CompletableFuture.completedFuture(sign(request,job.hostFingerprintHex(),bind.getHostAddress(),port));}
         public void close() throws Exception {host.close().awaitUninterruptibly();host.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
@@ -85,12 +80,11 @@ class NativeDiagnosticProbeAttemptTest {
         }
     }
     @Test @Timeout(25) void providerAnswerFailuresSendNoPeerPacketsOrAdmission() throws Exception {
-        for(String mode:List.of("signature","pin","oversize","catalog","withdraw"))try(Fixture fixture=new Fixture("127.0.0.1",15000);var attempt=fixture.attempt()) {
+        for(String mode:List.of("malformed","pin","oversize","withdraw"))try(Fixture fixture=new Fixture("127.0.0.1",15000);var attempt=fixture.attempt()) {
             var result=attempt.run(request->{
                 String wire=fixture.sign(request,mode.equals("pin")?"00".repeat(32):fixture.job.hostFingerprintHex(),fixture.bind.getHostAddress(),fixture.port);
-                if(mode.equals("signature"))wire=wire.substring(0,wire.length()-4)+(wire.charAt(wire.length()-4)=='A'?'B':'A')+wire.substring(wire.length()-3);
-                if(mode.equals("oversize"))wire="x".repeat(DiagnosticAnswerCodec.MAX_WIRE_BYTES+1);
-                if(mode.equals("catalog"))fixture.catalog.set(new DiagnosticAnswerCodec.Catalog(fixture.context.providerOrigin(),0,fixture.expiry+5000,fixture.catalog.get().keys()));
+                if(mode.equals("malformed"))wire=wire.replace("a=mid:0", "a=mid:1");
+                if(mode.equals("oversize"))wire="x".repeat(DiagnosticSdp.MAX_BYTES+1);
                 if(mode.equals("withdraw"))fixture.authorized.set(false);
                 return CompletableFuture.completedFuture(wire);
             });
@@ -119,10 +113,10 @@ class NativeDiagnosticProbeAttemptTest {
             assertFalse(result.success());assertTrue(result.answerVerified());assertTrue(result.cleanupComplete());assertFalse(result.pingVerified());assertEquals(0,fixture.gate.stats().liveNativePeers());assertEquals(0,fixture.players.get());
         }
     }
-    @Test @Timeout(20) void signedButWrongActualDtlsIdentityFailsBothFamilies() throws Exception {
+    @Test @Timeout(20) void wrongActualDtlsIdentityFailsBothFamilies() throws Exception {
         for(String address:List.of("127.0.0.1","::1"))try(Fixture fixture=new Fixture(address,4000)) {
             var expected=new NativeDiagnosticProbeAttempt.Job(fixture.job.context(),fixture.job.attemptIdHex(),fixture.job.target(),"00".repeat(32),fixture.expiry);
-            try(var attempt=new NativeDiagnosticProbeAttempt(expected,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.catalog::get,fixture.authorized::get,Clock.system(),true)) {
+            try(var attempt=new NativeDiagnosticProbeAttempt(expected,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.authorized::get,Clock.system(),true)) {
                 var result=attempt.run(request->CompletableFuture.completedFuture(fixture.sign(request,expected.hostFingerprintHex(),fixture.bind.getHostAddress(),fixture.port)));
                 assertFalse(result.success(),result.toString());assertTrue(result.answerVerified());assertFalse(result.transportEstablished());assertFalse(result.pingVerified());assertFalse(result.pingVerified());assertTrue(result.cleanupComplete());
                 assertTrue(fixture.host.nativeStats()[0]>0);assertEquals(0,fixture.players.get());
@@ -134,7 +128,7 @@ class NativeDiagnosticProbeAttemptTest {
             AtomicLong wall=new AtomicLong(),nanos=new AtomicLong();
             Clock clock=new Clock(()->System.currentTimeMillis()+wall.get(),()->System.nanoTime()+nanos.get());
             BooleanSupplier authorized=()->!change.equals("withdraw after checks")||fixture.gate.stats().active()==0;
-            try(var attempt=new NativeDiagnosticProbeAttempt(fixture.job,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.catalog::get,authorized,clock,true)) {
+            try(var attempt=new NativeDiagnosticProbeAttempt(fixture.job,new InetSocketAddress(fixture.bind,fixture.localPort),authorized,clock,true)) {
                 var result=attempt.run(request->{
                     String answer=fixture.respond(request).toCompletableFuture().join();
                     if(change.equals("forward wall"))wall.set(30000);
@@ -169,7 +163,7 @@ class NativeDiagnosticProbeAttemptTest {
     @Test @Timeout(15) void alreadyCompletedAnswerCannotBypassOriginalHandshakeDeadline() throws Exception {
         try(Fixture fixture=new Fixture("127.0.0.1",60000)) {
             AtomicLong elapsed=new AtomicLong();Clock clock=new Clock(System::currentTimeMillis,()->System.nanoTime()+elapsed.get());
-            try(var attempt=new NativeDiagnosticProbeAttempt(fixture.job,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.catalog::get,fixture.authorized::get,clock,true)) {
+            try(var attempt=new NativeDiagnosticProbeAttempt(fixture.job,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.authorized::get,clock,true)) {
                 var result=attempt.run(request->{
                     String wire=fixture.respond(request).toCompletableFuture().join();
                     elapsed.set(TimeUnit.SECONDS.toNanos(16)); // Stage is already complete when run gets it; wall/job expiry remains valid.
@@ -195,12 +189,12 @@ class NativeDiagnosticProbeAttemptTest {
     @Test @Timeout(25) void verifiedAnswerHandshakeTimeoutDistinguishesTransportFromAuthorityFailures() throws Exception {
         for(String change:List.of("handshake","absolute monotonic","absolute wall","clock rollback","withdraw","cancel"))
                 try(Fixture fixture=new Fixture("127.0.0.1",60000)) {
-            // Receive the first actual ICE check but never answer it: the signed target is unreachable at transport level.
+            // Receive the first actual ICE check but never answer it: the authorized target is unreachable at transport level.
             fixture.host.close().sync();fixture.host.termination().toCompletableFuture().get(3,TimeUnit.SECONDS);
             AtomicLong elapsed=new AtomicLong(),wall=new AtomicLong();
             Clock clock=new Clock(()->System.currentTimeMillis()+wall.get(),()->System.nanoTime()+elapsed.get());
             try(var silent=new DatagramSocket(new InetSocketAddress(fixture.bind,fixture.port));
-                    var attempt=new NativeDiagnosticProbeAttempt(fixture.job,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.catalog::get,fixture.authorized::get,clock,true)) {
+                    var attempt=new NativeDiagnosticProbeAttempt(fixture.job,new InetSocketAddress(fixture.bind,fixture.localPort),fixture.authorized::get,clock,true)) {
                 silent.setSoTimeout(3000);var executor=Executors.newSingleThreadExecutor();
                 try {
                     var pending=executor.submit(()->attempt.run(fixture::respond));
@@ -238,13 +232,13 @@ class NativeDiagnosticProbeAttemptTest {
         for(String address:List.of("127.0.0.1","10.0.0.1","100.64.0.1","169.254.1.1","192.0.2.1","0.0.0.0","224.0.0.1","::1","fc00::1","fe80::1","2001:db8::1","3fff::1")) {
             int family=address.contains(":")?6:4;var endpoint=new DiagnosticHostPolicy.Endpoint(family,DiagnosticAdmissionCodec.address(family,address),12345,1);
             var job=new NativeDiagnosticProbeAttempt.Job(context,id(),endpoint,"00".repeat(32),expiry);
-            assertThrows(IllegalArgumentException.class,()->new NativeDiagnosticProbeAttempt(job,new InetSocketAddress(InetAddress.getLoopbackAddress(),12346),()->null,()->true),address);
+            assertThrows(IllegalArgumentException.class,()->new NativeDiagnosticProbeAttempt(job,new InetSocketAddress(InetAddress.getLoopbackAddress(),12346),()->true),address);
         }
         assertThrows(IllegalArgumentException.class,()->new DiagnosticHostPolicy.Endpoint(6,"00000000000000000000ffff01020304",12345,1));
         var publicJob=new NativeDiagnosticProbeAttempt.Job(context,id(),new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"1.2.3.4"),12345,1),"00".repeat(32),expiry);
-        assertThrows(IllegalArgumentException.class,()->new NativeDiagnosticProbeAttempt(publicJob,InetSocketAddress.createUnresolved("localhost",12346),()->null,()->true));
-        assertThrows(IllegalArgumentException.class,()->new NativeDiagnosticProbeAttempt(publicJob,new InetSocketAddress(InetAddress.getByName("::1"),12346),()->null,()->true));
-        try(var unused=new NativeDiagnosticProbeAttempt(publicJob,new InetSocketAddress(InetAddress.getByName("127.0.0.1"),12346),()->null,()->true)) {
+        assertThrows(IllegalArgumentException.class,()->new NativeDiagnosticProbeAttempt(publicJob,InetSocketAddress.createUnresolved("localhost",12346),()->true));
+        assertThrows(IllegalArgumentException.class,()->new NativeDiagnosticProbeAttempt(publicJob,new InetSocketAddress(InetAddress.getByName("::1"),12346),()->true));
+        try(var unused=new NativeDiagnosticProbeAttempt(publicJob,new InetSocketAddress(InetAddress.getByName("127.0.0.1"),12346),()->true)) {
             unused.close();unused.termination().toCompletableFuture().get(1,TimeUnit.SECONDS);
             var stopped=unused.run(request->{fail("cancelled before run must not signal");return null;});
             assertFalse(stopped.success());assertTrue(stopped.cleanupComplete());

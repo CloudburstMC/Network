@@ -112,7 +112,8 @@ public final class AdmissionGate {
 
     synchronized Reservation reserveAuthenticated(AdmissionContext verifiedAdmission, InetSocketAddress address,
                                                    long nowMillis, long nowNanos) {
-        if (closed || verifiedAdmission.expiresAt() <= nowMillis) {
+        if (closed || verifiedAdmission.networkId().matches("0+") || verifiedAdmission.expiresAt() <= nowMillis) {
+            invalid++;
             verifiedAdmission.identityVerifier().close();
             return null;
         }

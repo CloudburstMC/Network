@@ -92,7 +92,7 @@ public final class RegionalDiagnosticHost {
         }, "regional-fixture-hard-deadline");
         watchdog.setDaemon(true); watchdog.start();
         AtomicInteger playerValidations=new AtomicInteger(), playerChildren=new AtomicInteger();
-        var endpoint=new NativeAdmissionServerChannel(identity,(request,time)->{playerValidations.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
+        var endpoint=new NativeAdmissionServerChannel(identity,NativeDiagnosticHostTest.validator(context,key,playerValidations),AdmissionGate.Limits.defaults());
         var group=new DefaultEventLoopGroup(1); NativeDiagnosticHostGate gate=null;
         long creations=PeerConnection.nativeCreationAttempts(); boolean cleanup=false, sawResult=false;
         try {

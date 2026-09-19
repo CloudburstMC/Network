@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
 /** Test-owned installed authority only. No offer/peer command reaches this host before the first UDP packet. */
-public final class SignedDiagnosticBrowserHost {
+public final class DiagnosticBrowserHost {
     private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().create();
     private static final Set<String> FIELDS = Set.of("bindAddress", "providerOrigin", "hostId", "incarnation", "generation",
         "keyId", "secret", "keyRetireAt", "policyExpiresAt", "candidateRevision", "enabled", "runExpiresAt", "certificatePath", "keyPath");
@@ -78,7 +78,7 @@ public final class SignedDiagnosticBrowserHost {
         boolean enabled=config.get("enabled").getAsBoolean();
         int port; try(DatagramSocket reservation=new DatagramSocket(new InetSocketAddress(bind,0))) { port=reservation.getLocalPort(); }
         AtomicInteger playerValidations=new AtomicInteger(), playerChildren=new AtomicInteger();
-        var endpoint=new NativeAdmissionServerChannel(identity,(request,time)->{playerValidations.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
+        var endpoint=new NativeAdmissionServerChannel(identity,NativeDiagnosticHostTest.validator(context,key,playerValidations),AdmissionGate.Limits.defaults());
         var group=new DefaultEventLoopGroup(1); NativeDiagnosticHostGate gate=null;
         long creations=PeerConnection.nativeCreationAttempts(); boolean cleanup=false, sawResult=false;
         try {

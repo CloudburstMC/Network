@@ -90,22 +90,22 @@ tasks.processResources {
 tasks.processTestResources {
     from(rootProject.file("docs/external-signaling/nxs-v1.fixtures.json"))
     from(rootProject.file("docs/external-signaling")) {
-        include("diagnostic-exchange-v1.fixtures.json", "diagnostic-answer-v1.fixtures.json", "diagnostic-v1.fixtures.json", "stateless-admission-v1.fixtures.json", "cloudburst-protocol-vectors.v1.json", "provenance.json")
+        include("diagnostic-exchange-v1.fixtures.json", "diagnostic-v1.fixtures.json", "stateless-admission-v1.fixtures.json", "cloudburst-protocol-vectors.v1.json", "provenance.json")
         into("nxs")
     }
 }
 
 // Test-only launch description; the same-machine Chromium harness explicitly supplies unpublished native overrides.
-tasks.register("writeSignedDiagnosticBrowserLaunch") {
+tasks.register("writeDiagnosticBrowserLaunch") {
     dependsOn(tasks.testClasses)
     dependsOn(sourceSets.test.get().runtimeClasspath)
     val launcher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
-    val output = layout.buildDirectory.file("signed-diagnostic-browser-argv.txt")
+    val output = layout.buildDirectory.file("diagnostic-browser-argv.txt")
     outputs.file(output)
     outputs.upToDateWhen { false }
     doLast {
         output.get().asFile.writeText(listOf(launcher.get().executablePath.asFile.absolutePath, "-cp",
             sourceSets.test.get().runtimeClasspath.asPath,
-            "org.cloudburstmc.netty.signaling.admission.SignedDiagnosticBrowserHost").joinToString("\n", postfix = "\n"))
+            "org.cloudburstmc.netty.signaling.admission.DiagnosticBrowserHost").joinToString("\n", postfix = "\n"))
     }
 }

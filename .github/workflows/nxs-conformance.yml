@@ -25,6 +25,8 @@ jobs:
         run: node docs/external-signaling/fixtures.mjs
       - name: Validate transport and independent provider
         run: ./gradlew --max-workers=2 build :external-signaling:nativeAdmissionTest
+      - name: Verify shared diagnostic admissions against Java output
+        run: node docs/external-signaling/diagnostic-v1.fixtures.mjs --java=external-signaling/build/diagnostic-java-admissions.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -6,12 +6,10 @@ import tel.schich.libdatachannel.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
-import java.security.spec.ECGenParameterSpec;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
 /** One caller-authorized diagnostic attempt; no workload authentication, retry scheduler or game protocol. */
@@ -24,14 +22,15 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             integer(expiresAt,1000,0xffffffffL * 1000); if (expiresAt % 1000 != 0) throw invalid();
         }
     }
-    /** Owned exact fully gathered offer. Sensitive ICE credentials/assertion must not be logged or persisted. */
-    public record Request(Context context, Claims claims, String ufrag, byte[] offer, DiagnosticAssertionCodec.Assertion assertion) {
+    /** Owned exact fully gathered offer. Sensitive ICE credentials must not be logged or persisted. */
+    public record Request(Context context, Claims claims, String ufrag, byte[] offer) {
         public Request { Objects.requireNonNull(context); Objects.requireNonNull(claims); DiagnosticAdmissionCodec.ufrag(ufrag);
-            if (offer.length < 1 || offer.length > DiagnosticAnswerCodec.MAX_SDP_BYTES) throw invalid(); offer = offer.clone(); Objects.requireNonNull(assertion); }
+            if (offer.length < 1 || offer.length > DiagnosticSdp.MAX_BYTES) throw invalid(); offer = offer.clone(); }
         @Override public byte[] offer() { return offer.clone(); }
         @Override public String toString() { return "NativeDiagnosticProbeRequest[redacted]"; }
     }
-    /** Must return promptly, with a bounded HTTP body; may not perform blocking IO on the calling worker. */
+    /** Trusted provider HTTPS exchange. Authenticate the provider, reject redirects and bound the SDP body.
+     * Return promptly without blocking the calling worker. */
     @FunctionalInterface public interface Signaling { CompletionStage<String> exchange(Request request); }
     public enum Reason { COMPLETE, CANCELLED, EXPIRED, WITHDRAWN, GATHERING, SIGNALING, ANSWER, TRANSPORT, PROTOCOL, SELECTED_PATH, CLEANUP }
     /** Success requires the original ping to be echoed by the pinned host.
@@ -49,7 +48,6 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     private final Job job;
     private final InetSocketAddress bind, target, stunServer;
     private final boolean loopbackTest;
-    private final Supplier<DiagnosticAnswerCodec.Catalog> catalogReader;
     private final BooleanSupplier authorized;
     private final Clock clock;
     private final AtomicBoolean closeObserved = new AtomicBoolean();
@@ -57,27 +55,22 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     private final DiagnosticChannels channels = new DiagnosticChannels();
     private final AtomicReference<PeerConnection> peer = new AtomicReference<>();
     private final CompletableFuture<Void> termination = new CompletableFuture<>();
-    private DiagnosticAnswerCodec.Catalog catalog;
     private InetSocketAddress gatheredLocal;
     private long anchorWall, anchorNanos, previousNanos, deadlineNanos, handshakeDeadlineNanos, currentNanos, currentWall;
 
-    public NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, Supplier<DiagnosticAnswerCodec.Catalog> catalog,
-                                        BooleanSupplier authorized) {
-        this(job, bind, catalog, authorized, Clock.system(), false, null);
+    public NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, BooleanSupplier authorized) {
+        this(job, bind, authorized, Clock.system(), false, null);
     }
     /** Optional explicitly configured numeric discovery server, used only for the proactive profile. */
-    public NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, Supplier<DiagnosticAnswerCodec.Catalog> catalog,
-                                        BooleanSupplier authorized, InetSocketAddress stunServer) {
-        this(job,bind,catalog,authorized,Clock.system(),false,stunServer);
+    public NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind,                                         BooleanSupplier authorized, InetSocketAddress stunServer) {
+        this(job,bind,authorized,Clock.system(),false,stunServer);
     }
     /** Local native tests only: the exception permits loopback, never private/unknown targets or DNS. */
-    NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, Supplier<DiagnosticAnswerCodec.Catalog> catalog,
-                                BooleanSupplier authorized, Clock clock, boolean loopbackTest) {
-        this(job,bind,catalog,authorized,clock,loopbackTest,null);
+    NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind,                                 BooleanSupplier authorized, Clock clock, boolean loopbackTest) {
+        this(job,bind,authorized,clock,loopbackTest,null);
     }
-    NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, Supplier<DiagnosticAnswerCodec.Catalog> catalog,
-                                BooleanSupplier authorized, Clock clock, boolean loopbackTest, InetSocketAddress stunServer) {
-        this.job = Objects.requireNonNull(job); this.catalogReader = Objects.requireNonNull(catalog);
+    NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind,                                 BooleanSupplier authorized, Clock clock, boolean loopbackTest, InetSocketAddress stunServer) {
+        this.job = Objects.requireNonNull(job);
         this.authorized = Objects.requireNonNull(authorized); this.clock = Objects.requireNonNull(clock); this.loopbackTest = loopbackTest;
         if (stunServer != null && (!job.target.assisted() || stunServer.isUnresolved() || stunServer.getPort() < 1
                 || family(stunServer.getAddress()) != job.target.family() || !(EndpointAddress.scope(stunServer.getAddress()) == EndpointAddress.Scope.PUBLIC
@@ -113,7 +106,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             if (remaining < 1 || remaining > MAX_ATTEMPT_MILLIS) throw new Failed(Reason.EXPIRED);
             deadlineNanos = anchorNanos + remaining * 1_000_000L;
             handshakeDeadlineNanos = anchorNanos + Math.min(remaining,MAX_HANDSHAKE_MILLIS) * 1_000_000L;
-            check(); catalog = Objects.requireNonNull(catalogReader.get()); check();
+            check();
             var configuration = PeerConnectionConfiguration.DEFAULT.withIceServers(List.of()).withEnableIceTcp(false)
                 .withBindAddress(bind.getAddress()).withPortRangeBegin(bind.getPort()).withPortRangeEnd(bind.getPort())
                 .withEnableIceUdpMux(true).withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE);
@@ -125,7 +118,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             checkHandshake(); nativePeer.setLocalDescription("offer",ufrag,password);
             await(gathered::get, true);
             String offerText = nativePeer.localDescription();
-            if (offerText.length() > DiagnosticAnswerCodec.MAX_SDP_BYTES) throw new Failed(Reason.GATHERING);
+            if (offerText.length() > DiagnosticSdp.MAX_BYTES) throw new Failed(Reason.GATHERING);
             if (job.target.assisted()) {
                 InetSocketAddress candidate = bind;
                 if (stunServer != null) {
@@ -153,34 +146,18 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             fingerprint = fp.substring(8).replace(":", "").toLowerCase(Locale.ROOT);
             var claims = new Claims(job.expiresAt,fingerprint,password,job.attemptIdHex,offerHash,job.target.candidateRevision(),
                 job.target.family(),job.target.addressHex(),job.target.port(),job.target.assisted() ? ASSISTED_PROFILE : PROFILE);
-            DiagnosticSdp offered = DiagnosticAssertionCodec.offer(offer, claims, ufrag);
+            DiagnosticSdp offered = DiagnosticSdp.offer(offer, claims, ufrag);
             if (!job.target.assisted() && !offered.endpoint(job.target.family()).equals(bind)) throw new Failed(Reason.GATHERING);
-            KeyPairGenerator generator = KeyPairGenerator.getInstance("EC"); generator.initialize(new ECGenParameterSpec("secp384r1"));
-            var assertion = DiagnosticAssertionCodec.sign(job.context,claims,ufrag,generator.generateKeyPair());
             checkHandshake(); reason = Reason.SIGNALING;
-            pending = Objects.requireNonNull(signaling.exchange(new Request(job.context,claims,ufrag,offer,assertion))).toCompletableFuture();
-            await(pending::isDone, true); String wire = pending.join(); pending = null; check(); reason = Reason.ANSWER;
-            if (wire == null || wire.length() > DiagnosticAnswerCodec.MAX_WIRE_BYTES) throw new Failed(Reason.ANSWER);
-            var expected = new DiagnosticAnswerCodec.Expected(job.context,claims,ufrag,job.hostFingerprintHex);
-            try (var verified = DiagnosticAnswerCodec.verify(expected,wire,this::currentCatalog,
-                    new DiagnosticAnswerCodec.Options(clock,cancelled::get))) {
-                if (verified == null) throw new Failed(Reason.ANSWER);
-                byte[] answer = verified.takeSdp();
-                try {
-                    checkHandshake();
-                    String sdp = new String(answer,StandardCharsets.UTF_8);
-                    String[] answerCandidate = field(sdp,"a=candidate:").split(" ");
-                    InetSocketAddress endpoint = numeric(answerCandidate[4],Integer.parseInt(answerCandidate[5]));
-                    var scope = EndpointAddress.scope(endpoint.getAddress());
-                    if (family(endpoint.getAddress()) != job.target.family()
-                            || (scope != EndpointAddress.Scope.PUBLIC && !(loopbackTest && scope == EndpointAddress.Scope.LOOPBACK)))
-                        throw new Failed(Reason.ANSWER);
-                    checkHandshake();
-                    answerVerified = true; attemptedRemote = endpoint;
-                    nativePeer.setRemoteDescription(sdp,SessionDescriptionType.ANSWER);
-                }
-                finally { Arrays.fill(answer,(byte)0); }
-            }
+            pending = Objects.requireNonNull(signaling.exchange(new Request(job.context,claims,ufrag,offer))).toCompletableFuture();
+            await(pending::isDone,true); String sdp=pending.join(); pending=null; check(); reason=Reason.ANSWER;
+            if (sdp==null || sdp.length()>DiagnosticSdp.MAX_BYTES) throw new Failed(Reason.ANSWER);
+            DiagnosticSdp answer=DiagnosticSdp.answer(utf8(sdp),claims,job.hostFingerprintHex);
+            InetSocketAddress endpoint=answer.endpoint(job.target.family());
+            var scope=EndpointAddress.scope(endpoint.getAddress());
+            if (scope!=EndpointAddress.Scope.PUBLIC && !(loopbackTest && scope==EndpointAddress.Scope.LOOPBACK)) throw new Failed(Reason.ANSWER);
+            checkHandshake(); answerVerified=true; attemptedRemote=endpoint;
+            nativePeer.setRemoteDescription(sdp,SessionDescriptionType.ANSWER);
             reason = Reason.TRANSPORT;
             await(channels::ready, true);
             transportEstablished = true;
@@ -208,7 +185,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         } catch (HandshakeTimeout timeout) { reason = answerVerified && !transportEstablished ? Reason.TRANSPORT : Reason.EXPIRED; }
         catch (Failed failure) { reason = failure.reason; }
         catch (InterruptedException interrupted) { cancelled.set(true); reason = Reason.CANCELLED; Thread.currentThread().interrupt(); }
-        catch (GeneralSecurityException | RuntimeException failure) { /* Reason identifies the failing bounded stage; never include secret payloads. */ }
+        catch (RuntimeException failure) { /* Reason identifies the failing bounded stage; never include secret payloads. */ }
         finally {
             if (pending != null) pending.cancel(false);
             if (monitor != null) { try { monitor.close(); } catch (RuntimeException failure) { discoveryClean = false; reason = Reason.CLEANUP; } }
@@ -260,7 +237,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         if (handshake && currentNanos - handshakeDeadlineNanos >= 0) throw new HandshakeTimeout();
         Thread.sleep(5);
     }
-    private DiagnosticAnswerCodec.Catalog currentCatalog() { check(); return catalog; }
+
     private void check() {
         if (cancelled.get() || Thread.currentThread().isInterrupted()) throw new Failed(Reason.CANCELLED);
         long nanos = clock.nanoTime().getAsLong(), wall = clock.wallMillis().getAsLong(); integer(wall,0,SAFE);
@@ -269,8 +246,6 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
         currentWall = Math.max(wall,progressed); anchorWall = currentWall; anchorNanos = nanos;
         if (nanos - deadlineNanos >= 0 || currentWall >= job.expiresAt) throw new Failed(Reason.EXPIRED);
         if (!authorized.getAsBoolean()) throw new Failed(Reason.WITHDRAWN);
-        if (catalog != null && (!catalog.equals(catalogReader.get()) || !catalog.providerOrigin().equals(job.context.providerOrigin())
-                || currentWall < catalog.notBefore() || job.expiresAt > catalog.expiresAt())) throw new Failed(Reason.WITHDRAWN);
     }
     private static InetSocketAddress numeric(String value,int port) { try { return new InetSocketAddress(EndpointAddress.parse(value),port); } catch (UnknownHostException e) { throw invalid(); } }
     private static int family(InetAddress address) { return address instanceof Inet6Address ? 6 : 4; }

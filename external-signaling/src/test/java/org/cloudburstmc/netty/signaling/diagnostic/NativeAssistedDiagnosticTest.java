@@ -26,8 +26,7 @@ class NativeAssistedDiagnosticTest {
     final class Fixture implements AutoCloseable {
         final InetAddress bind; final int hostPort, probePort; final long expiry;
         final Context context = new Context("https://provider.example","assisted-check-host",NativeDiagnosticProbeAttemptTest.id(),1);
-        final Key key; final NativeHostIdentity identity; final KeyPair signer = NativeDiagnosticProbeAttemptTest.keyPair();
-        final DiagnosticAnswerCodec.Catalog catalog;
+        final Key key; final NativeHostIdentity identity;
         final NativeAdmissionServerChannel host; final DefaultEventLoopGroup group = new DefaultEventLoopGroup(1);
         final NativeDiagnosticHostGate gate; final DiagnosticHostPolicy policy; final NativeDiagnosticProbeAttempt.Job job;
         final AtomicInteger players = new AtomicInteger(); final AtomicBoolean authorized = new AtomicBoolean(true);
@@ -37,30 +36,29 @@ class NativeAssistedDiagnosticTest {
             expiry=(System.currentTimeMillis()+lifetime)/1000*1000;
             var helper = new NativeDiagnosticProbeAttemptTest(); helper.directory=directory; identity=helper.identity("assisted-"+hostPort);
             key=new Key("D001","test-assistance-"+NativeDiagnosticProbeAttemptTest.id(),0,expiry+10000);
-            byte[] encoded=signer.getPublic().getEncoded();
-            catalog=new DiagnosticAnswerCodec.Catalog(context.providerOrigin(),0,expiry+10000,List.of(new DiagnosticAnswerCodec.VerificationKey("provider-diagnostic","answer",hex(Arrays.copyOfRange(encoded,encoded.length-97,encoded.length)),0,expiry+10000)));
             var target=DiagnosticHostPolicy.Endpoint.assisted(bind instanceof Inet6Address ? 6 : 4,7);
             policy=new DiagnosticHostPolicy(context,List.of(key),Set.of(target),expiry+10000);
             job=new NativeDiagnosticProbeAttempt.Job(context,NativeDiagnosticProbeAttemptTest.id(),target,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT),expiry);
-            host=new NativeAdmissionServerChannel(identity,(request,now)->{players.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
+            var validator=new StatelessAdmissionValidator(NativeProviderTransport.audience(context.incarnation()),60000);
+            validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey(key.keyId(),key.secret())));
+            host=new NativeAdmissionServerChannel(identity,validator,AdmissionGate.Limits.defaults());
             new ServerBootstrap().group(group).channelFactory(()->host).childHandler(new ChannelInitializer<Channel>() {
                 protected void initChannel(Channel channel) { players.incrementAndGet(); }
             }).bind(bind,hostPort).sync();
             gate=host.enableDiagnostics(policy).toCompletableFuture().get(3,TimeUnit.SECONDS);
         }
         JsonObject wire(NativeDiagnosticProbeAttempt.Request request) {
-            var credentials=issue(context,key,request.claims(),request.ufrag(),request.offer(),request.assertion(),policy.expiresAt(),Clock.system());
-            JsonObject wire=new JsonObject(); wire.addProperty("kind","assisted-join");wire.addProperty("version",1);wire.addProperty("purpose","connectivity-check");
+            var credentials=issue(context,key,request.claims(),request.ufrag(),request.offer(),policy.expiresAt(),Clock.system());
+            JsonObject wire=new JsonObject(); wire.addProperty("kind","assisted-join");wire.addProperty("version",1);wire.addProperty("networkId","0");
             wire.addProperty("id",job.attemptIdHex());wire.addProperty("instanceId",context.hostId());wire.addProperty("generation",context.generation());
             wire.addProperty("incarnation",context.incarnation());wire.addProperty("keyId",key.keyId());wire.addProperty("hostFingerprint",identity.fingerprint());wire.addProperty("expiresAt",expiry);
             wire.addProperty("localUfrag",credentials.localUfrag());wire.addProperty("localPassword",credentials.icePwd());wire.addProperty("offer",new String(request.offer(),java.nio.charset.StandardCharsets.UTF_8));
-            var proof=new JsonObject(); proof.addProperty("publicPointHex",hex(request.assertion().publicPoint()));proof.addProperty("signatureBase64",Base64.getEncoder().encodeToString(request.assertion().signature()));wire.add("assertion",proof);
             return wire;
         }
         AssistedJoin join(NativeDiagnosticProbeAttempt.Request request) { return AssistedJoin.decode(wire(request).toString()); }
 
         NativeDiagnosticProbeAttempt attempt(InetSocketAddress stun) {
-            return new NativeDiagnosticProbeAttempt(job,new InetSocketAddress(bind,probePort),()->catalog,authorized::get,Clock.system(),true,stun);
+            return new NativeDiagnosticProbeAttempt(job,new InetSocketAddress(bind,probePort),authorized::get,Clock.system(),true,stun);
         }
         CompletionStage<String> respond(NativeDiagnosticProbeAttempt.Request request) {
             assertEquals(ASSISTED_PROFILE,request.claims().profile()); assertEquals(0,request.claims().targetPort());
@@ -68,8 +66,7 @@ class NativeAssistedDiagnosticTest {
             return host.assistDiagnostic(join(request),()->{if(!authorized.get())throw new IllegalStateException("withdrawn");}).thenApply(answer->{
                 assertEquals(1,gate.stats().active()); assertEquals(0,players.get());
                 assertEquals(1,answer.lines().filter(line->line.startsWith("a=candidate:")).count());
-                return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(context,request.claims(),request.ufrag(),job.hostFingerprintHex()),utf8(answer),
-                        new DiagnosticAnswerCodec.Signer("provider-diagnostic","answer",signer.getPrivate()),()->catalog,DiagnosticAnswerCodec.Options.system());
+                return answer;
             });
         }
         public void close() throws Exception { host.close().awaitUninterruptibly();host.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync(); }
@@ -114,15 +111,13 @@ class NativeAssistedDiagnosticTest {
         try (var f = new Fixture("127.0.0.1");
              var relay = new PrivateClientRelay(new InetSocketAddress(f.bind, f.hostPort), new InetSocketAddress(privateAddress, probePort));
              var attempt = new NativeDiagnosticProbeAttempt(f.job, new InetSocketAddress(privateAddress, probePort),
-                     () -> f.catalog, f.authorized::get, Clock.system(), true)) {
+                     f.authorized::get, Clock.system(), true)) {
             var result = attempt.run(request -> {
                 assertTrue(new String(request.offer(), java.nio.charset.StandardCharsets.UTF_8)
                         .contains(" " + clientAddress.getHostAddress() + " " + probePort + " typ host"));
                 return f.host.assistDiagnostic(f.join(request), () -> {}, Map.of(), Map.of(4, relay.address())).thenApply(answer -> {
-                    assertFalse(relay.clientSent.get(), "No transport traffic before the signed host answer");
-                    return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()),
-                            utf8(answer), new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()),
-                            () -> f.catalog, DiagnosticAnswerCodec.Options.system());
+                    assertFalse(relay.clientSent.get(), "No transport traffic before the validated host answer");
+                    return answer;
                 });
             });
             assertTrue(result.success(), () -> result + "; privateBind=" + clientAddress.getHostAddress()
@@ -174,7 +169,7 @@ class NativeAssistedDiagnosticTest {
             Clock clock = new Clock(System::currentTimeMillis, () -> System.nanoTime() + elapsed.get());
             var destination = (InetSocketAddress) silent.getLocalSocketAddress();
             try (var attempt = new NativeDiagnosticProbeAttempt(f.job, new InetSocketAddress(f.bind, f.probePort),
-                    () -> f.catalog, f.authorized::get, clock, true)) {
+                    f.authorized::get, clock, true)) {
                 var executor = Executors.newSingleThreadExecutor();
                 try {
                     var pending = executor.submit(() -> attempt.run(request -> f.host.assistDiagnostic(f.join(request), () -> {},
@@ -183,9 +178,7 @@ class NativeAssistedDiagnosticTest {
                             f.host.close().awaitUninterruptibly();
                             try { f.host.termination().toCompletableFuture().get(3, TimeUnit.SECONDS); }
                             catch (Exception failure) { throw new CompletionException(failure); }
-                            return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()),
-                                    utf8(answer), new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()),
-                                    () -> f.catalog, DiagnosticAnswerCodec.Options.system());
+                            return answer;
                             })));
                     silent.setSoTimeout(3000); silent.receive(new DatagramPacket(new byte[2048], 2048));
                     elapsed.set(TimeUnit.SECONDS.toNanos(16));
@@ -198,11 +191,10 @@ class NativeAssistedDiagnosticTest {
         }
     }
 
-    @Test @Timeout(20) void signedPrivateServerReflexiveAndNonIpv4HostOffersCreateNoPeer() throws Exception {
+    @Test @Timeout(20) void privateServerReflexiveAndNonIpv4HostOffersCreateNoPeer() throws Exception {
         for (String[] candidate : List.of(new String[]{"127.0.0.1", "10.0.0.1", "srflx"},
                 new String[]{"::1", "fc00::1", "host"}, new String[]{"127.0.0.1", "169.254.169.254", "host"})) {
             try (var f = new Fixture(candidate[0]); var attempt = f.attempt(null)) {
-                var proofKey = NativeDiagnosticProbeAttemptTest.keyPair();
                 var result = attempt.run(original -> {
                     String sdp = new String(original.offer(), java.nio.charset.StandardCharsets.UTF_8);
                     sdp = sdp.replaceAll("(?m)(^a=candidate:[^\\r\\n]*? UDP [0-9]+ )[^ ]+", "$1" + candidate[1])
@@ -210,8 +202,7 @@ class NativeAssistedDiagnosticTest {
                     var c = original.claims();
                     var claims = new Claims(c.expiresAt(), c.clientFingerprintHex(), c.clientIcePwd(), c.attemptIdHex(),
                             hex(digest(utf8(sdp))), c.candidateRevision(), c.family(), c.targetAddressHex(), c.targetPort(), c.profile());
-                    var proof = DiagnosticAssertionCodec.sign(f.context, claims, original.ufrag(), proofKey);
-                    var request = new NativeDiagnosticProbeAttempt.Request(f.context, claims, original.ufrag(), utf8(sdp), proof);
+                    var request = new NativeDiagnosticProbeAttempt.Request(f.context, claims, original.ufrag(), utf8(sdp));
                     return f.host.assistDiagnostic(f.join(request), () -> {}).handle((answer, failure) -> {
                         assertNotNull(failure, Arrays.toString(candidate));
                         assertEquals(0, f.gate.stats().active()); assertEquals(0, f.gate.stats().liveNativePeers());
@@ -226,7 +217,7 @@ class NativeAssistedDiagnosticTest {
     }
 
     @Test @Timeout(35) void changedBindingProofExpiryAndWithdrawalCreateNoDiagnosticOrPlayerPeer() throws Exception {
-        for(String mode:List.of("generation","fingerprint","expiry","offer","assertion","withdraw","player-purpose"))
+        for(String mode:List.of("generation","fingerprint","expiry","offer","token","withdraw","player-purpose"))
             try(var f=new Fixture("127.0.0.1");var attempt=f.attempt(null)) {
                 var result=attempt.run(request->{
                     var wire=f.wire(request);
@@ -235,7 +226,7 @@ class NativeAssistedDiagnosticTest {
                         case "fingerprint" -> wire.addProperty("hostFingerprint","sha-256 "+String.join(":",Collections.nCopies(32,"AA")));
                         case "expiry" -> wire.addProperty("expiresAt",System.currentTimeMillis()-1);
                         case "offer" -> wire.addProperty("offer",wire.get("offer").getAsString().replace("typ host","typ srflx"));
-                        case "assertion" -> wire.getAsJsonObject("assertion").addProperty("signatureBase64",Base64.getEncoder().encodeToString(new byte[96]));
+                        case "token" -> wire.addProperty("localUfrag",wire.get("localUfrag").getAsString().substring(0,8)+"A".repeat(240));
                         case "withdraw" -> f.gate.replacePolicy(new DiagnosticHostPolicy(f.context,List.of(f.key),Set.of(),f.expiry+10000));
                         case "player-purpose" -> wire.addProperty("cpk","untrusted");
                     }
@@ -268,8 +259,7 @@ class NativeAssistedDiagnosticTest {
                                 () -> forged.receive(new DatagramPacket(new byte[2048], 2048)),
                                 "An unauthenticated source must not receive an ICE response");
                     } catch (Exception failure) { throw new CompletionException(failure); }
-                    return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()), utf8(answer),
-                            new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()), () -> f.catalog, DiagnosticAnswerCodec.Options.system());
+                    return answer;
                 });
             });
             assertTrue(result.success(), result.toString());
@@ -395,10 +385,9 @@ class NativeAssistedDiagnosticTest {
             var result=attempt.run(request -> f.host.assistDiagnostic(f.join(request),()->{if(!f.authorized.get())throw new IllegalStateException("withdrawn");},
                     Map.of(f.job.target().family(),stun.address()),Map.of()).thenApply(answer -> {
                 assertTrue(nat.droppedHost.get()>0,"host ICE was filtered before probe contacted its fresh public tuple");
-                assertFalse(nat.probeSent.get(),"probe sent no transport UDP before signed answer verification");
+                assertFalse(nat.probeSent.get(),"probe sent no transport UDP before answer validation");
                 assertTrue(answer.contains(" " + nat.hostExternal.getLocalPort() + " typ srflx"));
-                return DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context,request.claims(),request.ufrag(),f.job.hostFingerprintHex()),utf8(answer),
-                        new DiagnosticAnswerCodec.Signer("provider-diagnostic","answer",f.signer.getPrivate()),()->f.catalog,DiagnosticAnswerCodec.Options.system());
+                return answer;
             }));
             assertTrue(result.success(),result.toString());assertTrue(result.pingVerified());assertTrue(result.cleanupComplete());
             assertTrue(nat.hostSent.get());assertTrue(nat.probeSent.get());assertTrue(nat.forwarded.get()>4);
@@ -419,8 +408,7 @@ class NativeAssistedDiagnosticTest {
             nat.hostSent.set(true); // The host has a port forward; the probe's NAT still filters inbound traffic.
             var result = attempt.run(request -> f.host.assistDiagnostic(f.join(request), () -> {},
                     Map.of(f.job.target().family(), stun.address()), Map.of()).thenApply(answer ->
-                    DiagnosticAnswerCodec.sign(new DiagnosticAnswerCodec.Expected(f.context, request.claims(), request.ufrag(), f.job.hostFingerprintHex()), utf8(answer),
-                            new DiagnosticAnswerCodec.Signer("provider-diagnostic", "answer", f.signer.getPrivate()), () -> f.catalog, DiagnosticAnswerCodec.Options.system())));
+                    answer));
             assertTrue(result.success(), result.toString());
             assertTrue(result.transportEstablished());  assertTrue(result.pingVerified()); assertTrue(result.cleanupComplete());
             assertEquals(nat.probeExternal.getLocalSocketAddress(), result.selectedLocal());

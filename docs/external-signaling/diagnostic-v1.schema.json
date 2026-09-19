@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:nxs:diagnostic-v1:draft",
   "title": "NXS diagnostic admission claims",
-  "description": "Runtime also verifies canonical bytes, signatures, original authority deadlines and the exact diagnostic offer profile.",
+  "description": "Authenticated NXS1 network ID zero admission metadata. Runtime enforces the original deadline, target policy and exact offer profile.",
   "$ref": "#/$defs/claims",
   "$defs": {
     "context": {
@@ -187,24 +187,6 @@
         }
       }
     },
-    "assertion": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "publicPointHex",
-        "signatureHex"
-      ],
-      "properties": {
-        "publicPointHex": {
-          "type": "string",
-          "pattern": "^04[0-9a-f]{192}$"
-        },
-        "signatureHex": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{192}$"
-        }
-      }
-    },
     "credentials": {
       "type": "object",
       "additionalProperties": false,
@@ -215,9 +197,9 @@
       "properties": {
         "localUfrag": {
           "type": "string",
-          "pattern": "^NXD1[A-Z0-9]{4}[A-Za-z0-9+/]+$",
-          "minLength": 246,
-          "maxLength": 256
+          "pattern": "^NXS1[A-Z0-9]{4}[A-Za-z0-9+/]+$",
+          "minLength": 243,
+          "maxLength": 254
         },
         "icePwd": {
           "type": "string",

@@ -74,6 +74,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private final NativeHostIdentity identity;
     private final boolean allowWildcardBind;
     private final AdmissionGate gate;
+    private final AdmissionValidator validator;
     private final AdmissionGate.Limits limits;
     private final AtomicReference<Throwable> nativeCloseFailure = new AtomicReference<>();
     private final AtomicInteger liveNativePeers = new AtomicInteger();
@@ -109,6 +110,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                                         AdmissionGate.Limits limits, boolean allowWildcardBind) {
         this.identity = Objects.requireNonNull(identity);
         this.limits = Objects.requireNonNull(limits);
+        this.validator = Objects.requireNonNull(validator);
         gate = new AdmissionGate(limits, validator);
         this.allowWildcardBind = allowWildcardBind;
     }
@@ -144,7 +146,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         }
         NativeDiagnosticHostGate diagnostic = diagnostics;
         if (diagnostic != null) {
-            if (request.localUfrag().startsWith("NXD1")) {
+            if (request.localUfrag().startsWith("NXS1")) {
                 var prepared = diagnostic.reuse(request);
                 if (prepared != null) return CompletableFuture.completedFuture(prepared);
             }
@@ -154,11 +156,6 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 return CompletableFuture.completedFuture(null);
             }
         }
-        // This purpose is quarantined even when disabled or malformed. It never falls through to a player validator.
-        if (request.localUfrag().startsWith("NXD1")) {
-            return CompletableFuture.completedFuture(diagnostic == null ? null : diagnostic.admit(request));
-        }
-
         byte[] ip = NetUtil.createByteArrayFromIpAddressString(request.remoteAddress());
         if (ip == null) {
             return CompletableFuture.completedFuture(null);
@@ -166,7 +163,14 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
 
         AdmissionRequest metadata = new AdmissionRequest(request.localUfrag(), request.remoteUfrag(),
                 new InetSocketAddress(InetAddress.getByAddress(ip), request.remotePort()));
-        AdmissionGate.Reservation reservation = gate.reserve(metadata, System.currentTimeMillis(), System.nanoTime());
+        VerifiedAdmission verified = validator.validate(metadata, System.currentTimeMillis());
+        if (verified == null) { gate.invalidNativeRequest(); return CompletableFuture.completedFuture(null); }
+        // Purpose comes only from the authenticated token. Zero can never reach the player pipeline.
+        if (verified.diagnostic()) {
+            if (diagnostic == null) { verified.identityVerifier().close(); return CompletableFuture.completedFuture(null); }
+            return CompletableFuture.completedFuture(diagnostic.admit(request, verified));
+        }
+        AdmissionGate.Reservation reservation = gate.reserveAuthenticated(verified, metadata.address(), System.currentTimeMillis(), System.nanoTime());
         if (reservation == null) {
             return CompletableFuture.completedFuture(null);
         }

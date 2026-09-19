@@ -13,7 +13,6 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.*;
-import java.security.spec.ECGenParameterSpec;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -22,15 +21,19 @@ import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
-/** Actual signed permit/answer + incoming UDP gate, using test-owned workload/installed policy. No game/login. */
+/** Shared admission + incoming UDP gate, using test-owned workload/installed policy. No game/login. */
 @Tag("native")
 class NativeDiagnosticHostTest {
+    static AdmissionValidator validator(Context context,Key key,AtomicInteger players) {
+        var validator=new StatelessAdmissionValidator(NativeProviderTransport.audience(context.incarnation()),60000);
+        validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey(key.keyId(),key.secret())));
+        return (request,now)-> { var admission=validator.validate(request,now); if(admission!=null&&!admission.diagnostic())players.incrementAndGet(); return admission; };
+    }
     @TempDir Path directory;
     static String hex(byte[] bytes) { return HexFormat.of().formatHex(bytes); }
     static byte[] utf8(String text) { return text.getBytes(StandardCharsets.UTF_8); }
     static String hash(byte[] bytes) throws Exception { return hex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
     static String id() { byte[] value = new byte[16]; new SecureRandom().nextBytes(value); return hex(value); }
-    static KeyPair keyPair() throws Exception { KeyPairGenerator generator = KeyPairGenerator.getInstance("EC"); generator.initialize(new ECGenParameterSpec("secp384r1")); return generator.generateKeyPair(); }
     static int port(InetAddress bind) throws Exception { try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress(bind,0))) { return socket.getLocalPort(); } }
     static void await(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
@@ -74,26 +77,18 @@ class NativeDiagnosticHostTest {
             peer.setLocalDescription("offer",ufrag,password); assertTrue(gathered.await(3,TimeUnit.SECONDS));
         }
         void connect(NativeHostIdentity identity,Context context,Key key,int family,String target,int port,boolean wrongDtls) throws Exception {
-            connect(identity, context, key, family, target, port, wrongDtls, 7, null, null);
+            connect(identity, context, key, family, target, port, wrongDtls, 7);
         }
         void connect(NativeHostIdentity identity,Context context,Key key,int family,String target,int port,boolean wrongDtls,
-                long candidateRevision, DiagnosticAnswerCodec.Signer suppliedSigner, DiagnosticAnswerCodec.Catalog suppliedCatalog) throws Exception {
+                long candidateRevision) throws Exception {
             String offer=peer.localDescription();
             String fingerprint=TestSignalingProvider.field(offer,"fingerprint").substring(8).replace(":","").toLowerCase(Locale.ROOT);
             if(wrongDtls) { String wrong=(fingerprint.charAt(0)=='0'?"1":"0")+fingerprint.substring(1); offer=offer.replace(TestSignalingProvider.field(offer,"fingerprint"),"sha-256 "+HexFormat.ofDelimiter(":").withUpperCase().formatHex(HexFormat.of().parseHex(wrong)));fingerprint=wrong; }
             claims=new Claims(expiry,fingerprint,password,id(),hash(utf8(offer)),candidateRevision,family,DiagnosticAdmissionCodec.address(family,target),port,1);
-            KeyPair prober=keyPair(); var assertion=DiagnosticAssertionCodec.sign(context,claims,ufrag,prober);
-            credentials=DiagnosticAdmissionCodec.issue(context,key,claims,ufrag,utf8(offer),assertion,key.retireAt(),Clock.system());
+            credentials=DiagnosticAdmissionCodec.issue(context,key,claims,ufrag,utf8(offer),key.retireAt(),Clock.system());
             String answer="v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:active\r\na=ice-ufrag:"+credentials.localUfrag()+"\r\na=ice-pwd:"+credentials.icePwd()+"\r\na=fingerprint:"+identity.fingerprint()+"\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 "+target+" "+port+" typ host\r\na=end-of-candidates\r\n";
-            KeyPair provider=keyPair(); byte[] encoded=provider.getPublic().getEncoded();
-            var catalog=new DiagnosticAnswerCodec.Catalog(context.providerOrigin(),0,key.retireAt(),List.of(new DiagnosticAnswerCodec.VerificationKey("provider-diagnostic","test-answer",hex(Arrays.copyOfRange(encoded,encoded.length-97,encoded.length)),0,key.retireAt())));
-            var selectedCatalog = suppliedCatalog == null ? catalog : suppliedCatalog;
-            var signer = suppliedSigner == null ? new DiagnosticAnswerCodec.Signer("provider-diagnostic","test-answer",provider.getPrivate()) : suppliedSigner;
-            var expected=new DiagnosticAnswerCodec.Expected(context,claims,ufrag,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT));
-            String signed=DiagnosticAnswerCodec.sign(expected,utf8(answer),signer,()->selectedCatalog,DiagnosticAnswerCodec.Options.system());
-            try(var verified=DiagnosticAnswerCodec.verify(expected,signed,()->selectedCatalog,DiagnosticAnswerCodec.Options.system())) {
-                assertNotNull(verified); peer.setRemoteDescription(new String(verified.takeSdp(),StandardCharsets.UTF_8),SessionDescriptionType.ANSWER);
-            }
+            DiagnosticSdp.answer(utf8(answer),claims,identity.fingerprint().substring(8).replace(":","").toLowerCase(Locale.ROOT));
+            peer.setRemoteDescription(answer,SessionDescriptionType.ANSWER);
         }
         void send(int channel,byte[] bytes) {channels[channel].sendMessage(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip());}
         void start(boolean wrongPing) throws Exception {
@@ -109,7 +104,7 @@ class NativeDiagnosticHostTest {
         }
         public void close() {assertTrue(peer.closeAndAwait(Duration.ofSeconds(5)));}
     }
-    @Test @Timeout(35) void signedGateQualifiesBothFamiliesWithoutPlayerPromotion() throws Exception {
+    @Test @Timeout(35) void sharedGateQualifiesBothFamiliesWithoutPlayerPromotion() throws Exception {
         var identity=identity();
         for(String address:List.of("127.0.0.1","::1")) {
             InetAddress bind=InetAddress.getByName(address);int port=port(bind),family=bind instanceof Inet6Address?6:4;
@@ -117,7 +112,7 @@ class NativeDiagnosticHostTest {
             Context context=new Context("https://provider.example","test-host",id(),1);
             Key key=new Key("D001","test-only-diagnostic-secret-32-bytes",0,expiry+10000);
             AtomicInteger playerValidations=new AtomicInteger(),playerChildren=new AtomicInteger();
-            var endpoint=new NativeAdmissionServerChannel(identity,(request,now)->{playerValidations.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
+            var endpoint=new NativeAdmissionServerChannel(identity,validator(context,key,playerValidations),AdmissionGate.Limits.defaults());
             var group=new DefaultEventLoopGroup(1);
             try {
                 new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){playerChildren.incrementAndGet();}}).bind(bind,port).sync();
@@ -152,7 +147,7 @@ class NativeDiagnosticHostTest {
             Context context=new Context("https://provider.example","test-host",id(),1);
             Key key=new Key("D001","test-only-diagnostic-secret-32-bytes",0,expiry+10000);
             AtomicInteger playerValidations=new AtomicInteger();
-            var endpoint=new NativeAdmissionServerChannel(identity,(request,now)->{playerValidations.incrementAndGet();return null;},AdmissionGate.Limits.defaults());
+            var endpoint=new NativeAdmissionServerChannel(identity,validator(context,key,playerValidations),AdmissionGate.Limits.defaults());
             var group=new DefaultEventLoopGroup(1);
             try {
                 new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){fail("diagnostic promoted to player");}}).bind(bind,port).sync();
@@ -195,7 +190,7 @@ class NativeDiagnosticHostTest {
         var identity=identity();InetAddress bind=InetAddress.getByName("127.0.0.1");int port=port(bind);
         long expiry=(System.currentTimeMillis()+15000)/1000*1000;Context context=new Context("https://provider.example","test-host",id(),1);
         Key key=new Key("D001","test-only-diagnostic-secret-32-bytes",0,expiry+10000);AtomicInteger playerValidations=new AtomicInteger();
-        var endpoint=new NativeAdmissionServerChannel(identity,(request,now)->{playerValidations.incrementAndGet();return null;},AdmissionGate.Limits.defaults());var group=new DefaultEventLoopGroup(1);
+        var endpoint=new NativeAdmissionServerChannel(identity,validator(context,key,playerValidations),AdmissionGate.Limits.defaults());var group=new DefaultEventLoopGroup(1);
         try {
             new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){fail("player");}}).bind(bind,port).sync();
             byte[] malformed=StatelessAdmissionValidatorTest.binding("NXD1malformed:clientFixtureUf","p".repeat(24));
@@ -214,7 +209,8 @@ class NativeDiagnosticHostTest {
         long expiry=(System.currentTimeMillis()+15000)/1000*1000;Context context=new Context("https://provider.example","test-host",id(),1);
         Key key=new Key("D001","test-only-diagnostic-secret-32-bytes",0,expiry+10000);
         var validator=new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE,60_000);validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001",TestSignalingProvider.SECRET)));
-        var endpoint=new NativeAdmissionServerChannel(identity,validator,new AdmissionGate.Limits(2,64,2,15_000));var group=new DefaultEventLoopGroup(1);AtomicInteger children=new AtomicInteger(),echoes=new AtomicInteger();
+        var diagnosticValidator=validator(context,key,new AtomicInteger());
+        var endpoint=new NativeAdmissionServerChannel(identity,(request,now)-> { var ordinary=validator.validate(request,now); return ordinary!=null?ordinary:diagnosticValidator.validate(request,now); },new AdmissionGate.Limits(2,64,2,15_000));var group=new DefaultEventLoopGroup(1);AtomicInteger children=new AtomicInteger(),echoes=new AtomicInteger();
         try(PeerConnection player=PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT.withBindAddress(bind).withDisableAutoNegotiation(true))) {
             new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {protected void initChannel(AdmittedNetherNetChildChannel channel) {
                 children.incrementAndGet();channel.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {protected void channelRead0(ChannelHandlerContext ctx,ByteBuf bytes){ctx.writeAndFlush(bytes.retain());}});
@@ -245,7 +241,7 @@ class NativeDiagnosticHostTest {
         var identity=identity();InetAddress bind=InetAddress.getByName("127.0.0.1");int port=port(bind);
         long expiry=(System.currentTimeMillis()+5000)/1000*1000;Context context=new Context("https://provider.example","test-host",id(),1);
         Key key=new Key("D001","test-only-diagnostic-secret-32-bytes",0,expiry+10000);
-        var endpoint=new NativeAdmissionServerChannel(identity,(request,now)->{fail("player fallback");return null;},AdmissionGate.Limits.defaults());var group=new DefaultEventLoopGroup(1);var clients=new ArrayList<Client>();
+        var endpoint=new NativeAdmissionServerChannel(identity,validator(context,key,new AtomicInteger()),AdmissionGate.Limits.defaults());var group=new DefaultEventLoopGroup(1);var clients=new ArrayList<Client>();
         try {
             new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){fail("player child");}}).bind(bind,port).sync();
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,7)),expiry+10000)).toCompletableFuture().get();
@@ -254,8 +250,8 @@ class NativeDiagnosticHostTest {
             try(Client extra=new Client(bind,expiry)) {var before=NativeDiagnostics.creationAttempts();extra.connect(identity,context,key,4,"127.0.0.1",port,false);await(()->gate.stats().rejected()>0);NativeDiagnostics.assertCreations(before,0);}
             var reports=new ArrayList<NativeDiagnosticHostGate.Result>();await(()->{reports.addAll(gate.pollResults());return reports.size()==4&&gate.stats().active()==0&&gate.stats().retainedAttempts()==0;});
             assertTrue(reports.stream().noneMatch(NativeDiagnosticHostGate.Result::success));assertEquals(0,gate.stats().liveNativePeers());
-            Client original=clients.get(0);byte[] replay=StatelessAdmissionValidatorTest.binding(original.credentials.localUfrag()+":"+original.ufrag,original.credentials.icePwd());long rejected=gate.stats().rejected();var created=NativeDiagnostics.creationAttempts();
-            try(DatagramSocket socket=new DatagramSocket(new InetSocketAddress(bind,0))) {socket.send(new DatagramPacket(replay,replay.length,bind,port));await(()->gate.stats().rejected()>rejected);}
+            Client original=clients.get(0);byte[] replay=StatelessAdmissionValidatorTest.binding(original.credentials.localUfrag()+":"+original.ufrag,original.credentials.icePwd());long rejected=endpoint.admissionStats().invalid();var created=NativeDiagnostics.creationAttempts();
+            try(DatagramSocket socket=new DatagramSocket(new InetSocketAddress(bind,0))) {socket.send(new DatagramPacket(replay,replay.length,bind,port));await(()->endpoint.admissionStats().invalid()>rejected);}
             NativeDiagnostics.assertCreations(created,0);assertEquals(0,gate.stats().retainedAttempts());
         } finally {for(Client client:clients)client.close();endpoint.close().awaitUninterruptibly();endpoint.termination().toCompletableFuture().get(6,TimeUnit.SECONDS);group.shutdownGracefully(0,1,TimeUnit.SECONDS).sync();}
     }
@@ -263,7 +259,7 @@ class NativeDiagnosticHostTest {
     @Test @Timeout(35) void retainedFailedPingAttemptsStayBoundedAndAreNotReissued() throws Exception {
         var identity=identity();InetAddress bind=InetAddress.getByName("127.0.0.1");int port=port(bind);
         long expiry=(System.currentTimeMillis()+30000)/1000*1000;Context context=new Context("https://provider.example","test-host",id(),1);Key key=new Key("D001","test-only-diagnostic-secret-32-bytes",0,expiry+10000);
-        var endpoint=new NativeAdmissionServerChannel(identity,(request,now)->{fail("player fallback");return null;},AdmissionGate.Limits.defaults());var group=new DefaultEventLoopGroup(1);
+        var endpoint=new NativeAdmissionServerChannel(identity,validator(context,key,new AtomicInteger()),AdmissionGate.Limits.defaults());var group=new DefaultEventLoopGroup(1);
         try {
             new ServerBootstrap().group(group).channelFactory(()->endpoint).childHandler(new ChannelInitializer<Channel>() {protected void initChannel(Channel channel){fail("player child");}}).bind(bind,port).sync();
             var gate=endpoint.enableDiagnostics(new DiagnosticHostPolicy(context,List.of(key),Set.of(new DiagnosticHostPolicy.Endpoint(4,DiagnosticAdmissionCodec.address(4,"127.0.0.1"),port,7)),expiry+10000)).toCompletableFuture().get();

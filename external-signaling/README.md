@@ -87,7 +87,7 @@ targets and two assisted families with original deadlines. Lower-level callers u
 `NativeAdmissionServerChannel.enableDiagnostics(policy)`.
 
 `NativeDiagnosticProbeAttempt` performs one caller-authorized check on a bounded
-worker. Its `Signaling.exchange(Request)` callback supplies the provider-signed
-answer. The runner verifies it before starting transport and retains capacity until
+worker. Its `Signaling.exchange(Request)` callback supplies SDP over authenticated provider
+HTTPS. The runner checks the authorized host pin and destination before starting transport and retains capacity until
 native termination. Wire formats, PING/PONG and cleanup requirements are in the
 [diagnostic reference](../docs/external-signaling/diagnostic-v1.md).

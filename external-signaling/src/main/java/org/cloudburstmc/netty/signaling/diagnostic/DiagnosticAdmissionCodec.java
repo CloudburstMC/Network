@@ -1,11 +1,9 @@
 /* Copyright 2026 CloudburstMC. Licensed under the Apache License, Version 2.0. */
 package org.cloudburstmc.netty.signaling.diagnostic;
 
-import javax.crypto.Cipher;
-import javax.crypto.Mac;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import org.cloudburstmc.netty.signaling.control.ControlOrigin;
+import org.cloudburstmc.netty.signaling.admission.StatelessAdmissionCodec;
+import org.cloudburstmc.netty.signaling.admission.VerifiedAdmission;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -16,7 +14,7 @@ import java.util.HexFormat;
 import java.util.Objects;
 import java.util.function.LongSupplier;
 
-/** Draft NXD1 primitives; no listener, player admission, workload authorization or traffic execution. */
+/** Diagnostic metadata carried by the shared NXS1 admission envelope with network ID zero. */
 public final class DiagnosticAdmissionCodec {
     private DiagnosticAdmissionCodec() { }
     public static final int PROFILE = 1, ASSISTED_PROFILE = 2, SCTP_PORT = 5000, MAX_MESSAGE_SIZE = 262144;
@@ -48,76 +46,74 @@ public final class DiagnosticAdmissionCodec {
         public Clock { Objects.requireNonNull(wallMillis); Objects.requireNonNull(nanoTime); }
         public static Clock system() { return new Clock(System::currentTimeMillis, System::nanoTime); }
     }
+    public record Admission(Context context, Claims claims, Credentials credentials, String remoteUfrag) {
+        @Override public String toString() { return "DiagnosticAdmission[attempt="+claims.attemptIdHex()+"]"; }
+    }
     public record Credentials(String localUfrag, String icePwd) { @Override public String toString() { return "DiagnosticCredentials[redacted]"; } }
-    public static int ufragLength(int passwordBytes) { if (passwordBytes < 0 || passwordBytes > 65535) throw invalid(); return 8 + ((156 + passwordBytes) * 4 + 2) / 3; }
+    public static int ufragLength(int passwordBytes) { if (passwordBytes<0 || passwordBytes>65535) throw invalid(); return 8 + ((154 + passwordBytes) * 4 + 2) / 3; }
+    private static String audience(Context context) { return "nxs-stateless-host-v1/" + context.incarnation(); }
 
     public static Credentials issue(Context context, Key key, Claims claims, String remoteUfrag, byte[] offer,
-                                    DiagnosticAssertionCodec.Assertion assertion, long parentExpiresAt, Clock clock) {
+                                    long parentExpiresAt, Clock clock) {
         byte[] nonce = new byte[12]; new SecureRandom().nextBytes(nonce);
-        return issueWithNonce(context, key, claims, remoteUfrag, offer, assertion, parentExpiresAt, clock, nonce);
+        return issueWithNonce(context,key,claims,remoteUfrag,offer,parentExpiresAt,clock,nonce);
     }
-    /** Public deterministic fixtures only. Production callers must use issue(). */
-    public static Credentials issueWithNonce(Context context, Key key, Claims claims, String remoteUfrag, byte[] inputOffer,
-                                             DiagnosticAssertionCodec.Assertion assertion, long parentExpiresAt, Clock clock, byte[] inputNonce) {
-        if (inputOffer.length == 0 || inputOffer.length > 16384 || inputNonce.length != 12) throw invalid();
-        byte[] offer = inputOffer.clone(), nonce = inputNonce.clone(); ufrag(remoteUfrag);
-        long startWall = clock.wallMillis.getAsLong(), startNanos = clock.nanoTime.getAsLong();
-        deadline(key, claims, startWall, parentExpiresAt);
-        DiagnosticAssertionCodec.validateOffer(offer, claims, remoteUfrag);
-        if (!DiagnosticAssertionCodec.verify(context, claims, remoteUfrag, assertion)) throw invalid();
-        byte[] ctx = digest(contextBytes(context)), secret = utf8(key.secret), plain = encode(claims, identity(secret, ctx, assertion.publicPoint()));
-        try {
-            String header = "NXD1" + key.keyId;
-            String local = header + base64(concat(nonce, crypt(Cipher.ENCRYPT_MODE, secret, ctx, nonce, aad(header, ctx, remoteUfrag), plain)));
-            if (local.length() > 256) throw invalid(); Credentials result = new Credentials(local, icePassword(secret, ctx, local));
-            deadline(key, claims, clock.wallMillis.getAsLong(), parentExpiresAt);
-            long elapsedNanos = clock.nanoTime.getAsLong() - startNanos;
-            if (elapsedNanos < 0 || elapsedNanos >= (claims.expiresAt - startWall) * 1_000_000L) throw invalid(); return result;
-        } finally { Arrays.fill(plain, (byte) 0); Arrays.fill(secret, (byte) 0); }
+    /** Deterministic fixtures only. Production callers use issue(). */
+    public static Credentials issueWithNonce(Context context, Key key, Claims claims, String remoteUfrag, byte[] offer,
+                                             long parentExpiresAt, Clock clock, byte[] nonce) {
+        long now = clock.wallMillis.getAsLong(), nanos = clock.nanoTime.getAsLong();
+        deadline(key,claims,now,parentExpiresAt);
+        DiagnosticSdp.offer(offer,claims,remoteUfrag);
+        var payload = new StatelessAdmissionCodec.Claims(claims.expiresAt,claims.clientFingerprintHex,SCTP_PORT,MAX_MESSAGE_SIZE,
+                claims.attemptIdHex,"0",claims.clientIcePwd,encode(claims));
+        var credentials = StatelessAdmissionCodec.issue(key.keyId,key.secret,audience(context),remoteUfrag,payload,nonce);
+        deadline(key,claims,clock.wallMillis.getAsLong(),parentExpiresAt);
+        long elapsed = clock.nanoTime.getAsLong() - nanos;
+        if (elapsed < 0 || elapsed >= (claims.expiresAt-now)*1_000_000L) throw invalid();
+        return new Credentials(credentials.localUfrag(),credentials.icePwd());
     }
-    public static VerifiedDiagnosticAdmission open(Context context, Key key, String localUfrag, String remoteUfrag, long parentExpiresAt, Clock clock) {
-        byte[] plain = null, secret = null;
+    public static Admission open(Context context, Key key, String localUfrag, String remoteUfrag, long parentExpiresAt, Clock clock) {
+        byte[] secret = utf8(key.secret), encryption = StatelessAdmissionCodec.encryptionKey(secret,audience(context));
         try {
-            ufrag(remoteUfrag); long now = clock.wallMillis.getAsLong(), nanos = clock.nanoTime.getAsLong(); String header = "NXD1" + key.keyId;
-            if (localUfrag.length() > 256 || !localUfrag.startsWith(header)) return null;
-            byte[] envelope = unbase64(localUfrag.substring(8)); if (envelope.length < 178 || envelope.length > 186) return null;
-            byte[] ctx = digest(contextBytes(context)); secret = utf8(key.secret);
-            plain = crypt(Cipher.DECRYPT_MODE, secret, ctx, Arrays.copyOf(envelope, 12), aad(header, ctx, remoteUfrag), Arrays.copyOfRange(envelope, 12, envelope.length));
-            Claims claims = decode(plain); deadline(key, claims, now, parentExpiresAt); deadline(key, claims, clock.wallMillis.getAsLong(), parentExpiresAt);
-            VerifiedDiagnosticAdmission result = new VerifiedDiagnosticAdmission(context, claims, new Credentials(localUfrag, icePassword(secret, ctx, localUfrag)), remoteUfrag,
-                    secret, ctx, Arrays.copyOfRange(plain, 36, 52), clock, nanos + (claims.expiresAt - now) * 1_000_000L);
-            if (!result.usable()) { result.close(); return null; } return result;
+            if (!localUfrag.startsWith("NXS1"+key.keyId)) return null;
+            var payload = StatelessAdmissionCodec.open(encryption,audience(context),localUfrag,remoteUfrag);
+            return verified(context,key,payload,new Credentials(localUfrag,StatelessAdmissionCodec.icePassword(secret,audience(context),localUfrag)),remoteUfrag,parentExpiresAt,clock);
         } catch (RuntimeException invalid) { return null; }
-        finally { if (plain != null) Arrays.fill(plain, (byte) 0); if (secret != null) Arrays.fill(secret, (byte) 0); }
+        finally { Arrays.fill(secret,(byte)0); Arrays.fill(encryption,(byte)0); }
     }
-    static byte[] contextBytes(Context c) { return concat(domain("context"), lp(c.providerOrigin), lp(c.hostId), unhex(c.incarnation, 16), ByteBuffer.allocate(8).putLong(c.generation).array()); }
-    static byte[] encode(Claims c, byte[] binding) {
-        if (binding.length != 16) throw invalid(); ByteBuffer b = ByteBuffer.allocate(128 + c.clientIcePwd.length());
-        return b.putInt((int) (c.expiresAt / 1000)).put(unhex(c.clientFingerprintHex, 32)).put(binding).put(unhex(c.attemptIdHex, 16)).put(unhex(c.offerDigestHex, 32))
-                .putLong(c.candidateRevision).put((byte) (c.profile | (c.family == 6 ? 128 : 0))).put(unhex(c.targetAddressHex, 16)).putShort((short) c.targetPort).put((byte) c.clientIcePwd.length()).put(utf8(c.clientIcePwd)).array();
+    static Admission verified(Context context, Key key, VerifiedAdmission admission, long parentExpiresAt, Clock clock) {
+        byte[] secret = utf8(key.secret);
+        try {
+            if (!admission.localPassword().equals(StatelessAdmissionCodec.icePassword(secret,audience(context),admission.localUfrag()))) return null;
+            var payload = new StatelessAdmissionCodec.Claims(admission.expiresAt(),admission.remoteFingerprint().substring(8).replace(":", "").toLowerCase(),
+                    admission.remoteSctpPort(),admission.remoteMaxMessageSize(),admission.identityBindingHex(),admission.networkId(),admission.remotePassword(),admission.diagnosticData());
+            return verified(context,key,payload,new Credentials(admission.localUfrag(),admission.localPassword()),admission.remoteUfrag(),parentExpiresAt,clock);
+        } catch (RuntimeException invalid) { return null; }
+        finally { Arrays.fill(secret, (byte) 0); admission.identityVerifier().close(); }
     }
-    static Claims decode(byte[] bytes) {
-        if (bytes.length < 150 || bytes.length != 128 + Byte.toUnsignedInt(bytes[127])) throw invalid(); ByteBuffer b = ByteBuffer.wrap(bytes);
-        int packed = Byte.toUnsignedInt(bytes[108]); if (packed != 1 && packed != 129 && packed != 2 && packed != 130) throw invalid();
-        return new Claims(Integer.toUnsignedLong(b.getInt(0)) * 1000, hex(Arrays.copyOfRange(bytes, 4, 36)), new String(bytes, 128, bytes.length - 128, StandardCharsets.US_ASCII),
-                hex(Arrays.copyOfRange(bytes, 52, 68)), hex(Arrays.copyOfRange(bytes, 68, 100)), b.getLong(100), (packed & 128) != 0 ? 6 : 4, hex(Arrays.copyOfRange(bytes, 109, 125)), Short.toUnsignedInt(b.getShort(125)), packed & 127);
+    private static Admission verified(Context context, Key key, StatelessAdmissionCodec.Claims payload, Credentials credentials,
+                                                         String remote, long parent, Clock clock) {
+        if (!"0".equals(payload.networkId()) || payload.sctpPort()!=SCTP_PORT || payload.maxMessageSize()!=MAX_MESSAGE_SIZE) throw invalid();
+        Claims claims = decode(payload);
+        long now=clock.wallMillis.getAsLong();
+        deadline(key,claims,now,parent);
+        return new Admission(context,claims,credentials,remote);
     }
-    static byte[] identity(byte[] secret, byte[] context, byte[] point) { DiagnosticAssertionCodec.publicKey(point); return Arrays.copyOf(hmac(secret, concat(domain("identity"), context, DiagnosticAssertionCodec.spki(point))), 16); }
-    private static String icePassword(byte[] secret, byte[] context, String local) { return base64(Arrays.copyOf(hmac(secret, concat(domain("ice"), context, utf8(local))), 24)); }
-    private static byte[] aad(String header, byte[] context, String remote) { return concat(domain("admission"), utf8(header), new byte[1], context, new byte[1], utf8(remote)); }
-    private static byte[] crypt(int mode, byte[] secret, byte[] context, byte[] nonce, byte[] aad, byte[] input) {
-        byte[] key = hmac(secret, concat(domain("aead"), context));
-        try { Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(mode, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce)); cipher.updateAAD(aad); return cipher.doFinal(input); }
-        catch (java.security.GeneralSecurityException e) { throw invalid(); } finally { Arrays.fill(key, (byte) 0); }
+    static byte[] encode(Claims c) {
+        return ByteBuffer.allocate(59).put(unhex(c.offerDigestHex,32)).putLong(c.candidateRevision)
+                .put((byte)(c.profile|(c.family==6?128:0))).put(unhex(c.targetAddressHex,16)).putShort((short)c.targetPort).array();
+    }
+    private static Claims decode(StatelessAdmissionCodec.Claims c) {
+        byte[] bytes=c.diagnostic(); if (bytes.length!=59) throw invalid();
+        ByteBuffer b=ByteBuffer.wrap(bytes); int packed=Byte.toUnsignedInt(bytes[40]);
+        if (packed!=1 && packed!=129 && packed!=2 && packed!=130) throw invalid();
+        return new Claims(c.expiresAt(),c.fingerprintHex(),c.password(),c.identityBindingHex(),hex(Arrays.copyOf(bytes,32)),b.getLong(32),
+                (packed&128)!=0?6:4,hex(Arrays.copyOfRange(bytes,41,57)),Short.toUnsignedInt(b.getShort(57)),packed&127);
     }
     static void deadline(Key k, Claims c, long now, long parent) { integer(now, 0, SAFE); integer(parent, 1, SAFE); if (now < k.notBefore || now >= c.expiresAt || c.expiresAt - now > MAX_ATTEMPT_MILLIS || c.expiresAt > k.retireAt || c.expiresAt > parent) throw invalid(); }
-    static byte[] domain(String s) { return utf8("nxs-diagnostic-" + s + "-v1\0"); }
     static byte[] utf8(String s) { return s.getBytes(StandardCharsets.UTF_8); }
-    static byte[] lp(String s) { byte[] b = utf8(s); return concat(ByteBuffer.allocate(2).putShort((short) b.length).array(), b); }
     static String ufrag(String s) { if (!s.matches("[A-Za-z0-9+/]{4,256}")) throw invalid(); return s; }
-    static byte[] concat(byte[]... parts) { int n = 0; for (byte[] p : parts) n += p.length; byte[] out = new byte[n]; n = 0; for (byte[] p : parts) { System.arraycopy(p, 0, out, n, p.length); n += p.length; } return out; }
     static byte[] digest(byte[] bytes) { try { return MessageDigest.getInstance("SHA-256").digest(bytes); } catch (java.security.GeneralSecurityException e) { throw new IllegalStateException(e); } }
-    static byte[] hmac(byte[] key, byte[] bytes) { try { Mac m = Mac.getInstance("HmacSHA256"); m.init(new SecretKeySpec(key, "HmacSHA256")); return m.doFinal(bytes); } catch (java.security.GeneralSecurityException e) { throw new IllegalStateException(e); } }
     static String base64(byte[] bytes) { return Base64.getEncoder().withoutPadding().encodeToString(bytes); }
     static byte[] unbase64(String s) { if (s.length() > 248 || !s.matches("[A-Za-z0-9+/]+")) throw invalid(); byte[] b = Base64.getDecoder().decode(s); if (!base64(b).equals(s)) throw invalid(); return b; }
     static String hex(byte[] bytes) { return HexFormat.of().formatHex(bytes); }

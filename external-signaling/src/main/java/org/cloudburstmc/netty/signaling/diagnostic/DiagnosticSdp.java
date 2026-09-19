@@ -12,10 +12,11 @@ import java.util.*;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
 /** The common, closed SDP profile used by diagnostic offers and answers. */
-record DiagnosticSdp(String ufrag, String password, String fingerprintHex, String addressHex,
+public record DiagnosticSdp(String ufrag, String password, String fingerprintHex, String addressHex,
                      int port, String digestHex) {
+    public static final int MAX_BYTES = 16384;
     static DiagnosticSdp parse(byte[] input, Claims claims, boolean answer) {
-        if (input.length == 0 || input.length > DiagnosticAnswerCodec.MAX_SDP_BYTES) throw invalid();
+        if (input.length == 0 || input.length > MAX_BYTES) throw invalid();
         byte[] bytes = input.clone();
         String text;
         try {
@@ -74,7 +75,23 @@ record DiagnosticSdp(String ufrag, String password, String fingerprintHex, Strin
                 address(claims.family(), candidate[4]), port, hex(digest(bytes)));
     }
 
-    InetSocketAddress endpoint(int family) {
+    public static DiagnosticSdp offer(byte[] input, Claims claims, String remoteUfrag) {
+        DiagnosticSdp sdp=parse(input,claims,false);
+        if (!sdp.ufrag.equals(DiagnosticAdmissionCodec.ufrag(remoteUfrag)) || !sdp.password.equals(claims.clientIcePwd())
+                || !sdp.fingerprintHex.equals(claims.clientFingerprintHex()) || !sdp.digestHex.equals(claims.offerDigestHex())) throw invalid();
+        return sdp;
+    }
+    /** Validate the provider's authenticated HTTPS response before giving SDP to native code. */
+    public static DiagnosticSdp answer(byte[] input, Claims claims, String hostFingerprintHex) {
+        DiagnosticSdp sdp=parse(input,claims,true);
+        if (!sdp.fingerprintHex.equals(hostFingerprintHex) || !sdp.ufrag.matches("NXS1[A-Z0-9]{4}[A-Za-z0-9+/]+")
+                || sdp.ufrag.length()!=ufragLength(claims.clientIcePwd().length())
+                || unbase64(sdp.ufrag.substring(8)).length!=154+claims.clientIcePwd().length()
+                || !sdp.password.matches("[A-Za-z0-9+/]{32}")) throw invalid();
+        if (claims.profile()==PROFILE && (sdp.port!=claims.targetPort() || !sdp.addressHex.equals(claims.targetAddressHex()))) throw invalid();
+        return sdp;
+    }
+    public InetSocketAddress endpoint(int family) {
         byte[] bytes = unhex(addressHex, 16);
         try { return new InetSocketAddress(InetAddress.getByAddress(family == 4 ? Arrays.copyOfRange(bytes, 12, 16) : bytes), port); }
         catch (UnknownHostException malformed) { throw invalid(); }

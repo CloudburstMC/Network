@@ -27,7 +27,15 @@ import java.util.regex.Pattern;
 public record VerifiedAdmission(String tokenId, String localUfrag, String localPassword,
                                 String remoteUfrag, String remotePassword, String remoteFingerprint,
                                 int remoteSctpPort, int remoteMaxMessageSize, long expiresAt,
-                                String networkId, String identityBindingHex, String keyId, IdentityKeyVerifier identityVerifier) implements AdmissionContext {
+                                String networkId, String identityBindingHex, String keyId, IdentityKeyVerifier identityVerifier, byte[] diagnosticData) implements AdmissionContext {
+    public VerifiedAdmission(String tokenId, String localUfrag, String localPassword, String remoteUfrag,
+                             String remotePassword, String remoteFingerprint, int remoteSctpPort, int remoteMaxMessageSize,
+                             long expiresAt, String networkId, String identityBindingHex, String keyId, IdentityKeyVerifier identityVerifier) {
+        this(tokenId,localUfrag,localPassword,remoteUfrag,remotePassword,remoteFingerprint,remoteSctpPort,remoteMaxMessageSize,
+                expiresAt,networkId,identityBindingHex,keyId,identityVerifier,new byte[0]);
+    }
+    public boolean diagnostic() { return StatelessAdmissionCodec.DIAGNOSTIC_NETWORK_ID.equals(networkId); }
+    @Override public byte[] diagnosticData() { return diagnosticData.clone(); }
     /**
      * The envelope bounds the client password: 186 bytes less a 12 byte nonce, a 16 byte tag and
      * the 67 byte fixed prefix leaves 91. Narrower than the 256 ICE itself permits.
@@ -37,6 +45,7 @@ public record VerifiedAdmission(String tokenId, String localUfrag, String localP
     private static final Pattern TOKEN_ID = Pattern.compile("[0-9a-f]{32}");
 
     public VerifiedAdmission {
+        diagnosticData = diagnosticData.clone();
         Objects.requireNonNull(identityVerifier, "identityVerifier");
         if (tokenId == null || !TOKEN_ID.matcher(tokenId).matches()) {
             throw new IllegalArgumentException("tokenId");
@@ -59,6 +68,10 @@ public record VerifiedAdmission(String tokenId, String localUfrag, String localP
     }
 
     public String remoteDescription() {
+        return remoteDescription(remoteUfrag,remotePassword,remoteFingerprint,remoteSctpPort,remoteMaxMessageSize);
+    }
+    /** Shared single-data-channel transport description, including diagnostic admission. */
+    public static String remoteDescription(String remoteUfrag,String remotePassword,String remoteFingerprint,int remoteSctpPort,int remoteMaxMessageSize) {
         return "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n" +
                 "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\n"
                 +

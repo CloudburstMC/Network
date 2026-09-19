@@ -412,6 +412,12 @@ data (AAD) is
 | 66 | 1 | Client ICE password length, 22–91 |
 | 67 | N | Client ICE password in ICE base64 alphabet |
 
+Network ID **zero is reserved for [diagnostics](diagnostic-v1.md)**. For zero,
+the identity-binding slot carries the attempt ID and a mandatory 59-byte target
+extension follows the password. Player issuers reject zero; nonzero admissions
+reject trailing diagnostic data. Hosts select the diagnostic handler only after
+AEAD verification, before any player reservation or pipeline event.
+
 ### Bind signaling identity to the game login
 
 The provider MUST verify the client's signaling assertion, including its proof
