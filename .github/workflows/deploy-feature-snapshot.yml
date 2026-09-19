@@ -38,6 +38,7 @@ jobs:
           echo "Publishing ${publish_version}"
 
   deploy:
+    if: github.repository == 'CloudburstMC/Network'
     needs: version
     uses: ./.github/workflows/deploy.yml
     with:
