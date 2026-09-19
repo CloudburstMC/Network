@@ -42,7 +42,7 @@ public final class ProviderClient implements AutoCloseable {
     public static final String BEARER_TOKEN = "bearer-token";
 
     public enum ControlTransport { HTTP, AUTO }
-    private static final String CONNECTIVITY_EXTENSION = "org.nethernet.connectivity";
+    private static final String CONNECTIVITY_EXTENSION = "dev.opencollab.nxs.connectivity";
     private static final long DIAGNOSTIC_VALIDITY_MILLIS = 300000;
 
     public record Configuration(URI provider, String profile, String label, String registrationMode,
@@ -1506,8 +1506,8 @@ public final class ProviderClient implements AutoCloseable {
         websocketEndpoint = null;
         if (config.controlTransport() != ControlTransport.AUTO || !discovery.has("extensions")) return;
         JsonObject extensions = discovery.getAsJsonObject("extensions");
-        if (!extensions.has("org.nethernet.websocket")) return;
-        JsonObject extension = extensions.getAsJsonObject("org.nethernet.websocket");
+        if (!extensions.has("dev.opencollab.nxs.websocket")) return;
+        JsonObject extension = extensions.getAsJsonObject("dev.opencollab.nxs.websocket");
         if (extension.get("version").getAsInt() != 1) return;
         JsonObject data = extension.getAsJsonObject("data");
         try {

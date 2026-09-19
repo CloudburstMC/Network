@@ -36,7 +36,7 @@ Every live replica needs its own key and private state directory. Account/token
 issuance, ownership claims and fleet administration belong to the provider.
 
 The Java client defaults to HTTP. Its optional `controlTransport=AUTO` uses the
-noncritical `org.nethernet.websocket` discovery extension when advertised. The
+noncritical `dev.opencollab.nxs.websocket` discovery extension when advertised. The
 same lifecycle signs and handles ordinary operations over either carrier;
 registration and recovery remain HTTPS. See [control transport](control-v1.md).
 

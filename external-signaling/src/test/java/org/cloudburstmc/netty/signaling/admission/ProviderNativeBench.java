@@ -204,8 +204,8 @@ public final class ProviderNativeBench {
                     JsonObject feedback = new JsonObject();
                     if (refreshed.has("extensions")) {
                         JsonObject extensions = refreshed.getAsJsonObject("extensions");
-                        if (extensions.has("org.nethernet.connectivity")) {
-                            feedback = extensions.getAsJsonObject("org.nethernet.connectivity")
+                        if (extensions.has("dev.opencollab.nxs.connectivity")) {
+                            feedback = extensions.getAsJsonObject("dev.opencollab.nxs.connectivity")
                                     .getAsJsonObject("data");
                         }
                     }

@@ -381,16 +381,16 @@ class ProviderWebSocketTest {
                             .getAsJsonObject("statelessAdmission").has("assisted"), "Configuration applies before any feedback");
                     for (String outcome : List.of("unknown", "not-established", "established", "unavailable")) {
                         var data = provider.stub.lastHeartbeat.getAsJsonObject("extensions")
-                                .getAsJsonObject("org.nethernet.connectivity").getAsJsonObject("data");
+                                .getAsJsonObject("dev.opencollab.nxs.connectivity").getAsJsonObject("data");
                         assertEquals(enabled ? "[4,6]" : "[]", data.getAsJsonArray("assistedFamilies").toString());
                         assertEquals(enabled ? "per_join" : "discovered", data.get("method").getAsString());
                         var feedback = connectivityFeedback(System.currentTimeMillis());
                         feedback.getAsJsonObject("data").getAsJsonArray("checks").get(0).getAsJsonObject().addProperty("outcome", outcome);
-                        provider.stub.extensionMetadata.add("org.nethernet.connectivity", feedback);
+                        provider.stub.extensionMetadata.add("dev.opencollab.nxs.connectivity", feedback);
                         client.readiness().get(10, TimeUnit.SECONDS);
                     }
                     var data = provider.stub.lastHeartbeat.getAsJsonObject("extensions")
-                            .getAsJsonObject("org.nethernet.connectivity").getAsJsonObject("data");
+                            .getAsJsonObject("dev.opencollab.nxs.connectivity").getAsJsonObject("data");
                     assertEquals(enabled ? "[4,6]" : "[]", data.getAsJsonArray("assistedFamilies").toString());
                 } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
             }
@@ -433,7 +433,7 @@ class ProviderWebSocketTest {
                 JsonObject profile = provider.stub.lastHeartbeat.getAsJsonObject("hostProfile");
                 assertEquals("nethernet.websocket-assisted.v1",profile.getAsJsonObject("statelessAdmission").get("assisted").getAsString());
                 int upgrades = provider.upgrades.get();
-                provider.stub.extensionMetadata.add("org.nethernet.connectivity", connectivityFeedback(null));
+                provider.stub.extensionMetadata.add("dev.opencollab.nxs.connectivity", connectivityFeedback(null));
                 client.readiness().get(10, TimeUnit.SECONDS);
                 assertEquals(upgrades, provider.upgrades.get(), "An empty feedback gap must not remove assistance and reconnect");
                 var generator = java.security.KeyPairGenerator.getInstance("EC"); generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
@@ -621,7 +621,7 @@ class ProviderWebSocketTest {
             stub.origin = "http://127.0.0.1:" + ((InetSocketAddress) server.localAddress()).getPort();
             stub.operationPrefix = "/v1/nxs/";
             stub.checkInMillis = 900000;
-            stub.extensionMetadata = JsonParser.parseString("{\"org.nethernet.websocket\":{\"version\":1,\"critical\":false,\"data\":{\"url\":\""
+            stub.extensionMetadata = JsonParser.parseString("{\"dev.opencollab.nxs.websocket\":{\"version\":1,\"critical\":false,\"data\":{\"url\":\""
                     + stub.origin.replace("http:", "ws:") + "/v1/nxs/control\",\"subprotocol\":\"" + ProviderCrypto.PROTOCOL + "\"}}}").getAsJsonObject();
         }
 

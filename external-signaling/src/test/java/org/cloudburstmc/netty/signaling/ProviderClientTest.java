@@ -552,7 +552,7 @@ class ProviderClientTest {
     @Test
     void outcomeOutageBacksOffWhileHeartbeatsContinue(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
-            stub.extensionMetadata = JsonParser.parseString("{\"org.nethernet.connectivity\":{\"version\":1,\"critical\":false,\"data\":{}}}").getAsJsonObject();
+            stub.extensionMetadata = JsonParser.parseString("{\"dev.opencollab.nxs.connectivity\":{\"version\":1,\"critical\":false,\"data\":{}}}").getAsJsonObject();
             FakeTransport host = new FakeTransport();
             stub.failOutcomes = true;
             var client = new ProviderClient(

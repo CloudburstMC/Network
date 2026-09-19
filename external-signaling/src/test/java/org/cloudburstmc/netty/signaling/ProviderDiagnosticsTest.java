@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Real ordinary HTTPS heartbeat; the transport seam only observes local policy application. */
 class ProviderDiagnosticsTest {
     @TempDir Path directory;
-    static final String NAMESPACE = "org.nethernet.connectivity";
+    static final String NAMESPACE = "dev.opencollab.nxs.connectivity";
 
     static final class Transport extends ProviderClientTest.FakeTransport {
         final List<DiagnosticHostPolicy> policies = new CopyOnWriteArrayList<>();
@@ -149,7 +149,7 @@ class ProviderDiagnosticsTest {
 
     @Test @Timeout(30) void discoveryConfiguresStunAndPublishesTheMappingWithoutDuplicateProbeTargets() throws Exception {
         try (var f = new Fixture()) {
-            f.provider.extensionMetadata = JsonParser.parseString("{\"org.nethernet.connectivity\":{\"version\":1,\"critical\":false,\"data\":{\"stunServers\":[{\"host\":\"stun.example\",\"port\":3478}]}}}").getAsJsonObject();
+            f.provider.extensionMetadata = JsonParser.parseString("{\"dev.opencollab.nxs.connectivity\":{\"version\":1,\"critical\":false,\"data\":{\"stunServers\":[{\"host\":\"stun.example\",\"port\":3478}]}}}").getAsJsonObject();
             var transport = new Transport(); transport.srflx = true;
             transport.expiry = System.currentTimeMillis() + 180000;
             var client = f.client(directory, transport, true, "discovered");
@@ -175,7 +175,7 @@ class ProviderDiagnosticsTest {
                 f.provider.failHeartbeats = 100;
                 assertThrows(ExecutionException.class, () -> client.readiness().get(10, TimeUnit.SECONDS));
                 assertEquals(installed, transport.policies.size()); assertEquals(deadline, transport.deadline);
-                var forged = JsonParser.parseString("{\"org.nethernet.connectivity\":{\"version\":1,\"critical\":false,\"data\":{}}}").getAsJsonObject();
+                var forged = JsonParser.parseString("{\"dev.opencollab.nxs.connectivity\":{\"version\":1,\"critical\":false,\"data\":{}}}").getAsJsonObject();
                 assertThrows(IllegalArgumentException.class, () -> client.updateHeartbeatExtensions(forged));
             } finally { f.provider.failHeartbeats = 0; client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
         }

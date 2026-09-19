@@ -394,7 +394,7 @@
       },
       "x-max-utf8-bytes": 16384,
       "properties": {
-        "org.nethernet.connectivity": {
+        "dev.opencollab.nxs.connectivity": {
           "$ref": "#/$defs/connectivityObservation"
         }
       }

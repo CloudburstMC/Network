@@ -7,7 +7,7 @@ ordinary operations. Both carriers share identity, sequencing and recovery.
 
 ## Discovery and authentication
 
-The noncritical `org.nethernet.websocket` discovery extension has `version: 1`
+The noncritical `dev.opencollab.nxs.websocket` discovery extension has `version: 1`
 and `data: {url, subprotocol}`. The endpoint is the provider's same-authority
 `wss://HOST/v1/nxs/control`, with subprotocol `nethernet-external-signaling-v1`.
 Loopback development may use WS. Apply the canonical-origin rules below and
