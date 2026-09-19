@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.jspecify.annotations.Nullable;
 import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
@@ -118,9 +119,15 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private SslContext sslContext;
     private ServerIdentity serverIdentity;
     private NewConnectionHandler newConnectionHandler;
+    private volatile NetherServerMetrics metrics;
 
     private Channel serverChannel;
     private volatile EventLoop eventLoop;
+
+    @Override
+    public void setMetrics(@Nullable NetherServerMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     private NetherNetHTTPSignaling(Builder builder) {
         this.playerFilter = builder.playerFilter;
@@ -226,6 +233,10 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             if (connectionsPerAddress.merge(peer, 1, Integer::sum) > maxConnectionsPerAddress) {
                 release(peer);
                 log.debug("Refused a connection from {}, already holding {}", peer, maxConnectionsPerAddress);
+                NetherServerMetrics metrics = NetherNetHTTPSignaling.this.metrics;
+                if (metrics != null) {
+                    metrics.addressRefused((InetSocketAddress) ctx.channel().remoteAddress());
+                }
                 ctx.close();
                 return;
             }
@@ -306,6 +317,10 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
             if (requiresTls && sslContext != null && ctx.pipeline().get(SslHandler.class) == null) {
                 log.debug("Refused a plaintext request from {}", remoteAddress);
+                NetherServerMetrics metrics = NetherNetHTTPSignaling.this.metrics;
+                if (metrics != null) {
+                    metrics.plaintextRefused(remoteAddress);
+                }
                 respondUpgradeRequired(ctx, keepAlive);
                 return;
             }
@@ -366,8 +381,13 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 }
 
                 Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
-                respondEmptyWithStatus(ctx, (cause instanceof OfferRejected rejected
-                        ? rejected.refusal() : JoinRefusal.ERROR).status(), keepAlive);
+                HttpResponseStatus status = (cause instanceof OfferRejected rejected
+                        ? rejected.refusal() : JoinRefusal.ERROR).status();
+                NetherServerMetrics metrics = NetherNetHTTPSignaling.this.metrics;
+                if (metrics != null) {
+                    metrics.joinRefused(status.code());
+                }
+                respondEmptyWithStatus(ctx, status, keepAlive);
             });
         }
 

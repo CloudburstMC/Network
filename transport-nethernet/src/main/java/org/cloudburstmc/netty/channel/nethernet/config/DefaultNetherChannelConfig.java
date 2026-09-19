@@ -14,6 +14,7 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
 
     private volatile PeerConnectionConfiguration peerConnectionConfig = PeerConnectionConfiguration.DEFAULT
             .withMaxMessageSize(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE);
+    private volatile NetherChannelMetrics metrics;
 
     public DefaultNetherChannelConfig(Channel channel) {
         super(channel);
@@ -23,7 +24,7 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
     public Map<ChannelOption<?>, Object> getOptions() {
         return this.getOptions(
                 super.getOptions(),
-                NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG
+                NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG, NetherChannelOption.NETHER_METRICS
         );
     }
 
@@ -33,6 +34,8 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
 
         if (option == NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG) {
             return (T) this.peerConnectionConfig;
+        } else if (option == NetherChannelOption.NETHER_METRICS) {
+            return (T) this.getMetrics();
         } else if (options.containsKey(option)) {
             return (T) options.get(option);
         }
@@ -45,6 +48,9 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
         if (option == NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG) {
             this.setPeerConnectionConfig((PeerConnectionConfiguration) value);
             return true;
+        } else if (option == NetherChannelOption.NETHER_METRICS) {
+            this.setMetrics((NetherChannelMetrics) value);
+            return true;
         } else if (super.setOption(option, value)) {
             return true;
         } else {
@@ -55,5 +61,13 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
 
     void setPeerConnectionConfig(PeerConnectionConfiguration peerConnectionConfig) {
         this.peerConnectionConfig = peerConnectionConfig;
+    }
+
+    public void setMetrics(NetherChannelMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public NetherChannelMetrics getMetrics() {
+        return this.metrics;
     }
 }

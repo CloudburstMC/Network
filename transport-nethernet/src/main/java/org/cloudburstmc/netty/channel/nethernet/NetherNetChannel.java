@@ -14,13 +14,15 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import tel.schich.libdatachannel.CandidatePair;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
-import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelCallback;
 import tel.schich.libdatachannel.PeerConnection;
+import tel.schich.libdatachannel.PeerState;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.function.Consumer;
@@ -58,12 +60,63 @@ public abstract class NetherNetChannel extends AbstractChannel {
     protected volatile boolean open = true;
 
     private volatile DataChannels pending;
-    private boolean activeFired;
+    /** Read from the libdatachannel callback thread, so it cannot be plain. */
+    private volatile boolean activeFired;
+    private final AtomicBoolean failureReported = new AtomicBoolean();
 
     protected NetherNetChannel(Channel parent, InetSocketAddress remote, InetSocketAddress local) {
         super(parent);
         this.remoteAddress = remote;
         this.localAddress = local;
+    }
+
+    /**
+     * Reports that this connection ended before it ever carried traffic, at most once per attempt.
+     * Both sides call it, so a failure counts the same whether this channel dialed out or was
+     * accepted.
+     */
+    public void connectionFailed(NetherConnectionFailure reason) {
+        NetherChannelMetrics metrics = config.getMetrics();
+        if (metrics != null && this.failureReported.compareAndSet(false, true)) {
+            metrics.connectionFailed(reason);
+        }
+    }
+
+    /** Starts a new attempt, so the next failure is reportable again. */
+    protected void clearFailureReported() {
+        this.failureReported.set(false);
+    }
+
+    /**
+     * Registers the peer callbacks that only report metrics, so neither side has to repeat them.
+     * Call it once per peer connection, which on the client means again after every retry; closing
+     * the channel drops them with the peer's other listeners.
+     */
+    protected void registerMetrics(PeerConnection peer) {
+        if (peer == null) {
+            return;
+        }
+        peer.onStateChange.register((p, state) -> {
+            NetherChannelMetrics metrics = config.getMetrics();
+            if (metrics != null) {
+                metrics.peerStateChange(state);
+            }
+            if (state == PeerState.RTC_CONNECTED) {
+                Path path = selectedPath();
+                if (metrics != null && path != null) {
+                    metrics.pathSelected(path.localType(), path.remoteType());
+                }
+            } else if ((state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) && !this.activeFired) {
+                connectionFailed(state == PeerState.RTC_FAILED ? NetherConnectionFailure.PEER_FAILED
+                        : NetherConnectionFailure.PEER_CLOSED);
+            }
+        });
+        peer.onIceStateChange.register((p, state) -> {
+            NetherChannelMetrics metrics = config.getMetrics();
+            if (metrics != null) {
+                metrics.iceStateChange(state);
+            }
+        });
     }
 
     /**
@@ -179,7 +232,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     private void onMessage(NetherNetMessageAssembler assembler, ByteBuffer data) {
-        NetherChannelMetrics metrics = config.getOption(NetherChannelOption.NETHER_METRICS);
+        NetherChannelMetrics metrics = config.getMetrics();
 
         // The native ByteBuffer expires when this callback returns.
         ByteBuf packet = assembler.decode(data, alloc());
@@ -270,7 +323,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
             } else {
                 log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
 
-                NetherChannelMetrics metrics = config.getOption(NetherChannelOption.NETHER_METRICS);
+                NetherChannelMetrics metrics = config.getMetrics();
                 if (metrics != null) {
                     metrics.messagesOut(segments);
                     metrics.bytesOut(totalLength);

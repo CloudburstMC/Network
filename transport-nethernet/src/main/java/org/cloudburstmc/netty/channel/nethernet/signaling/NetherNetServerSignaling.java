@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.jspecify.annotations.Nullable;
 import com.google.gson.JsonObject;
@@ -35,6 +36,15 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * @param pongData The Pong advertisement data.
      */
     void setAdvertisementData(PongData pongData);
+
+    /**
+     * Sets where to report joins this signaling turns away. Signaling that refuses nothing of its
+     * own ignores it.
+     *
+     * @param metrics The metrics to report to, or null to report nothing.
+     */
+    default void setMetrics(@Nullable NetherServerMetrics metrics) {
+    }
 
     /**
      * Functional interface for new connection handling.

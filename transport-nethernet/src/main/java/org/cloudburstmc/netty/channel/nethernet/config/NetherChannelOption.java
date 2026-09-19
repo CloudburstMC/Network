@@ -45,6 +45,13 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<NetherChannelMetrics> NETHER_METRICS =
             valueOf(NetherChannelOption.class, "NETHER_METRICS");
 
+    /**
+     * The {@link NetherServerMetrics} to report listener wide events to, set on the server channel.
+     * Unset by default, in which case nothing is reported.
+     */
+    public static final ChannelOption<NetherServerMetrics> NETHER_SERVER_METRICS =
+            valueOf(NetherChannelOption.class, "NETHER_SERVER_METRICS");
+
     @SuppressWarnings("deprecation")
     protected NetherChannelOption(String name) {
         super(name);

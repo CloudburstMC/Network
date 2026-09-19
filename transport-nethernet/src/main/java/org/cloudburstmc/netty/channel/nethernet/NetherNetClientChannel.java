@@ -1,7 +1,9 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherClientChannelConfig;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling;
@@ -182,6 +184,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         // Fail exceptionally once the retries are spent
         int maxRetries = this.config().getOption(NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS);
         if (retryCount >= maxRetries) {
+            connectionFailed(NetherConnectionFailure.HANDSHAKE_TIMEOUT);
             if (connectPromise != null && !connectPromise.isDone()) {
                 connectPromise.tryFailure(
                         new ConnectException("Connection timed out after " + retryCount + " retries"));
@@ -190,7 +193,14 @@ public class NetherNetClientChannel extends NetherNetChannel {
             return;
         }
 
+        NetherChannelMetrics metrics = config.getMetrics();
+        if (metrics != null) {
+            metrics.handshakeRetry();
+        }
+
         retryCount++;
+        // Otherwise the first attempt's PEER_FAILED swallows the HANDSHAKE_TIMEOUT that ends them.
+        clearFailureReported();
         closeWebRTC();
 
         signaling.removeSignalHandler(this.connectionId);
@@ -204,6 +214,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 .withIceServers(iceServers.stream().map(IceServerInfo::toUris).flatMap(List::stream).toList());
 
         peerConnection = PeerConnection.createPeer(rtcConfig);
+        registerMetrics(peerConnection);
 
         // Registering is what arms the native callback, so it must happen before anything can fire it
         peerConnection.onLocalCandidate.register((peer, candidate, mediaId) -> {
