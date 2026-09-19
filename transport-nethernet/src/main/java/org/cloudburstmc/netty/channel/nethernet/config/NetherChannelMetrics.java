@@ -25,5 +25,16 @@ public interface NetherChannelMetrics {
 
     default void iceStateChange(IceState state) {
     }
+
+    /** ICE candidate types, {@code host}, {@code srflx}, {@code prflx} or {@code relay}, either null. */
+    default void pathSelected(String localType, String remoteType) {
+    }
+
+    /** At most once per attempt, so a client that retries reports one per attempt. */
+    default void connectionFailed(NetherConnectionFailure reason) {
+    }
+
+    default void handshakeRetry() {
+    }
 }
 

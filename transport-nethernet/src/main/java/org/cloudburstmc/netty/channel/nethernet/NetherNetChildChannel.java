@@ -38,6 +38,7 @@ public class NetherNetChildChannel extends NetherNetChannel {
         super(parent, remote, local);
         this.peerConnection = peerConnection;
         this.config = new DefaultNetherChannelConfig(this);
+        registerMetrics(peerConnection);
     }
 
     @Override
