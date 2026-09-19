@@ -4,7 +4,6 @@ package org.cloudburstmc.netty.signaling.diagnostic;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import tel.schich.libdatachannel.*;
 import java.net.*;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.spec.ECGenParameterSpec;
@@ -42,7 +41,6 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                          String offerDigestHex, String clientFingerprintHex, InetSocketAddress selectedLocal,
                          InetSocketAddress selectedRemote, InetSocketAddress attemptedRemote, int sentFrames, int sentBytes,
                          int receivedFrames, int receivedBytes, long completedAt) { }
-    private record Incoming(int channel, byte[] bytes) { }
     private static final class Failed extends RuntimeException {
         final Reason reason; Failed(Reason reason) { super(reason.name()); this.reason = reason; }
     }
@@ -55,16 +53,13 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     private final BooleanSupplier authorized;
     private final Clock clock;
     private final AtomicBoolean closeObserved = new AtomicBoolean();
-    private final AtomicBoolean started = new AtomicBoolean(), cancelled = new AtomicBoolean(), failed = new AtomicBoolean(), connected = new AtomicBoolean(), gathered = new AtomicBoolean(), protocolFailed = new AtomicBoolean();
-    private final AtomicInteger receivedFrames = new AtomicInteger(), receivedBytes = new AtomicInteger();
-    private final ArrayBlockingQueue<Incoming> incoming = new ArrayBlockingQueue<>(MAX_FRAMES);
-    private final DataChannel[] channels = new DataChannel[2];
+    private final AtomicBoolean started = new AtomicBoolean(), cancelled = new AtomicBoolean(), gathered = new AtomicBoolean();
+    private final DiagnosticChannels channels = new DiagnosticChannels();
     private final AtomicReference<PeerConnection> peer = new AtomicReference<>();
     private final CompletableFuture<Void> termination = new CompletableFuture<>();
     private DiagnosticAnswerCodec.Catalog catalog;
     private InetSocketAddress gatheredLocal;
     private long anchorWall, anchorNanos, previousNanos, deadlineNanos, handshakeDeadlineNanos, currentNanos, currentWall;
-    private int sentFrames, sentBytes;
 
     public NativeDiagnosticProbeAttempt(Job job, InetSocketAddress bind, Supplier<DiagnosticAnswerCodec.Catalog> catalog,
                                         BooleanSupplier authorized) {
@@ -124,13 +119,8 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                 .withEnableIceUdpMux(true).withDisableAutoNegotiation(true).withMtu(1248).withMaxMessageSize(MAX_MESSAGE_SIZE);
             PeerConnection nativePeer = PeerConnection.createPeer(configuration, Runnable::run);
             peer.set(nativePeer); check();
-            nativePeer.onStateChange.register((p,state) -> {
-                if (state == PeerState.RTC_CONNECTED) connected.set(true);
-                if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) failed.set(true);
-            });
             nativePeer.onGatheringStateChange.register((p,state) -> { if (state == GatheringState.RTC_GATHERING_COMPLETE) gathered.set(true); });
-            nativePeer.onDataChannel.register((p,channel) -> protocolFailed.set(true)); // Exactly our two locally created channels.
-            installChannels(nativePeer);
+            channels.attach(nativePeer, false);
             String ufrag = random(18), password = random(18);
             checkHandshake(); nativePeer.setLocalDescription("offer",ufrag,password);
             await(gathered::get, true);
@@ -163,9 +153,8 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             fingerprint = fp.substring(8).replace(":", "").toLowerCase(Locale.ROOT);
             var claims = new Claims(job.expiresAt,fingerprint,password,job.attemptIdHex,offerHash,job.target.candidateRevision(),
                 job.target.family(),job.target.addressHex(),job.target.port(),job.target.assisted() ? ASSISTED_PROFILE : PROFILE);
-            DiagnosticAssertionCodec.validateOffer(offer,claims,ufrag);
-            String[] candidate = field(offerText,"a=candidate:").split(" ");
-            if (!job.target.assisted() && !numeric(candidate[4],Integer.parseInt(candidate[5])).equals(bind)) throw new Failed(Reason.GATHERING);
+            DiagnosticSdp offered = DiagnosticAssertionCodec.offer(offer, claims, ufrag);
+            if (!job.target.assisted() && !offered.endpoint(job.target.family()).equals(bind)) throw new Failed(Reason.GATHERING);
             KeyPairGenerator generator = KeyPairGenerator.getInstance("EC"); generator.initialize(new ECGenParameterSpec("secp384r1"));
             var assertion = DiagnosticAssertionCodec.sign(job.context,claims,ufrag,generator.generateKeyPair());
             checkHandshake(); reason = Reason.SIGNALING;
@@ -193,15 +182,24 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                 finally { Arrays.fill(answer,(byte)0); }
             }
             reason = Reason.TRANSPORT;
-            await(() -> connected.get() && channels[0].isOpen() && channels[1].isOpen(), true);
-            for (int i = 0; i < 2; i++) validateChannel(channels[i],i);
+            await(channels::ready, true);
             transportEstablished = true;
             CandidatePair establishedPair = selectedPair(nativePeer); // No PING is sent to an invalid selected destination.
             selectedLocal = numeric(establishedPair.local().getHostString(),establishedPair.local().getPort());
             selectedRemote = numeric(establishedPair.remote().getHostString(),establishedPair.remote().getPort());
             reason = Reason.PROTOCOL;
-            checkHandshake(); exchange = new DiagnosticExchange(job.attemptIdHex,false,this::send); exchange.start();
-            while (!exchange.complete()) { drain(exchange); if (!exchange.complete()) pause(false); }
+            checkHandshake();
+            exchange = new DiagnosticExchange(job.attemptIdHex, false, (channel, bytes) -> {
+                check(); channels.send(channel, bytes);
+            });
+            exchange.start();
+            while (!exchange.complete()) {
+                check();
+                if (channels.protocolFailed()) throw new Failed(Reason.PROTOCOL);
+                byte[] incoming = channels.poll();
+                if (incoming != null) exchange.receive(0, incoming);
+                if (!exchange.complete()) pause(false);
+            }
             check(); reason = Reason.SELECTED_PATH;
             CandidatePair pair = selectedPair(nativePeer);
             selectedLocal = numeric(pair.local().getHostString(),pair.local().getPort());
@@ -224,14 +222,15 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                 catch (ExecutionException | TimeoutException | RuntimeException failure) { reason = Reason.CLEANUP; }
                 finally { if (interrupted) Thread.currentThread().interrupt(); }
             }
-            incoming.clear(); Arrays.fill(channels,null);
+            channels.clear();
         }
         cleanup = cleanup && discoveryClean;
         if (complete && cleanup) { try { check(); } catch (RuntimeException withdrawn) { complete = false; reason = withdrawn instanceof Failed failure ? failure.reason : Reason.WITHDRAWN; } }
-        boolean success = complete && cleanup && !protocolFailed.get();
+        boolean success = complete && cleanup && !channels.protocolFailed();
         if (!success && reason == Reason.COMPLETE) reason = Reason.PROTOCOL;
         return new Result(job,success,reason,answerVerified,transportEstablished,exchange != null && exchange.complete(),cleanup,
-            offerHash,fingerprint,selectedLocal,selectedRemote,attemptedRemote,sentFrames,sentBytes,receivedFrames.get(),receivedBytes.get(),
+            offerHash,fingerprint,selectedLocal,selectedRemote,attemptedRemote,exchange == null ? 0 : exchange.sentFrames(),
+            exchange == null ? 0 : exchange.sentBytes(),channels.receivedFrames(),channels.receivedBytes(),
             currentWall);
     }
     private CandidatePair selectedPair(PeerConnection nativePeer) {
@@ -250,45 +249,14 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                 || !"udp".equals(pair.remoteTransport())) throw new Failed(Reason.SELECTED_PATH);
         return pair;
     }
-    private void installChannels(PeerConnection value) {
-        for (int i = 0; i < 2; i++) {
-            int index = i;
-            channels[i] = value.createDataChannel(i == 0 ? "ReliableDataChannel" : "UnreliableDataChannel", DataChannelInitSettings.DEFAULT
-                .withReliability(DataChannelReliability.DEFAULT.withUnordered(i == 1).withUnreliable(i == 1).withMaxRetransmits(0)));
-            channels[i].onClosed.register(channel -> failed.set(true)); channels[i].onError.register((channel,error) -> failed.set(true));
-            channels[i].onMessage.register(new DataChannelCallback.Message() {
-                public void onText(DataChannel channel,String text) { protocolFailed.set(true); }
-                public void onBinary(DataChannel channel,ByteBuffer bytes) {
-                    int size = bytes.remaining();
-                    if (cancelled.get() || protocolFailed.get() || size != DiagnosticExchange.FRAME_BYTES || receivedFrames.incrementAndGet() > MAX_FRAMES
-                            || receivedBytes.addAndGet(size) > MAX_APPLICATION_SEND_BYTES) { protocolFailed.set(true); return; }
-                    byte[] owned = new byte[size]; bytes.get(owned);
-                    if (!incoming.offer(new Incoming(index,owned))) protocolFailed.set(true);
-                }
-            });
-        }
-    }
-    private void validateChannel(DataChannel dc,int index) {
-        DataChannelReliability r = dc.reliability();
-        if (!dc.label().equals(index == 0 ? "ReliableDataChannel" : "UnreliableDataChannel") || !dc.protocol().isEmpty()
-                || r.isUnordered() != (index == 1) || r.isUnreliable() != (index == 1) || r.maxRetransmits() != 0 || !r.maxPacketLifeTime().isZero()) throw new Failed(Reason.PROTOCOL);
-    }
-    private void send(int channel,byte[] bytes) {
-        check(); if (protocolFailed.get() || bytes.length > MAX_FRAME_BYTES || ++sentFrames > MAX_FRAMES || (sentBytes += bytes.length) > MAX_APPLICATION_SEND_BYTES) throw new Failed(Reason.PROTOCOL);
-        channels[channel].sendMessage(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip());
-    }
-    private void drain(DiagnosticExchange exchange) {
-        check(); if (protocolFailed.get()) throw new Failed(Reason.PROTOCOL);
-        Incoming message; while ((message = incoming.poll()) != null) exchange.receive(message.channel,message.bytes);
-    }
     private void await(BooleanSupplier condition,boolean handshake) throws InterruptedException {
         while (!condition.getAsBoolean()) pause(handshake);
         if (handshake) checkHandshake(); else check();
     }
     private void checkHandshake() { check(); if (currentNanos - handshakeDeadlineNanos >= 0) throw new HandshakeTimeout(); }
     private void pause(boolean handshake) throws InterruptedException {
-        check(); if (protocolFailed.get()) throw new Failed(Reason.PROTOCOL);
-        if (failed.get()) throw new Failed(Reason.TRANSPORT);
+        check(); if (channels.protocolFailed()) throw new Failed(Reason.PROTOCOL);
+        if (channels.failed()) throw new Failed(Reason.TRANSPORT);
         if (handshake && currentNanos - handshakeDeadlineNanos >= 0) throw new HandshakeTimeout();
         Thread.sleep(5);
     }

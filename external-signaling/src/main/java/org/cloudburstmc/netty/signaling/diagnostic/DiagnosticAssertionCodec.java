@@ -1,14 +1,10 @@
 /* Copyright 2026 CloudburstMC. Licensed under the Apache License, Version 2.0. */
 package org.cloudburstmc.netty.signaling.diagnostic;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.interfaces.ECPrivateKey;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
-import java.util.List;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
 /** Detached diagnostic key proof. Deliberately unrelated to Minecraft CPK identity. */
@@ -43,39 +39,17 @@ public final class DiagnosticAssertionCodec {
         try { Signature verifier = Signature.getInstance("SHA384withECDSAinP1363Format"); verifier.initVerify(publicKey(assertion.publicPoint())); verifier.update(transcript(context, claims, remoteUfrag)); return verifier.verify(assertion.signature()); }
         catch (GeneralSecurityException | RuntimeException e) { return false; }
     }
-    public static void validateOffer(byte[] input, Claims c, String remoteUfrag) {
-        if (input.length == 0 || input.length > 16384) throw invalid(); byte[] bytes = input.clone(); String text;
-        try { text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString(); }
-        catch (java.nio.charset.CharacterCodingException e) { throw invalid(); }
-        if (text.indexOf(0) >= 0 || text.replace("\r\n", "").indexOf('\r') >= 0) throw invalid();
-        List<String> lines = Arrays.stream(text.split("\r?\n")).filter(s -> !s.isEmpty()).toList();
-        if (!one(lines, "m=").matches("application [0-9]{1,5} UDP/DTLS/SCTP webrtc-datachannel") || Integer.parseInt(one(lines, "m=").split(" ")[1]) < 1 || Integer.parseInt(one(lines, "m=").split(" ")[1]) > 65535 || lines.stream().anyMatch(l -> l.startsWith("a=ice-lite")) || !one(lines, "a=group:").equals("BUNDLE 0") || !one(lines, "a=mid:").equals("0") || !one(lines, "a=setup:").equals("actpass") ||
-                !one(lines, "a=ice-ufrag:").equals(ufrag(remoteUfrag)) || !one(lines, "a=ice-pwd:").equals(c.clientIcePwd()) || !one(lines, "a=sctp-port:").equals("5000") || !one(lines, "a=max-message-size:").equals("262144") ||
-                lines.stream().filter(l -> l.equals("a=end-of-candidates")).count() != 1 || lines.stream().anyMatch(l -> l.startsWith("a=identity:"))) throw invalid();
-        String fingerprint = one(lines, "a=fingerprint:");
-        if (!fingerprint.matches("sha-256 (?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}") || !fingerprint.substring(8).replace(":", "").equalsIgnoreCase(c.clientFingerprintHex())) throw invalid();
-        String[] candidate = one(lines, "a=candidate:").split(" ", -1);
-        if ((candidate.length < 8 || candidate.length > 20 || candidate.length % 2 != 0) || !candidate[0].matches("[A-Za-z0-9+/]{1,32}") || !candidate[1].equals("1") || !candidate[2].equalsIgnoreCase("udp") || !candidate[3].matches("[0-9]{1,10}") || Long.parseLong(candidate[3]) > 0xffffffffL || !candidate[5].matches("[0-9]{1,5}") || Integer.parseInt(candidate[5]) < 1 || Integer.parseInt(candidate[5]) > 65535 || !candidate[6].equals("typ") || !(candidate[7].equals("host") || (c.profile() == ASSISTED_PROFILE && candidate[7].equals("srflx")))) throw invalid();
-        java.util.Set<String> extensions = new java.util.HashSet<>();
-        for (int i = 8; i < candidate.length; i += 2) {
-            String name = candidate[i], value = candidate[i + 1];
-            if (!extensions.add(name)) throw invalid();
-            if (name.equals("raddr")) { if (!candidate[7].equals("srflx")) throw invalid(); address(c.family(), value); }
-            else if (name.equals("rport")) { if (!candidate[7].equals("srflx") || !value.matches("[0-9]{1,5}")) throw invalid(); integer(Long.parseLong(value),1,65535); }
-            else if (name.equals("ufrag") ? !value.equals(remoteUfrag) : !List.of("generation", "network-id", "network-cost").contains(name) || !value.matches("[0-9]{1,10}") || Long.parseLong(value) > 0xffffffffL) throw invalid();
-        }
-        if (extensions.contains("raddr") != extensions.contains("rport")) throw invalid();
-        address(c.family(), candidate[4]); if (!hex(digest(bytes)).equals(c.offerDigestHex())) throw invalid();
+    public static void validateOffer(byte[] input, Claims claims, String remoteUfrag) {
+        offer(input, claims, remoteUfrag);
+    }
+    static DiagnosticSdp offer(byte[] input, Claims claims, String remoteUfrag) {
+        DiagnosticSdp sdp = DiagnosticSdp.parse(input, claims, false);
+        if (!sdp.ufrag().equals(ufrag(remoteUfrag)) || !sdp.password().equals(claims.clientIcePwd())
+                || !sdp.fingerprintHex().equals(claims.clientFingerprintHex()) || !sdp.digestHex().equals(claims.offerDigestHex())) throw invalid();
+        return sdp;
     }
     /** Returns the sole signed numeric candidate after full offer validation. */
     public static java.net.InetSocketAddress candidate(byte[] input, Claims claims, String remoteUfrag) {
-        validateOffer(input, claims, remoteUfrag);
-        String line = one(Arrays.stream(new String(input, StandardCharsets.UTF_8).split("\\r?\\n")).toList(), "a=candidate:");
-        String[] parts = line.split(" ");
-        try {
-            byte[] packed = unhex(address(claims.family(), parts[4]), 16);
-            return new java.net.InetSocketAddress(java.net.InetAddress.getByAddress(claims.family() == 4 ? Arrays.copyOfRange(packed,12,16) : packed), Integer.parseInt(parts[5]));
-        } catch (java.net.UnknownHostException invalidAddress) { throw invalid(); }
+        return offer(input, claims, remoteUfrag).endpoint(claims.family());
     }
-    private static String one(List<String> lines, String prefix) { List<String> values = lines.stream().filter(l -> l.startsWith(prefix)).toList(); if (values.size() != 1) throw invalid(); return values.get(0).substring(prefix.length()); }
 }

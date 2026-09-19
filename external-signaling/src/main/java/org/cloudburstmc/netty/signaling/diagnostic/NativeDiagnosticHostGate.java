@@ -6,11 +6,9 @@ import org.cloudburstmc.netty.signaling.control.AssistedJoin;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import tel.schich.libdatachannel.*;
 import java.net.*;
-import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
 /** Explicit diagnostic consumer; never constructs a player child, principal, CPK verifier or pipeline event. */
@@ -21,17 +19,12 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                          int sentFrames, int sentBytes, int receivedFrames, int receivedBytes, long completedAt,
                          boolean cleanupComplete) { }
     public record Stats(int active, int pending, int retainedAttempts, int liveNativePeers, long rejected, long droppedResults) { }
-    private record Incoming(int channel, byte[] bytes) { }
     private static final class Session {
         final VerifiedDiagnosticAdmission admission;
         final Key key;
         final InetSocketAddress remote;
         final long deadlineNanos, handshakeDeadlineNanos;
-        final ArrayBlockingQueue<DataChannel> channels = new ArrayBlockingQueue<>(2);
-        final ArrayBlockingQueue<Incoming> messages = new ArrayBlockingQueue<>(MAX_FRAMES);
-        final AtomicBoolean failed = new AtomicBoolean(), protocolFailed = new AtomicBoolean(), connected = new AtomicBoolean();
-        final AtomicInteger receivedBytes = new AtomicInteger(), receivedFrames = new AtomicInteger();
-        final DataChannel[] channel = new DataChannel[2];
+        final DiagnosticChannels channels = new DiagnosticChannels();
         Runnable requireCurrent;
         PeerConnection peer;
         DiagnosticExchange exchange;
@@ -219,14 +212,9 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         String local = peer.localDescription();
         if (!local.contains("a=fingerprint:" + identity.fingerprint() + "\r\n") ||
                 !local.contains("a=ice-ufrag:" + session.admission.credentials().localUfrag() + "\r\n")) throw invalid();
-        peer.onStateChange.register((p, state) -> {
-            if (state == PeerState.RTC_CONNECTED) session.connected.set(true);
-            if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) session.failed.set(true);
-        });
-        peer.onDataChannel.register((p, channel) -> {
-            if (!session.channels.offer(channel)) session.protocolFailed.set(true);
-        });
+        session.channels.attach(peer, true);
     }
+
     private synchronized void settled(Session session, Throwable failure) {
         session.settled = true;
         if (failure != null) { session.complete = false; session.reason = "native_acceptance_failed"; session.wantsClose = true; }
@@ -250,27 +238,26 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         for (Session session : new ArrayList<>(sessions.values())) {
             if (session.closing || session.wantsClose) continue;
             if (!authorized(session, now)) { stop(session, "expired_or_withdrawn"); continue; }
-            if (session.protocolFailed.get()) { stop(session, "invalid_diagnostic_protocol"); continue; }
-            if (session.failed.get()) { stop(session, session.complete ? "pong_sent" : "transport_failed"); continue; }
+            if (session.channels.protocolFailed()) { stop(session, "invalid_diagnostic_protocol"); continue; }
+            if (session.channels.failed()) { stop(session, session.complete ? "pong_sent" : "transport_failed"); continue; }
             if (!session.complete && lastNanos - session.handshakeDeadlineNanos >= 0) { stop(session, "handshake_timeout"); continue; }
             try {
-                DataChannel channel;
-                while ((channel = session.channels.poll()) != null) installChannel(session, channel);
-                if (session.exchange == null && bothChannels(session) && session.connected.get()) {
+                boolean ready = session.channels.ready();
+                if (session.exchange == null && ready) {
                     session.phase = "selected_path";
                     if (!authorized(session, observe())) throw invalid();
                     capture(session); // Validate the actual pinned transport before sending a pong.
                     session.exchange = new DiagnosticExchange(session.admission.claims().attemptIdHex(), true, (index, bytes) -> {
-                        if (!authorized(session, observe()) || session.closing || bytes.length > MAX_FRAME_BYTES) throw invalid();
-                        session.channel[index].sendMessage(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip());
+                        if (!authorized(session, observe()) || session.closing) throw invalid();
+                        session.channels.send(index, bytes);
                     });
                     session.exchange.start();
                     session.phase = "ping";
                 }
                 if (session.exchange != null) {
-                    Incoming incoming;
-                    while ((incoming = session.messages.poll()) != null) {
-                        session.exchange.receive(incoming.channel, incoming.bytes);
+                    byte[] incoming = session.channels.poll();
+                    if (incoming != null) {
+                        session.exchange.receive(0, incoming);
                         session.complete = true;
                         session.completeNanos = lastNanos;
                     }
@@ -279,29 +266,6 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                 if (session.complete && lastNanos - session.completeNanos >= 1_000_000_000L) stop(session, "pong_sent");
             } catch (RuntimeException invalid) { stop(session, "invalid_" + session.phase); }
         }
-    }
-    private void installChannel(Session session, DataChannel dc) {
-        int index = dc.label().equals("ReliableDataChannel") ? 0 : dc.label().equals("UnreliableDataChannel") ? 1 : -1;
-        if (index < 0 || session.channel[index] != null || !dc.protocol().isEmpty()) throw invalid();
-        DataChannelReliability r = dc.reliability();
-        if (r.isUnordered() != (index == 1) || r.isUnreliable() != (index == 1) || r.maxRetransmits() != 0 || !r.maxPacketLifeTime().isZero()) throw invalid();
-        session.channel[index] = dc;
-        dc.onClosed.register(channel -> session.failed.set(true));
-        dc.onError.register((channel, error) -> session.failed.set(true));
-        dc.onMessage.register(new DataChannelCallback.Message() {
-            @Override public void onText(DataChannel channel, String text) { session.protocolFailed.set(true); }
-            @Override public void onBinary(DataChannel channel, ByteBuffer bytes) {
-                // INLINE callback: own bounded bytes before native memory expires. No per-frame event-loop task.
-                int size = bytes.remaining();
-                if (session.closing || session.protocolFailed.get() || size < 1 || size > MAX_FRAME_BYTES || session.receivedFrames.incrementAndGet() > MAX_FRAMES ||
-                        session.receivedBytes.addAndGet(size) > MAX_APPLICATION_SEND_BYTES) { session.protocolFailed.set(true); return; }
-                byte[] owned = new byte[size]; bytes.get(owned);
-                if (!session.messages.offer(new Incoming(index, owned))) session.protocolFailed.set(true);
-            }
-        });
-    }
-    private static boolean bothChannels(Session session) {
-        return session.channel[0] != null && session.channel[1] != null && session.channel[0].isOpen() && session.channel[1].isOpen();
     }
     private void capture(Session session) {
         CandidatePair pair = session.peer.selectedCandidatePair();
@@ -335,14 +299,14 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
         // Forged STUN never allocated a peer, so cannot consume an otherwise usable permit.
         if (!session.created) used.remove(session.admission.claims().attemptIdHex());
         long now = observe();
-        boolean success = failure == null && session.complete && !session.protocolFailed.get() && authorized(session, now);
+        boolean success = failure == null && session.complete && !session.channels.protocolFailed() && authorized(session, now);
         if (session.created) {
             DiagnosticExchange exchange = session.exchange;
             Claims claims = session.admission.claims();
             Result result = new Result(session.admission.context(), session.key.keyId(), claims.attemptIdHex(), claims.offerDigestHex(), claims.clientFingerprintHex(), claims.expiresAt(), DiagnosticHostPolicy.Endpoint.from(claims), success,
                 failure != null ? "native_cleanup_failed" : session.complete && !success ? "observation_invalidated" : session.reason,
                 session.selectedLocal, session.selectedRemote, exchange == null ? 0 : exchange.sentFrames(), exchange == null ? 0 : exchange.sentBytes(),
-                session.receivedFrames.get(), session.receivedBytes.get(), now, failure == null);
+                session.channels.receivedFrames(), session.channels.receivedBytes(), now, failure == null);
             if (!results.offer(result)) droppedResults++;
         }
         completeTermination();

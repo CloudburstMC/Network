@@ -63,7 +63,7 @@ class NativeDiagnosticHostTest {
                 channels[i].onMessage.register(new DataChannelCallback.Message() {
                     public void onText(DataChannel channel,String text) { failure.compareAndSet(null,new AssertionError("text")); }
                     public void onBinary(DataChannel channel,ByteBuffer data) {
-                        if(data.remaining()>MAX_FRAME_BYTES) {failure.compareAndSet(null,new AssertionError("oversize"));return;}
+                        if(data.remaining()!=DiagnosticExchange.FRAME_BYTES) {failure.compareAndSet(null,new AssertionError("oversize"));return;}
                         byte[] copy=new byte[data.remaining()];data.get(copy);
                         if(!(index==0?reliable:unreliable).offer(copy)) failure.compareAndSet(null,new AssertionError("queue"));
                     }

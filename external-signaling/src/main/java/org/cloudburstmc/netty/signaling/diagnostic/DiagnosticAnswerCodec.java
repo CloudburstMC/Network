@@ -4,7 +4,6 @@ package org.cloudburstmc.netty.signaling.diagnostic;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.nio.ByteBuffer;
-import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivateKey;
 import java.security.Signature;
@@ -101,31 +100,14 @@ public final class DiagnosticAnswerCodec {
     }
     /** Enforces the declared profile and exact numeric destination; it does not observe a selected pair. */
     public static void validateSdp(byte[] input, Expected expected) {
-        if (input.length == 0 || input.length > MAX_SDP_BYTES) throw invalid(); byte[] bytes = input.clone(); String text;
-        try { text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString(); }
-        catch (java.nio.charset.CharacterCodingException e) { throw invalid(); }
-        if (text.indexOf(0) >= 0 || text.replace("\r\n", "").indexOf('\r') >= 0) throw invalid(); List<String> lines = Arrays.stream(text.split("\r?\n")).filter(s -> !s.isEmpty()).toList();
-        if (lines.stream().anyMatch(l -> !l.equals(l.trim()))) throw invalid();
-        String media = one(lines, "m=");
-        if (!media.matches("application [0-9]{1,5} UDP/DTLS/SCTP webrtc-datachannel") || Integer.parseInt(media.split(" ")[1]) < 1 || Integer.parseInt(media.split(" ")[1]) > 65535 || !one(lines, "a=group:").equals("BUNDLE 0") || !one(lines, "a=mid:").equals("0") || !one(lines, "a=setup:").equals("active") || !one(lines, "a=sctp-port:").equals("5000") || !one(lines, "a=max-message-size:").equals("262144") || lines.stream().anyMatch(l -> l.startsWith("a=ice-lite") || l.startsWith("a=identity:")) || lines.stream().filter(l -> l.equals("a=end-of-candidates")).count() != 1) throw invalid();
-        String fingerprint = one(lines, "a=fingerprint:");
-        if (!fingerprint.matches("sha-256 (?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}") || !fingerprint.substring(8).replace(":", "").equalsIgnoreCase(expected.hostFingerprintHex)) throw invalid();
-        String local = one(lines, "a=ice-ufrag:");
-        if (!local.matches("NXD1[A-Z0-9]{4}[A-Za-z0-9+/]+") || local.length() != ufragLength(expected.claims.clientIcePwd().length()) || unbase64(local.substring(8)).length != 156 + expected.claims.clientIcePwd().length() || !one(lines, "a=ice-pwd:").matches("[A-Za-z0-9+/]{32}")) throw invalid();
-        if (lines.stream().anyMatch(line -> line.startsWith("a=remote-candidates:"))) throw invalid();
-        String[] c = one(lines, "a=candidate:").split(" ", -1);
-        if (c.length < 8 || c.length > 20 || c.length % 2 != 0 || !c[0].matches("[A-Za-z0-9+/]{1,32}") || !c[1].equals("1") || !c[2].equalsIgnoreCase("udp") || !c[3].matches("[0-9]{1,10}") || Long.parseLong(c[3]) > 0xffffffffL || !c[6].equals("typ") || !List.of("host", "srflx").contains(c[7]) || !c[5].matches("[0-9]{1,5}") || Integer.parseInt(c[5]) < 1 || Integer.parseInt(c[5]) > 65535) throw invalid();
-        String candidateAddress = address(expected.claims.family(), c[4]);
-        if (expected.claims.profile() == PROFILE && (Integer.parseInt(c[5]) != expected.claims.targetPort()
-                || !candidateAddress.equals(expected.claims.targetAddressHex()))) throw invalid();
-        Set<String> seen = new HashSet<>();
-        for (int i = 8; i < c.length; i += 2) {
-            String name = c[i], value = c[i + 1]; if (!seen.add(name)) throw invalid();
-            if (name.equals("raddr")) { if (!c[7].equals("srflx")) throw invalid(); address(expected.claims.profile() == ASSISTED_PROFILE ? expected.claims.family() : value.contains(":") ? 6 : 4, value); }
-            else if (name.equals("ufrag")) { if (!value.equals(local)) throw invalid(); }
-            else if (!List.of("rport", "generation", "network-id", "network-cost").contains(name) || !value.matches("[0-9]{1,10}") || Long.parseLong(value) > (name.equals("rport") ? 65535 : 0xffffffffL) || (name.equals("rport") && !c[7].equals("srflx"))) throw invalid();
-        }
-        if (seen.contains("raddr") != seen.contains("rport")) throw invalid();
+        DiagnosticSdp sdp = DiagnosticSdp.parse(input, expected.claims, true);
+        String local = sdp.ufrag();
+        if (!sdp.fingerprintHex().equalsIgnoreCase(expected.hostFingerprintHex)
+                || !local.matches("NXD1[A-Z0-9]{4}[A-Za-z0-9+/]+")
+                || local.length() != ufragLength(expected.claims.clientIcePwd().length())
+                || unbase64(local.substring(8)).length != 156 + expected.claims.clientIcePwd().length()
+                || !sdp.password().matches("[A-Za-z0-9+/]{32}")) throw invalid();
+        if (expected.claims.profile() == PROFILE && (sdp.port() != expected.claims.targetPort()
+                || !sdp.addressHex().equals(expected.claims.targetAddressHex()))) throw invalid();
     }
-    private static String one(List<String> lines, String prefix) { List<String> values = lines.stream().filter(l -> l.startsWith(prefix)).toList(); if (values.size() != 1) throw invalid(); return values.get(0).substring(prefix.length()); }
 }
