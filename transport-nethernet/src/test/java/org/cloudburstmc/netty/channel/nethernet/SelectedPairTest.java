@@ -22,6 +22,7 @@ import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 
+import java.net.InetAddress;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -39,8 +40,11 @@ class SelectedPairTest {
 
     @Test
     void aLiveConnectionReportsATypedResolvedPair() throws Exception {
-        try (PeerConnection offerer = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT);
-             PeerConnection answerer = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT)) {
+        // Pinned to loopback, so the pair does not depend on whatever interfaces the host has
+        PeerConnectionConfiguration loopback =
+                PeerConnectionConfiguration.DEFAULT.withBindAddress(InetAddress.getLoopbackAddress());
+        try (PeerConnection offerer = PeerConnection.createPeer(loopback);
+             PeerConnection answerer = PeerConnection.createPeer(loopback)) {
             offerer.onLocalDescription.register((peer, sdp, type) -> answerer.setRemoteDescription(sdp, type));
             answerer.onLocalDescription.register((peer, sdp, type) -> offerer.setRemoteDescription(sdp, type));
             offerer.onLocalCandidate.register((peer, candidate, mid) -> answerer.addRemoteCandidate(candidate, mid));
