@@ -18,7 +18,7 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
-import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +41,7 @@ class ForwardedForTest {
 
     private final EventLoopGroup group = new NioEventLoopGroup(1);
     private final BlockingQueue<InetSocketAddress> seen = new ArrayBlockingQueue<>(4);
-    private NetherNetHTTPSignaling signaling;
+    private NetherNetHTTPServerSignaling signaling;
 
     @AfterEach
     void tearDown() {
@@ -57,8 +57,8 @@ class ForwardedForTest {
             port = probe.getLocalPort();
         }
 
-        signaling = new NetherNetHTTPSignaling.Builder()
-                .setIdentity(ServerIdentity.generate("example.test"))
+        signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
                 .setTrustedProxies(trustedProxies)
                 .setMotdProvider((host, remoteAddress) -> {
                     seen.offer(remoteAddress);

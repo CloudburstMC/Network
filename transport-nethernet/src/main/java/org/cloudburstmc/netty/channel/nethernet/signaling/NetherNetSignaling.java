@@ -38,13 +38,24 @@ public interface NetherNetSignaling extends AutoCloseable {
     }
 
     /**
-     * Sends a full SDP message with all candidates to the remote peer
-     * TODO Find a better name
+     * Sends a complete session description, every gathered candidate included, to the remote peer.
+     * This is how a description travels when {@link #usesTrickleIce} is false, on either side.
      *
      * @param targetNetworkId The Network ID of the destination (String to support Realms).
-     * @param sdp             The full SDP message with all candidates.
+     * @param sdp             The complete description.
      */
-    default void sendFullSdp(String targetNetworkId, String sdp) {
+    default void sendDescription(String targetNetworkId, String sdp) {
+    }
+
+    /**
+     * Whether this signaling delivers ICE candidates one by one as they are gathered. Signaling
+     * that cannot, such as a single HTTP exchange, receives one {@link #sendDescription} once
+     * gathering is complete and no candidate signals at all.
+     *
+     * @return true if candidates are trickled as they are gathered
+     */
+    default boolean usesTrickleIce() {
+        return true;
     }
 
     /**

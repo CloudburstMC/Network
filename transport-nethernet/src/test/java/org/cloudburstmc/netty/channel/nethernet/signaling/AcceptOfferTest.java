@@ -18,7 +18,7 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
-import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -38,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AcceptOfferTest {
 
     private final EventLoopGroup group = new NioEventLoopGroup(1);
-    private NetherNetHTTPSignaling signaling;
+    private NetherNetHTTPServerSignaling signaling;
 
     @AfterEach
     void tearDown() {
@@ -48,12 +48,12 @@ class AcceptOfferTest {
         group.shutdownGracefully();
     }
 
-    private NetherNetHTTPSignaling build(boolean serveHttp, boolean allow) throws Exception {
-        signaling = new NetherNetHTTPSignaling.Builder()
-                .setIdentity(ServerIdentity.generate("example.test"))
+    private NetherNetHTTPServerSignaling build(boolean serveHttp, boolean allow) throws Exception {
+        signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
                 .setTokenTrust(TokenTrust.ANY)
                 .setServeHttp(serveHttp)
-                .setPlayerFilter((host, player) -> allow ? null : NetherNetHTTPSignaling.JoinRefusal.REJECTED)
+                .setPlayerFilter((host, player) -> allow ? null : NetherNetHTTPServerSignaling.JoinRefusal.REJECTED)
                 .build();
         signaling.setNewConnectionHandler((id, networkId, payload, address, player) -> { });
         return signaling;
@@ -78,7 +78,7 @@ class AcceptOfferTest {
 
     @Test
     void answersAnOfferHandedInFromOutside() throws Exception {
-        NetherNetHTTPSignaling s = build(false, true);
+        NetherNetHTTPServerSignaling s = build(false, true);
         s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
 
         CompletableFuture<String> answer =
@@ -86,34 +86,34 @@ class AcceptOfferTest {
         // Nothing produced an answer yet, so it is still pending rather than failed
         assertFalse(answer.isDone());
 
-        s.sendFullSdp("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n");
+        s.sendDescription("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n");
         assertTrue(answer.get(10, TimeUnit.SECONDS).contains("m=application"));
     }
 
     @Test
     void reportsWhyAnOfferWasRejected() throws Exception {
-        NetherNetHTTPSignaling s = build(false, false);
+        NetherNetHTTPServerSignaling s = build(false, false);
         s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
 
         ExecutionException e = assertThrows(ExecutionException.class,
                 () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null).get(10, TimeUnit.SECONDS));
 
-        NetherNetHTTPSignaling.OfferRejected rejected =
-                assertInstanceOf(NetherNetHTTPSignaling.OfferRejected.class, e.getCause());
-        assertEquals(NetherNetHTTPSignaling.JoinRefusal.REJECTED, rejected.refusal());
+        NetherNetHTTPServerSignaling.OfferRejected rejected =
+                assertInstanceOf(NetherNetHTTPServerSignaling.OfferRejected.class, e.getCause());
+        assertEquals(NetherNetHTTPServerSignaling.JoinRefusal.REJECTED, rejected.refusal());
     }
 
     @Test
     void reportsAnUnusableIdentity() throws Exception {
-        NetherNetHTTPSignaling s = build(false, true);
+        NetherNetHTTPServerSignaling s = build(false, true);
         s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
 
         ExecutionException e = assertThrows(ExecutionException.class,
                 () -> s.acceptOffer("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n", null, null)
                         .get(10, TimeUnit.SECONDS));
 
-        NetherNetHTTPSignaling.OfferRejected rejected =
-                assertInstanceOf(NetherNetHTTPSignaling.OfferRejected.class, e.getCause());
-        assertEquals(NetherNetHTTPSignaling.JoinRefusal.INVALID_IDENTITY, rejected.refusal());
+        NetherNetHTTPServerSignaling.OfferRejected rejected =
+                assertInstanceOf(NetherNetHTTPServerSignaling.OfferRejected.class, e.getCause());
+        assertEquals(NetherNetHTTPServerSignaling.JoinRefusal.INVALID_IDENTITY, rejected.refusal());
     }
 }

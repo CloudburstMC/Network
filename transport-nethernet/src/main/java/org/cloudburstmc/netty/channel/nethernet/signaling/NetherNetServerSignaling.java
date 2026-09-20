@@ -20,7 +20,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.jspecify.annotations.Nullable;
 import com.google.gson.JsonObject;
-import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import io.netty.channel.EventLoop;
 
 import java.net.ConnectException;
@@ -95,7 +95,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      *
      * @return The server identity, or null if this signaling has none
      */
-    default ServerIdentity serverIdentity() {
+    default OperatorIdentity serverIdentity() {
         return null;
     }
 
@@ -105,15 +105,6 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * @return true if ICE should be pinned to the bound address
      */
     default boolean allowsIceOnLocalPort() {
-        return true;
-    }
-
-    /**
-     * Whether this signaling can deliver ICE candidates incrementally after the answer has been sent.
-     *
-     * @return true if candidates are trickled as they are gathered
-     */
-    default boolean usesTrickleIce() {
         return true;
     }
 

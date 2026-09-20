@@ -16,7 +16,7 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
-import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-class NetherNetHTTPSignalingBuilderTest {
+class NetherNetHTTPServerSignalingBuilderTest {
 
     /** Throwaway key from {@code openssl ecparam -name secp384r1 -genkey -noout}. Never deploy it. */
     private static final String PEM =
@@ -53,7 +53,7 @@ class NetherNetHTTPSignalingBuilderTest {
 
     @Test
     void acceptsAPemIdentity(@TempDir Path dir) throws Exception {
-        NetherNetHTTPSignaling signaling = new NetherNetHTTPSignaling.Builder()
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
                 .setIdentityPem(pem(dir), "example.test")
                 .build();
 
@@ -62,8 +62,8 @@ class NetherNetHTTPSignalingBuilderTest {
 
     @Test
     void acceptsAPrebuiltIdentity(@TempDir Path dir) throws Exception {
-        ServerIdentity identity = ServerIdentity.generate("example.test");
-        NetherNetHTTPSignaling signaling = new NetherNetHTTPSignaling.Builder()
+        OperatorIdentity identity = OperatorIdentity.generate("example.test");
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(identity)
                 .build();
 
@@ -74,8 +74,8 @@ class NetherNetHTTPSignalingBuilderTest {
     void reportsWhatItWillDoWithIce(@TempDir Path dir) throws Exception {
         NetherNetSignaling.IceServerInfo turn =
                 new NetherNetSignaling.IceServerInfo("user", "secret", List.of("turn:turn.example:3478"));
-        NetherNetHTTPSignaling signaling = new NetherNetHTTPSignaling.Builder()
-                .setIdentity(ServerIdentity.generate("example.test"))
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
                 .setIceOnLocalPort(false)
                 .setIceServers(List.of(turn))
                 .build();
@@ -90,8 +90,8 @@ class NetherNetHTTPSignalingBuilderTest {
 
     @Test
     void defaultsToAnnouncingEverythingItGathers() throws Exception {
-        NetherNetHTTPSignaling signaling = new NetherNetHTTPSignaling.Builder()
-                .setIdentity(ServerIdentity.generate("example.test"))
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
                 .setAdvertisedAddresses(null)
                 .setIceServers(null)
                 .build();
@@ -105,8 +105,8 @@ class NetherNetHTTPSignalingBuilderTest {
 
     @Test
     void takesNoAdvertisementData() throws Exception {
-        NetherNetHTTPSignaling signaling = new NetherNetHTTPSignaling.Builder()
-                .setIdentity(ServerIdentity.generate("example.test"))
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
                 .build();
 
         // The MOTD comes from the provider on every request, so a pushed one is ignored
@@ -116,8 +116,8 @@ class NetherNetHTTPSignalingBuilderTest {
 
     @Test
     void refusesToBindSomethingThatIsNotAnInternetAddress() throws Exception {
-        NetherNetHTTPSignaling signaling = new NetherNetHTTPSignaling.Builder()
-                .setIdentity(ServerIdentity.generate("example.test"))
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
                 .build();
 
         assertThrows(IllegalArgumentException.class,
@@ -132,20 +132,20 @@ class NetherNetHTTPSignalingBuilderTest {
         File missing = dir.resolve("nothing.p12").toFile();
 
         assertThrows(IllegalArgumentException.class,
-                () -> new NetherNetHTTPSignaling.Builder().setHttpsKeystore(missing));
+                () -> new NetherNetHTTPServerSignaling.Builder().setHttpsKeystore(missing));
         assertThrows(IllegalArgumentException.class,
-                () -> new NetherNetHTTPSignaling.Builder().setHttpsKeystore(missing, "password"));
+                () -> new NetherNetHTTPServerSignaling.Builder().setHttpsKeystore(missing, "password"));
         assertThrows(IllegalArgumentException.class,
-                () -> new NetherNetHTTPSignaling.Builder().setHttpsPem(missing, missing));
+                () -> new NetherNetHTTPServerSignaling.Builder().setHttpsPem(missing, missing));
         assertThrows(IllegalArgumentException.class,
-                () -> new NetherNetHTTPSignaling.Builder().setHttpsPem(missing, missing, "password"));
+                () -> new NetherNetHTTPServerSignaling.Builder().setHttpsPem(missing, missing, "password"));
     }
 
     private static final String SDP = "v=0\r\na=candidate:1 1 udp 2130706431 203.0.113.10 19191 typ host\r\n";
 
     @Test
     void refusesToBuildWithoutAnIdentity() {
-        assertThrows(IllegalStateException.class, () -> new NetherNetHTTPSignaling.Builder().build());
+        assertThrows(IllegalStateException.class, () -> new NetherNetHTTPServerSignaling.Builder().build());
     }
 
     @Test
@@ -154,6 +154,6 @@ class NetherNetHTTPSignalingBuilderTest {
         Files.writeString(unreadable.toPath(), "not a pem at all\n");
 
         assertThrows(IllegalArgumentException.class,
-                () -> new NetherNetHTTPSignaling.Builder().setIdentityPem(unreadable, "example.test"));
+                () -> new NetherNetHTTPServerSignaling.Builder().setIdentityPem(unreadable, "example.test"));
     }
 }

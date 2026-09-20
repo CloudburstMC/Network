@@ -26,7 +26,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
-import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import io.netty.channel.AbstractServerChannel;
 import io.netty.channel.ChannelConfig;
@@ -54,7 +54,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private InetSocketAddress localAddress;
     private volatile boolean open = true;
 
-    private ServerIdentity serverIdentity;
+    private OperatorIdentity serverIdentity;
 
     /**
      * Creates a NetherNetServerChannel.
@@ -69,7 +69,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         this.serverIdentity = signaling.serverIdentity();
         if (this.serverIdentity == null) {
             try {
-                this.serverIdentity = ServerIdentity.generate("self");
+                this.serverIdentity = OperatorIdentity.generate("self");
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -233,7 +233,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         if (signaling.usesTrickleIce()) {
             log.trace("Sending Answer SDP for {}", connectionId);
             signaling.sendSignal(remoteNetworkId, NetherNetConstants.buildSignalConnectResponse(connectionId,
-                    serverIdentity.augmentAnswer(pc.localDescription())));
+                    serverIdentity.withAssertion(pc.localDescription())));
         }
     }
 
@@ -389,7 +389,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
             log.trace("Sending full SDP (with gathered candidates) for {}", connectionId);
             try {
-                signaling.sendFullSdp(remoteNetworkId, serverIdentity.augmentAnswer(local));
+                signaling.sendDescription(remoteNetworkId, serverIdentity.withAssertion(local));
             } catch (Exception e) {
                 log.error("Failed to sign the full SDP for {}", connectionId, e);
             }

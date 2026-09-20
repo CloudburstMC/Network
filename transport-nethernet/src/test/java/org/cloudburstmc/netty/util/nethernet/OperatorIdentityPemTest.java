@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Throwaway keys from {@code openssl ecparam -name secp384r1 -genkey -noout}. Never deploy them. */
-class ServerIdentityPemTest {
+class OperatorIdentityPemTest {
 
     private static final String SEC1 =
             "-----BEGIN EC PRIVATE KEY-----\n" +
@@ -81,20 +81,20 @@ class ServerIdentityPemTest {
 
     @Test
     void readsTheSec1KeyOpenSslWrites(@TempDir Path dir) throws Exception {
-        ServerIdentity identity = ServerIdentity.fromPem(write(dir, "sec1.pem", SEC1), "example.test");
+        OperatorIdentity identity = OperatorIdentity.fromPem(write(dir, "sec1.pem", SEC1), "example.test");
         assertEquals(PUBLIC_KEY, publicKeyOf(identity));
     }
 
     @Test
     void readsThePkcs8FormOfTheSameKey(@TempDir Path dir) throws Exception {
-        ServerIdentity identity = ServerIdentity.fromPem(write(dir, "pkcs8.pem", PKCS8), "example.test");
+        OperatorIdentity identity = OperatorIdentity.fromPem(write(dir, "pkcs8.pem", PKCS8), "example.test");
         assertEquals(PUBLIC_KEY, publicKeyOf(identity));
     }
 
     @Test
     void signsAnAnswerWithTheLoadedKey(@TempDir Path dir) throws Exception {
-        ServerIdentity identity = ServerIdentity.fromPem(write(dir, "sec1.pem", SEC1), "example.test");
-        String augmented = identity.augmentAnswer(ANSWER);
+        OperatorIdentity identity = OperatorIdentity.fromPem(write(dir, "sec1.pem", SEC1), "example.test");
+        String augmented = identity.withAssertion(ANSWER);
 
         assertTrue(augmented.contains("a=identity:"));
         assertTrue(augmented.indexOf("a=identity:") < augmented.indexOf("m=application"));
@@ -104,15 +104,15 @@ class ServerIdentityPemTest {
     void rejectsAKeyWithoutItsPublicPoint(@TempDir Path dir) throws Exception {
         File file = write(dir, "nopub.pem", NO_PUBLIC);
         GeneralSecurityException e = assertThrows(GeneralSecurityException.class,
-                () -> ServerIdentity.fromPem(file, "example.test"));
+                () -> OperatorIdentity.fromPem(file, "example.test"));
         assertTrue(e.getMessage().contains("does not carry its public key"), e.getMessage());
     }
 
     @Test
     void namesTheIdentityWithoutReplacingTheKey(@TempDir Path dir) throws Exception {
         // The domain is display text, so overriding it must not change the key clients pinned
-        ServerIdentity fromCert = ServerIdentity.fromPem(write(dir, "sec1.pem", SEC1), "from.cert");
-        ServerIdentity renamed = ServerIdentity.fromPem(write(dir, "sec1.pem", SEC1), "renamed.test");
+        OperatorIdentity fromCert = OperatorIdentity.fromPem(write(dir, "sec1.pem", SEC1), "from.cert");
+        OperatorIdentity renamed = OperatorIdentity.fromPem(write(dir, "sec1.pem", SEC1), "renamed.test");
 
         assertEquals(publicKeyOf(fromCert), publicKeyOf(renamed));
     }
@@ -121,19 +121,19 @@ class ServerIdentityPemTest {
     void createsAKeyOnFirstUseAndKeepsIt(@TempDir Path dir) throws Exception {
         File file = dir.resolve("keys/identity.pem").toFile();
 
-        ServerIdentity created = ServerIdentity.fromPemOrCreate(file, "example.test");
+        OperatorIdentity created = OperatorIdentity.fromPemOrCreate(file, "example.test");
         assertTrue(file.isFile());
         assertTrue(Files.readString(file.toPath()).startsWith("-----BEGIN EC PRIVATE KEY-----"));
 
         // A second start must reuse it, replacing it would re-prompt every player
-        ServerIdentity reloaded = ServerIdentity.fromPemOrCreate(file, "example.test");
+        OperatorIdentity reloaded = OperatorIdentity.fromPemOrCreate(file, "example.test");
         assertEquals(publicKeyOf(created), publicKeyOf(reloaded));
     }
 
     @Test
     void createsTheKeyReadableOnlyByItsOwner(@TempDir Path dir) throws Exception {
         File file = dir.resolve("identity.pem").toFile();
-        ServerIdentity.fromPemOrCreate(file, "example.test");
+        OperatorIdentity.fromPemOrCreate(file, "example.test");
 
         if (Files.getFileStore(dir).supportsFileAttributeView(PosixFileAttributeView.class)) {
             assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file.toPath())));
@@ -143,10 +143,10 @@ class ServerIdentityPemTest {
     @Test
     void writesAKeyItCanReadBack(@TempDir Path dir) throws Exception {
         File file = dir.resolve("identity.pem").toFile();
-        ServerIdentity created = ServerIdentity.fromPemOrCreate(file, "example.test");
+        OperatorIdentity created = OperatorIdentity.fromPemOrCreate(file, "example.test");
 
         // Round trips through the reader, which requires the embedded public point
-        assertEquals(publicKeyOf(created), publicKeyOf(ServerIdentity.fromPem(file, "example.test")));
+        assertEquals(publicKeyOf(created), publicKeyOf(OperatorIdentity.fromPem(file, "example.test")));
     }
 
     /** Wraps raw DER in a PEM block, to drive the parser with bytes openssl would never write. */
@@ -160,7 +160,7 @@ class ServerIdentityPemTest {
 
     private static GeneralSecurityException refused(Path pem) {
         return assertThrows(GeneralSecurityException.class,
-                () -> ServerIdentity.fromPem(pem.toFile(), "example.test"));
+                () -> OperatorIdentity.fromPem(pem.toFile(), "example.test"));
     }
 
     @Test
@@ -200,7 +200,7 @@ class ServerIdentityPemTest {
         Files.writeString(pem, "# just a comment\nand some text\n");
 
         GeneralSecurityException refused = assertThrows(GeneralSecurityException.class,
-                () -> ServerIdentity.fromPem(pem.toFile(), "example.test"));
+                () -> OperatorIdentity.fromPem(pem.toFile(), "example.test"));
         assertTrue(refused.getMessage().contains("No PEM block"));
     }
 
@@ -215,7 +215,7 @@ class ServerIdentityPemTest {
                         .getPrivate().getEncoded())
                 + "\n-----END PRIVATE KEY-----\n");
 
-        assertThrows(GeneralSecurityException.class, () -> ServerIdentity.fromPem(pem.toFile(), "example.test"));
+        assertThrows(GeneralSecurityException.class, () -> OperatorIdentity.fromPem(pem.toFile(), "example.test"));
     }
 
     @Test
@@ -227,17 +227,17 @@ class ServerIdentityPemTest {
         Files.createSymbolicLink(link, real);
 
         IOException refused = assertThrows(IOException.class,
-                () -> ServerIdentity.fromPemOrCreate(link.toFile(), "example.test"));
+                () -> OperatorIdentity.fromPemOrCreate(link.toFile(), "example.test"));
         assertTrue(refused.getMessage().contains("symbolic link"));
     }
 
     @Test
     void tightensThePermissionsOfAKeyItFindsAlready(@TempDir Path dir) throws Exception {
         Path pem = dir.resolve("key.pem");
-        ServerIdentity.fromPemOrCreate(pem.toFile(), "example.test");
+        OperatorIdentity.fromPemOrCreate(pem.toFile(), "example.test");
         Files.setPosixFilePermissions(pem, PosixFilePermissions.fromString("rw-rw-rw-"));
 
-        ServerIdentity.fromPemOrCreate(pem.toFile(), "example.test");
+        OperatorIdentity.fromPemOrCreate(pem.toFile(), "example.test");
 
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(pem)),
                 "a key left readable by everyone is tightened on the next start");
@@ -246,14 +246,14 @@ class ServerIdentityPemTest {
     @Test
     void rejectsSomethingThatIsNotAPem(@TempDir Path dir) throws Exception {
         File file = write(dir, "junk.pem", "not a pem at all\n");
-        assertThrows(GeneralSecurityException.class, () -> ServerIdentity.fromPem(file, "example.test"));
+        assertThrows(GeneralSecurityException.class, () -> OperatorIdentity.fromPem(file, "example.test"));
     }
 
     /**
      * The token's cpk claim is the X.509 encoding of the public key the loader derived.
      */
-    private String publicKeyOf(ServerIdentity identity) throws Exception {
-        String line = identity.augmentAnswer(ANSWER).lines()
+    private String publicKeyOf(OperatorIdentity identity) throws Exception {
+        String line = identity.withAssertion(ANSWER).lines()
                 .filter(l -> l.startsWith("a=identity:")).findFirst().orElseThrow();
         Identity identityValue = Identity.fromBase64(line.substring("a=identity:".length()));
         String payload = identityValue.assertion().token().split("\\.")[1];

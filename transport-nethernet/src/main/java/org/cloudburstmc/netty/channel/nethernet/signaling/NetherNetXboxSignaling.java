@@ -84,9 +84,9 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
             switch (type) {
                 case NetherNetConstants.XBOX_SIGNAL_NOT_FOUND -> {
                     log.debug("Peer Not Found: {}", text);
-                    if (notFoundHandler != null) {
+                    if (failureHandler != null) {
                         String reason = json.has("Message") ? json.get("Message").getAsString() : text;
-                        notFoundHandler.onNotFound(reason);
+                        failureHandler.onFailure(reason);
                     }
                 }
                 case NetherNetConstants.XBOX_SIGNAL_SIGNAL -> {

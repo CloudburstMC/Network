@@ -19,9 +19,9 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetHTTPSignaling.JoinRefusal;
+import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetHTTPServerSignaling.JoinRefusal;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -61,7 +61,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class HttpSignalingRequestTest {
 
     private final EventLoopGroup group = new NioEventLoopGroup(1);
-    private NetherNetHTTPSignaling signaling;
+    private NetherNetHTTPServerSignaling signaling;
     private int port;
 
     @AfterEach
@@ -72,21 +72,21 @@ class HttpSignalingRequestTest {
         this.group.shutdownGracefully();
     }
 
-    private NetherNetHTTPSignaling.Builder builder() throws Exception {
-        return new NetherNetHTTPSignaling.Builder()
-                .setIdentity(ServerIdentity.generate("example.test"))
+    private NetherNetHTTPServerSignaling.Builder builder() throws Exception {
+        return new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
                 .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY);
     }
 
     /** Serves TLS from a certificate no client trusts, which is all a scheme check needs. */
-    private NetherNetHTTPSignaling.Builder tlsBuilder() throws Exception {
+    private NetherNetHTTPServerSignaling.Builder tlsBuilder() throws Exception {
         SelfSignedCertificate certificate = new SelfSignedCertificate("example.test");
         return this.builder().setSslContext(
                 SslContextBuilder.forServer(certificate.certificate(), certificate.privateKey()).build());
     }
 
-    private void start(NetherNetHTTPSignaling.Builder builder) throws Exception {
+    private void start(NetherNetHTTPServerSignaling.Builder builder) throws Exception {
         try (ServerSocket probe = new ServerSocket(0)) {
             this.port = probe.getLocalPort();
         }
@@ -210,7 +210,7 @@ class HttpSignalingRequestTest {
     void answersAnOfferTheTransportAcceptsFor() throws Exception {
         this.start(this.builder());
         this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
-                this.signaling.sendFullSdp(networkId, ANSWER));
+                this.signaling.sendDescription(networkId, ANSWER));
 
         HttpResponse<String> response = this.send("POST", "/v1/join/42", TestOffers.selfSigned());
 
@@ -224,7 +224,7 @@ class HttpSignalingRequestTest {
         this.start(this.builder());
 
         // A late or stray answer must not disturb the endpoint
-        this.signaling.sendFullSdp("999", ANSWER);
+        this.signaling.sendDescription("999", ANSWER);
 
         assertEquals(200, this.status("GET", "/v1/join", null));
     }
@@ -270,7 +270,7 @@ class HttpSignalingRequestTest {
         // client waits forever for a reply that cannot come.
         this.start(this.builder());
         this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
-                this.signaling.sendFullSdp(networkId, ANSWER));
+                this.signaling.sendDescription(networkId, ANSWER));
 
         try (Socket socket = new Socket("127.0.0.1", this.port)) {
             socket.setSoTimeout(10_000);
@@ -422,7 +422,7 @@ class HttpSignalingRequestTest {
     /** The refusal a turned away offer carries, for a future nobody is going to wait on. */
     private static JoinRefusal refusalOf(java.util.concurrent.CompletableFuture<String> refused) {
         Throwable cause = assertThrows(java.util.concurrent.ExecutionException.class, refused::get).getCause();
-        return ((NetherNetHTTPSignaling.OfferRejected) cause).refusal();
+        return ((NetherNetHTTPServerSignaling.OfferRejected) cause).refusal();
     }
 
     /** Retries until the allowance frees up, since a peer closing is not instant on this side. */
@@ -451,7 +451,7 @@ class HttpSignalingRequestTest {
         assertTrue(duplicate.isCompletedExceptionally(), "a duplicate cannot replace a pending answer");
         assertEquals(JoinRefusal.DUPLICATE, refusalOf(duplicate), "and it is not refused as a full host");
         assertEquals(1, created.get(), "only the original offer may allocate a peer");
-        this.signaling.sendFullSdp("same-id", ANSWER);
+        this.signaling.sendDescription("same-id", ANSWER);
         assertTrue(first.get(2, java.util.concurrent.TimeUnit.SECONDS).startsWith("v=0"));
     }
 
@@ -475,7 +475,7 @@ class HttpSignalingRequestTest {
         var b = second.get(5, java.util.concurrent.TimeUnit.SECONDS);
         assertEquals(1, created.get(), "concurrent duplicates must not allocate a second peer");
         assertTrue(a.isCompletedExceptionally() ^ b.isCompletedExceptionally());
-        this.signaling.sendFullSdp("same-id", ANSWER);
+        this.signaling.sendDescription("same-id", ANSWER);
         var accepted = a.isCompletedExceptionally() ? b : a;
         assertTrue(accepted.get(2, java.util.concurrent.TimeUnit.SECONDS).startsWith("v=0"));
     }

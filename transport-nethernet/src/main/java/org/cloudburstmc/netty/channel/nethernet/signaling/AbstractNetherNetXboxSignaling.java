@@ -75,7 +75,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     protected final Map<String, SignalHandler> handlers = new ConcurrentHashMap<>();
     protected NetherNetServerSignaling.NewConnectionHandler newConnectionHandler;
-    protected volatile NetherNetClientSignaling.NotFoundHandler notFoundHandler;
+    protected volatile NetherNetClientSignaling.FailureHandler failureHandler;
 
     protected AbstractNetherNetXboxSignaling(String localNetworkId, String xboxToken, URI uri) {
         this.localNetworkId = localNetworkId;
@@ -194,8 +194,8 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     @Override
-    public void setNotFoundHandler(NotFoundHandler handler) {
-        this.notFoundHandler = handler;
+    public void setFailureHandler(FailureHandler handler) {
+        this.failureHandler = handler;
     }
 
     @Override
