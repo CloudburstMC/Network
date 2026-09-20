@@ -25,7 +25,7 @@ dependencies {
 }
 ```
 
-The classifiers are `windows-x86_64`, `windows-aarch64`, `macos-x86_64`, `macos-arm64`, plus `x86_64` and `aarch64` for Linux. Android ships from its own `libdatachannel-java-android` module.
+The classifiers are `linux-x86_64`, `linux-aarch64`, `windows-x86_64`, `windows-aarch64`, `macos-x86_64` and `macos-arm64`. Android ships from its own `libdatachannel-java-android` module.
 
 > [!WARNING]
 > Every classifier of one operating system carries its native under the same path, so putting several of them on one classpath resolves to whichever comes first. Use `arch-detect` instead of listing them.

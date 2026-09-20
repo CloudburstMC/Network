@@ -14,7 +14,7 @@ dependencies {
     testImplementation(libs.bundles.junit)
     testImplementation(project(":transport-raknet"))
     testRuntimeOnly(libs.junit.platform.launcher)
-    testRuntimeOnly(variantOf(libs.libdatachannel.java) { classifier("x86_64") })
+    testRuntimeOnly(variantOf(libs.libdatachannel.java) { classifier("linux-x86_64") })
 }
 
 tasks.jar {
