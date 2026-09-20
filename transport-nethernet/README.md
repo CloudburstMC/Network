@@ -3,25 +3,32 @@
 ## Usage
 
 > [!IMPORTANT]
-> This library uses [libdatachannel-java](https://github.com/opencollab-incubator/libdatachannel-java) and needs its platform-specific native library at runtime. The main artifact contains no natives, so you have to add the classifier(s) for the platforms you ship yourself.
+> This library uses [libdatachannel-java](https://github.com/opencollab-incubator/libdatachannel-java) and needs its platform-specific native library at runtime. The main artifact contains no natives, so you have to add them yourself.
+
+For a build that ships to more than one platform, add `libdatachannel-java-arch-detect`. It bundles every architecture and selects the matching one at runtime.
 
 ```kotlin
-val nativePlatforms = listOf(
-    "windows-x86_64",
-    "windows-aarch64",
-    "x86_64",        // linux x86_64
-    "aarch64",       // linux aarch64
-    "macos-x86_64",
-    "macos-arm64"
-)
-
 dependencies {
     implementation("org.cloudburstmc.netty:netty-transport-nethernet:$netherNetVersion")
-    nativePlatforms.forEach { platform ->
-        runtimeOnly("dev.opencollab:libdatachannel-java:$libdatachannelVersion:$platform")
-    }
+    implementation("dev.opencollab:libdatachannel-java-arch-detect:$libdatachannelVersion")
 }
 ```
+
+Call `LibDataChannelArchDetect.initialize()` during startup. The native is loaded on first use, and the lookup path has to be set before anything touches libdatachannel.
+
+For a separate artifact per platform, take the one matching classifier instead and keep the jar small:
+
+```kotlin
+dependencies {
+    implementation("org.cloudburstmc.netty:netty-transport-nethernet:$netherNetVersion")
+    runtimeOnly("dev.opencollab:libdatachannel-java:$libdatachannelVersion:windows-aarch64")
+}
+```
+
+The classifiers are `windows-x86_64`, `windows-aarch64`, `macos-x86_64`, `macos-arm64`, plus `x86_64` and `aarch64` for Linux. Android ships from its own `libdatachannel-java-android` module.
+
+> [!WARNING]
+> Every classifier of one operating system carries its native under the same path, so putting several of them on one classpath resolves to whichever comes first. Use `arch-detect` instead of listing them.
 
 ### Examples
 
