@@ -83,7 +83,13 @@ class AcceptOfferTest {
 
         CompletableFuture<String> answer =
                 s.acceptOffer("42", TestOffers.selfSigned(), new InetSocketAddress("203.0.113.7", 1234), null);
+        // Validation runs off the loop, so the join is registered a moment later
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (s.pendingJoins() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
         // Nothing produced an answer yet, so it is still pending rather than failed
+        assertEquals(1, s.pendingJoins());
         assertFalse(answer.isDone());
 
         s.sendDescription("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n");
@@ -115,5 +121,23 @@ class AcceptOfferTest {
         NetherNetHTTPServerSignaling.OfferRejected rejected =
                 assertInstanceOf(NetherNetHTTPServerSignaling.OfferRejected.class, e.getCause());
         assertEquals(NetherNetHTTPServerSignaling.JoinRefusal.INVALID_IDENTITY, rejected.refusal());
+    }
+
+    @Test
+    void failsTheJoinAsSoonAsItsChildCloses() throws Exception {
+        NetherNetHTTPServerSignaling s = build(false, true);
+        s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
+        // A child that dies during setup closes before answering, which the channel reports by
+        // removing its handler. The join must not sit out the answer timeout
+        s.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
+                s.removeSignalHandler(connectionId));
+
+        ExecutionException e = assertThrows(ExecutionException.class,
+                () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null).get(5, TimeUnit.SECONDS));
+
+        NetherNetHTTPServerSignaling.OfferRejected rejected =
+                assertInstanceOf(NetherNetHTTPServerSignaling.OfferRejected.class, e.getCause());
+        assertEquals(NetherNetHTTPServerSignaling.JoinRefusal.ERROR, rejected.refusal());
+        assertEquals(0, s.pendingJoins());
     }
 }

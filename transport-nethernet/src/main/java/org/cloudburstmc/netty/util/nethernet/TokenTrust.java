@@ -36,7 +36,17 @@ public interface TokenTrust {
      * Verifies the token against Minecraft's authorization service, which is what a retail client
      * presents. This is the default.
      */
-    TokenTrust MINECRAFT_AUTH = identity -> IdentityUtils.validateIdentity(identity).getJwtClaims();
+    TokenTrust MINECRAFT_AUTH = new TokenTrust() {
+        @Override
+        public JwtClaims claims(Identity identity) throws Exception {
+            return IdentityUtils.validateIdentity(identity).getJwtClaims();
+        }
+
+        @Override
+        public void prepare() {
+            IdentityUtils.prefetchKeys();
+        }
+    };
 
     /**
      * Reads the claims without checking who signed the token, for peers that cannot present a
@@ -56,6 +66,13 @@ public interface TokenTrust {
      * @throws Exception If the token is not trusted
      */
     JwtClaims claims(Identity identity) throws Exception;
+
+    /**
+     * Does whatever makes the first {@link #claims} call fast, such as fetching keys. Called once
+     * when signaling binds, off the event loop, and expected to swallow its own failures.
+     */
+    default void prepare() {
+    }
 
     /** Holder so the shared consumer is built once. */
     final class Unverified {

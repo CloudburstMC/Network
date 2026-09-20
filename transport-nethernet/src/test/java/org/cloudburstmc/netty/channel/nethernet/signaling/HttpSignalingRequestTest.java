@@ -46,6 +46,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -448,8 +449,12 @@ class HttpSignalingRequestTest {
         String offer = TestOffers.selfSigned();
         var first = this.signaling.acceptOffer("same-id", offer, null, "example.test");
         var duplicate = this.signaling.acceptOffer("same-id", offer, null, "example.test");
-        assertTrue(duplicate.isCompletedExceptionally(), "a duplicate cannot replace a pending answer");
+        // Offers are validated and admitted in order, off the caller's thread, so the second is
+        // the one refused, once it has been looked at
+        assertThrows(ExecutionException.class, () -> duplicate.get(5, java.util.concurrent.TimeUnit.SECONDS),
+                "a duplicate cannot replace a pending answer");
         assertEquals(JoinRefusal.DUPLICATE, refusalOf(duplicate), "and it is not refused as a full host");
+        assertFalse(first.isDone(), "the original offer keeps its pending answer");
         assertEquals(1, created.get(), "only the original offer may allocate a peer");
         this.signaling.sendDescription("same-id", ANSWER);
         assertTrue(first.get(2, java.util.concurrent.TimeUnit.SECONDS).startsWith("v=0"));
@@ -457,24 +462,25 @@ class HttpSignalingRequestTest {
 
     @Test
     void refusesConcurrentDuplicateOffersBeforeCreatingPeers() throws Exception {
-        var bothValidated = new java.util.concurrent.CyclicBarrier(2);
-        this.start(this.builder().setMaxPendingJoins(2).setPlayerFilter((host, player) -> {
-            try { bothValidated.await(3, java.util.concurrent.TimeUnit.SECONDS); }
-            catch (Exception failure) { throw new IllegalStateException(failure); }
-            return null;
-        }));
+        this.start(this.builder().setMaxPendingJoins(2));
         var created = new java.util.concurrent.atomic.AtomicInteger();
         this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
                 created.incrementAndGet());
         String offer = TestOffers.selfSigned();
+        // Two callers at once: admission is serialized on the loop, so exactly one of them wins
         var first = java.util.concurrent.CompletableFuture.supplyAsync(() ->
                 this.signaling.acceptOffer("same-id", offer, null, "example.test"));
         var second = java.util.concurrent.CompletableFuture.supplyAsync(() ->
                 this.signaling.acceptOffer("same-id", offer, null, "example.test"));
         var a = first.get(5, java.util.concurrent.TimeUnit.SECONDS);
         var b = second.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (!(a.isCompletedExceptionally() || b.isCompletedExceptionally()) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertTrue(a.isCompletedExceptionally() ^ b.isCompletedExceptionally(), "exactly one is refused");
+        assertEquals(JoinRefusal.DUPLICATE, refusalOf(a.isCompletedExceptionally() ? a : b));
         assertEquals(1, created.get(), "concurrent duplicates must not allocate a second peer");
-        assertTrue(a.isCompletedExceptionally() ^ b.isCompletedExceptionally());
         this.signaling.sendDescription("same-id", ANSWER);
         var accepted = a.isCompletedExceptionally() ? b : a;
         assertTrue(accepted.get(2, java.util.concurrent.TimeUnit.SECONDS).startsWith("v=0"));
