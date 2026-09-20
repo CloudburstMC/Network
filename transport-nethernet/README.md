@@ -14,7 +14,7 @@ dependencies {
 }
 ```
 
-Call `LibDataChannelArchDetect.initialize()` during startup. The native is loaded on first use, and the lookup path has to be set before anything touches libdatachannel.
+The native is loaded on first use, and the bundle's per architecture layout is found without any setup code.
 
 For a separate artifact per platform, take the one matching classifier instead and keep the jar small:
 
