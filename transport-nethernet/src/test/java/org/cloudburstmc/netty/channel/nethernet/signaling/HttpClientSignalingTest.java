@@ -135,4 +135,15 @@ class HttpClientSignalingTest {
         assertTrue(cause.getMessage().contains(endpoint.toString()), cause.getMessage());
         assertFalse(this.admitted.isDone());
     }
+
+    @Test
+    void aSignalingServesOneConnectionAndSaysSoAfterwards() throws Exception {
+        NetherNetHTTPClientSignaling signaling = new NetherNetHTTPClientSignaling();
+        signaling.close();
+
+        ExecutionException spent = assertThrows(ExecutionException.class,
+                () -> signaling.connect(new InetSocketAddress("127.0.0.1", 1)).get());
+
+        assertInstanceOf(IllegalStateException.class, spent.getCause());
+    }
 }
