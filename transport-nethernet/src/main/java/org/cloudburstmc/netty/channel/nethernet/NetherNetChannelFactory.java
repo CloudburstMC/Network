@@ -47,12 +47,27 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
     }
 
     /**
-     * Creates a NetherNet Client Channel Factory.
+     * Creates a NetherNet Client Channel Factory around one signaling shared by every channel it
+     * makes, which suits signaling that carries many connections at once, such as Xbox Live.
+     * Signaling that serves one connection, such as {@code NetherNetHTTPClientSignaling}, goes
+     * through {@link #client(Supplier)} instead.
      *
      * @param signaling The NetherNetClientSignaling instance for signaling.
      * @return A ChannelFactory for NetherNetClientChannel.
      */
     public static ChannelFactory<NetherNetClientChannel> client(NetherNetClientSignaling signaling) {
         return new NetherNetChannelFactory<>(() -> new NetherNetClientChannel(signaling));
+    }
+
+    /**
+     * Creates a NetherNet Client Channel Factory that gives every channel a signaling of its own,
+     * so a {@code Bootstrap} can be reused for connection after connection.
+     *
+     * @param signaling Makes the signaling for one channel.
+     * @return A ChannelFactory for NetherNetClientChannel.
+     */
+    public static ChannelFactory<NetherNetClientChannel> client(
+            Supplier<? extends NetherNetClientSignaling> signaling) {
+        return new NetherNetChannelFactory<>(() -> new NetherNetClientChannel(signaling.get()));
     }
 }

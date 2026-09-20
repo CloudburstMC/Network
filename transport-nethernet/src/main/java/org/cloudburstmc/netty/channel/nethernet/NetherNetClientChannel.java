@@ -33,6 +33,7 @@ import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelInitSettings;
 import tel.schich.libdatachannel.DataChannelReliability;
 import tel.schich.libdatachannel.GatheringState;
+import tel.schich.libdatachannel.LibDataChannel;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 import tel.schich.libdatachannel.PeerState;
@@ -154,6 +155,15 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
         signaling.setSignalHandler(this.connectionId, this::handleSignal);
 
+        // Loaded here rather than under the first peer, so a missing native fails the connect
+        // with its own cause instead of a handshake that never starts
+        try {
+            LibDataChannel.initialize();
+        } catch (LinkageError e) {
+            failConnect(connectException("The libdatachannel native library is not available", e));
+            return;
+        }
+
         signaling.connect(remoteAddress).thenAcceptAsync(iceServers -> {
             if (handshakeComplete) {
                 return;
@@ -198,11 +208,14 @@ public class NetherNetClientChannel extends NetherNetChannel {
             return;
         }
 
-        // Fail exceptionally once the retries are spent
-        int maxRetries = this.config().getOption(NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS);
-        if (retryCount >= maxRetries) {
+        // Fail once the attempts are spent. Signaling that sends the offer in one piece gets one:
+        // the server would refuse a repeat as a duplicate join while the first is still pending
+        int attempts = retryCount + 1;
+        int maxAttempts = this.config().getOption(NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS);
+        if (attempts >= maxAttempts || !signaling.usesTrickleIce()) {
             connectionFailed(NetherConnectionFailure.HANDSHAKE_TIMEOUT);
-            failConnect(new ConnectException("Connection timed out after " + retryCount + " retries"));
+            failConnect(new ConnectException("Connection timed out after " + attempts
+                    + (attempts == 1 ? " attempt" : " attempts")));
             return;
         }
 

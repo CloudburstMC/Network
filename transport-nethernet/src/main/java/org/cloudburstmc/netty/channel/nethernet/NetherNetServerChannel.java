@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.channel.nethernet;
 
+import java.io.IOException;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
@@ -82,6 +83,14 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             throw new IllegalArgumentException("Unsupported address type");
         }
         this.localAddress = (InetSocketAddress) localAddress;
+
+        // Loaded here rather than under the first join, so a missing native fails the bind with
+        // its own cause instead of leaving every join to time out
+        try {
+            LibDataChannel.initialize();
+        } catch (LinkageError e) {
+            throw new IOException("The libdatachannel native library is not available", e);
+        }
 
         this.signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp, clientAddress, player) -> {
             acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, player);
