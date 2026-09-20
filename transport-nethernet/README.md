@@ -8,6 +8,7 @@
 ```kotlin
 val nativePlatforms = listOf(
     "windows-x86_64",
+    "windows-aarch64",
     "x86_64",        // linux x86_64
     "aarch64",       // linux aarch64
     "macos-x86_64",
