@@ -49,7 +49,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
     private final NetherNetClientSignaling signaling;
 
-    private volatile long connectionId; // Session ID (Long)
+    private volatile String connectionId; // The token this attempt is known by on the signaling
     private volatile String targetNetworkId; // Peer ID (String, for Realms)
 
     private volatile boolean handshakeComplete = false;
@@ -130,7 +130,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
             return;
         }
 
-        log.debug("Starting Handshake with Connection ID: {}", Long.toUnsignedString(this.connectionId));
+        log.debug("Starting Handshake with Connection ID: {}", this.connectionId);
 
         if (handshakeTimeoutTask != null) {
             handshakeTimeoutTask.cancel(false);
@@ -277,24 +277,17 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     private void handleSignal(String signal) {
-        String[] parts = signal.split(" ", 3);
-        if (parts.length < 2) {
-            return; // Allow length 2 for ERROR packets without payload
-        }
-        String type = parts[0];
-        String idStr = parts[1].trim();
-        String data = parts.length > 2 ? parts[2] : "";
-
-        // Verify this signal belongs to the current attempt
-        try {
-            long signalId = Long.parseUnsignedLong(idStr);
-            if (signalId != this.connectionId) {
-                log.debug("Ignored stale signal for ID {}", idStr);
-                return;
-            }
-        } catch (NumberFormatException e) {
+        NetherNetConstants.Signal parsed = NetherNetConstants.parseSignal(signal);
+        if (parsed == null) {
             return;
         }
+
+        // Verify this signal belongs to the current attempt
+        if (!parsed.connectionId().equals(this.connectionId)) {
+            log.debug("Ignored stale signal for ID {}", parsed.connectionId());
+            return;
+        }
+        String data = parsed.payload();
 
         eventLoop().execute(() -> {
             if (peerConnection == null) {
@@ -304,12 +297,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 return;
             }
 
-            switch (type) {
+            switch (parsed.type()) {
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE -> {
                     try {
                         peerConnection.setRemoteDescription(data, SessionDescriptionType.ANSWER);
                     } catch (Exception e) {
-                        log.debug("Failed to apply answer for {}: {}", Long.toUnsignedString(connectionId),
+                        log.debug("Failed to apply answer for {}: {}", connectionId,
                                 e.toString());
                     }
                 }
@@ -317,19 +310,19 @@ public class NetherNetClientChannel extends NetherNetChannel {
                     try {
                         peerConnection.addRemoteCandidate(data);
                     } catch (Exception e) {
-                        log.debug("Failed to apply ICE candidate for {}: {}", Long.toUnsignedString(connectionId),
+                        log.debug("Failed to apply ICE candidate for {}: {}", connectionId,
                                 e.toString());
                     }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
-                    log.error("Received SIGNAL_CONNECT_ERROR for {}.", Long.toUnsignedString(this.connectionId));
+                    log.error("Received SIGNAL_CONNECT_ERROR for {}.", this.connectionId);
                     if (connectPromise != null && !connectPromise.isDone()) {
                         connectPromise.tryFailure(new ConnectException("Remote peer sent connect error."));
                     }
                     close();
                 }
                 default -> {
-                    log.debug("Received unknown signal type: {}", type);
+                    log.debug("Received unknown signal type: {}", parsed.type());
                 }
             }
         });
@@ -366,8 +359,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
         }));
     }
 
-    private long cycleConnectionId() {
-        this.connectionId = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
+    /** A uint64 as text, which is what the docs describe and what a retail peer expects to echo. */
+    private String cycleConnectionId() {
+        this.connectionId = Long.toUnsignedString(ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE));
         return this.connectionId;
     }
 }

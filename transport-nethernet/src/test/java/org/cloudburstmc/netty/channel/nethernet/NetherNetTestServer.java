@@ -57,7 +57,7 @@ final class NetherNetTestServer implements AutoCloseable {
     }
 
     Accepted accept(String offer) throws Exception {
-        server.eventLoop().submit(() -> server.acceptConnection(1, offer, "client")).sync();
+        server.eventLoop().submit(() -> server.acceptConnection("1", offer, "client")).sync();
         return accepted.get(5, TimeUnit.SECONDS);
     }
 
@@ -88,10 +88,10 @@ final class NetherNetTestServer implements AutoCloseable {
         final CompletableFuture<Void> removed = new CompletableFuture<>();
         boolean failSetup, failRemoval;
 
-        public void setSignalHandler(long id, SignalHandler handler) {
+        public void setSignalHandler(String id, SignalHandler handler) {
             if (failSetup) throw new IllegalStateException("signaling setup failed");
         }
-        public void removeSignalHandler(long id) {
+        public void removeSignalHandler(String id) {
             removed.complete(null);
             if (failRemoval) throw new IllegalStateException("signaling cleanup failed");
         }

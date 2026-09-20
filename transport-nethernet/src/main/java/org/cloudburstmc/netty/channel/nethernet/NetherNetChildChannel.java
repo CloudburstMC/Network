@@ -34,7 +34,7 @@ public class NetherNetChildChannel extends NetherNetChannel {
      * A child arrives on the server pipeline carrying nothing that ties it back to the offer that
      * produced it, and arrival order does not follow the order answers were produced in.
      */
-    public static final AttributeKey<Long> CONNECTION_ID =
+    public static final AttributeKey<String> CONNECTION_ID =
             AttributeKey.valueOf(NetherNetChildChannel.class, "connectionId");
 
     /**

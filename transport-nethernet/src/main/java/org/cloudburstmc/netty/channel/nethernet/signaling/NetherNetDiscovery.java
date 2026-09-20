@@ -46,7 +46,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscovery.class);
 
     private final long networkId;
-    private final Map<Long, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
+    private final Map<String, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
     private final Map<Long, InetSocketAddress> peerAddresses = new ConcurrentHashMap<>();
     private Channel channel;
     private byte[] pongData;
@@ -137,11 +137,11 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         response.release();
     }
 
-    public void registerSignalHandler(long connectionId, SignalHandler handler) {
+    public void registerSignalHandler(String connectionId, SignalHandler handler) {
         this.signalHandlers.put(connectionId, handler);
     }
 
-    public void unregisterSignalHandler(long connectionId) {
+    public void unregisterSignalHandler(String connectionId) {
         this.signalHandlers.remove(connectionId);
     }
 
@@ -286,33 +286,28 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             return;
         }
 
-        String[] parts = messageData.split(" ", 3);
-        if (parts.length < 2) {
+        NetherNetConstants.Signal signal = NetherNetConstants.parseSignal(messageData);
+        if (signal == null) {
+            log.debug("Malformed signal in message: {}", messageData);
             return;
         }
+        String connectionId = signal.connectionId();
 
-        try {
-            String type = parts[0];
-            long connectionId = Long.parseUnsignedLong(parts[1]);
+        SignalHandler handler = signalHandlers.get(connectionId);
 
-            SignalHandler handler = signalHandlers.get(connectionId);
-
-            if (handler != null) {
-                handler.onSignal(messageData);
-            } else if (NetherNetConstants.RTC_NEGOTIATION_CONNECT_REQUEST.equals(type)) {
-                if (newConnectionHandler != null) {
-                    String payload = parts.length > 2 ? parts[2] : "";
-                    log.trace("Dispatching New Connection: ID={} Sender={}", Long.toUnsignedString(connectionId),
-                            Long.toUnsignedString(senderId));
-                    newConnectionHandler.onConnect(connectionId, Long.toUnsignedString(senderId), payload, sender, null);
-                } else {
-                    log.debug("Received CONNECT_REQUEST but no NewConnectionHandler is set!");
-                }
+        if (handler != null) {
+            handler.onSignal(messageData);
+        } else if (NetherNetConstants.RTC_NEGOTIATION_CONNECT_REQUEST.equals(signal.type())) {
+            if (newConnectionHandler != null) {
+                log.trace("Dispatching New Connection: ID={} Sender={}", connectionId,
+                        Long.toUnsignedString(senderId));
+                newConnectionHandler.onConnect(connectionId, Long.toUnsignedString(senderId), signal.payload(),
+                        sender, null);
             } else {
-                log.debug("Unhandled signal type: {}", type);
+                log.debug("Received CONNECT_REQUEST but no NewConnectionHandler is set!");
             }
-        } catch (NumberFormatException e) {
-            log.debug("Invalid connection ID format in message: {}", messageData);
+        } else {
+            log.debug("Unhandled signal type: {}", signal.type());
         }
     }
 

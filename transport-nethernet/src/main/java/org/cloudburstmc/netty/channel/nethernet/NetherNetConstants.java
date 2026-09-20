@@ -174,33 +174,73 @@ public class NetherNetConstants {
     /**
      * Builds a signaling message for a CONNECTREQUEST.
      *
-     * @param connectionId The unique connection ID.
+     * @param connectionId The connection id, the opaque token the initiator chose.
      * @param sdp          The SDP payload.
      * @return The formatted signaling message.
      */
-    public static String buildSignalConnectRequest(long connectionId, String sdp) {
-        return RTC_NEGOTIATION_CONNECT_REQUEST + " " + Long.toUnsignedString(connectionId) + " " + sdp;
+    public static String buildSignalConnectRequest(String connectionId, String sdp) {
+        return RTC_NEGOTIATION_CONNECT_REQUEST + " " + connectionId + " " + sdp;
     }
 
     /**
      * Builds a signaling message for a CONNECTRESPONSE.
      *
-     * @param connectionId The unique connection ID.
+     * @param connectionId The connection id, the opaque token the initiator chose.
      * @param sdp          The SDP payload.
      * @return The formatted signaling message.
      */
-    public static String buildSignalConnectResponse(long connectionId, String sdp) {
-        return RTC_NEGOTIATION_CONNECT_RESPONSE + " " + Long.toUnsignedString(connectionId) + " " + sdp;
+    public static String buildSignalConnectResponse(String connectionId, String sdp) {
+        return RTC_NEGOTIATION_CONNECT_RESPONSE + " " + connectionId + " " + sdp;
     }
 
     /**
      * Builds a signaling message for a CANDIDATEADD.
      *
-     * @param connectionId The unique connection ID.
+     * @param connectionId The connection id, the opaque token the initiator chose.
      * @param candidateSdp The candidate SDP string.
      * @return The formatted signaling message.
      */
-    public static String buildSignalCandidateAdd(long connectionId, String candidateSdp) {
-        return RTC_NEGOTIATION_CANDIDATE_ADD + " " + Long.toUnsignedString(connectionId) + " " + candidateSdp;
+    public static String buildSignalCandidateAdd(String connectionId, String candidateSdp) {
+        return RTC_NEGOTIATION_CANDIDATE_ADD + " " + connectionId + " " + candidateSdp;
+    }
+
+    /**
+     * A signal as the bus carries it: {@code <type> <connection id> <payload>}.
+     *
+     * @param type         One of the {@code RTC_NEGOTIATION_*} types
+     * @param connectionId The connection the signal belongs to, as the initiator wrote it. The
+     *                     docs describe a uint64 encoded as text, but nothing here depends on
+     *                     that: the id is compared and echoed, never interpreted
+     * @param payload      The description or candidate, empty when the signal carries none
+     */
+    public record Signal(String type, String connectionId, String payload) {
+    }
+
+    /**
+     * @param raw The signal as received
+     * @return The parsed signal, or null when it has no type, no connection id, or a connection id
+     * that is not printable ASCII
+     */
+    public static Signal parseSignal(String raw) {
+        String[] parts = raw.split(" ", 3);
+        if (parts.length < 2 || !isPrintableAscii(parts[1])) {
+            return null;
+        }
+        return new Signal(parts[0], parts[1], parts.length > 2 ? parts[2] : "");
+    }
+
+    // The id is echoed into logs and back onto the bus, so a control character in it is refused
+    // rather than passed along.
+    private static boolean isPrintableAscii(String s) {
+        if (s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c <= ' ' || c > '~') {
+                return false;
+            }
+        }
+        return true;
     }
 }

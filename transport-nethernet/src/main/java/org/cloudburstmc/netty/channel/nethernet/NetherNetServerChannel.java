@@ -131,11 +131,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         return this.config.getOption(NetherChannelOption.NETHER_SERVER_METRICS);
     }
 
-    public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId) {
+    public void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId) {
         acceptConnection(connectionId, offerSdp, remoteNetworkId, null, null);
     }
 
-    public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId,
+    public void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
                                  @Nullable InetSocketAddress clientAddress) {
         acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, null);
     }
@@ -145,7 +145,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      *                      replaces it with the negotiated pair once the connection is up, but
      *                      until then it is all the child channel has to report.
      */
-    public void acceptConnection(long connectionId, String offerSdp, String remoteNetworkId,
+    public void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
                                  @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
         PeerConnectionConfiguration rtcConfig =
                 bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
@@ -179,7 +179,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         pipeline().fireChannelRead(child);
     }
 
-    private void initializeConnection(NetherNetChildChannel child, PeerConnection pc, long connectionId,
+    private void initializeConnection(NetherNetChildChannel child, PeerConnection pc, String connectionId,
                                       String remoteNetworkId, String offerSdp,
                                       @Nullable InetSocketAddress clientAddress) throws Exception {
         int handshakeTimeoutSeconds =
@@ -188,7 +188,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             if (!child.isActive()) {
                 child.connectionFailed(NetherConnectionFailure.HANDSHAKE_TIMEOUT);
                 child.close();
-                log.warn("Connection {} timed out during handshake ({}s)", Long.toUnsignedString(connectionId),
+                log.warn("Connection {} timed out during handshake ({}s)", connectionId,
                         handshakeTimeoutSeconds);
             }
         }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
@@ -199,25 +199,24 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 offerSdp, clientAddress, child, pc, timeout);
         observer.register(pc);
         signaling.setSignalHandler(connectionId, signal -> {
-            String[] parts = signal.split(" ", 3);
-            if (parts.length < 3) {
+            NetherNetConstants.Signal parsed = NetherNetConstants.parseSignal(signal);
+            if (parsed == null) {
                 return;
             }
-            String type = parts[0];
-            String data = parts[2];
+            String data = parsed.payload();
 
-            switch (type) {
+            switch (parsed.type()) {
                 case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
-                    log.trace("Applying Remote Candidate for {}: {}", Long.toUnsignedString(connectionId), data);
+                    log.trace("Applying Remote Candidate for {}: {}", connectionId, data);
                     try {
                         pc.addRemoteCandidate(data);
                     } catch (Exception e) {
                         log.debug("Failed to apply ICE candidate for {} (Connection likely closed): {}",
-                                Long.toUnsignedString(connectionId), e.toString());
+                                connectionId, e.toString());
                     }
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
-                    log.debug("Received CONNECT_ERROR for {}", Long.toUnsignedString(connectionId));
+                    log.debug("Received CONNECT_ERROR for {}", connectionId);
                     if (!child.isActive()) {
                         child.connectionFailed(NetherConnectionFailure.CONNECT_ERROR);
                     }
@@ -227,12 +226,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         });
 
         pc.setRemoteDescription(offerSdp, SessionDescriptionType.OFFER);
-        log.trace("Remote description set for {}", Long.toUnsignedString(connectionId));
+        log.trace("Remote description set for {}", connectionId);
         pc.setLocalDescription("answer");
 
         // Anything without trickle answers once from onGatheringStateChange instead.
         if (signaling.usesTrickleIce()) {
-            log.trace("Sending Answer SDP for {}", Long.toUnsignedString(connectionId));
+            log.trace("Sending Answer SDP for {}", connectionId);
             signaling.sendSignal(remoteNetworkId, NetherNetConstants.buildSignalConnectResponse(connectionId,
                     serverIdentity.augmentAnswer(pc.localDescription())));
         }
@@ -242,7 +241,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * Observer to handle Data Channel creation from the client.
      */
     private class ServerPeerConnectionObserver {
-        private final long connectionId;
+        private final String connectionId;
         private final String remoteNetworkId;
         private final NetherNetChildChannel child;
 
@@ -257,7 +256,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private final String offerSdp;
         private final InetSocketAddress clientAddress;
 
-        public ServerPeerConnectionObserver(long connectionId, String remoteNetworkId, String offerSdp,
+        public ServerPeerConnectionObserver(String connectionId, String remoteNetworkId, String offerSdp,
                                             @Nullable InetSocketAddress clientAddress,
                                             NetherNetChildChannel child, PeerConnection peerConnection,
                                             ScheduledFuture<?> handshakeTimeout) {
@@ -282,12 +281,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 return;
             }
             for (String candidate : SdpUtil.inferredPeerCandidates(this.offerSdp, this.clientAddress)) {
-                log.debug("Inferred candidate for {}: {}", Long.toUnsignedString(connectionId), candidate);
+                log.debug("Inferred candidate for {}: {}", connectionId, candidate);
                 try {
                     peerConnection.addRemoteCandidate(candidate);
                 } catch (Exception e) {
                     log.debug("Failed to add inferred candidate for {}: {}",
-                            Long.toUnsignedString(connectionId), e.toString());
+                            connectionId, e.toString());
                 }
             }
         }
@@ -302,7 +301,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private void onLocalCandidate(String candidate) {
             if (log.isTraceEnabled()) {
                 log.trace("Generated ICE Candidate for {}: {} (Type: {})",
-                        Long.toUnsignedString(this.connectionId), candidate, extractCandidateType(candidate));
+                        this.connectionId, candidate, extractCandidateType(candidate));
             }
 
             // Skip sending candidate if the signaling doesn't support trickle ICE
@@ -330,7 +329,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         private void onConnectionChange(PeerState state) {
-            log.debug("Connection {} state changed: {}", Long.toUnsignedString(this.connectionId), state);
+            log.debug("Connection {} state changed: {}", this.connectionId, state);
 
             if (state == PeerState.RTC_CONNECTED) {
                 // The selected candidate pair is the only place the peer's real address appears
@@ -339,7 +338,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) {
                 if (child.isOpen()) {
-                    log.debug("Closing connection {} due to state change: {}", Long.toUnsignedString(this.connectionId),
+                    log.debug("Closing connection {} due to state change: {}", this.connectionId,
                             state);
                     child.close();
                 }
@@ -362,7 +361,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
             if (reliable != null && unreliable != null) {
                 handshakeTimeout.cancel(false);
-                log.debug("Data Channels established for {}", Long.toUnsignedString(this.connectionId));
+                log.debug("Data Channels established for {}", this.connectionId);
                 child.activate(reliable, unreliable);
             }
         }
@@ -377,7 +376,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 local = peerConnection.localDescription();
             } catch (Exception e) {
                 log.warn("Gathering complete for {} but the local description is unavailable: {}",
-                        Long.toUnsignedString(connectionId), e.toString());
+                        connectionId, e.toString());
                 return;
             }
 
@@ -388,11 +387,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
             fullSdpSent = true;
 
-            log.trace("Sending full SDP (with gathered candidates) for {}", Long.toUnsignedString(connectionId));
+            log.trace("Sending full SDP (with gathered candidates) for {}", connectionId);
             try {
                 signaling.sendFullSdp(remoteNetworkId, serverIdentity.augmentAnswer(local));
             } catch (Exception e) {
-                log.error("Failed to sign the full SDP for {}", Long.toUnsignedString(connectionId), e);
+                log.error("Failed to sign the full SDP for {}", connectionId, e);
             }
         }
     }

@@ -70,7 +70,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
         /**
          * Called when a new connection is initiated by a remote peer.
          *
-         * @param connectionId    The unique connection ID for this session.
+         * @param connectionId    The connection ID the peer chose, an opaque token echoed back to it.
          * @param remoteNetworkId The Network ID of the remote peer.
          * @param payload         The initial signaling payload from the remote peer.
          * @param clientAddress   The address the peer signaled from, seeding the child channel
@@ -78,7 +78,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
          * @param player          The peer's validated identity, or null if this signaling does
          *                        not validate one.
          */
-        void onConnect(long connectionId, String remoteNetworkId, String payload,
+        void onConnect(String connectionId, String remoteNetworkId, String payload,
                        @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player);
     }
 
