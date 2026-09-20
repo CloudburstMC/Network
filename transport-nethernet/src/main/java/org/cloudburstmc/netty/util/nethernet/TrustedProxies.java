@@ -34,8 +34,8 @@ import java.util.List;
  * The proxies allowed to speak for a client, with any {@code http} or {@code https} entry fetched
  * and expanded into the addresses it lists, one per line.
  * <p>
- * Resolved once per start and shared, because a host may bind several listeners and each would
- * otherwise fetch the same list again.
+ * Stateless: every call fetches its URL entries again, so parse once when a listener starts and
+ * keep the set, rather than on each connection.
  */
 public final class TrustedProxies {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(TrustedProxies.class);
@@ -53,8 +53,6 @@ public final class TrustedProxies {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
-    private static volatile IpRangeSet resolved;
-
     private TrustedProxies() {
     }
 
@@ -62,19 +60,8 @@ public final class TrustedProxies {
      * @param entries The configured entries, each an address, a CIDR range or a URL to fetch
      * @return The addresses that may speak for a client, empty when nothing is configured
      */
-    public static synchronized IpRangeSet parse(Collection<String> entries) {
-        IpRangeSet cached = resolved;
-        if (cached != null) {
-            return cached;
-        }
-        return resolved = IpRangeSet.parse(expand(entries));
-    }
-
-    /**
-     * Forgets the resolved list so the next listener to start fetches it again.
-     */
-    public static synchronized void invalidate() {
-        resolved = null;
+    public static IpRangeSet parse(Collection<String> entries) {
+        return IpRangeSet.parse(expand(entries));
     }
 
     private static List<String> expand(Collection<String> entries) {

@@ -18,7 +18,6 @@ package org.cloudburstmc.netty.util.nethernet;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -26,22 +25,17 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TrustedProxiesTest {
 
     private HttpServer server;
-
-    @BeforeEach
-    @AfterEach
-    void reset() {
-        TrustedProxies.invalidate();
-    }
+    private final AtomicInteger fetches = new AtomicInteger();
 
     @AfterEach
     void stopServer() {
@@ -54,6 +48,7 @@ class TrustedProxiesTest {
     private String serve(String body) throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/list", exchange -> {
+            fetches.incrementAndGet();
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, bytes.length);
             exchange.getResponseBody().write(bytes);
@@ -125,18 +120,16 @@ class TrustedProxiesTest {
     }
 
     @Test
-    void resolvesOnceAndForgetsOnlyWhenAsked() throws Exception {
+    void holdsNoStateBetweenCalls() throws Exception {
         String url = serve("198.51.100.7\n");
 
         IpRangeSet first = TrustedProxies.parse(List.of(url));
         assertTrue(first.contains(InetAddress.getByName("198.51.100.7")));
 
-        // A second listener starting must not fetch again, it takes what the first resolved
-        assertSame(first, TrustedProxies.parse(List.of("192.0.2.1")));
-
-        TrustedProxies.invalidate();
-        assertFalse(TrustedProxies.parse(List.of("192.0.2.1"))
-                .contains(InetAddress.getByName("198.51.100.7")));
+        // A different list gets its own set, and the same list is fetched again: callers keep the set
+        assertFalse(TrustedProxies.parse(List.of("192.0.2.1")).contains(InetAddress.getByName("198.51.100.7")));
+        TrustedProxies.parse(List.of(url));
+        assertEquals(2, fetches.get());
     }
 
     @Test

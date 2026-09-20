@@ -42,14 +42,27 @@ import java.util.stream.Collectors;
 public class IdentityUtils {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(IdentityUtils.class);
 
+    private static final HttpsJwks JWKS =
+            new HttpsJwks("https://authorization.franchise.minecraft-services.net/.well-known/keys");
     private static final JwtConsumer JWT_CONSUMER = new JwtConsumerBuilder()
-            .setVerificationKeyResolver(new HttpsJwksVerificationKeyResolver(
-                    new HttpsJwks("https://authorization.franchise.minecraft-services.net/.well-known/keys")))
+            .setVerificationKeyResolver(new HttpsJwksVerificationKeyResolver(JWKS))
             .setRequireExpirationTime()
             .setRequireSubject()
             .setExpectedAudience(true, "api://auth-minecraft-services/multiplayer")
             .setExpectedIssuer("https://authorization.franchise.minecraft-services.net/")
             .build();
+
+    /**
+     * Fetches the auth service's keys ahead of the first join, so that join does not pay for the
+     * round trip. A failure is only logged: the first join fetches them again.
+     */
+    public static void prefetchKeys() {
+        try {
+            JWKS.refresh();
+        } catch (Exception e) {
+            log.warn("Could not prefetch the Minecraft auth keys, the first join will fetch them: {}", e.toString());
+        }
+    }
 
     /**
      * Validate the given identity against the known jwt signer
