@@ -171,12 +171,12 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     }
 
     @Override
-    public void setSignalHandler(long connectionId, SignalHandler handler) {
+    public void setSignalHandler(String connectionId, SignalHandler handler) {
         this.discovery.registerSignalHandler(connectionId, handler);
     }
 
     @Override
-    public void removeSignalHandler(long connectionId) {
+    public void removeSignalHandler(String connectionId) {
         this.discovery.unregisterSignalHandler(connectionId);
     }
 

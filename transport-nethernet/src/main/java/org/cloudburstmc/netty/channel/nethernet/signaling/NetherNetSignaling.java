@@ -50,17 +50,17 @@ public interface NetherNetSignaling extends AutoCloseable {
     /**
      * Sets a handler to receive signaling messages for a specific connection ID.
      *
-     * @param connectionId The connection ID to listen for.
+     * @param connectionId The connection ID to listen for, the token the initiator chose.
      * @param handler      The handler to process incoming signaling messages.
      */
-    void setSignalHandler(long connectionId, SignalHandler handler);
+    void setSignalHandler(String connectionId, SignalHandler handler);
 
     /**
      * Removes the signaling handler for a specific connection ID.
      *
      * @param connectionId The connection ID whose handler should be removed.
      */
-    void removeSignalHandler(long connectionId);
+    void removeSignalHandler(String connectionId);
 
     /**
      * Returns the Local Network ID of this client as a String.

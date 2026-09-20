@@ -73,7 +73,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     protected CompletableFuture<List<IceServerInfo>> connectFuture;
     protected volatile List<IceServerInfo> iceServers = new ArrayList<>();
 
-    protected final Map<Long, SignalHandler> handlers = new ConcurrentHashMap<>();
+    protected final Map<String, SignalHandler> handlers = new ConcurrentHashMap<>();
     protected NetherNetServerSignaling.NewConnectionHandler newConnectionHandler;
     protected volatile NetherNetClientSignaling.NotFoundHandler notFoundHandler;
 
@@ -199,12 +199,12 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     @Override
-    public void setSignalHandler(long connectionId, SignalHandler handler) {
+    public void setSignalHandler(String connectionId, SignalHandler handler) {
         this.handlers.put(connectionId, handler);
     }
 
     @Override
-    public void removeSignalHandler(long connectionId) {
+    public void removeSignalHandler(String connectionId) {
         this.handlers.remove(connectionId);
     }
 
@@ -250,13 +250,11 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     protected void dispatchSignalToPipeline(String sender, String rawMsg) {
         try {
-            // Signal Format: <Type> <ConnectionID> <Data>
-            String[] parts = rawMsg.split(" ", 3);
-            if (parts.length < 2) {
+            NetherNetConstants.Signal signal = NetherNetConstants.parseSignal(rawMsg);
+            if (signal == null) {
                 return;
             }
-
-            long connectionId = Long.parseUnsignedLong(parts[1]);
+            String connectionId = signal.connectionId();
 
             SignalHandler handler = handlers.get(connectionId);
             if (handler != null) {
@@ -264,11 +262,11 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                 return;
             }
 
-            if (NetherNetConstants.RTC_NEGOTIATION_CONNECT_REQUEST.equals(parts[0]) && newConnectionHandler != null) {
-                String payload = parts.length > 2 ? parts[2] : "";
-                newConnectionHandler.onConnect(connectionId, sender, payload, null, null);
+            if (NetherNetConstants.RTC_NEGOTIATION_CONNECT_REQUEST.equals(signal.type())
+                    && newConnectionHandler != null) {
+                newConnectionHandler.onConnect(connectionId, sender, signal.payload(), null, null);
             } else {
-                log.debug("No handler found for connection ID: {} (Type: {})", connectionId, parts[0]);
+                log.debug("No handler found for connection ID: {} (Type: {})", connectionId, signal.type());
             }
         } catch (Exception e) {
             log.error("Failed to dispatch signal: {}", rawMsg, e);

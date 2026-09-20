@@ -625,8 +625,8 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                     "no answer was produced", future.cause()));
         });
 
-        // We cannot use the network ID as the connection ID, they can fall outside the bounds of a long
-        newConnectionHandler.onConnect(random.nextLong(), networkId, sdpOffer, clientAddress, player);
+        // The network id is the peer's own; the connection id is ours to choose, a uint64 as text
+        newConnectionHandler.onConnect(Long.toUnsignedString(random.nextLong()), networkId, sdpOffer, clientAddress, player);
         return result;
     }
 
@@ -706,12 +706,12 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     @Override
-    public void setSignalHandler(long connectionId, SignalHandler handler) {
+    public void setSignalHandler(String connectionId, SignalHandler handler) {
         // Nothing to do for HTTP signaling
     }
 
     @Override
-    public void removeSignalHandler(long connectionId) {
+    public void removeSignalHandler(String connectionId) {
         // Nothing to do for HTTP signaling
     }
 
