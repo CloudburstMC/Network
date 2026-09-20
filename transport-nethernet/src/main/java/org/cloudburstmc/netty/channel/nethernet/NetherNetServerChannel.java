@@ -92,24 +92,29 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     }
 
     /**
-     * Pins ICE to the bound address, so the transport uses one predictable port rather than an
-     * ephemeral one per connection. Skipped when the signaling holds that UDP port itself.
+     * Pins ICE to one address, so the transport uses one predictable port rather than an ephemeral
+     * one per connection: {@link NetherChannelOption#NETHER_SERVER_ICE_ADDRESS} when set, else the
+     * bound address unless the signaling holds that UDP port itself.
      *
      * @param config The configuration to derive from.
-     * @return The configuration with the bound address applied.
+     * @return The configuration with the ICE address applied.
      */
     private PeerConnectionConfiguration bindIce(PeerConnectionConfiguration config) {
-        if (localAddress == null || !signaling.allowsIceOnLocalPort()) {
-            return config;
+        InetSocketAddress ice = this.config.getOption(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS);
+        if (ice == null) {
+            if (localAddress == null || !signaling.allowsIceOnLocalPort()) {
+                return config;
+            }
+            ice = localAddress;
         }
 
         // A wildcard bind is left unset so ICE keeps gathering on every interface
-        InetAddress host = localAddress.getAddress();
+        InetAddress host = ice.getAddress();
         if (host != null && !host.isAnyLocalAddress()) {
             config = config.withBindAddress(host);
         }
 
-        int port = localAddress.getPort();
+        int port = ice.getPort();
         if (port <= 0) {
             return config;
         }

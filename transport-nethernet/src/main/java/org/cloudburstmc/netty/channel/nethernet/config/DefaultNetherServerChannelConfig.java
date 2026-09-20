@@ -20,12 +20,14 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerChannel;
 
+import java.net.InetSocketAddress;
 import java.util.Map;
 
 public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig {
     private volatile int serverRtcHandshakeTimeoutSeconds = 30;
     private volatile boolean inferPeerCandidates = true;
     private volatile NetherServerMetrics serverMetrics;
+    private volatile InetSocketAddress iceAddress;
 
     public DefaultNetherServerChannelConfig(Channel channel) {
         super(channel);
@@ -35,7 +37,8 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
     public Map<ChannelOption<?>, Object> getOptions() {
         return this.getOptions(
                 super.getOptions(), NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS,
-                NetherChannelOption.NETHER_INFER_PEER_CANDIDATES, NetherChannelOption.NETHER_SERVER_METRICS
+                NetherChannelOption.NETHER_INFER_PEER_CANDIDATES, NetherChannelOption.NETHER_SERVER_METRICS,
+                NetherChannelOption.NETHER_SERVER_ICE_ADDRESS
         );
     }
 
@@ -48,6 +51,8 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
             return (T) Boolean.valueOf(this.inferPeerCandidates);
         } else if (option == NetherChannelOption.NETHER_SERVER_METRICS) {
             return (T) this.getServerMetrics();
+        } else if (option == NetherChannelOption.NETHER_SERVER_ICE_ADDRESS) {
+            return (T) this.iceAddress;
         }
 
         return super.getOption(option);
@@ -65,6 +70,9 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
             return true;
         } else if (option == NetherChannelOption.NETHER_INFER_PEER_CANDIDATES) {
             this.inferPeerCandidates = (Boolean) value;
+            return true;
+        } else if (option == NetherChannelOption.NETHER_SERVER_ICE_ADDRESS) {
+            this.iceAddress = (InetSocketAddress) value;
             return true;
         } else {
             return super.setOption(option, value);

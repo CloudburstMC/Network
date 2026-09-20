@@ -20,6 +20,8 @@ import io.netty.channel.ChannelOption;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 
+import java.net.InetSocketAddress;
+
 public class NetherChannelOption<T> extends ChannelOption<T> {
 
     /**
@@ -53,6 +55,14 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<Integer> NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS =
             valueOf(NetherChannelOption.class, "NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS");
+
+    /**
+     * Where ICE binds on the server, for a media port other than the signaling port. A wildcard
+     * host gathers on every interface and port 0 leaves the port ephemeral. Unset, ICE uses the
+     * bound address when the signaling allows it and ephemeral ports otherwise.
+     */
+    public static final ChannelOption<InetSocketAddress> NETHER_SERVER_ICE_ADDRESS =
+            valueOf(NetherChannelOption.class, "NETHER_SERVER_ICE_ADDRESS");
 
     /**
      * Whether to check the address a peer signaled from when its offer holds nothing routable.
