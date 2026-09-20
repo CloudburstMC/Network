@@ -25,7 +25,9 @@ import java.net.InetSocketAddress;
 public class NetherChannelOption<T> extends ChannelOption<T> {
 
     /**
-     * The {@link PeerConnectionConfiguration} used for the underlying peer connections.
+     * The {@link PeerConnectionConfiguration} used for the underlying peer connections. The ICE
+     * servers the signaling hands out are added to the ones set here, and the transport's message
+     * size limit applies unless the configuration names its own.
      */
     public static final ChannelOption<PeerConnectionConfiguration> NETHER_PEER_CONNECTION_CONFIG =
             valueOf(NetherChannelOption.class, "NETHER_PEER_CONNECTION_CONFIG");
@@ -82,7 +84,8 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
 
     /**
      * The {@link NetherChannelMetrics} to report per-channel events to. Unset by default, in which
-     * case nothing is reported.
+     * case nothing is reported, and null clears it again. A child option on a server, since it is
+     * the accepted connection that reports; an option on a client.
      */
     public static final ChannelOption<NetherChannelMetrics> NETHER_METRICS =
             valueOf(NetherChannelOption.class, "NETHER_METRICS");

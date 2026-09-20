@@ -26,6 +26,10 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.MessageDigest;
 
+/**
+ * The wire constants and helpers the transport and its signalings share. Nothing here is meant
+ * for a host, which never builds or reads a signal itself.
+ */
 public class NetherNetConstants {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetConstants.class);
 

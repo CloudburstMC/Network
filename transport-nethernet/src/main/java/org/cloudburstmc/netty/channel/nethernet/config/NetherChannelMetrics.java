@@ -19,6 +19,12 @@ package org.cloudburstmc.netty.channel.nethernet.config;
 import tel.schich.libdatachannel.IceState;
 import tel.schich.libdatachannel.PeerState;
 
+/**
+ * Per connection counters and events. Called from the transport's threads, not one of your own:
+ * the inbound counters, {@link #decodeFail} and the state changes fire on the native callback
+ * thread, the outbound counters on the channel's event loop, so an implementation is thread safe
+ * or hands off.
+ */
 public interface NetherChannelMetrics {
 
     default void bytesIn(int count) {

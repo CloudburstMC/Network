@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import io.netty.channel.DefaultEventLoopGroup;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -114,6 +115,23 @@ class HttpSignalingRequestTest {
 
         assertEquals(200, response.statusCode());
         assertEquals("application/json", response.headers().firstValue("content-type").orElse(""));
+    }
+
+    @Test
+    void servesFromAChannelOnAnyKindOfLoop() throws Exception {
+        // The listener brings its own NIO loop, so the channel's loop need not be one
+        DefaultEventLoopGroup plain = new DefaultEventLoopGroup(1);
+        try {
+            try (ServerSocket probe = new ServerSocket(0)) {
+                this.port = probe.getLocalPort();
+            }
+            this.signaling = this.builder().build();
+            this.signaling.bind(new InetSocketAddress("127.0.0.1", this.port), plain.next());
+
+            assertEquals(200, this.status("GET", "/v1/join", null));
+        } finally {
+            plain.shutdownGracefully(0, 1, java.util.concurrent.TimeUnit.SECONDS).sync();
+        }
     }
 
     @Test

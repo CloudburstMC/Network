@@ -37,7 +37,8 @@ public class NetherNetChannelFactory<T extends Channel> implements ChannelFactor
     }
 
     /**
-     * Creates a NetherNet Server Channel Factory.
+     * Creates a NetherNet Server Channel Factory. The channel works on any event loop: media is
+     * native, and a signaling that listens on a socket brings a loop of its own for it.
      *
      * @param signaling The NetherNetServerSignaling instance for signaling.
      * @return A ChannelFactory for NetherNetServerChannel.

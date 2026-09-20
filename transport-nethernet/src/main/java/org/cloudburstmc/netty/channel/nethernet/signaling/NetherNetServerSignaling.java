@@ -34,22 +34,24 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * Binds the signaling medium to listen for incoming connections (Server mode).
      *
      * @param localAddress The local address to bind to.
-     * @param eventLoop    The owning channel's event loop.
-     * @throws ConnectException
+     * @param eventLoop    The owning channel's event loop, where new connections are handed over.
+     * @throws ConnectException If the signaling cannot bind
      */
     void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException;
 
     /**
-     * Handler for new connections.
+     * Sets the handler a new connection is handed to, see {@link NewConnectionHandler#onConnect}.
+     * The server channel installs its own on bind.
      *
-     * @param handler Functional interface receiving (ConnectionID, RemoteNetworkID, Payload)
+     * @param handler The handler for new connections
      */
     void setNewConnectionHandler(NewConnectionHandler handler);
 
     /**
-     * Sets the advertisement data for the discovery mechanism (e.g. LAN Pong).
+     * Sets what this host advertises: the LAN pong for discovery, the status document for HTTP
+     * signaling, and nothing for signaling that advertises elsewhere.
      *
-     * @param pongData The Pong advertisement data.
+     * @param pongData The advertisement.
      */
     void setAdvertisementData(PongData pongData);
 
@@ -68,7 +70,8 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     @FunctionalInterface
     interface NewConnectionHandler {
         /**
-         * Called when a new connection is initiated by a remote peer.
+         * Called when a new connection is initiated by a remote peer, on the signaling's event
+         * loop, which for HTTP signaling is the server channel's own.
          *
          * @param connectionId    The connection ID the peer chose, an opaque token echoed back to it.
          * @param remoteNetworkId The Network ID of the remote peer.
@@ -91,7 +94,9 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     }
 
     /**
-     * Returns the identity used to sign SDP answers, or null to have the channel generate an ephemeral one.
+     * Returns the identity used to sign SDP answers, or null to have each server channel generate
+     * one of its own under the domain {@code self}, which is then what players see in the trust
+     * prompt and which changes on every start.
      *
      * @return The server identity, or null if this signaling has none
      */
@@ -154,6 +159,10 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
             return info.toString();
         }
 
+        /**
+         * The defaults are placeholders, protocol 2187 and version 1.26.50 among them; a host
+         * sets what it speaks.
+         */
         public static class Builder {
             private String serverName = "Server";
             private int protocol = 2187;

@@ -29,6 +29,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jose4j.lang.JoseException;
+import tel.schich.libdatachannel.CandidatePair;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelInitSettings;
 import tel.schich.libdatachannel.DataChannelReliability;
@@ -77,7 +78,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         this.config = new DefaultNetherClientChannelConfig(this);
     }
 
-    public void setTargetNetworkId(String id) {
+    private void setTargetNetworkId(String id) {
         this.targetNetworkId = id;
     }
 
@@ -236,9 +237,11 @@ public class NetherNetClientChannel extends NetherNetChannel {
     }
 
     private void initWebRTC(List<NetherNetSignaling.IceServerInfo> iceServers) {
-        PeerConnectionConfiguration rtcConfig = this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG)
+        PeerConnectionConfiguration configured =
+                this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG);
+        PeerConnectionConfiguration rtcConfig = configured
                 .withDisableAutoNegotiation(true)
-                .withIceServers(iceServers.stream().map(IceServerInfo::toUris).flatMap(List::stream).toList());
+                .withIceServers(withIceServers(configured, iceServers));
 
         peerConnection = PeerConnection.createPeer(rtcConfig);
         registerMetrics(peerConnection);
@@ -267,7 +270,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
         });
 
         peerConnection.onStateChange.register((peer, state) -> {
-            if (state == PeerState.RTC_FAILED) {
+            if (state == PeerState.RTC_CONNECTED) {
+                adoptSelectedPair(peer);
+            } else if (state == PeerState.RTC_FAILED) {
                 // Fast fail trigger: retry immediately instead of waiting for timeout
                 log.warn("PeerConnection entered FAILED state, resetting and retrying handshake.");
                 eventLoop().execute(() -> resetAndRetryHandshake());
@@ -331,6 +336,23 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 resetAndRetryHandshake();
             }
         });
+    }
+
+    /**
+     * The selected pair is where the media flows, which is rarely the signaling endpoint. A
+     * network id address stays, since it names the peer rather than a place.
+     */
+    private void adoptSelectedPair(PeerConnection peer) {
+        if (!(remoteAddress instanceof InetSocketAddress)) {
+            return;
+        }
+        try {
+            CandidatePair pair = peer.selectedCandidatePair();
+            this.localAddress = pair.local();
+            this.remoteAddress = pair.remote();
+        } catch (Exception e) {
+            log.debug("Selected pair unavailable for {}: {}", connectionId, e.toString());
+        }
     }
 
     /** The offer with this side's identity assertion when one is configured, unsigned otherwise. */

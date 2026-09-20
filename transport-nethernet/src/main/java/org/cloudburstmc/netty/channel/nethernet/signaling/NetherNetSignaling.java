@@ -29,12 +29,15 @@ import java.util.List;
 public interface NetherNetSignaling extends AutoCloseable {
 
     /**
-     * Sends a signaling message to the remote peer.
+     * Sends a signaling message to the remote peer. Required when {@link #usesTrickleIce} is
+     * true, which is the default.
      *
      * @param targetNetworkId The Network ID of the destination (String to support Realms).
      * @param data            The raw signaling payload.
      */
     default void sendSignal(String targetNetworkId, String data) {
+        throw new UnsupportedOperationException(getClass().getName()
+                + " trickles candidates but does not send signals");
     }
 
     /**
@@ -45,6 +48,8 @@ public interface NetherNetSignaling extends AutoCloseable {
      * @param sdp             The complete description.
      */
     default void sendDescription(String targetNetworkId, String sdp) {
+        throw new UnsupportedOperationException(getClass().getName()
+                + " does not trickle candidates but does not send descriptions");
     }
 
     /**
@@ -74,8 +79,9 @@ public interface NetherNetSignaling extends AutoCloseable {
     void removeSignalHandler(String connectionId);
 
     /**
-     * Returns the Local Network ID of this client as a String.
-     * This is required for formatting the 'candidate:' string in SDP.
+     * Returns the Local Network ID this side is addressed by. A client puts it in its join, a
+     * server that is addressed by host name rather than network id, such as HTTP signaling,
+     * returns an empty string.
      */
     String getLocalNetworkId();
 
@@ -96,7 +102,8 @@ public interface NetherNetSignaling extends AutoCloseable {
     @FunctionalInterface
     interface SignalHandler {
         /**
-         * Called when a signal is received for the registered connection ID.
+         * Called when a signal is received for the registered connection ID, on whichever thread
+         * the signaling reads from. The channels move themselves back onto their event loop.
          *
          * @param signal The raw signal payload.
          */
