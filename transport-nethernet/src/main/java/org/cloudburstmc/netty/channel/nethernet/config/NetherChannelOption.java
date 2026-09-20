@@ -31,27 +31,34 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
             valueOf(NetherChannelOption.class, "NETHER_PEER_CONNECTION_CONFIG");
 
     /**
-     * The timeout in seconds for completing the WebRTC handshake on the client before retrying.
+     * How long, in milliseconds, one client attempt has to finish signaling, ICE and DTLS before
+     * the attempt is given up. Defaults to 3000, which suits LAN discovery; a connection across
+     * the internet with HTTP signaling wants the same order as a connect timeout.
      */
     public static final ChannelOption<Integer> NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS =
             valueOf(NetherChannelOption.class, "NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS");
 
     /**
-     * The maximum number of handshake attempts before giving up on connecting.
+     * How many attempts a client connect gets before it fails, the first one included. Defaults
+     * to 3. Signaling that sends the offer in one piece, such as HTTP, gets one attempt whatever
+     * this says: the server would refuse a repeat as a duplicate join while the first is pending.
      */
     public static final ChannelOption<Integer> NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS =
             valueOf(NetherChannelOption.class, "NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS");
 
     /**
      * The identity a client presents in its offer, derived for the player it connects on behalf of
-     * with {@link OperatorIdentity#forPlayer}. Unset, the offer carries no assertion, which a server
-     * that validates identities refuses.
+     * with {@link OperatorIdentity#forPlayer}. Derive it per connection: its token expires after an
+     * hour. Unset, the offer carries no assertion, which a server that validates identities
+     * refuses. A server accepts an operator signed identity only with
+     * {@link org.cloudburstmc.netty.util.nethernet.TokenTrust#ANY}, since no auth service issued it.
      */
     public static final ChannelOption<OperatorIdentity> NETHER_CLIENT_IDENTITY =
             valueOf(NetherChannelOption.class, "NETHER_CLIENT_IDENTITY");
 
     /**
-     * The timeout in seconds for completing the WebRTC handshake on the server side before automatically closing the connection.
+     * The timeout in seconds for completing the WebRTC handshake on the server side before
+     * automatically closing the connection.
      */
     public static final ChannelOption<Integer> NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS =
             valueOf(NetherChannelOption.class, "NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS");

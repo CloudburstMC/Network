@@ -1129,6 +1129,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         /**
          * Sets who to trust to have signed the token in a joining peer's identity assertion.
          * Defaults to {@link TokenTrust#MINECRAFT_AUTH}, which is what a retail client presents.
+         * A peer built with this library, such as a proxy presenting
+         * {@link OperatorIdentity#forPlayer}, signs its own token, which only
+         * {@link TokenTrust#ANY} accepts.
          *
          * @param tokenTrust The trust policy
          * @return This builder
