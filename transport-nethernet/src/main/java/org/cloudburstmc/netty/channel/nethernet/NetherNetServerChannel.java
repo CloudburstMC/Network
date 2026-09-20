@@ -25,7 +25,6 @@ import org.jspecify.annotations.Nullable;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
@@ -42,7 +41,6 @@ import tel.schich.libdatachannel.*;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public class NetherNetServerChannel extends AbstractServerChannel {
@@ -134,7 +132,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 .withPortRangeEnd(port);
     }
 
-    /** Called when the server metrics option changes, which is usually long after the bind. */
+    /**
+     * Called by the config when the server metrics option changes, which is usually long after
+     * the bind. Not for hosts, which set the option.
+     */
     public void serverMetricsChanged(NetherServerMetrics metrics) {
         if (this.signaling != null) {
             this.signaling.setMetrics(metrics);
@@ -145,28 +146,25 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         return this.config.getOption(NetherChannelOption.NETHER_SERVER_METRICS);
     }
 
-    public void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId) {
+    void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId) {
         acceptConnection(connectionId, offerSdp, remoteNetworkId, null, null);
     }
 
-    public void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
-                                 @Nullable InetSocketAddress clientAddress) {
-        acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, null);
-    }
-
     /**
+     * Where a join arrives from the signaling. A host hands offers in through the signaling's own
+     * entry, such as {@code NetherNetHTTPServerSignaling.acceptOffer}, which answers them.
+     *
      * @param clientAddress The address the peer signaled from, or null if it is not known. ICE
      *                      replaces it with the negotiated pair once the connection is up, but
      *                      until then it is all the child channel has to report.
      */
-    public void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
-                                 @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
-        PeerConnectionConfiguration rtcConfig =
-                bindIce(this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG))
-                        .withDisableAutoNegotiation(true)
-                        .withIceServers(
-                                this.signaling.getIceServers().stream().map(IceServerInfo::toUris).flatMap(List::stream)
-                                        .toList());
+    void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
+                          @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
+        PeerConnectionConfiguration configured =
+                this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG);
+        PeerConnectionConfiguration rtcConfig = bindIce(configured)
+                .withDisableAutoNegotiation(true)
+                .withIceServers(NetherNetChannel.withIceServers(configured, this.signaling.getIceServers()));
         IdentityKeyVerifier identityVerifier = player == null ? null
                 : TransportIdentityBinding.forPlayer(player);
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);

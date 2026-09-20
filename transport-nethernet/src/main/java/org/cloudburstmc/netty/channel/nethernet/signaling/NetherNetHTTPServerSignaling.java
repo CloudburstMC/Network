@@ -62,7 +62,9 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoop;
+import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -120,7 +122,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final Map<InetAddress, Integer> connectionsPerAddress = new ConcurrentHashMap<>();
 
     private final PlayerFilter playerFilter;
-    private final MotdProvider motdProvider;
+    private volatile MotdProvider motdProvider;
 
     private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
 
@@ -149,6 +151,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private volatile NetherServerMetrics metrics;
 
     private Channel serverChannel;
+    /** The HTTP listener's own loop, so the channel's loop can be of any transport. */
+    private volatile EventLoopGroup acceptor;
     private volatile EventLoop eventLoop;
     /** Identity validation runs here rather than on the loop, since a trust anchor may fetch keys. */
     private volatile ExecutorService validation;
@@ -210,8 +214,17 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             throw new ConnectException("Failed to bind HTTP signaling to " + localAddress + ": " + e.getMessage());
         }
 
+        // The listener needs an NIO loop for its socket, which the owning channel's loop need not
+        // be, so it brings one; joins still reach the channel on the loop given above
+        EventLoopGroup acceptor = new NioEventLoopGroup(1, task -> {
+            Thread thread = new Thread(task, "NetherNet signaling acceptor");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.acceptor = acceptor;
+
         ServerBootstrap bootstrap = new ServerBootstrap();
-        bootstrap.group(eventLoop)
+        bootstrap.group(acceptor)
                 .channelFactory((ChannelFactory<NioServerSocketChannel>) () -> new NioServerSocketChannel(channel))
                 .childHandler(new ChannelInitializer<>() {
                     @Override
@@ -245,6 +258,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
         ChannelFuture regFuture = bootstrap.register();
         serverChannel = regFuture.channel();
+        if (regFuture.isDone() && !regFuture.isSuccess()) {
+            regFuture.channel().close();
+            throw new ConnectException("Failed to register HTTP signaling: " + regFuture.cause());
+        }
         regFuture.addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
                 log.error("Failed to register HTTP signaling channel", future.cause());
@@ -535,9 +552,12 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         this.newConnectionHandler = handler;
     }
 
+    /**
+     * Serves this as the status document from here on, in place of whatever the builder set.
+     */
     @Override
     public void setAdvertisementData(PongData pongData) {
-        // Nothing to do for HTTP signaling
+        this.motdProvider = (host, remoteAddress) -> pongData;
     }
 
     @Override
@@ -583,6 +603,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * <p>
      * The returned description already carries the ICE candidates and the server identity
      * assertion, so it can be written back to the peer verbatim.
+     * <p>
+     * Callable from any thread. The identity is validated on the signaling's own thread and the
+     * rest happens on the event loop, which is also where the future completes.
      *
      * @param networkId     The peer's network ID
      * @param sdpOffer      The raw SDP offer
@@ -839,6 +862,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         if (serverChannel != null) {
             serverChannel.close();
         }
+        EventLoopGroup acceptor = this.acceptor;
+        if (acceptor != null) {
+            acceptor.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+        }
         ExecutorService validation = this.validation;
         if (validation != null) {
             validation.shutdownNow();
@@ -872,8 +899,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         /**
          * Called for every status request, so the returned data can change over time.
          * <p>
-         * Called on the event loop, so don't block in here. The discovery-only fields of
-         * {@link PongData} are ignored, as they have no place in the status response.
+         * Called on the event loop, so don't block in here. Every field of {@link PongData} is
+         * written to the status document, in the order the schema lists.
          * <p>
          * Answering null serves no status at all, which is how a host says it does not take
          * NetherNet for this request. A join sent anyway still reaches the {@link PlayerFilter}.
@@ -888,9 +915,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     /**
      * Builder for {@link NetherNetHTTPServerSignaling}.
      * <p>
-     * The server is backed by one keystore for the TLS listener and another for the
-     * server identity used to sign SDP answers. Both must be PKCS12 files, and only
-     * the identity keystore is required.
+     * Only the identity is required, see {@link #setIdentity}. TLS is optional and comes from a
+     * PEM pair or a PKCS12 keystore. The defaults suit a retail client on the open internet:
+     * tokens are checked against Minecraft's auth service, TLS once served is required, and ICE
+     * gathers on the signaling port's UDP side.
      */
     public static class Builder {
         private OperatorIdentity identity;
@@ -1016,8 +1044,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Caps the connections one address may hold at once. Trusted proxies are exempt, since
-         * every client behind one shares its address.
+         * Caps the connections one address may hold at once. Defaults to 8, which is one player's
+         * worth with room for a status check: players behind one NAT share an address, so a host
+         * expecting a household or a LAN party behind one raises it. Trusted proxies are exempt,
+         * since every client behind one shares its address.
          *
          * @param maxConnectionsPerAddress Connections per address, must be positive
          * @return This builder
@@ -1084,8 +1114,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets whether ICE may gather on the port signaling binds to. Defaults to true. Set it
-         * false when another transport, such as RakNet, already holds the UDP side of that port.
+         * Sets whether ICE may gather on the port signaling binds to. Defaults to true, so a host
+         * needs one port open for both. Set it false when another transport already holds the UDP
+         * side of that port, which is the case for RakNet on the usual 19132, and give ICE its own
+         * port through {@code NetherChannelOption.NETHER_SERVER_ICE_ADDRESS}.
          *
          * @param iceOnLocalPort Whether ICE may use the signaling port
          * @return This builder
@@ -1211,7 +1243,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets a fixed MOTD to advertise for every status request.
+         * Sets a fixed MOTD to advertise for every status request. The same as
+         * {@code setAdvertisementData} on the built signaling.
          *
          * @param motd The MOTD to advertise
          * @return This builder

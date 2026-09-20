@@ -60,12 +60,14 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
 
     @Override
     public <T> boolean setOption(ChannelOption<T> option, T value) {
-        this.validate(option, value);
-
+        // Null clears the metrics, which is the only way back to reporting nothing
         if (option == NetherChannelOption.NETHER_SERVER_METRICS) {
             this.setServerMetrics((NetherServerMetrics) value);
             return true;
-        } else if (option == NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS) {
+        }
+        this.validate(option, value);
+
+        if (option == NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS) {
             this.setServerRtcHandshakeTimeoutSeconds((Integer) value);
             return true;
         } else if (option == NetherChannelOption.NETHER_INFER_PEER_CANDIDATES) {

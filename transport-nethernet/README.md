@@ -30,6 +30,44 @@ The classifiers are `windows-x86_64`, `windows-aarch64`, `macos-x86_64`, `macos-
 > [!WARNING]
 > Every classifier of one operating system carries its native under the same path, so putting several of them on one classpath resolves to whichever comes first. Use `arch-detect` instead of listing them.
 
+### Server
+
+```java
+OperatorIdentity identity = OperatorIdentity.fromPemOrCreate(new File("identity.pem"), "My Server");
+NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
+        .setIdentity(identity)
+        .setMotd(new PongData.Builder().setServerName("My Server").setProtocol(protocol).setVersion(version).build())
+        // Retail clients present an Xbox issued token; a proxy built with this library signs its own
+        .setTokenTrust(TokenTrust.MINECRAFT_AUTH)
+        .build();
+
+new ServerBootstrap()
+        .group(group) // any transport, the signaling listener runs on a loop of its own
+        .channelFactory(NetherNetChannelFactory.server(signaling))
+        // Media on its own UDP port when another transport holds the signaling port's
+        .option(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, new InetSocketAddress(host, 19133))
+        .childHandler(initializer)
+        .bind(host, 19132);
+```
+
+The identity file is created on first start and pinned by clients, so keep it. `NetherNetChildChannel.PLAYER_INFO` on an accepted channel carries the validated player, and `TransportIdentityBinding` ties the login chain to it.
+
+### Client
+
+```java
+OperatorIdentity player = identity.forPlayer(xuid, name); // per connection, the token expires
+
+new Bootstrap()
+        .group(group)
+        .channelFactory(NetherNetChannelFactory.client(NetherNetHTTPClientSignaling::new)) // one per connection
+        .option(NetherChannelOption.NETHER_CLIENT_IDENTITY, player)
+        .option(NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS, 10_000)
+        .handler(initializer)
+        .connect(serverAddress);
+```
+
+The server has to trust an operator signed identity, which is `TokenTrust.ANY`; the default refuses it with 401. The client speaks plaintext unless built with `secure`, and a server serving TLS refuses plaintext by default.
+
 ### Examples
 
 These projects use this library to provide Nethernet support. You can see their source code for examples of how to use this library:

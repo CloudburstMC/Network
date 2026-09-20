@@ -16,6 +16,8 @@
 
 package org.cloudburstmc.netty.channel.nethernet;
 
+import tel.schich.libdatachannel.PeerConnectionConfiguration;
+import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
@@ -36,6 +38,9 @@ import tel.schich.libdatachannel.DataChannelCallback;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.PeerState;
 
+import java.util.List;
+import java.util.ArrayList;
+import java.net.URI;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -91,7 +96,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * Both sides call it, so a failure counts the same whether this channel dialed out or was
      * accepted.
      */
-    public void connectionFailed(NetherConnectionFailure reason) {
+    protected void connectionFailed(NetherConnectionFailure reason) {
         NetherChannelMetrics metrics = config.getMetrics();
         if (metrics != null && this.failureReported.compareAndSet(false, true)) {
             metrics.connectionFailed(reason);
@@ -150,14 +155,11 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     /**
-     * The ICE candidate pair traffic currently flows over, or {@code null} until the peer connection
-     * is connected. The pair can change after connection, so callers should not cache it.
-     * <p>
-     * Types are what ICE reports for the pair. The remote side is where traffic actually arrives
-     * from, which behind a NAT is usually a peer reflexive candidate the offer never carried. For a
-     * pair that is not relayed, libjuice sends from one socket and does not track which local
-     * candidate it used, so the local side is the first one it gathered. A {@code relay} type on
-     * either side means the traffic passes through a TURN server.
+     * The candidate pair ICE settled on, which is where the media really flows: the signaling
+     * endpoint a client dialed and the address a server saw a join from are only where the
+     * conversation started. Once connected, a channel's remote address is the pair's remote side.
+     *
+     * @return The selected pair, or null while there is none
      */
     public Path selectedPath() {
         PeerConnection peer = this.peerConnection;
@@ -195,7 +197,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * @param reliable   The reliable data channel, which this channel sends over
      * @param unreliable The unreliable data channel, or {@code null} when the peer opened none
      */
-    public void activate(DataChannel reliable, DataChannel unreliable) {
+    protected void activate(DataChannel reliable, DataChannel unreliable) {
         this.pending = new DataChannels(reliable, unreliable);
         if (isRegistered()) {
             eventLoop().execute(this::activate0);
@@ -448,6 +450,22 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
     }
 
+    /**
+     * The configured ICE servers with the signaling's added, since a host may name its own and a
+     * signaling that hands some out is not a reason to lose them.
+     */
+    static List<URI> withIceServers(PeerConnectionConfiguration configured, List<IceServerInfo> fromSignaling) {
+        List<URI> servers = new ArrayList<>(configured.iceServers());
+        for (IceServerInfo info : fromSignaling) {
+            for (URI uri : info.toUris()) {
+                if (!servers.contains(uri)) {
+                    servers.add(uri);
+                }
+            }
+        }
+        return servers;
+    }
+
     static void deregisterAll(PeerConnection peer) {
         peer.onLocalDescription.deregisterAll();
         peer.onLocalCandidate.deregisterAll();
@@ -507,7 +525,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
         return METADATA;
     }
 
-    public void setRemoteAddress(SocketAddress remoteAddress) {
+    protected void setRemoteAddress(SocketAddress remoteAddress) {
         this.remoteAddress = remoteAddress;
     }
 }

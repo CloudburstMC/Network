@@ -23,11 +23,8 @@ import io.netty.channel.DefaultChannelConfig;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class DefaultNetherChannelConfig extends DefaultChannelConfig {
-    private final Map<ChannelOption<?>, Object> options = new ConcurrentHashMap<>();
-
     private volatile PeerConnectionConfiguration peerConnectionConfig = PeerConnectionConfiguration.DEFAULT
             .withMaxMessageSize(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE);
     private volatile NetherChannelMetrics metrics;
@@ -52,30 +49,39 @@ public class DefaultNetherChannelConfig extends DefaultChannelConfig {
             return (T) this.peerConnectionConfig;
         } else if (option == NetherChannelOption.NETHER_METRICS) {
             return (T) this.getMetrics();
-        } else if (options.containsKey(option)) {
-            return (T) options.get(option);
         }
 
         return super.getOption(option);
     }
 
+    /**
+     * Accepts the transport's own options and Netty's, and refuses the rest, so a socket option or
+     * one meant for the other side is reported rather than kept without effect. Null clears the
+     * metrics.
+     */
     @Override
     public <T> boolean setOption(ChannelOption<T> option, T value) {
+        if (option == NetherChannelOption.NETHER_METRICS) {
+            this.setMetrics((NetherChannelMetrics) value);
+            return true;
+        }
+        this.validate(option, value);
         if (option == NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG) {
             this.setPeerConnectionConfig((PeerConnectionConfiguration) value);
             return true;
-        } else if (option == NetherChannelOption.NETHER_METRICS) {
-            this.setMetrics((NetherChannelMetrics) value);
-            return true;
-        } else if (super.setOption(option, value)) {
-            return true;
-        } else {
-            options.put(option, value);
-            return true;
         }
+        return super.setOption(option, value);
     }
 
+    /**
+     * The transport's message size limit stands unless the configuration names its own, since a
+     * configuration built from the binding's default would otherwise quietly shrink it.
+     */
     void setPeerConnectionConfig(PeerConnectionConfiguration peerConnectionConfig) {
+        if (peerConnectionConfig.maxMessageSize() == PeerConnectionConfiguration.DEFAULT.maxMessageSize()) {
+            peerConnectionConfig =
+                    peerConnectionConfig.withMaxMessageSize(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE);
+        }
         this.peerConnectionConfig = peerConnectionConfig;
     }
 
