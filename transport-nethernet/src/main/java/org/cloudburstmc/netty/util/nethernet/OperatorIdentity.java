@@ -53,6 +53,7 @@ import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.spec.ECGenParameterSpec;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -62,14 +63,20 @@ import java.util.List;
 
 
 /**
- * Produces the server-side identity assertion for each SDP answer
+ * The key an operator signs NetherNet identity assertions with, and the name players see it under.
+ * <p>
+ * A server presents it in every answer. A client presents it in its offer, derived for the player
+ * it connects on behalf of with {@link #forPlayer}, which is what a proxy does toward a downstream
+ * server.
  *
  * @see <a href="https://github.com/Mojang/bedrock-protocol-docs/blob/7330880ab78ef001cad0b9cdfedb3aa3eaa6d4af/NetherNetOnboardingGuide.md#52-producing-the-server-assertion-in-the-answer">NetherNet onboarding guide, section 5.2</a>
  */
-public class ServerIdentity {
+public class OperatorIdentity {
     private static final String ALG = AlgorithmIdentifiers.ECDSA_USING_P384_CURVE_AND_SHA384; // ES384 / P-384
     private static final String CURVE = "secp384r1";
     private static final int FIELD_BYTES = 48;
+    /** A token issued for one player's connection only needs to outlive that connection attempt. */
+    private static final Duration PLAYER_TOKEN_LIFETIME = Duration.ofHours(1);
     private static final JcaPEMKeyConverter CONVERTER = new JcaPEMKeyConverter();
     private static final Set<PosixFilePermission> OWNER_ONLY = PosixFilePermissions.fromString("rw-------");
 
@@ -78,24 +85,29 @@ public class ServerIdentity {
     private final String domain;
     private final String token;
 
-    public ServerIdentity(PrivateKey privateKey, PublicKey publicKey, Instant expiry,
-                          String domain) throws JoseException {
+    public OperatorIdentity(PrivateKey privateKey, PublicKey publicKey, Instant expiry,
+                            String domain) throws JoseException {
+        this(privateKey, publicKey, expiry, domain, null, null);
+    }
+
+    private OperatorIdentity(PrivateKey privateKey, PublicKey publicKey, Instant expiry, String domain,
+                             String xuid, String name) throws JoseException {
         this.privateKey = privateKey;
         this.publicKey = publicKey;
         this.domain = domain;
-        this.token = buildToken(publicKey, expiry);
+        this.token = buildToken(publicKey, expiry, xuid, name);
     }
 
     /**
      * Generate a brand-new server identity that is not stored
      *
      * @param domain The domain name for the server identity
-     * @return A new ServerIdentity instance
+     * @return A new OperatorIdentity instance
      * @throws JoseException If there is an error creating the JWT
      */
-    public static ServerIdentity generate(String domain) throws JoseException {
+    public static OperatorIdentity generate(String domain) throws JoseException {
         EllipticCurveJsonWebKey jwk = EcJwkGenerator.generateJwk(EllipticCurves.P384);
-        return new ServerIdentity(jwk.getPrivateKey(), jwk.getPublicKey(), null, domain);
+        return new OperatorIdentity(jwk.getPrivateKey(), jwk.getPublicKey(), null, domain);
     }
 
 
@@ -107,15 +119,15 @@ public class ServerIdentity {
      *
      * @param pem    The PEM file
      * @param domain The domain name for the server identity, as a PEM carries no subject
-     * @return The loaded ServerIdentity
+     * @return The loaded OperatorIdentity
      * @throws GeneralSecurityException If the key is malformed or not on P-384
      * @throws IOException              If there is an I/O error
      * @throws JoseException            If there is an error creating the JWT
      */
-    public static ServerIdentity fromPem(File pem, String domain)
+    public static OperatorIdentity fromPem(File pem, String domain)
             throws GeneralSecurityException, IOException, JoseException {
         KeyPair pair = readKeyPair(pem);
-        return new ServerIdentity(pair.getPrivate(), pair.getPublic(), null, domain);
+        return new OperatorIdentity(pair.getPrivate(), pair.getPublic(), null, domain);
     }
 
     /**
@@ -174,12 +186,12 @@ public class ServerIdentity {
      *
      * @param pem    The PEM file to load or create
      * @param domain The identity domain, as a PEM carries no subject
-     * @return The loaded ServerIdentity
+     * @return The loaded OperatorIdentity
      * @throws GeneralSecurityException If the key is malformed or not on P-384
      * @throws IOException              If there is an I/O error
      * @throws JoseException            If there is an error creating the JWT
      */
-    public static ServerIdentity fromPemOrCreate(File pem, String domain)
+    public static OperatorIdentity fromPemOrCreate(File pem, String domain)
             throws GeneralSecurityException, IOException, JoseException {
         Path path = pem.toPath();
         if (Files.isSymbolicLink(path)) {
@@ -235,26 +247,46 @@ public class ServerIdentity {
     }
 
     /**
-     * The keypair this identity signs with, for callers that also have to sign as a client.
+     * The key players pin this operator by, for fingerprints and fleet checks.
      *
-     * @return The keypair
+     * @return The public key
      */
-    public KeyPair keyPair() {
-        return new KeyPair(this.publicKey, this.privateKey);
+    public PublicKey publicKey() {
+        return this.publicKey;
+    }
+
+    /**
+     * This identity acting for a player, for the offer a client sends on their behalf. The token
+     * names the player and expires, so derive one per connection rather than keeping it.
+     *
+     * @param xuid The player's XUID, which the server reads as {@code xid}
+     * @param name The player's name, read as {@code xname}
+     * @return An identity with the same key and domain whose token carries the player
+     * @throws JoseException If there is an error signing the token
+     */
+    public OperatorIdentity forPlayer(String xuid, String name) throws JoseException {
+        return new OperatorIdentity(privateKey, publicKey, Instant.now().plus(PLAYER_TOKEN_LIFETIME), domain,
+                xuid, name);
     }
 
     /**
      * Build a JWT token with the given public key and expiry.
      *
      * @param publicKey The public key to include in the token
-     * @param expiry    The expiration time of the token
+     * @param expiry    The expiration time of the token, or null for none
+     * @param xuid      The player this identity acts for, or null when it acts as a host
+     * @param name      The player's name, ignored without a xuid
      * @return The signed JWT token
      * @throws JoseException If there is an error signing the token
      */
-    private String buildToken(PublicKey publicKey, Instant expiry) throws JoseException {
+    private String buildToken(PublicKey publicKey, Instant expiry, String xuid, String name) throws JoseException {
         JwtClaims claims = new JwtClaims();
         claims.setClaim("cpk", Base64.getEncoder()
                 .encodeToString(publicKey.getEncoded())); // Custom claim required by the NetherNet spec
+        if (xuid != null) {
+            claims.setClaim("xid", xuid);
+            claims.setClaim("xname", name == null ? "" : name);
+        }
         claims.setIssuedAtToNow();
 
         // If we have a domain set it as the issuer, as it could be shown to the user
@@ -286,15 +318,11 @@ public class ServerIdentity {
     }
 
     /**
-     * Generate the identity value as base64 for this answer SDP
-     *
-     * @param answerSdp The SDP to generate the identity value for
-     * @return The base64 identity value
-     * @throws JoseException If there is an error signing the identity value
+     * The identity attribute value for a description: the token and a detached signature over the
+     * description's fingerprints, which is what ties the assertion to the DTLS certificate.
      */
-    public String identityValue(String answerSdp) throws JoseException {
-        // Generate and sign the fingerprint
-        String[] fingerprintParts = sign(IdentityUtils.getCanonicalFingerprintJson(answerSdp)).split("\\.");
+    private String identityValue(String sdp) throws JoseException {
+        String[] fingerprintParts = sign(IdentityUtils.getCanonicalFingerprintJson(sdp)).split("\\.");
         String fingerprints = fingerprintParts[0] + ".." + fingerprintParts[2];
 
         Identity.Assertion assertion = new Identity.Assertion(token, fingerprints);
@@ -303,18 +331,19 @@ public class ServerIdentity {
     }
 
     /**
-     * Insert the identity into the answer SDP
-     * The specific placement is a strange requirement for the spec but we will follow it
+     * Inserts this identity's assertion into a description, offer or answer. The description has
+     * to be finished, because a peer checks the signature against exactly the fingerprints it
+     * receives, and the attribute goes ahead of the first media line as the spec requires.
      *
-     * @param answerSdp The SDP to insert the identity into
-     * @return The SDP with the identity inserted
-     * @throws JoseException If there is an error signing the identity value
+     * @param sdp The description without an identity line
+     * @return The description with the identity inserted
+     * @throws JoseException If there is an error signing
      */
-    public String augmentAnswer(String answerSdp) throws JoseException {
-        String line = "a=identity:" + identityValue(answerSdp);
-        String eol = answerSdp.contains("\r\n") ? "\r\n" : "\n";
+    public String withAssertion(String sdp) throws JoseException {
+        String line = "a=identity:" + identityValue(sdp);
+        String eol = sdp.contains("\r\n") ? "\r\n" : "\n";
 
-        String[] lines = answerSdp.split("\r\n|\n", -1);
+        String[] lines = sdp.split("\r\n|\n", -1);
         List<String> out = new ArrayList<>(lines.length + 1);
 
         boolean inserted = false;

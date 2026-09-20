@@ -13,7 +13,6 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-
 package org.cloudburstmc.netty.channel.nethernet;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherClientChannelConfig;
@@ -24,13 +23,16 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jose4j.lang.JoseException;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelInitSettings;
 import tel.schich.libdatachannel.DataChannelReliability;
+import tel.schich.libdatachannel.GatheringState;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 import tel.schich.libdatachannel.PeerState;
@@ -59,6 +61,8 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private volatile ScheduledFuture<?> handshakeTimeoutTask;
 
     private int retryCount = 0;
+    /** Whether this attempt's complete offer went out, for signaling that takes it in one piece. */
+    private boolean descriptionSent;
 
     /**
      * Creates a NetherNetClientChannel.
@@ -136,13 +140,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
             handshakeTimeoutTask.cancel(false);
         }
 
-        signaling.setNotFoundHandler(reason -> {
-            if (connectPromise != null && !connectPromise.isDone()) {
-                connectPromise.tryFailure(
-                        new ConnectException("Target Network ID " + this.targetNetworkId + " not found or offline."));
-            }
-            close();
-        });
+        // Signaling reports from its own threads, so the channel is only touched on the loop
+        signaling.setFailureHandler(reason -> eventLoop().execute(() -> {
+            String target = remoteAddress instanceof NetherNetAddress
+                    ? "network " + this.targetNetworkId : String.valueOf(remoteAddress);
+            failConnect(new ConnectException("Signaling to " + target + " failed: " + reason));
+        }));
 
         int handshakeTimeout = this.config().getOption(NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS);
         handshakeTimeoutTask = eventLoop().schedule(() -> {
@@ -162,28 +165,26 @@ public class NetherNetClientChannel extends NetherNetChannel {
                     createAndSendOffer();
                 }
             } catch (Exception e) {
-                ConnectException ce = new ConnectException("Failed to start WebRTC handshake: " + e.getMessage());
-                ce.initCause(e);
-                if (connectPromise != null && !connectPromise.isDone()) {
-                    connectPromise.tryFailure(ce);
-                }
-                if (handshakeTimeoutTask != null) {
-                    handshakeTimeoutTask.cancel(false);
-                }
-                close();
+                failConnect(connectException("Failed to start WebRTC handshake", e));
             }
         }, eventLoop()).exceptionally(e -> {
-            ConnectException ce = new ConnectException("Signaling connection failed: " + e.getMessage());
-            ce.initCause(e);
-            if (connectPromise != null && !connectPromise.isDone()) {
-                connectPromise.tryFailure(ce);
-            }
-            if (handshakeTimeoutTask != null) {
-                handshakeTimeoutTask.cancel(false);
-            }
-            close();
+            failConnect(connectException("Signaling connection failed", e));
             return null;
         });
+    }
+
+    /** Fails the connect and closes the channel. Nothing happens once the connect is decided. */
+    private void failConnect(ConnectException cause) {
+        if (connectPromise != null && !connectPromise.isDone()) {
+            connectPromise.tryFailure(cause);
+        }
+        close();
+    }
+
+    private static ConnectException connectException(String message, Throwable cause) {
+        ConnectException exception = new ConnectException(message + ": " + cause.getMessage());
+        exception.initCause(cause);
+        return exception;
     }
 
     private void resetAndRetryHandshake() {
@@ -201,11 +202,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         int maxRetries = this.config().getOption(NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS);
         if (retryCount >= maxRetries) {
             connectionFailed(NetherConnectionFailure.HANDSHAKE_TIMEOUT);
-            if (connectPromise != null && !connectPromise.isDone()) {
-                connectPromise.tryFailure(
-                        new ConnectException("Connection timed out after " + retryCount + " retries"));
-            }
-            close();
+            failConnect(new ConnectException("Connection timed out after " + retryCount + " retries"));
             return;
         }
 
@@ -217,6 +214,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         retryCount++;
         // Otherwise the first attempt's PEER_FAILED swallows the HANDSHAKE_TIMEOUT that ends them.
         clearFailureReported();
+        descriptionSent = false;
         closeWebRTC();
 
         signaling.removeSignalHandler(this.connectionId);
@@ -234,6 +232,10 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
         // Registering is what arms the native callback, so it must happen before anything can fire it
         peerConnection.onLocalCandidate.register((peer, candidate, mediaId) -> {
+            // Without trickle the candidates travel inside the description once gathering is done
+            if (!signaling.usesTrickleIce()) {
+                return;
+            }
             try {
                 signaling.sendSignal(
                         targetNetworkId,
@@ -242,6 +244,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
             } catch (Exception e) {
                 log.error("Failed to send ICE candidate", e);
                 eventLoop().execute(() -> resetAndRetryHandshake());
+            }
+        });
+
+        peerConnection.onGatheringStateChange.register((peer, state) -> {
+            if (state == GatheringState.RTC_GATHERING_COMPLETE) {
+                onGatheringComplete(peer);
             }
         });
 
@@ -265,15 +273,57 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
         // Not null for autodetection, that path releases an unset string in JNI and crashes the JVM
         peerConnection.setLocalDescription("offer");
+
+        // Anything without trickle sends the offer once from onGatheringComplete instead
+        if (!signaling.usesTrickleIce()) {
+            return;
+        }
         try {
-            signaling.sendSignal(
-                    targetNetworkId,
-                    NetherNetConstants.buildSignalConnectRequest(connectionId, peerConnection.localDescription())
-            );
+            String offer = signed(peerConnection.localDescription());
+            signaling.sendSignal(targetNetworkId, NetherNetConstants.buildSignalConnectRequest(connectionId, offer));
         } catch (Exception e) {
             log.error("Failed to send Connect Request", e);
             eventLoop().execute(() -> resetAndRetryHandshake());
         }
+    }
+
+    /**
+     * Sends the offer with every gathered candidate in it, for signaling that is one exchange
+     * rather than a stream of candidates.
+     */
+    private void onGatheringComplete(PeerConnection peer) {
+        if (signaling.usesTrickleIce()) {
+            return;
+        }
+
+        String local;
+        try {
+            // Read from the peer that gathered, which a retry may already have replaced
+            local = peer.localDescription();
+        } catch (Exception e) {
+            log.warn("Gathering complete for {} but the local description is unavailable: {}",
+                    connectionId, e.toString());
+            return;
+        }
+
+        eventLoop().execute(() -> {
+            if (peer != peerConnection || descriptionSent || handshakeComplete || !isOpen()) {
+                return;
+            }
+            descriptionSent = true;
+            try {
+                signaling.sendDescription(targetNetworkId, signed(local));
+            } catch (Exception e) {
+                log.error("Failed to send the offer for {}", connectionId, e);
+                resetAndRetryHandshake();
+            }
+        });
+    }
+
+    /** The offer with this side's identity assertion when one is configured, unsigned otherwise. */
+    private String signed(String offer) throws JoseException {
+        OperatorIdentity identity = this.config.getOption(NetherChannelOption.NETHER_CLIENT_IDENTITY);
+        return identity == null ? offer : identity.withAssertion(offer);
     }
 
     private void handleSignal(String signal) {
@@ -316,10 +366,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 }
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
                     log.error("Received SIGNAL_CONNECT_ERROR for {}.", this.connectionId);
-                    if (connectPromise != null && !connectPromise.isDone()) {
-                        connectPromise.tryFailure(new ConnectException("Remote peer sent connect error."));
-                    }
-                    close();
+                    failConnect(new ConnectException("Remote peer sent connect error."));
                 }
                 default -> {
                     log.debug("Received unknown signal type: {}", parsed.type());

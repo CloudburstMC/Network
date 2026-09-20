@@ -40,7 +40,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.Set;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
-import org.cloudburstmc.netty.util.nethernet.ServerIdentity;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -103,7 +103,7 @@ import java.util.concurrent.TimeoutException;
  * <p>
  * Follows <a href="https://github.com/Mojang/bedrock-protocol-docs/blob/7330880ab78ef001cad0b9cdfedb3aa3eaa6d4af/NetherNetOnboardingGuide.md">...</a>
  */
-public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
+public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final InternalLogger log = InternalLoggerFactory.getInstance(getClass());
 
     private final Random random = new SecureRandom();
@@ -119,7 +119,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
     /** The source a trusted proxy declared in its PROXY header. */
     private static final AttributeKey<InetSocketAddress> PROXIED_SOURCE =
-            AttributeKey.valueOf(NetherNetHTTPSignaling.class, "proxiedSource");
+            AttributeKey.valueOf(NetherNetHTTPServerSignaling.class, "proxiedSource");
 
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
@@ -133,7 +133,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     private final int maxPendingJoins;
 
     private SslContext sslContext;
-    private ServerIdentity serverIdentity;
+    private OperatorIdentity serverIdentity;
     private NewConnectionHandler newConnectionHandler;
     private volatile NetherServerMetrics metrics;
 
@@ -145,7 +145,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         this.metrics = metrics;
     }
 
-    private NetherNetHTTPSignaling(Builder builder) {
+    private NetherNetHTTPServerSignaling(Builder builder) {
         this.playerFilter = builder.playerFilter;
         this.motdProvider = builder.motdProvider;
         this.sslContext = builder.sslContext;
@@ -249,7 +249,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
             if (connectionsPerAddress.merge(peer, 1, Integer::sum) > maxConnectionsPerAddress) {
                 release(peer);
                 log.debug("Refused a connection from {}, already holding {}", peer, maxConnectionsPerAddress);
-                NetherServerMetrics metrics = NetherNetHTTPSignaling.this.metrics;
+                NetherServerMetrics metrics = NetherNetHTTPServerSignaling.this.metrics;
                 if (metrics != null) {
                     metrics.addressRefused((InetSocketAddress) ctx.channel().remoteAddress());
                 }
@@ -333,7 +333,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
 
             if (requiresTls && sslContext != null && ctx.pipeline().get(SslHandler.class) == null) {
                 log.debug("Refused a plaintext request from {}", remoteAddress);
-                NetherServerMetrics metrics = NetherNetHTTPSignaling.this.metrics;
+                NetherServerMetrics metrics = NetherNetHTTPServerSignaling.this.metrics;
                 if (metrics != null) {
                     metrics.plaintextRefused(remoteAddress);
                 }
@@ -399,7 +399,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
                 Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
                 HttpResponseStatus status = (cause instanceof OfferRejected rejected
                         ? rejected.refusal() : JoinRefusal.ERROR).status();
-                NetherServerMetrics metrics = NetherNetHTTPSignaling.this.metrics;
+                NetherServerMetrics metrics = NetherNetHTTPServerSignaling.this.metrics;
                 if (metrics != null) {
                     metrics.joinRefused(status.code());
                 }
@@ -504,7 +504,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     @Override
-    public ServerIdentity serverIdentity() {
+    public OperatorIdentity serverIdentity() {
         return this.serverIdentity;
     }
 
@@ -694,7 +694,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     @Override
-    public void sendFullSdp(String targetNetworkId, String sdp) {
+    public void sendDescription(String targetNetworkId, String sdp) {
         log.debug("Sending sdp to " + targetNetworkId);
 
         Promise<String> answer = pendingAnswers.get(targetNetworkId);
@@ -774,14 +774,14 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
     }
 
     /**
-     * Builder for {@link NetherNetHTTPSignaling}.
+     * Builder for {@link NetherNetHTTPServerSignaling}.
      * <p>
      * The server is backed by one keystore for the TLS listener and another for the
      * server identity used to sign SDP answers. Both must be PKCS12 files, and only
      * the identity keystore is required.
      */
     public static class Builder {
-        private ServerIdentity identity;
+        private OperatorIdentity identity;
         private SslContext sslContext;
         private IpRangeSet trustedProxies = IpRangeSet.empty();
         private int maxConnectionsPerAddress = 8;
@@ -799,13 +799,13 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         /**
          * Sets the identity used to sign SDP answers. Required.
          * <p>
-         * Load it with {@link ServerIdentity#fromPemOrCreate}, {@link ServerIdentity#fromPem} or
-         * {@link ServerIdentity#generate}, or build one straight from a keypair.
+         * Load it with {@link OperatorIdentity#fromPemOrCreate}, {@link OperatorIdentity#fromPem} or
+         * {@link OperatorIdentity#generate}, or build one straight from a keypair.
          *
          * @param identity The identity to sign with
          * @return This builder
          */
-        public Builder setIdentity(ServerIdentity identity) {
+        public Builder setIdentity(OperatorIdentity identity) {
             this.identity = identity;
             return this;
         }
@@ -821,7 +821,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          */
         public Builder setIdentityPem(File identityPem, String domain) {
             try {
-                return setIdentity(ServerIdentity.fromPem(identityPem, domain));
+                return setIdentity(OperatorIdentity.fromPem(identityPem, domain));
             } catch (Exception e) {
                 throw new IllegalArgumentException("Cannot read the identity key " + identityPem, e);
             }
@@ -1031,7 +1031,7 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
         /**
          * Sets whether to serve the HTTP join endpoint. Defaults to true. With it off nothing is
          * listened on and offers have to be handed in through
-         * {@link NetherNetHTTPSignaling#acceptOffer}, which is how an endpoint outside this process
+         * {@link NetherNetHTTPServerSignaling#acceptOffer}, which is how an endpoint outside this process
          * drives signaling.
          *
          * @param serveHttp Whether to bind the join endpoint
@@ -1097,12 +1097,12 @@ public class NetherNetHTTPSignaling implements NetherNetServerSignaling {
          * @return A new signaling instance
          * @throws IllegalStateException If no identity was set
          */
-        public NetherNetHTTPSignaling build() {
+        public NetherNetHTTPServerSignaling build() {
             if (identity == null) {
                 throw new IllegalStateException("An identity is required");
             }
 
-            return new NetherNetHTTPSignaling(this);
+            return new NetherNetHTTPServerSignaling(this);
         }
     }
 }

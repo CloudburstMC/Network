@@ -29,22 +29,23 @@ public interface NetherNetClientSignaling extends NetherNetSignaling {
     CompletableFuture<List<IceServerInfo>> connect(SocketAddress remoteAddress);
 
     /**
-     * Sets a handler to be called when a signaling message is received for an unknown connection ID.
+     * Sets a handler to be called when the signaling cannot deliver the connection: the target is
+     * not found or offline, or an endpoint refused the offer.
      *
-     * @param handler The handler to process incoming signaling messages for unknown connection IDs.
+     * @param handler The handler for signaling failures.
      */
-    void setNotFoundHandler(NotFoundHandler handler);
+    void setFailureHandler(FailureHandler handler);
 
     /**
-     * Functional interface for handling "Not Found" signals.
+     * Functional interface for handling signaling failures.
      */
     @FunctionalInterface
-    interface NotFoundHandler {
+    interface FailureHandler {
         /**
-         * Called when the signaling service indicates the target peer was not found.
+         * Called when the signaling reports that the connection cannot be made.
          *
          * @param reason The reason or raw message payload regarding the failure.
          */
-        void onNotFound(String reason);
+        void onFailure(String reason);
     }
 }

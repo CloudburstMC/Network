@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
 import io.netty.channel.ChannelOption;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 
 public class NetherChannelOption<T> extends ChannelOption<T> {
@@ -38,6 +39,14 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<Integer> NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS =
             valueOf(NetherChannelOption.class, "NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS");
+
+    /**
+     * The identity a client presents in its offer, derived for the player it connects on behalf of
+     * with {@link OperatorIdentity#forPlayer}. Unset, the offer carries no assertion, which a server
+     * that validates identities refuses.
+     */
+    public static final ChannelOption<OperatorIdentity> NETHER_CLIENT_IDENTITY =
+            valueOf(NetherChannelOption.class, "NETHER_CLIENT_IDENTITY");
 
     /**
      * The timeout in seconds for completing the WebRTC handshake on the server side before automatically closing the connection.

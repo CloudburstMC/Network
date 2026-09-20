@@ -16,16 +16,7 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
-import org.cloudburstmc.netty.util.nethernet.Identity;
-import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
-import org.jose4j.jws.AlgorithmIdentifiers;
-import org.jose4j.jws.JsonWebSignature;
-import org.jose4j.jwt.JwtClaims;
-
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.spec.ECGenParameterSpec;
-import java.util.Base64;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 
 /** Builds offers that carry a self signed identity, for tests that are not about the trust anchor. */
 final class TestOffers {
@@ -39,30 +30,6 @@ final class TestOffers {
     }
 
     static String selfSigned() throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
-        generator.initialize(new ECGenParameterSpec("secp384r1"));
-        KeyPair pair = generator.generateKeyPair();
-
-        JwtClaims claims = new JwtClaims();
-        claims.setClaim("cpk", Base64.getEncoder().encodeToString(pair.getPublic().getEncoded()));
-        claims.setClaim("xid", "2535000000000000");
-        claims.setClaim("xname", "Probe");
-        claims.setIssuedAtToNow();
-        claims.setExpirationTimeMinutesInTheFuture(5);
-
-        String token = sign(pair, claims.toJson());
-        String[] parts = sign(pair, IdentityUtils.getCanonicalFingerprintJson(SDP)).split("\\.");
-
-        Identity identity = new Identity(new Identity.Idp("example.test", "default"),
-                new Identity.Assertion(token, parts[0] + ".." + parts[2]));
-        return SDP.replace("m=application", "a=identity:" + identity.toBase64() + "\r\nm=application");
-    }
-
-    private static String sign(KeyPair pair, String payload) throws Exception {
-        JsonWebSignature jws = new JsonWebSignature();
-        jws.setPayload(payload);
-        jws.setKey(pair.getPrivate());
-        jws.setAlgorithmHeaderValue(AlgorithmIdentifiers.ECDSA_USING_P384_CURVE_AND_SHA384);
-        return jws.getCompactSerialization();
+        return OperatorIdentity.generate("example.test").forPlayer("2535000000000000", "Probe").withAssertion(SDP);
     }
 }

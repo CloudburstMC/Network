@@ -130,8 +130,8 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
                     }
                 }
 
-                if (isNotFound && notFoundHandler != null) {
-                    notFoundHandler.onNotFound(msg);
+                if (isNotFound && failureHandler != null) {
+                    failureHandler.onFailure(msg);
                 }
                 future.completeExceptionally(new RuntimeException(msg));
             } else {

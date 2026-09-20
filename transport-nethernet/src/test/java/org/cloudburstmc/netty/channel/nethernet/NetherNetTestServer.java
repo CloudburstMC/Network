@@ -95,7 +95,7 @@ final class NetherNetTestServer implements AutoCloseable {
             removed.complete(null);
             if (failRemoval) throw new IllegalStateException("signaling cleanup failed");
         }
-        public void sendFullSdp(String remoteNetworkId, String sdp) { answer.complete(sdp); }
+        public void sendDescription(String remoteNetworkId, String sdp) { answer.complete(sdp); }
         public boolean usesTrickleIce() { return false; }
         public void bind(SocketAddress address, EventLoop loop) { }
         public void setNewConnectionHandler(NewConnectionHandler handler) { }
