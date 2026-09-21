@@ -306,16 +306,18 @@ public final class IndependentProviderStub implements AutoCloseable {
                     request.add("keyId", requestedKey.get("keyId"));
                     ok.add("keyRequest", request);
                 }
-                draining = !body.get("state").getAsString().equals("serving");
+                draining = !body.get("acceptingPlayers").getAsBoolean();
                 long applied = body.get("appliedStateRevision").getAsLong();
                 if (applied > appliedRevision) {
                     appliedRevision = applied;
                     acknowledgements++;
                 }
-                JsonObject desired = new JsonObject();
-                desired.addProperty("revision", desiredRevision);
-                desired.addProperty("state", desiredState);
-                ok.add("desiredState", desired);
+                if (desiredState != null) {
+                    JsonObject desired = new JsonObject();
+                    desired.addProperty("revision", desiredRevision);
+                    desired.addProperty("state", desiredState);
+                    ok.add("desiredState", desired);
+                }
                 ok.addProperty("hostProfileRevision", "example-profile-" + profileRevision);
                 ok.addProperty("routable", profileRevision > 0 && keyAcknowledgements > 0 && !draining);
                 JsonObject ready = new JsonObject();
@@ -325,7 +327,7 @@ public final class IndependentProviderStub implements AutoCloseable {
                 if (extensionMetadata != null) {
                     ok.add("extensions", extensionMetadata.deepCopy());
                 }
-                if (checkInMillis > 0 && body.has("checkInVersion")) {
+                if (checkInMillis > 0) {
                     long now = System.currentTimeMillis();
                     JsonObject schedule = new JsonObject();
                     schedule.addProperty("version", 1);
