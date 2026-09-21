@@ -62,7 +62,7 @@ class ForwardedForTest {
                 .setTrustedProxies(trustedProxies)
                 .setMotdProvider((host, remoteAddress) -> {
                     seen.offer(remoteAddress);
-                    return NetherNetServerSignaling.PongData.DEFAULT;
+                    return PongData.DEFAULT;
                 })
                 .build();
 

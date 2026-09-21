@@ -17,7 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
+import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;

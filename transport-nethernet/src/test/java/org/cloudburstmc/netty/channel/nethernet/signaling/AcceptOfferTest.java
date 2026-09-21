@@ -53,7 +53,7 @@ class AcceptOfferTest {
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setTokenTrust(TokenTrust.ANY)
                 .setServeHttp(serveHttp)
-                .setPlayerFilter((host, player) -> allow ? null : NetherNetHTTPServerSignaling.JoinRefusal.REJECTED)
+                .setPlayerFilter((host, player) -> allow ? null : JoinRefusal.REJECTED)
                 .build();
         signaling.setNewConnectionHandler((id, networkId, payload, address, player) -> { });
         return signaling;
@@ -104,9 +104,9 @@ class AcceptOfferTest {
         ExecutionException e = assertThrows(ExecutionException.class,
                 () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null).get(10, TimeUnit.SECONDS));
 
-        NetherNetHTTPServerSignaling.OfferRejected rejected =
-                assertInstanceOf(NetherNetHTTPServerSignaling.OfferRejected.class, e.getCause());
-        assertEquals(NetherNetHTTPServerSignaling.JoinRefusal.REJECTED, rejected.refusal());
+        OfferRejected rejected =
+                assertInstanceOf(OfferRejected.class, e.getCause());
+        assertEquals(JoinRefusal.REJECTED, rejected.refusal());
     }
 
     @Test
@@ -118,9 +118,9 @@ class AcceptOfferTest {
                 () -> s.acceptOffer("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n", null, null)
                         .get(10, TimeUnit.SECONDS));
 
-        NetherNetHTTPServerSignaling.OfferRejected rejected =
-                assertInstanceOf(NetherNetHTTPServerSignaling.OfferRejected.class, e.getCause());
-        assertEquals(NetherNetHTTPServerSignaling.JoinRefusal.INVALID_IDENTITY, rejected.refusal());
+        OfferRejected rejected =
+                assertInstanceOf(OfferRejected.class, e.getCause());
+        assertEquals(JoinRefusal.INVALID_IDENTITY, rejected.refusal());
     }
 
     @Test
@@ -135,9 +135,9 @@ class AcceptOfferTest {
         ExecutionException e = assertThrows(ExecutionException.class,
                 () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null).get(5, TimeUnit.SECONDS));
 
-        NetherNetHTTPServerSignaling.OfferRejected rejected =
-                assertInstanceOf(NetherNetHTTPServerSignaling.OfferRejected.class, e.getCause());
-        assertEquals(NetherNetHTTPServerSignaling.JoinRefusal.ERROR, rejected.refusal());
+        OfferRejected rejected =
+                assertInstanceOf(OfferRejected.class, e.getCause());
+        assertEquals(JoinRefusal.ERROR, rejected.refusal());
         assertEquals(0, s.pendingJoins());
     }
 }
