@@ -63,12 +63,15 @@ new Bootstrap()
         .group(group)
         .channelFactory(NetherNetChannelFactory.client(NetherNetHTTPClientSignaling::new)) // one per connection
         .option(NetherChannelOption.NETHER_CLIENT_IDENTITY, player)
+        .option(NetherChannelOption.NETHER_CLIENT_SERVER_TRUST, TokenTrust.pinnedTo(serverKey)) // optional
         .option(NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS, 10_000)
         .handler(initializer)
         .connect(serverAddress);
 ```
 
 The server has to trust an operator signed identity, which is `TokenTrust.ANY`; the default refuses it with 401. The client speaks plaintext unless built with `secure`, and a server serving TLS refuses plaintext by default.
+
+A client that knows the server can pin it: the connect then fails unless the answer is signed by the identity behind `serverKey`. The server side reads that key as `identity.publicKey()`, and `IdentityUtils.encodePublicKey` and `decodePublicKey` carry it through a config as text. Without the option the answer's identity is not checked.
 
 ### Examples
 

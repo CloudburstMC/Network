@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 class NetherNetHTTPServerSignalingBuilderTest {
 
     /** Throwaway key from {@code openssl ecparam -name secp384r1 -genkey -noout}. Never deploy it. */
-    private static final String PEM =
+    static final String PEM =
             "-----BEGIN EC PRIVATE KEY-----\n" +
             "MIGkAgEBBDDmCV/icghwrAdKuvy8s6iJc7J5SdH9Ks43hq7Bw1JO/d0sgdHGbe30\n" +
             "mKHzlu5+GW6gBwYFK4EEACKhZANiAAQK7XU8ZiZox723S4u5U01a1Uioo5TMCuT7\n" +
