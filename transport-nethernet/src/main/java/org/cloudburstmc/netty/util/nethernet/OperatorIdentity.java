@@ -16,16 +16,6 @@
 
 package org.cloudburstmc.netty.util.nethernet;
 
-import org.bouncycastle.asn1.ASN1BitString;
-import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
-import org.bouncycastle.asn1.sec.ECPrivateKey;
-import org.bouncycastle.asn1.sec.SECObjectIdentifiers;
-import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
-import org.bouncycastle.openssl.PEMKeyPair;
-import org.bouncycastle.openssl.PEMParser;
-import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
-import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
-import org.bouncycastle.util.io.pem.PemObject;
 import org.jose4j.jwk.EcJwkGenerator;
 import org.jose4j.jwk.EllipticCurveJsonWebKey;
 import org.jose4j.jws.AlgorithmIdentifiers;
@@ -38,8 +28,6 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.StringReader;
-import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -74,10 +62,8 @@ import java.util.List;
 public class OperatorIdentity {
     private static final String ALG = AlgorithmIdentifiers.ECDSA_USING_P384_CURVE_AND_SHA384; // ES384 / P-384
     private static final String CURVE = "secp384r1";
-    private static final int FIELD_BYTES = 48;
     /** A token issued for one player's connection only needs to outlive that connection attempt. */
     private static final Duration PLAYER_TOKEN_LIFETIME = Duration.ofHours(1);
-    private static final JcaPEMKeyConverter CONVERTER = new JcaPEMKeyConverter();
     private static final Set<PosixFilePermission> OWNER_ONLY = PosixFilePermissions.fromString("rw-------");
 
     private final PrivateKey privateKey;
@@ -96,6 +82,29 @@ public class OperatorIdentity {
         this.publicKey = publicKey;
         this.domain = domain;
         this.token = buildToken(publicKey, expiry, xuid, name);
+    }
+
+    private OperatorIdentity(KeyPair keyPair, String domain, String token) {
+        this.privateKey = keyPair.getPrivate();
+        this.publicKey = keyPair.getPublic();
+        this.domain = domain;
+        this.token = token;
+    }
+
+    /**
+     * An identity whose token an auth service issued for the key, as a retail client's multiplayer
+     * token is: what a client presents to a server that validates against Minecraft's auth service
+     * rather than trusting the peer's own signature. The key has to be the one the token's
+     * {@code cpk} claim names, or the fingerprint signature will not verify.
+     *
+     * @param keyPair The key the token was issued for
+     * @param token   The compact JWT the auth service issued, carrying {@code cpk}, {@code xid} and
+     *                {@code xname}
+     * @param domain  The identity provider named in the assertion
+     * @return An identity presenting that token
+     */
+    public static OperatorIdentity fromToken(KeyPair keyPair, String token, String domain) {
+        return new OperatorIdentity(keyPair, domain, token);
     }
 
     /**
@@ -126,56 +135,8 @@ public class OperatorIdentity {
      */
     public static OperatorIdentity fromPem(File pem, String domain)
             throws GeneralSecurityException, IOException, JoseException {
-        KeyPair pair = readKeyPair(pem);
+        KeyPair pair = PemKeys.read(pem);
         return new OperatorIdentity(pair.getPrivate(), pair.getPublic(), null, domain);
-    }
-
-    /**
-     * Reads either shape of EC private key. PKCS#8 wraps the same SEC1 structure, so the public
-     * point is in the same place either way, and the file is useless to us without it.
-     */
-    private static KeyPair readKeyPair(File pem) throws GeneralSecurityException, IOException {
-        // Read the file first, so anything the parser then complains about is the key's fault
-        String armour = Files.readString(pem.toPath(), StandardCharsets.UTF_8);
-        Object parsed;
-        try (PEMParser parser = new PEMParser(new StringReader(armour))) {
-            parsed = parser.readObject();
-        } catch (IOException | RuntimeException malformed) {
-            throw new GeneralSecurityException("Cannot read the EC private key in " + pem, malformed);
-        }
-
-        PrivateKeyInfo info;
-        if (parsed instanceof PEMKeyPair keyPair) {
-            info = keyPair.getPrivateKeyInfo();
-        } else if (parsed instanceof PrivateKeyInfo only) {
-            info = only;
-        } else if (parsed == null) {
-            throw new GeneralSecurityException("No PEM block found in " + pem);
-        } else {
-            throw new GeneralSecurityException("Expected an unencrypted EC private key in " + pem
-                    + ", got " + parsed.getClass().getSimpleName());
-        }
-
-        ASN1BitString point;
-        try {
-            point = ECPrivateKey.getInstance(info.parsePrivateKey()).getPublicKey();
-        } catch (IOException | RuntimeException malformed) {
-            throw new GeneralSecurityException("Cannot read the EC private key in " + pem, malformed);
-        }
-        if (point == null) {
-            throw new GeneralSecurityException("The EC private key in " + pem + " does not carry its public key. "
-                    + "Regenerate it with: openssl ecparam -name secp384r1 -genkey -noout");
-        }
-
-        KeyPair pair = CONVERTER.getKeyPair(new PEMKeyPair(
-                new SubjectPublicKeyInfo(info.getPrivateKeyAlgorithm(), point.getBytes()), info));
-        try {
-            // Rejects anything that is not a point on P-384, which the assertion algorithm requires
-            IdentityPublicKey.canonical(pair.getPublic());
-        } catch (RuntimeException invalid) {
-            throw new GeneralSecurityException("The key in " + pem + " is not on P-384", invalid);
-        }
-        return pair;
     }
 
     /**
@@ -220,30 +181,13 @@ public class OperatorIdentity {
                 : new FileAttribute<?>[0];
         Path temporary = Files.createTempFile(directory, ".identity-", ".pem", attributes);
         try {
-            Files.writeString(temporary, writeSec1Pem(pair), StandardCharsets.UTF_8);
+            Files.writeString(temporary, PemKeys.writeSec1(pair), StandardCharsets.UTF_8);
             // Never replace a key another process created in the meantime
             Files.move(temporary, path);
         } finally {
             Files.deleteIfExists(temporary);
         }
         return fromPem(pem, domain);
-    }
-
-    /**
-     * Writes SEC1 rather than the PKCS#8 the JDK produces, because that drops the public point and
-     * it cannot be recomputed through the standard library.
-     */
-    private static String writeSec1Pem(KeyPair pair) throws IOException {
-        SubjectPublicKeyInfo publicKey = SubjectPublicKeyInfo.getInstance(pair.getPublic().getEncoded());
-        ECPrivateKey scalar = ECPrivateKey.getInstance(
-                PrivateKeyInfo.getInstance(pair.getPrivate().getEncoded()).parsePrivateKey());
-
-        StringWriter out = new StringWriter();
-        try (JcaPEMWriter writer = new JcaPEMWriter(out)) {
-            writer.writeObject(new PemObject("EC PRIVATE KEY", new ECPrivateKey(FIELD_BYTES * 8,
-                    scalar.getKey(), publicKey.getPublicKeyData(), SECObjectIdentifiers.secp384r1).getEncoded()));
-        }
-        return out.toString();
     }
 
     /**

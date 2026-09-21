@@ -56,6 +56,8 @@ The identity file is created on first start and pinned by clients, so keep it. `
 
 ```java
 OperatorIdentity player = identity.forPlayer(xuid, name); // per connection, the token expires
+// A client holding a token the auth service issued for its key presents that instead:
+// OperatorIdentity.fromToken(sessionKeyPair, multiplayerToken, "https://authorization.franchise.minecraft-services.net/")
 
 new Bootstrap()
         .group(group)
