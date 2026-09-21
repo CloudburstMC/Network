@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet.config;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 
 import java.util.Map;
 
@@ -26,6 +27,7 @@ public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig
     private volatile int clientHandshakeTimeoutMs = 3000;
     private volatile int maxHandshakeAttempts = 3;
     private volatile OperatorIdentity clientIdentity;
+    private volatile TokenTrust serverTrust;
 
     public DefaultNetherClientChannelConfig(Channel channel) {
         super(channel);
@@ -37,7 +39,8 @@ public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig
                 super.getOptions(),
                 NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS,
                 NetherChannelOption.NETHER_CLIENT_MAX_HANDSHAKE_ATTEMPTS,
-                NetherChannelOption.NETHER_CLIENT_IDENTITY
+                NetherChannelOption.NETHER_CLIENT_IDENTITY,
+                NetherChannelOption.NETHER_CLIENT_SERVER_TRUST
         );
     }
 
@@ -50,6 +53,8 @@ public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig
             return (T) Integer.valueOf(this.maxHandshakeAttempts);
         } else if (option == NetherChannelOption.NETHER_CLIENT_IDENTITY) {
             return (T) this.clientIdentity;
+        } else if (option == NetherChannelOption.NETHER_CLIENT_SERVER_TRUST) {
+            return (T) this.serverTrust;
         }
 
         return super.getOption(option);
@@ -67,6 +72,9 @@ public class DefaultNetherClientChannelConfig extends DefaultNetherChannelConfig
             return true;
         } else if (option == NetherChannelOption.NETHER_CLIENT_IDENTITY) {
             this.clientIdentity = (OperatorIdentity) value;
+            return true;
+        } else if (option == NetherChannelOption.NETHER_CLIENT_SERVER_TRUST) {
+            this.serverTrust = (TokenTrust) value;
             return true;
         } else {
             return super.setOption(option, value);

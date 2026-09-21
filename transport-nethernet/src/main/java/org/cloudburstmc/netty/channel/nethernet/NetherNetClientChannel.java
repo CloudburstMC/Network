@@ -22,7 +22,9 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
+import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
@@ -44,6 +46,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
@@ -162,6 +165,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
         } catch (LinkageError e) {
             failConnect(connectException("The libdatachannel native library is not available", e));
             return;
+        }
+
+        TokenTrust serverTrust = this.config.getOption(NetherChannelOption.NETHER_CLIENT_SERVER_TRUST);
+        if (serverTrust != null && retryCount == 0) {
+            // Off the loop, since a trust that fetches keys would otherwise do so on it
+            CompletableFuture.runAsync(serverTrust::prepare);
         }
 
         signaling.connect(remoteAddress).thenAcceptAsync(iceServers -> {
@@ -383,6 +392,15 @@ public class NetherNetClientChannel extends NetherNetChannel {
 
             switch (parsed.type()) {
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE -> {
+                    TokenTrust trust = this.config.getOption(NetherChannelOption.NETHER_CLIENT_SERVER_TRUST);
+                    if (trust != null) {
+                        try {
+                            IdentityUtils.validateSdp(data, trust);
+                        } catch (Exception e) {
+                            failConnect(connectException("The server's identity was refused", e));
+                            return;
+                        }
+                    }
                     try {
                         peerConnection.setRemoteDescription(data, SessionDescriptionType.ANSWER);
                     } catch (Exception e) {

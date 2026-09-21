@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.channel.nethernet.config;
 
 import io.netty.channel.ChannelOption;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 
 import java.net.InetSocketAddress;
@@ -57,6 +58,17 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<OperatorIdentity> NETHER_CLIENT_IDENTITY =
             valueOf(NetherChannelOption.class, "NETHER_CLIENT_IDENTITY");
+
+    /**
+     * How a client trusts the identity the server answers with. Unset, the answer's identity is
+     * not checked, which suits a hop that TLS on the signaling already protects. Set it to
+     * {@link TokenTrust#pinnedTo} with the server's public key to confirm the server is the one
+     * holding that identity; the connect fails otherwise. The other policies do not fit an answer:
+     * a dedicated server's token is issued by its own operator identity and carries no expiry, so
+     * {@link TokenTrust#MINECRAFT_AUTH} cannot verify it and {@link TokenTrust#ANY} refuses it.
+     */
+    public static final ChannelOption<TokenTrust> NETHER_CLIENT_SERVER_TRUST =
+            valueOf(NetherChannelOption.class, "NETHER_CLIENT_SERVER_TRUST");
 
     /**
      * The timeout in seconds for completing the WebRTC handshake on the server side before

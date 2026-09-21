@@ -44,7 +44,6 @@ import java.security.spec.ECGenParameterSpec;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Set;
 import java.util.Collections;
 import java.util.List;
@@ -225,8 +224,7 @@ public class OperatorIdentity {
      */
     private String buildToken(PublicKey publicKey, Instant expiry, String xuid, String name) throws JoseException {
         JwtClaims claims = new JwtClaims();
-        claims.setClaim("cpk", Base64.getEncoder()
-                .encodeToString(publicKey.getEncoded())); // Custom claim required by the NetherNet spec
+        claims.setClaim("cpk", IdentityUtils.encodePublicKey(publicKey)); // Custom claim required by the NetherNet spec
         if (xuid != null) {
             claims.setClaim("xid", xuid);
             claims.setClaim("xname", name == null ? "" : name);

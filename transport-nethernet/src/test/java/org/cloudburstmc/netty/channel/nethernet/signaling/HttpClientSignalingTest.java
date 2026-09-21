@@ -25,15 +25,20 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChannelFactory;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.PublicKey;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -91,6 +96,10 @@ class HttpClientSignalingTest {
     }
 
     private Bootstrap client(OperatorIdentity identity) {
+        return this.client(identity, null);
+    }
+
+    private Bootstrap client(OperatorIdentity identity, TokenTrust serverTrust) {
         Bootstrap bootstrap = new Bootstrap().group(this.group)
                 .channelFactory(NetherNetChannelFactory.client(new NetherNetHTTPClientSignaling()))
                 .option(NetherChannelOption.NETHER_CLIENT_HANDSHAKE_TIMEOUT_MS, 20_000)
@@ -99,7 +108,61 @@ class HttpClientSignalingTest {
         if (identity != null) {
             bootstrap.option(NetherChannelOption.NETHER_CLIENT_IDENTITY, identity);
         }
+        if (serverTrust != null) {
+            bootstrap.option(NetherChannelOption.NETHER_CLIENT_SERVER_TRUST, serverTrust);
+        }
         return bootstrap;
+    }
+
+    @Test
+    void confirmsTheServerItWasPinnedTo() throws Exception {
+        OperatorIdentity host = OperatorIdentity.generate("host.test");
+        InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(host)
+                .setTrustedProxies(List.of())
+                .setTokenTrust(TokenTrust.ANY));
+        OperatorIdentity player = OperatorIdentity.generate("proxy.test").forPlayer("2535000000000001", "Tester");
+
+        this.client = this.client(player, TokenTrust.pinnedTo(host.publicKey())).connect(endpoint).sync().channel();
+
+        assertTrue(this.client.isActive(), "the data channel opened");
+        assertEquals("2535000000000001", this.admitted.get(10, TimeUnit.SECONDS).xuid());
+    }
+
+    @Test
+    void confirmsAServerWhoseIdentityCameFromAFileThroughTheKeysTextForm(@TempDir Path dir) throws Exception {
+        Path pem = dir.resolve("identity.pem");
+        Files.writeString(pem, NetherNetHTTPServerSignalingBuilderTest.PEM);
+        InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
+                .setIdentityPem(pem.toFile(), "host.test")
+                .setTrustedProxies(List.of())
+                .setTokenTrust(TokenTrust.ANY));
+        // The key the operator copies into the client's config, as the file's owner would print it
+        String configured = IdentityUtils.encodePublicKey(this.signaling.serverIdentity().publicKey());
+        PublicKey pinned = IdentityUtils.decodePublicKey(configured);
+        OperatorIdentity player = OperatorIdentity.generate("proxy.test").forPlayer("2535000000000001", "Tester");
+
+        this.client = this.client(player, TokenTrust.pinnedTo(pinned)).connect(endpoint).sync().channel();
+
+        assertTrue(this.client.isActive(), "the data channel opened");
+        assertEquals("2535000000000001", this.admitted.get(10, TimeUnit.SECONDS).xuid());
+    }
+
+    @Test
+    void refusesAServerAnsweringWithAnotherIdentity() throws Exception {
+        InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("host.test"))
+                .setTrustedProxies(List.of())
+                .setTokenTrust(TokenTrust.ANY));
+        OperatorIdentity player = OperatorIdentity.generate("proxy.test").forPlayer("2535000000000001", "Tester");
+        TokenTrust expected = TokenTrust.pinnedTo(OperatorIdentity.generate("host.test").publicKey());
+
+        ExecutionException refused = assertThrows(ExecutionException.class,
+                () -> this.client(player, expected).connect(endpoint).get(10, TimeUnit.SECONDS));
+
+        ConnectException cause = assertInstanceOf(ConnectException.class, refused.getCause());
+        assertTrue(cause.getMessage().contains("identity was refused"), cause.getMessage());
+        assertFalse(this.admitted.isDone(), "no data channel opened toward the impostor");
     }
 
     @Test

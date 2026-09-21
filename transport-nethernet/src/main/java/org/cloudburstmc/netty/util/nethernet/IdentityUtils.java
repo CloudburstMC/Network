@@ -71,6 +71,24 @@ public class IdentityUtils {
      * @return The JWT context if the identity is valid
      * @throws InvalidJwtException If the identity is invalid
      */
+    /**
+     * @param key An EC public key
+     * @return The key as a token's {@code cpk} claim carries it, base64 of its X.509 encoding
+     */
+    public static String encodePublicKey(PublicKey key) {
+        return Base64.getEncoder().encodeToString(key.getEncoded());
+    }
+
+    /**
+     * @param encoded A key as {@link #encodePublicKey} writes it
+     * @return The key
+     * @throws GeneralSecurityException If the bytes are not an EC public key
+     */
+    public static PublicKey decodePublicKey(String encoded) throws GeneralSecurityException {
+        byte[] der = Base64.getDecoder().decode(encoded);
+        return KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(der));
+    }
+
     public static JwtContext validateIdentity(Identity identity) throws InvalidJwtException {
         return JWT_CONSUMER.process(identity.assertion().token()); // TODO Take into account the idp in the identity
     }
@@ -128,9 +146,7 @@ public class IdentityUtils {
             JsonWebSignature jws = new JsonWebSignature();
             jws.setCompactSerialization(detachedJws);
 
-            // cpk is base64, decode it and parse as a public key
-            byte[] der = Base64.getDecoder().decode(claims.getClaimValueAsString("cpk"));
-            PublicKey cpkKey = KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(der));
+            PublicKey cpkKey = decodePublicKey(claims.getClaimValueAsString("cpk"));
 
             // Set the JWS properties so we can verify
             jws.setKey(cpkKey);
