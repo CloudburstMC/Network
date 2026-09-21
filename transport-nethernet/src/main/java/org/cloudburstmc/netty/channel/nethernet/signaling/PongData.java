@@ -78,7 +78,7 @@ public record PongData(String serverName, int protocol, String version, String l
         private int maxPlayerCount = 10;
         private boolean isEditorWorld = false;
         private boolean isHardcore = false;
-        private int transportLayer = 2; // Default to NetherNet
+        private int transportLayer = 2; // Default to NetherNet. 2 = NetherNet, 4 = RakNet
         private int connectionType = 4; // Default to LANWebRTCSignaling
         private int dataVersion = 7;
         private boolean onlineAuth = true;
