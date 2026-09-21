@@ -85,4 +85,28 @@ class PlayerIdentityTest {
         assertTrue(signed.indexOf("a=identity:") < signed.indexOf("m=application"));
         assertEquals(1, signed.lines().filter(l -> l.startsWith("a=identity:")).count());
     }
+
+    @Test
+    void presentsAnIssuedTokenAsItIs() throws Exception {
+        // Stands in for the auth service: a token issued for the key, which the server then reads
+        OperatorIdentity issuer = OperatorIdentity.generate("https://auth.test/");
+        String issued = Identity.fromSdpOffer(
+                issuer.forPlayer("2535000000000002", "Retail").withAssertion(offer(FINGERPRINT))).assertion().token();
+
+        // A client presents that token over its own key, which is the key the token was issued for
+        OperatorIdentity client = OperatorIdentity.fromToken(
+                new java.security.KeyPair(issuer.publicKey(), keyOf(issuer)), issued, "https://auth.test/");
+        String signed = client.withAssertion(offer(FINGERPRINT));
+
+        assertEquals(issued, Identity.fromSdpOffer(signed).assertion().token(), "the token travels untouched");
+        JwtClaims claims = IdentityUtils.validateSdp(signed, TokenTrust.ANY);
+        assertEquals("2535000000000002", claims.getClaimValueAsString("xid"));
+    }
+
+    /** The private key behind an identity, which the test needs to play both issuer and client. */
+    private static java.security.PrivateKey keyOf(OperatorIdentity identity) throws Exception {
+        java.lang.reflect.Field field = OperatorIdentity.class.getDeclaredField("privateKey");
+        field.setAccessible(true);
+        return (java.security.PrivateKey) field.get(identity);
+    }
 }
