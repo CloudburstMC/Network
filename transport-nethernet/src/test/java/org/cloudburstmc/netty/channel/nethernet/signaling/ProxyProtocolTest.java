@@ -61,7 +61,7 @@ class ProxyProtocolTest {
                 .setProxyProtocol(proxyProtocol)
                 .setMotdProvider((host, remoteAddress) -> {
                     seen.offer(remoteAddress);
-                    return NetherNetServerSignaling.PongData.DEFAULT;
+                    return PongData.DEFAULT;
                 })
                 .build();
         signaling.bind(new InetSocketAddress("127.0.0.1", port), group.next());

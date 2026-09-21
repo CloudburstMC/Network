@@ -22,7 +22,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetHTTPServerSignaling.JoinRefusal;
+import org.cloudburstmc.netty.channel.nethernet.signaling.JoinRefusal;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -441,7 +441,7 @@ class HttpSignalingRequestTest {
     /** The refusal a turned away offer carries, for a future nobody is going to wait on. */
     private static JoinRefusal refusalOf(java.util.concurrent.CompletableFuture<String> refused) {
         Throwable cause = assertThrows(java.util.concurrent.ExecutionException.class, refused::get).getCause();
-        return ((NetherNetHTTPServerSignaling.OfferRejected) cause).refusal();
+        return ((OfferRejected) cause).refusal();
     }
 
     /** Retries until the allowance frees up, since a peer closing is not instant on this side. */

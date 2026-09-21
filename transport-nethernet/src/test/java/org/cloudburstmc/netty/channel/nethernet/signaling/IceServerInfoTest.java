@@ -16,7 +16,7 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
+import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;

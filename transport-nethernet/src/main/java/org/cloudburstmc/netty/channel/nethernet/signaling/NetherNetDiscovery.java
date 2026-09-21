@@ -17,7 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling.PongData;
+import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.SignalHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;

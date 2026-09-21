@@ -72,8 +72,8 @@ class NetherNetHTTPServerSignalingBuilderTest {
 
     @Test
     void reportsWhatItWillDoWithIce(@TempDir Path dir) throws Exception {
-        NetherNetSignaling.IceServerInfo turn =
-                new NetherNetSignaling.IceServerInfo("user", "secret", List.of("turn:turn.example:3478"));
+        IceServerInfo turn =
+                new IceServerInfo("user", "secret", List.of("turn:turn.example:3478"));
         NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setIceOnLocalPort(false)
@@ -110,7 +110,7 @@ class NetherNetHTTPServerSignalingBuilderTest {
                 .build();
 
         // The MOTD comes from the provider on every request, so a pushed one is ignored
-        assertDoesNotThrow(() -> signaling.setAdvertisementData(NetherNetServerSignaling.PongData.DEFAULT));
+        assertDoesNotThrow(() -> signaling.setAdvertisementData(PongData.DEFAULT));
         signaling.close();
     }
 

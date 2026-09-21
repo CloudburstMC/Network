@@ -21,8 +21,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetClientSignaling;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.IceServerInfo;
+import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -236,7 +235,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         startHandshake();
     }
 
-    private void initWebRTC(List<NetherNetSignaling.IceServerInfo> iceServers) {
+    private void initWebRTC(List<IceServerInfo> iceServers) {
         PeerConnectionConfiguration configured =
                 this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG);
         PeerConnectionConfiguration rtcConfig = configured

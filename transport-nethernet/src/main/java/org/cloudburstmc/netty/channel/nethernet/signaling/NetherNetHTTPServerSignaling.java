@@ -24,15 +24,8 @@ import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
-import io.netty.handler.codec.ByteToMessageDecoder;
 import java.util.List;
-import io.netty.handler.codec.ProtocolDetectionResult;
-import io.netty.handler.codec.ProtocolDetectionState;
-import io.netty.handler.codec.haproxy.HAProxyMessage;
-import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
-import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.util.AsciiString;
-import io.netty.util.AttributeKey;
 import io.netty.util.NetUtil;
 
 import java.util.Collection;
@@ -57,7 +50,6 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFactory;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
@@ -129,9 +121,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     /** The joins whose child has not answered yet, by the connection id the channel was handed. */
     private final Map<String, Promise<String>> pendingByConnection = new ConcurrentHashMap<>();
 
-    /** The source a trusted proxy declared in its PROXY header. */
-    private static final AttributeKey<InetSocketAddress> PROXIED_SOURCE =
-            AttributeKey.valueOf(NetherNetHTTPServerSignaling.class, "proxiedSource");
 
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
@@ -232,11 +221,12 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                         ChannelPipeline p = ch.pipeline();
                         // Counted before anything is read, so a peer holding sockets open is capped
                         // whatever it goes on to send
-                        p.addLast(new ConnectionLimiter());
+                        p.addLast(new ConnectionLimiter(trustedProxies, maxConnectionsPerAddress,
+                                connectionsPerAddress, () -> metrics));
 
                         // A PROXY header precedes the TLS handshake, so it is read before any of this
                         if (proxyProtocol) {
-                            p.addLast(new OptionalProxyProtocol());
+                            p.addLast(new OptionalProxyProtocol(trustedProxies));
                         }
 
                         // Both schemes reach one port: the first bytes say which this is, and a
@@ -268,90 +258,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 future.channel().close();
             }
         });
-    }
-
-    /**
-     * Caps how many connections one address may hold open at once.
-     * <p>
-     * Anyone on the internet can reach this endpoint, and a kept connection costs a socket until
-     * it goes idle, so without a cap a single peer can hold as many as the host has descriptors.
-     * A trusted reverse proxy is exempt, since every client behind it shares its address and
-     * counting them together would throttle all of them at once.
-     */
-    private class ConnectionLimiter extends ChannelInboundHandlerAdapter {
-        private InetAddress counted;
-
-        @Override
-        public void channelActive(ChannelHandlerContext ctx) {
-            InetAddress peer = ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress();
-            if (trustedProxies.contains(peer)) {
-                ctx.fireChannelActive();
-                return;
-            }
-
-            if (connectionsPerAddress.merge(peer, 1, Integer::sum) > maxConnectionsPerAddress) {
-                release(peer);
-                log.debug("Refused a connection from {}, already holding {}", peer, maxConnectionsPerAddress);
-                NetherServerMetrics metrics = NetherNetHTTPServerSignaling.this.metrics;
-                if (metrics != null) {
-                    metrics.addressRefused((InetSocketAddress) ctx.channel().remoteAddress());
-                }
-                ctx.close();
-                return;
-            }
-            this.counted = peer;
-            ctx.fireChannelActive();
-        }
-
-        @Override
-        public void channelInactive(ChannelHandlerContext ctx) {
-            if (this.counted != null) {
-                release(this.counted);
-                this.counted = null;
-            }
-            ctx.fireChannelInactive();
-        }
-
-        private void release(InetAddress peer) {
-            connectionsPerAddress.computeIfPresent(peer, (address, held) -> held <= 1 ? null : held - 1);
-        }
-    }
-
-    /**
-     * Reads a PROXY header from a trusted proxy, and steps aside for anything else.
-     */
-    private class OptionalProxyProtocol extends ByteToMessageDecoder {
-        @Override
-        protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
-            InetSocketAddress peer = (InetSocketAddress) ctx.channel().remoteAddress();
-            if (!trustedProxies.contains(peer)) {
-                ctx.pipeline().remove(this);
-                return;
-            }
-
-            ProtocolDetectionResult<HAProxyProtocolVersion> detected = HAProxyMessageDecoder.detectProtocol(in);
-            if (detected.state() == ProtocolDetectionState.NEEDS_MORE_DATA) {
-                return;
-            }
-            if (detected.state() == ProtocolDetectionState.INVALID) {
-                // A trusted proxy is allowed to speak plain HTTP too
-                ctx.pipeline().remove(this);
-                return;
-            }
-
-            ctx.pipeline().addAfter(ctx.name(), null, new SimpleChannelInboundHandler<HAProxyMessage>() {
-                @Override
-                protected void channelRead0(ChannelHandlerContext inner, HAProxyMessage message) {
-                    if (message.sourceAddress() != null) {
-                        inner.channel().attr(PROXIED_SOURCE)
-                                .set(new InetSocketAddress(message.sourceAddress(), message.sourcePort()));
-                        log.debug("Got PROXY header: (from " + peer + ") " + message.sourceAddress());
-                    }
-                    inner.pipeline().remove(this);
-                }
-            });
-            ctx.pipeline().replace(this, null, new HAProxyMessageDecoder());
-        }
     }
 
     /** How long a kept connection may sit unused before it is closed. */
@@ -463,7 +369,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             }
 
             // A PROXY header is the more trustworthy of the two, so it wins
-            InetSocketAddress proxied = ctx.channel().attr(PROXIED_SOURCE).get();
+            InetSocketAddress proxied = ctx.channel().attr(OptionalProxyProtocol.PROXIED_SOURCE).get();
             if (proxied != null) {
                 return proxied;
             }
@@ -756,70 +662,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         return result;
     }
 
-    /**
-     * Why a join did not happen, and the status it is refused with.
-     * <p>
-     * The constants are what this signaling raises on its own. A host answering something else
-     * builds one. Only the status reaches the peer for now, since the client shows nothing else; a
-     * message can be added here later without changing what callers build.
-     */
-    public static class JoinRefusal {
-        /** The offer carried no usable identity assertion. */
-        public static final JoinRefusal INVALID_IDENTITY = new JoinRefusal(HttpResponseStatus.UNAUTHORIZED);
-        /** The player filter turned the peer away. */
-        public static final JoinRefusal REJECTED = new JoinRefusal(HttpResponseStatus.FORBIDDEN);
-        /** There is no room for another player. */
-        public static final JoinRefusal FULL = new JoinRefusal(HttpResponseStatus.SERVICE_UNAVAILABLE);
-        /** Another join for this network ID is already waiting for an answer. */
-        public static final JoinRefusal DUPLICATE = new JoinRefusal(HttpResponseStatus.CONFLICT);
-        /** Nothing produced an answer in time. */
-        public static final JoinRefusal TIMEOUT = new JoinRefusal(HttpResponseStatus.GATEWAY_TIMEOUT);
-        /** Signaling is not in a state to answer, or something failed while answering. */
-        public static final JoinRefusal ERROR = new JoinRefusal(HttpResponseStatus.INTERNAL_SERVER_ERROR);
-
-        private final HttpResponseStatus status;
-
-        public JoinRefusal(HttpResponseStatus status) {
-            // A 2xx leaves the client parsing an answer we never wrote
-            if (status.code() >= 200 && status.code() < 300) {
-                throw new IllegalArgumentException("A refusal cannot tell a client the join worked: " + status);
-            }
-            this.status = status;
-        }
-
-        public HttpResponseStatus status() {
-            return this.status;
-        }
-
-        @Override
-        public boolean equals(Object other) {
-            return other instanceof JoinRefusal refusal && this.status.equals(refusal.status);
-        }
-
-        @Override
-        public int hashCode() {
-            return this.status.hashCode();
-        }
-
-        @Override
-        public String toString() {
-            return this.status.toString();
-        }
-    }
-
-    public static final class OfferRejected extends Exception {
-        private final JoinRefusal refusal;
-
-        OfferRejected(JoinRefusal refusal, String message, @Nullable Throwable cause) {
-            super(message, cause);
-            this.refusal = refusal;
-        }
-
-        public JoinRefusal refusal() {
-            return this.refusal;
-        }
-    }
-
     @Override
     public void sendDescription(String targetNetworkId, String sdp) {
         log.debug("Sending sdp to " + targetNetworkId);
@@ -870,46 +712,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         if (validation != null) {
             validation.shutdownNow();
         }
-    }
-
-    /**
-     * Functional interface for filtering players before a connection is created for them.
-     */
-    @FunctionalInterface
-    public interface PlayerFilter {
-        /**
-         * Called once the identity attached to an SDP offer has been validated, before
-         * the connection is handed to the {@link NewConnectionHandler}.
-         * <p>
-         * Called on the event loop, so don't block in here. A thrown exception turns the player
-         * away as {@link JoinRefusal#REJECTED} does.
-         *
-         * @param host   The host header from the join request, which may be used to identify the server
-         * @param player The validated player attempting to join
-         * @return Why to turn the player away, or null to let them in
-         */
-        @Nullable JoinRefusal refuse(String host, PlayerInfo player);
-    }
-
-    /**
-     * Functional interface providing the MOTD returned to clients querying the server.
-     */
-    @FunctionalInterface
-    public interface MotdProvider {
-        /**
-         * Called for every status request, so the returned data can change over time.
-         * <p>
-         * Called on the event loop, so don't block in here. Every field of {@link PongData} is
-         * written to the status document, in the order the schema lists.
-         * <p>
-         * Answering null serves no status at all, which is how a host says it does not take
-         * NetherNet for this request. A join sent anyway still reaches the {@link PlayerFilter}.
-         *
-         * @param host          The host header from the join request, which may be used to identify the server
-         * @param remoteAddress The address the status request came from
-         * @return The MOTD to advertise, or null to leave the client to its other transport
-         */
-        @Nullable PongData getMotd(String host, InetSocketAddress remoteAddress);
     }
 
     /**

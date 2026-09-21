@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
+import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import tel.schich.libdatachannel.*;
 
 import java.net.SocketAddress;

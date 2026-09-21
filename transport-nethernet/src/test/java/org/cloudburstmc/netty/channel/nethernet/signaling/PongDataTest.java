@@ -18,7 +18,7 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling.PongData;
+import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
