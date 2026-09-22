@@ -40,10 +40,24 @@ public final class ProviderClient implements AutoCloseable {
     public static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work";
     public static final String BEARER_TOKEN = "bearer-token";
 
-    public record Configuration(URI provider, String profile, String label, String registrationMode,
-                                String authorizationScheme,
-                                String authorizationToken, String region, String pool, Map<String, String> tags) {
+    public enum ControlTransport {
+        HTTP,
+        AUTO
+    }
+
+    public record Configuration(
+            URI provider,
+            String profile,
+            String label,
+            String registrationMode,
+            String authorizationScheme,
+            String authorizationToken,
+            String region,
+            String pool,
+            Map<String, String> tags,
+            ControlTransport controlTransport) {
         public Configuration {
+            Objects.requireNonNull(controlTransport);
             Objects.requireNonNull(provider);
             Objects.requireNonNull(profile);
             Objects.requireNonNull(registrationMode);
@@ -92,6 +106,29 @@ public final class ProviderClient implements AutoCloseable {
                             || e.getValue().codePoints().anyMatch(c -> c < 32 || c == 127))) {
                 throw new IllegalArgumentException("Invalid provider placement tags");
             }
+        }
+
+        public Configuration(
+                URI provider,
+                String profile,
+                String label,
+                String registrationMode,
+                String authorizationScheme,
+                String authorizationToken,
+                String region,
+                String pool,
+                Map<String, String> tags) {
+            this(
+                    provider,
+                    profile,
+                    label,
+                    registrationMode,
+                    authorizationScheme,
+                    authorizationToken,
+                    region,
+                    pool,
+                    tags,
+                    ControlTransport.HTTP);
         }
 
         public Configuration(URI provider, String profile, String label) {
@@ -160,7 +197,7 @@ public final class ProviderClient implements AutoCloseable {
     private final ProviderTransport transport;
     private final Supplier<ServerStatus> statusSupplier;
     private final Supplier<Health> healthSupplier;
-    private final Consumer<String> diagnostics;
+    private final ProviderLog diagnostics;
     private final String origin;
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "nethernet-provider");
@@ -179,6 +216,7 @@ public final class ProviderClient implements AutoCloseable {
     private PrivateKey privateKey;
     private String profileRevision;
     private JsonObject lastProfile;
+
     /** A delivered epoch, kept out of the persisted state until the transport has accepted it. */
     private JsonObject pendingTicketKey;
     private long intervalMs = 10000;
@@ -191,6 +229,9 @@ public final class ProviderClient implements AutoCloseable {
     private long nextOutcomes;
     private long nextStatusUpdate;
     private long minUpdateIntervalMs = 1000;
+    private URI websocketEndpoint;
+    private ProviderWebSocket websocket;
+    private volatile String lastControlCarrier = "none";
     private long appliedStateRevision;
     private String hostState = "serving";
     private String installedKeyId;
@@ -201,81 +242,128 @@ public final class ProviderClient implements AutoCloseable {
     private final CompletableFuture<Void> stopped = new CompletableFuture<>();
     private ScheduledFuture<?> timer;
 
-    public ProviderClient(Configuration config, ProviderStateStore store, ProviderTransport transport,
-                          Supplier<ServerStatus> statusSupplier, Supplier<Health> healthSupplier,
-                          Consumer<String> diagnostics) {
+    public ProviderClient(
+            Configuration config,
+            ProviderStateStore store,
+            ProviderTransport transport,
+            Supplier<ServerStatus> statusSupplier,
+            Supplier<Health> healthSupplier,
+            Consumer<ProviderDiagnostic> diagnostics) {
         this.config = config;
         this.store = store;
         this.transport = transport;
         this.statusSupplier = statusSupplier;
         this.healthSupplier = healthSupplier;
-        this.diagnostics = diagnostics;
+        this.diagnostics = new ProviderLog(diagnostics);
         this.origin = ProviderCrypto.origin(config.provider());
     }
 
+    /** Carrier of the last successful signed operation, independent of advertised configuration. */
+    public String lastControlCarrier() {
+        return lastControlCarrier;
+    }
+
     public CompletableFuture<JsonObject> start() {
-        return submit(() -> {
-            if (started) {
-                throw new IllegalStateException("Already started");
-            }
-            discovery = exchange(URI.create(origin + "/.well-known/nethernet-external-signaling"), "GET", null, false,
-                    null, null);
-            validateDiscovery();
-            state = store.read();
-            if (state.has("provider") && !origin.equals(state.get("provider").getAsString())) {
-                throw new IOException("State belongs to another provider; use a separate directory");
-            }
-            if (!state.has("privateKey")) {
-                KeyPair pair = ProviderCrypto.generate();
-                state.addProperty("provider", origin);
-                state.addProperty("privateKey", ProviderCrypto.base64(pair.getPrivate().getEncoded()));
-                state.add("publicKeyJwk", ProviderCrypto.publicJwk(pair.getPublic()));
-                save();
-            }
-            privateKey = ProviderCrypto.privateKey(state.get("privateKey").getAsString());
-            if (!state.has("registration")) {
-                enroll();
-            } else {
-                recoverExisting();
-            }
-            JsonObject registration = state.getAsJsonObject("registration");
-            if (!registration.get("provider").getAsString().equals(origin)) {
-                throw new IOException("Registration audience changed");
-            }
-            state.addProperty("protocol", ProviderCrypto.PROTOCOL);
-            state.addProperty("profile", config.profile());
-            state.addProperty("generation", registration.get("leaseGeneration").getAsLong());
-            state.addProperty("sequence", 0);
-            state.remove("cursor");
-            state.remove("pendingAdmissions");
-            save();
-            installKeys();
-            started = true;
-            heartbeat();
-            timer = executor.scheduleWithFixedDelay(() -> {
-                if (closed) {
-                    return;
-                }
-                try {
-                    if (started && (System.nanoTime() >= nextHeartbeat || statusChanged())) {
-                        heartbeat();
+        return submit(
+                () -> {
+                    if (store.read().has("controlMode")
+                            || java.nio.file.Files.exists(
+                                    store.directory()
+                                            .resolve("control-session/provider-state.json"))) {
+                        throw new IOException(
+                                "Experimental control state requires explicit conversion before startup");
                     }
-                } catch (Exception e) {
-                    nextHeartbeat = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                    nextStatusUpdate = nextHeartbeat;
-                    diagnostics.accept("provider_status_unavailable: " + safeFailure(e));
-                }
-                if (System.nanoTime() >= nextOutcomes) {
-                    try {
-                        flushEvents();
-                    } catch (Exception e) {
-                        nextOutcomes = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                        diagnostics.accept("provider_events_unavailable: " + safeFailure(e));
+                    if (started) {
+                        throw new IllegalStateException("Already started");
                     }
-                }
-            }, 1000, 1000, TimeUnit.MILLISECONDS);
-            return redactedRegistration();
-        });
+                    discovery =
+                            exchange(
+                                    URI.create(
+                                            origin + "/.well-known/nethernet-external-signaling"),
+                                    "GET",
+                                    null,
+                                    false,
+                                    null,
+                                    null);
+                    validateDiscovery();
+                    configureWebSocket();
+                    state = store.read();
+                    if (state.has("provider")
+                            && !origin.equals(state.get("provider").getAsString())) {
+                        throw new IOException(
+                                "State belongs to another provider; use a separate directory");
+                    }
+                    if (!state.has("privateKey")) {
+                        KeyPair pair = ProviderCrypto.generate();
+                        state.addProperty("provider", origin);
+                        state.addProperty(
+                                "privateKey",
+                                ProviderCrypto.base64(pair.getPrivate().getEncoded()));
+                        state.add("publicKeyJwk", ProviderCrypto.publicJwk(pair.getPublic()));
+                        save();
+                    }
+                    privateKey = ProviderCrypto.privateKey(state.get("privateKey").getAsString());
+                    if (!state.has("registration")) {
+                        enroll();
+                    } else {
+                        recoverExisting();
+                    }
+                    JsonObject registration = state.getAsJsonObject("registration");
+                    if (!registration.get("provider").getAsString().equals(origin)) {
+                        throw new IOException("Registration audience changed");
+                    }
+                    state.addProperty("protocol", ProviderCrypto.PROTOCOL);
+                    state.addProperty("profile", config.profile());
+                    state.addProperty(
+                            "generation", registration.get("leaseGeneration").getAsLong());
+                    state.addProperty("sequence", 0);
+                    state.remove("cursor");
+                    state.remove("pendingAdmissions");
+                    state.remove("pendingWebSocketOperation");
+                    save();
+                    installKeys();
+                    started = true;
+                    heartbeat();
+                    timer =
+                            executor.scheduleWithFixedDelay(
+                                    () -> {
+                                        if (closed) {
+                                            return;
+                                        }
+                                        try {
+                                            if (started
+                                                    && (System.nanoTime() >= nextHeartbeat
+                                                            || statusChanged())) {
+                                                heartbeat();
+                                            }
+                                        } catch (Exception e) {
+                                            nextHeartbeat =
+                                                    System.nanoTime()
+                                                            + TimeUnit.SECONDS.toNanos(10);
+                                            nextStatusUpdate = nextHeartbeat;
+                                            diagnostics.failed(ProviderLog.Operation.STATUS);
+                                            diagnostics.detail(
+                                                    ProviderLog.Operation.STATUS, safeFailure(e));
+                                        }
+                                        if (System.nanoTime() >= nextOutcomes) {
+                                            try {
+                                                flushEvents();
+                                            } catch (Exception e) {
+                                                nextOutcomes =
+                                                        System.nanoTime()
+                                                                + TimeUnit.SECONDS.toNanos(10);
+                                                diagnostics.failed(ProviderLog.Operation.EVENTS);
+                                                diagnostics.detail(
+                                                        ProviderLog.Operation.EVENTS,
+                                                        safeFailure(e));
+                                            }
+                                        }
+                                    },
+                                    1000,
+                                    1000,
+                                    TimeUnit.MILLISECONDS);
+                    return redactedRegistration();
+                });
     }
 
     private void validateDiscovery() throws IOException {
@@ -576,6 +664,7 @@ public final class ProviderClient implements AutoCloseable {
             throw new IOException("Too many admission key epochs");
         }
         if (retained.isEmpty()) {
+
             state.add("ticketKeys", retained);
             installedKeyId = null;
             if (!state.has("keyRequestId")) {
@@ -614,19 +703,21 @@ public final class ProviderClient implements AutoCloseable {
      */
     public void requestStatusRefresh() {
         if (!closing.get() && refreshQueued.compareAndSet(false, true)) {
-            executor.execute(() -> {
-                refreshQueued.set(false);
-                if (!closed && started) {
-                    try {
-                        if (statusChanged()) {
-                            heartbeat();
+            executor.execute(
+                    () -> {
+                        refreshQueued.set(false);
+                        if (!closed && started) {
+                            try {
+                                if (statusChanged()) {
+                                    heartbeat();
+                                }
+                            } catch (Exception e) {
+                                nextStatusUpdate = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                                diagnostics.failed(ProviderLog.Operation.STATUS);
+                                diagnostics.detail(ProviderLog.Operation.STATUS, safeFailure(e));
+                            }
                         }
-                    } catch (Exception e) {
-                        nextStatusUpdate = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                        diagnostics.accept("provider_status_unavailable: " + safeFailure(e));
-                    }
-                }
-            });
+                    });
         }
     }
 
@@ -655,15 +746,37 @@ public final class ProviderClient implements AutoCloseable {
         return health.playerCount() == null ? null : health.playerCount().connectedPlayers();
     }
 
+    /** Sample the cheap local counter; material replacement bypasses freshness-only coalescing. */
     private void heartbeat() throws Exception {
+        if (state.has("pendingWebSocketOperation")) {
+
+            // An ambiguous send may have outlived its native mapping. Recover the existing
+            // registration
+            // before issuing fresh state; do not replay expired profile bytes or stall until
+            // process restart.
+            if (websocket != null) {
+                websocket.close();
+            }
+            recoverExisting();
+            clearWebSocketPending();
+            configureWebSocket();
+            profileRevision = null;
+            lastProfile = null;
+            installKeys();
+        }
         // Key delivery can need an immediate second exchange.
         for (int exchange = 0; exchange < 3; exchange++) {
-            JsonObject body = new JsonObject(), profile = null;
+            try {
+                JsonObject body = new JsonObject(), profile = null;
+                ProviderTransport.HostProfileSnapshot profileSnapshot = null;
             if (installedKeyId != null && hostState.equals("serving")) {
-                profile = transport.hostProfile().toCompletableFuture().get(10, TimeUnit.SECONDS);
-                if (profile == null) {
-                    throw new IOException("Transport profile unavailable");
-                }
+                    profileSnapshot =
+                            transport
+                                    .captureHostProfile()
+                                    .toCompletableFuture()
+                                    .get(10, TimeUnit.SECONDS);
+                    profileSnapshot.requireCurrent();
+                    profile = profileSnapshot.profile();
                 if (!profile.equals(lastProfile)) {
                     body.add("hostProfile", profile);
                 } else if (profileRevision != null) {
@@ -683,14 +796,23 @@ public final class ProviderClient implements AutoCloseable {
                 body.add("keyRequestId", state.get("keyRequestId"));
             }
             Health health = healthSupplier.get();
-            body.addProperty("acceptingPlayers", health.acceptingPlayers() && installedKeyId != null && hostState.equals("serving"));
-            if (!heartbeatExtensions.isEmpty()) body.add("extensions", heartbeatExtensions.deepCopy());
+                body.addProperty(
+                        "acceptingPlayers",
+                        health.acceptingPlayers()
+                                && installedKeyId != null
+                                && hostState.equals("serving"));
+                if (!heartbeatExtensions.isEmpty()) {
+                    body.add("extensions", heartbeatExtensions.deepCopy());
+                }
+                ProtocolExtensions.validate(body);
             body.addProperty("capacity", health.capacity());
             if (health.playerCount() != null) {
                 body.add("playerCount", JSON.toJsonTree(health.playerCount()));
-            }
-            if (health.build() != null) body.addProperty("build", health.build());
-            snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
+                }
+                if (health.build() != null) {
+                    body.addProperty("build", health.build());
+                }
+                snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
             body.addProperty("clockUnixMillis", snapshotClock);
             // Temporary historic field; acknowledging an echo never controls the listener.
             body.addProperty("appliedStateRevision", appliedStateRevision);
@@ -701,29 +823,58 @@ public final class ProviderClient implements AutoCloseable {
             ServerStatus status = null;
             try {
                 status = currentStatus();
+                    diagnostics.recovered(ProviderLog.Operation.SERVER_STATUS);
                 if (status != null) {
-                    if (status.players() == null && health.playerCount() == null)
-                        throw new IllegalStateException("Server status requires players or an actual player count");
-                    JsonObject listing = JSON.toJsonTree(status).getAsJsonObject();
-                    if (health.playerCount() != null) listing.remove("players");
-                    body.add("serverStatus", listing);
+                        if (status.players() == null && health.playerCount() == null) {
+                            throw new IllegalStateException(
+                                    "Server status requires players or an actual player count");
+                        }
+                        JsonObject listing = JSON.toJsonTree(status).getAsJsonObject();
+                        if (health.playerCount() != null) {
+                            listing.remove("players");
+                        }
+                        body.add("serverStatus", listing);
                 }
             } catch (RuntimeException failure) {
-                diagnostics.accept("status_refresh_failed");
+                    diagnostics.failed(ProviderLog.Operation.SERVER_STATUS);
             }
             long requestStarted = System.nanoTime();
-            JsonObject response = signed("heartbeat", "POST", body);
+                var captured = profileSnapshot;
+                JsonObject response =
+                        signed(
+                                "heartbeat",
+                                "POST",
+                                body,
+                                UUID.randomUUID().toString(),
+                                captured == null ? () -> {} : captured::requireCurrent);
             ProtocolExtensions.validate(response);
+                boolean again = false;
+                if (profileSnapshot != null) {
+                    try {
+                        profileSnapshot.requireCurrent();
+                    } catch (ProviderTransport.HostProfileSnapshotChangedException replaced) {
+                        invalidatePublishedProfile();
+                        // The operation committed. Keep its keys and lease, but grant no authority
+                        // to stale endpoints.
+                        profileSnapshot = null;
+                        again = true;
+                    } catch (RuntimeException unavailable) {
+                        invalidatePublishedProfile();
+                        throw unavailable;
+                    }
+                }
+
             if (body.has("hostProfile")) {
                 if (!response.has("hostProfileRevision") || response.get("hostProfileRevision").isJsonNull()) {
                     throw new IOException("Profile acknowledgement missing");
                 }
-                profileRevision = response.get("hostProfileRevision").getAsString();
-                lastProfile = profile.deepCopy();
-                state.addProperty("profilePublishedAt", System.currentTimeMillis());
-                save();
+                    if (profileSnapshot != null) {
+                        profileRevision = response.get("hostProfileRevision").getAsString();
+                        lastProfile = profile.deepCopy();
+                        state.addProperty("profilePublishedAt", System.currentTimeMillis());
+                        save();
+                    }
             }
-            boolean again = false;
             if (response.has("ticketKey")) {
                 JsonObject key = response.remove("ticketKey").getAsJsonObject();
                 if (!state.has("keyRequestId") || !response.has("keyRequest") ||
@@ -790,15 +941,31 @@ public final class ProviderClient implements AutoCloseable {
             if (response.has("desiredState") && response.get("desiredState").isJsonObject()) {
                 JsonObject echo = response.getAsJsonObject("desiredState");
                 if (echo.has("state") && hostState.equals(echo.get("state").getAsString()) && echo.has("revision")) {
-                    long revision = echo.get("revision").getAsBigDecimal().longValueExact();
-                    if (revision >= appliedStateRevision && revision <= 9007199254740991L) appliedStateRevision = revision;
-                }
+                        long revision = echo.get("revision").getAsBigDecimal().longValueExact();
+                        if (revision >= appliedStateRevision && revision <= 9007199254740991L) {
+                            appliedStateRevision = revision;
+                        }
+                    }
             }
             if (!again) {
+                    diagnostics.recovered(ProviderLog.Operation.STATUS);
                 return;
+            }
+            } catch (ProviderTransport.HostProfileSnapshotChangedException replaced) {
+                invalidatePublishedProfile();
+                // An ambiguous carrier attempt must follow ordinary recovery before any fresh
+                // operation.
+                if (state.has("pendingWebSocketOperation")) {
+                    break;
+                }
             }
         }
         nextHeartbeat = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+    }
+
+    private void invalidatePublishedProfile() {
+        lastProfile = null;
+        profileRevision = null;
     }
 
     private void flushEvents() throws Exception {
@@ -836,6 +1003,7 @@ public final class ProviderClient implements AutoCloseable {
         // Dropped by position, and only once the exchange is done, so no view spans the request
         pending.asList().subList(0, sent).clear();
         save();
+        diagnostics.recovered(ProviderLog.Operation.EVENTS);
     }
 
     /**
@@ -856,11 +1024,14 @@ public final class ProviderClient implements AutoCloseable {
         JsonObject document = new JsonObject();
         document.add("extensions", extensions.deepCopy());
         JsonObject validated = ProtocolExtensions.copy(document);
-        return submit(() -> {
-            heartbeatExtensions = validated;
-            if (started) heartbeat();
-            return null;
-        });
+        return submit(
+                () -> {
+                    heartbeatExtensions = validated;
+                    if (started) {
+                        heartbeat();
+                    }
+                    return null;
+                });
     }
 
     /** Opaque registration metadata; the application decides what it means. */
@@ -873,78 +1044,109 @@ public final class ProviderClient implements AutoCloseable {
      */
     public CompletableFuture<JsonObject> extensionRequest(String namespace, String operation, String method,
                                                           JsonObject body) {
-        return submit(() -> {
-            if (!Set.of("GET", "POST").contains(method)) {
-                throw new IOException("Unsupported extension method");
-            }
-            JsonObject extension = ProtocolExtensions.copy(discovery).getAsJsonObject(namespace);
-            if (extension == null) {
-                throw new IOException("Extension unavailable");
-            }
-            JsonObject operations = extension.getAsJsonObject("data").getAsJsonObject("operations");
-            if (operations == null || !operations.has(operation)) {
-                throw new IOException("Extension operation unavailable");
-            }
-            URI uri = trusted(URI.create(operations.get(operation).getAsString()));
-            long sequence = state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1;
-            state.addProperty("sequence", sequence);
-            save();
-            JsonObject response =
-                    exchange(uri, method, body == null ? null : JSON.toJson(body), true, UUID.randomUUID().toString(),
-                            null);
-            ProtocolExtensions.validate(response);
-            return response;
-        });
+        return submit(
+                () -> {
+                    if (!Set.of("GET", "POST").contains(method)) {
+                        throw new IOException("Unsupported extension method");
+                    }
+                    JsonObject extension =
+                            ProtocolExtensions.copy(discovery).getAsJsonObject(namespace);
+                    if (extension == null) {
+                        throw new IOException("Extension unavailable");
+                    }
+                    JsonObject operations =
+                            extension.getAsJsonObject("data").getAsJsonObject("operations");
+                    if (operations == null || !operations.has(operation)) {
+                        throw new IOException("Extension operation unavailable");
+                    }
+                    URI uri = trusted(URI.create(operations.get(operation).getAsString()));
+                    requireResolvedOperation();
+                    long sequence =
+                            state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1;
+                    state.addProperty("sequence", sequence);
+                    save();
+                    JsonObject response =
+                            exchange(
+                                    uri,
+                                    method,
+                                    body == null ? null : JSON.toJson(body),
+                                    true,
+                                    UUID.randomUUID().toString(),
+                                    null);
+                    ProtocolExtensions.validate(response);
+                    return response;
+                });
     }
 
     public CompletableFuture<Void> deregister() {
-        return submit(() -> {
-            signed("deregister", "POST", new JsonObject());
-            transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
-            started = false;
-            return null;
-        });
+        return submit(
+                () -> {
+                    signed("deregister", "POST", new JsonObject());
+                    if (websocket != null) {
+                        websocket.close();
+                    }
+                    transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                    started = false;
+                    return null;
+                });
     }
 
     public CompletableFuture<JsonObject> rotateTicketKey() {
-        return submit(() -> {
-            installKeys();
-            if (state.getAsJsonArray("ticketKeys").size() >= 8) {
-                throw new IOException("Wait for retiring admission epochs before rotating again");
-            }
-            state.addProperty("keyRequestId", UUID.randomUUID().toString());
-            save();
-            heartbeat();
-            return redactedRegistration();
-        });
+        return submit(
+                () -> {
+                    requireResolvedOperation();
+                    installKeys();
+                    if (state.getAsJsonArray("ticketKeys").size() >= 8) {
+                        throw new IOException(
+                                "Wait for retiring admission epochs before rotating again");
+                    }
+                    state.addProperty("keyRequestId", UUID.randomUUID().toString());
+                    save();
+                    heartbeat();
+                    return redactedRegistration();
+                });
     }
 
     public CompletableFuture<JsonObject> rotateMachineKey() {
-        return submit(() -> {
-            KeyPair replacement = ProviderCrypto.generate();
-            JsonObject jwk = ProviderCrypto.publicJwk(replacement.getPublic());
-            state.addProperty("pendingPrivateKey", ProviderCrypto.base64(replacement.getPrivate().getEncoded()));
-            state.add("pendingPublicKeyJwk", jwk);
-            save();
-            String intent = UUID.randomUUID().toString();
-            JsonObject body = new JsonObject();
-            body.add("publicKeyJwk", jwk);
-            body.addProperty("proof", ProviderCrypto.sign(replacement.getPrivate(),
-                    ProviderCrypto.array(ProviderCrypto.PROTOCOL, "rotate", origin, registration("instanceId"),
-                            registration("keyId"), ProviderCrypto.thumbprint(jwk), state.get("generation").getAsLong(),
-                            intent)));
-            JsonObject result = signed("rotate", "POST", body, intent);
-            String oldKey = registration("keyId");
-            state.add("privateKey", state.remove("pendingPrivateKey"));
-            state.add("publicKeyJwk", state.remove("pendingPublicKeyJwk"));
-            state.getAsJsonObject("registration").addProperty("keyId", result.get("keyId").getAsString());
-            save();
-            privateKey = replacement.getPrivate();
-            JsonObject retire = new JsonObject();
-            retire.addProperty("keyId", oldKey);
-            signed("retire", "POST", retire);
-            return result;
-        });
+        return submit(
+                () -> {
+                    requireResolvedOperation();
+                    KeyPair replacement = ProviderCrypto.generate();
+                    JsonObject jwk = ProviderCrypto.publicJwk(replacement.getPublic());
+                    state.addProperty(
+                            "pendingPrivateKey",
+                            ProviderCrypto.base64(replacement.getPrivate().getEncoded()));
+                    state.add("pendingPublicKeyJwk", jwk);
+                    save();
+                    String intent = UUID.randomUUID().toString();
+                    JsonObject body = new JsonObject();
+                    body.add("publicKeyJwk", jwk);
+                    body.addProperty(
+                            "proof",
+                            ProviderCrypto.sign(
+                                    replacement.getPrivate(),
+                                    ProviderCrypto.array(
+                                            ProviderCrypto.PROTOCOL,
+                                            "rotate",
+                                            origin,
+                                            registration("instanceId"),
+                                            registration("keyId"),
+                                            ProviderCrypto.thumbprint(jwk),
+                                            state.get("generation").getAsLong(),
+                                            intent)));
+                    JsonObject result = signed("rotate", "POST", body, intent);
+                    String oldKey = registration("keyId");
+                    state.add("privateKey", state.remove("pendingPrivateKey"));
+                    state.add("publicKeyJwk", state.remove("pendingPublicKeyJwk"));
+                    state.getAsJsonObject("registration")
+                            .addProperty("keyId", result.get("keyId").getAsString());
+                    save();
+                    privateKey = replacement.getPrivate();
+                    JsonObject retire = new JsonObject();
+                    retire.addProperty("keyId", oldKey);
+                    signed("retire", "POST", retire);
+                    return result;
+                });
     }
 
     public CompletableFuture<Void> drain() {
@@ -955,6 +1157,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private void drainAndReport() throws Exception {
+
         if (!hostState.equals("closed")) {
             transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
             hostState = "draining";
@@ -975,12 +1178,27 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private JsonObject signed(String op, String method, JsonObject body, String intent) throws Exception {
+        return signed(op, method, body, intent, () -> {});
+    }
+
+    private JsonObject signed(
+            String op, String method, JsonObject body, String intent, Runnable requireCurrent)
+            throws Exception {
+        requireResolvedOperation();
         long sequence = state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1;
         state.addProperty("sequence", sequence);
         save();
         URI uri = operation(op);
-        return exchange(uri, method, body == null ? null : JSON.toJson(body), true, intent, null,
-                op.equals("outcomes") ? 3 : 15, op.equals("outcomes") ? 1 : 3);
+        return exchange(
+                uri,
+                method,
+                body == null ? null : JSON.toJson(body),
+                true,
+                intent,
+                null,
+                op.equals("outcomes") ? 3 : 15,
+                op.equals("outcomes") ? 1 : 3,
+                requireCurrent);
     }
 
     private URI operation(String op) throws IOException {
@@ -1006,9 +1224,29 @@ public final class ProviderClient implements AutoCloseable {
 
     private JsonObject exchange(URI uri, String method, String body, boolean signed, String intent, String bearerToken,
                                 int timeoutSeconds, int attempts) throws Exception {
+        return exchange(
+                uri, method, body, signed, intent, bearerToken, timeoutSeconds, attempts, () -> {});
+    }
+
+    private JsonObject exchange(
+            URI uri,
+            String method,
+            String body,
+            boolean signed,
+            String intent,
+            String bearerToken,
+            int timeoutSeconds,
+            int attempts,
+            Runnable requireCurrent)
+            throws Exception {
         trusted(uri);
+        if (signed) {
+            requireResolvedOperation();
+        }
         String raw = body == null ? "" : body;
+        boolean ambiguous = false;
         for (int attempt = 0; attempt < attempts; attempt++) {
+            requireCurrent.run();
             HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("accept", "application/json").method(method,
                             body == null ? HttpRequest.BodyPublishers.noBody() :
@@ -1035,21 +1273,103 @@ public final class ProviderClient implements AutoCloseable {
                                 ProviderCrypto.request(origin, method, path, now, registration("instanceId"),
                                         registration("keyId"), intent, generation, sequence, raw)));
             }
-            HttpResponse<byte[]> response;
-            var responseFuture = http.sendAsync(b.build(), info -> new LimitedBodySubscriber(65536));
+            HttpRequest request = b.build();
+            ProviderWebSocket.Reply response = null;
+            String wsOperation = signed ? websocketOperation(uri) : null;
+            if (wsOperation != null) {
+                try {
+                    response =
+                            websocket.exchange(
+                                    wsOperation,
+                                    request,
+                                    raw,
+                                    websocketUpgradeHeaders(),
+                                    timeoutSeconds,
+                                    () -> {
+                                        requireCurrent.run();
+                                        state.addProperty("pendingWebSocketOperation", intent);
+                                        try {
+                                            save();
+                                        } catch (IOException failure) {
+                                            throw new UncheckedIOException(failure);
+                                        }
+                                        try {
+                                            requireCurrent.run();
+                                        } catch (RuntimeException replaced) {
+                                            clearWebSocketPending(); // Callback failed before
+                                            // handing any frame to the
+                                            // carrier.
+                                            throw replaced;
+                                        }
+                                    },
+                                    requireCurrent);
+                } catch (IOException | ExecutionException | TimeoutException failure) {
+                    // Retry the SAME signed operation over HTTPS; neither intent nor body is
+                    // replaced.
+                    ambiguous |= state.has("pendingWebSocketOperation");
+                    diagnostics.failed(ProviderLog.Operation.WEBSOCKET);
+                }
+            }
+            boolean usedWebSocket = response != null;
+            CompletableFuture<HttpResponse<byte[]>> responseFuture = null;
             try {
-                response = responseFuture.get(timeoutSeconds + 1, TimeUnit.SECONDS);
+                if (response == null) {
+                    requireCurrent.run();
+                    responseFuture =
+                            http.sendAsync(request, info -> new LimitedBodySubscriber(65536));
+                    HttpResponse<byte[]> httpResponse =
+                            responseFuture.get(timeoutSeconds + 1, TimeUnit.SECONDS);
+                    response =
+                            new ProviderWebSocket.Reply(
+                                    httpResponse.statusCode(),
+                                    httpResponse.headers(),
+                                    new String(httpResponse.body(), StandardCharsets.UTF_8));
+                }
             } catch (ExecutionException | TimeoutException failure) {
-                responseFuture.cancel(true);
+                if (responseFuture != null) {
+                    responseFuture.cancel(true);
+                }
+                ambiguous = true;
                 if (attempt == attempts - 1) {
                     throw new IOException("Provider transport unavailable", failure);
                 }
                 Thread.sleep((250L << attempt) + ThreadLocalRandom.current().nextLong(100));
                 continue;
             }
-            String text = new String(response.body(), StandardCharsets.UTF_8);
-            int status = response.statusCode();
-            if ((status == 429 || status == 503 || status == 502 || status == 504) && attempt < attempts - 1) {
+            String text = response.body();
+            int status = response.status();
+            String code = "request_rejected";
+            if (status / 100 != 2) {
+                try {
+                    JsonObject error = JsonParser.parseString(text).getAsJsonObject();
+                    if (error.has("code")
+                            && error.get("code").getAsString().matches("[a-z0-9_]{1,80}")) {
+                        code = error.get("code").getAsString();
+                    }
+                } catch (RuntimeException ignored) {
+                }
+            }
+            // These responses reject before mutation. A previous ambiguous attempt still needs
+            // recovery.
+            if (!ambiguous
+                    && (status == 429
+                            || (status / 100 == 4
+                                    && Set.of(
+                                                    "check_in_profile_required",
+                                                    "profile_key_not_installed",
+                                                    "invalid_heartbeat",
+                                                    "invalid_host_profile",
+                                                    "placement_forbidden",
+                                                    "invalid_host_location",
+                                                    "stateless_profile_required")
+                                            .contains(code)))) {
+                clearWebSocketPending();
+            }
+            if (status >= 500) {
+                ambiguous = true;
+            }
+            if ((status == 429 || status == 503 || status == 502 || status == 504)
+                    && attempt < attempts - 1) {
                 long delay = 250L << attempt;
                 try {
                     delay = Math.max(delay, response.headers().firstValueAsLong("retry-after").orElse(0) * 1000);
@@ -1062,19 +1382,130 @@ public final class ProviderClient implements AutoCloseable {
                 continue;
             }
             if (status / 100 != 2) {
-                String code = "request_rejected";
-                try {
-                    JsonObject error = JsonParser.parseString(text).getAsJsonObject();
-                    if (error.has("code") && error.get("code").getAsString().matches("[a-z0-9_]{1,80}")) {
-                        code = error.get("code").getAsString();
-                    }
-                } catch (RuntimeException ignored) {
-                }
                 throw new ProviderException(status, code);
             }
-            return JsonParser.parseString(text).getAsJsonObject();
+            JsonObject result = JsonParser.parseString(text).getAsJsonObject();
+            if (signed) {
+                lastControlCarrier = usedWebSocket ? "websocket" : "http";
+            }
+            if (signed) {
+                clearWebSocketPending();
+            }
+            if (usedWebSocket) {
+                diagnostics.recovered(ProviderLog.Operation.WEBSOCKET);
+            }
+            return result;
         }
         throw new IOException("Provider retry limit exceeded");
+    }
+
+    private void requireResolvedOperation() throws IOException {
+        if (state.has("pendingWebSocketOperation")) {
+            throw new IOException(
+                    "Unresolved provider operation; ordinary registration recovery required");
+        }
+    }
+
+    private void clearWebSocketPending() throws IOException {
+        if (state == null || !state.has("pendingWebSocketOperation")) {
+            return;
+        }
+        JsonElement pending = state.remove("pendingWebSocketOperation");
+        try {
+            save();
+        } catch (IOException failure) {
+            state.add("pendingWebSocketOperation", pending);
+            throw failure;
+        }
+    }
+
+    private void configureWebSocket() throws IOException {
+        if (websocket != null) {
+            websocket.close();
+        }
+        websocket = null;
+        websocketEndpoint = null;
+        if (config.controlTransport() != ControlTransport.AUTO || !discovery.has("extensions")) {
+            return;
+        }
+        JsonObject extensions = discovery.getAsJsonObject("extensions");
+        if (!extensions.has("dev.opencollab.nxs.websocket")) {
+            return;
+        }
+        JsonObject extension = extensions.getAsJsonObject("dev.opencollab.nxs.websocket");
+        if (extension.get("version").getAsInt() != 1) {
+            return;
+        }
+        JsonObject data = extension.getAsJsonObject("data");
+        try {
+            URI endpoint = URI.create(data.get("url").getAsString());
+            String scheme = origin.startsWith("https:") ? "wss" : "ws";
+            URI httpEndpoint =
+                    URI.create(
+                            (scheme.equals("wss") ? "https" : "http")
+                                    + "://"
+                                    + endpoint.getRawAuthority()
+                                    + endpoint.getRawPath());
+            if (!scheme.equals(endpoint.getScheme())
+                    || endpoint.getRawQuery() != null
+                    || endpoint.getFragment() != null
+                    || !"/v1/nxs/control".equals(endpoint.getRawPath())
+                    || !ProviderCrypto.PROTOCOL.equals(data.get("subprotocol").getAsString())) {
+                throw new IOException("Unsupported provider WebSocket capability");
+            }
+            trusted(httpEndpoint);
+            websocketEndpoint = endpoint;
+            websocket = new ProviderWebSocket(http, endpoint);
+        } catch (IllegalArgumentException | NullPointerException failure) {
+            throw new IOException("Invalid provider WebSocket capability", failure);
+        }
+    }
+
+    private String websocketOperation(URI uri) throws IOException {
+        if (websocket == null) {
+            return null;
+        }
+        for (String name : List.of("heartbeat", "outcomes", "rotate", "retire", "deregister")) {
+            // This capability carries the standard endpoints, never silently rewrites a signature
+            // target.
+            if (uri.equals(operation(name))
+                    && uri.getRawQuery() == null
+                    && uri.getRawPath().equals("/v1/nxs/" + name)) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    private Map<String, String> websocketUpgradeHeaders() throws GeneralSecurityException {
+        long now = System.currentTimeMillis(),
+                generation = state.get("generation").getAsLong(),
+                sequence = state.get("sequence").getAsLong();
+        String intent = UUID.randomUUID().toString();
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("nxs-instance-id", registration("instanceId"));
+        headers.put("nxs-key-id", registration("keyId"));
+        headers.put("nxs-timestamp", Long.toString(now));
+        headers.put("nxs-signature-version", ProviderCrypto.SIGNATURE);
+        headers.put("nxs-generation", Long.toString(generation));
+        headers.put("nxs-sequence", Long.toString(sequence));
+        headers.put("idempotency-key", intent);
+        headers.put(
+                "nxs-signature",
+                ProviderCrypto.sign(
+                        privateKey,
+                        ProviderCrypto.request(
+                                origin,
+                                "GET",
+                                websocketEndpoint.getRawPath(),
+                                now,
+                                registration("instanceId"),
+                                registration("keyId"),
+                                intent,
+                                generation,
+                                sequence,
+                                "")));
+        return headers;
     }
 
     private String registration(String field) {
@@ -1094,7 +1525,7 @@ public final class ProviderClient implements AutoCloseable {
         try {
             store.write(state);
         } catch (IOException failure) {
-            diagnostics.accept("provider_persistence_failed");
+            diagnostics.failed(ProviderLog.Operation.STORAGE);
             stop();
             throw failure;
         }
@@ -1123,34 +1554,38 @@ public final class ProviderClient implements AutoCloseable {
         if (!closing.compareAndSet(false, true)) {
             return stopped;
         }
-        executor.execute(() -> {
-            try {
-                if (started) {
-                    drainAndReport();
-                    flushEvents();
-                }
-            } catch (Exception e) {
-                diagnostics.accept("provider_drain_unavailable");
-            } finally {
-                closed = true;
-                started = false;
-                if (timer != null) {
-                    timer.cancel(false);
-                }
-                try {
-                    transport.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
-                } catch (Exception e) {
-                    diagnostics.accept("transport_close_failed");
-                }
-                try {
-                    store.close();
-                } catch (Exception e) {
-                    diagnostics.accept("provider_state_close_failed");
-                }
-                executor.shutdown();
-                stopped.complete(null);
-            }
-        });
+        executor.execute(
+                () -> {
+                    try {
+                        if (started) {
+                            drainAndReport();
+                            flushEvents();
+                        }
+                    } catch (Exception e) {
+                        diagnostics.failed(ProviderLog.Operation.DRAIN);
+                    } finally {
+                        closed = true;
+                        started = false;
+                        if (websocket != null) {
+                            websocket.close();
+                        }
+                        if (timer != null) {
+                            timer.cancel(false);
+                        }
+                        try {
+                            transport.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                        } catch (Exception e) {
+                            diagnostics.failed(ProviderLog.Operation.TRANSPORT_CLOSE);
+                        }
+                        try {
+                            store.close();
+                        } catch (Exception e) {
+                            diagnostics.failed(ProviderLog.Operation.STATE_CLOSE);
+                        }
+                        executor.shutdown();
+                        stopped.complete(null);
+                    }
+                });
         return stopped;
     }
 

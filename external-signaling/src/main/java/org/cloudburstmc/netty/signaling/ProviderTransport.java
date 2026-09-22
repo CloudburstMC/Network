@@ -19,12 +19,44 @@ package org.cloudburstmc.netty.signaling;
 import com.google.gson.JsonObject;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
 /**
  * Transport boundary. Provider code performs no native allocation or game packet handling.
  */
 public interface ProviderTransport {
+    /** A bound endpoint changed while its profile was queued for publication. */
+    final class HostProfileSnapshotChangedException extends IllegalStateException {
+        public HostProfileSnapshotChangedException() {
+            super("Host profile candidate snapshot changed");
+        }
+    }
+
+    /** Immutable profile plus a nonblocking ownership check, repeated before send and acknowledgement. */
+    final class HostProfileSnapshot {
+        private final JsonObject profile;
+        private final Runnable current;
+
+        public HostProfileSnapshot(JsonObject profile, Runnable requireCurrent) {
+            this.profile = Objects.requireNonNull(profile).deepCopy();
+            this.current = Objects.requireNonNull(requireCurrent);
+        }
+
+        public JsonObject profile() {
+            return profile.deepCopy();
+        }
+
+        public void requireCurrent() {
+            current.run();
+        }
+    }
+
+    /** Adapters with mutable endpoints override this to fence queued profile bytes. */
+    default CompletionStage<HostProfileSnapshot> captureHostProfile() {
+        return hostProfile().thenApply(profile -> new HostProfileSnapshot(profile, () -> {}));
+    }
+
     /**
      * Existing PublishHostProfileRequest, exported from actual bound native metadata.
      */

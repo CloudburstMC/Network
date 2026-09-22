@@ -324,7 +324,7 @@ class ProviderClientTest {
         }
     }
 
-    static final class FakeTransport implements ProviderTransport {
+    static class FakeTransport implements ProviderTransport {
         final CompletableFuture<Void> closed = new CompletableFuture<>();
         final Queue<JsonObject> events = new ConcurrentLinkedQueue<>();
         volatile int installed, drains;
@@ -370,8 +370,10 @@ class ProviderClientTest {
 
         public List<JsonObject> pollEvents() {
             List<JsonObject> batch = new ArrayList<>();
-            for (JsonObject event; (event = events.poll()) != null; ) {
+            JsonObject event = events.poll();
+            while (event != null) {
                 batch.add(event);
+                event = events.poll();
             }
             return batch;
         }
