@@ -18,6 +18,85 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderClientTest {
     @Test
+    void repeatedStatusReadFailuresRecoverOnlyWhenStatusCanBeRead(@TempDir Path path)
+            throws Exception {
+        try (var stub = new IndependentProviderStub()) {
+            var broken = new java.util.concurrent.atomic.AtomicBoolean();
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            var client =
+                    new ProviderClient(
+                            new ProviderClient.Configuration(
+                                    URI.create(stub.origin), "nxs-admission-v1", "Example"),
+                            new ProviderStateStore(path),
+                            new FakeTransport(),
+                            () -> {
+                                if (broken.get()) {
+                                    throw new IllegalStateException("private failure details");
+                                }
+                                return new ServerStatus("Example", "", 1, 40, 0);
+                            },
+                            () -> new ProviderClient.Health(true, 100, "fixture", null),
+                            logs::add);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                broken.set(true);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(
+                        1,
+                        logs.stream()
+                                .filter(
+                                        e ->
+                                                e.level() == ProviderDiagnostic.Level.WARN
+                                                        && e.message()
+                                                                .equals(
+                                                                        ProviderLog.Operation
+                                                                                .SERVER_STATUS
+                                                                                .failure))
+                                .count());
+                assertTrue(
+                        logs.stream()
+                                .anyMatch(
+                                        e ->
+                                                e.level() == ProviderDiagnostic.Level.DEBUG
+                                                        && e.message()
+                                                                .equals(
+                                                                        ProviderLog.Operation
+                                                                                .SERVER_STATUS
+                                                                                .failure)));
+                assertFalse(
+                        logs.stream()
+                                .anyMatch(
+                                        e ->
+                                                e.message()
+                                                        .equals(
+                                                                ProviderLog.Operation.SERVER_STATUS
+                                                                        .recovery)));
+                broken.set(false);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(
+                        1,
+                        logs.stream()
+                                .filter(
+                                        e ->
+                                                e.level() == ProviderDiagnostic.Level.INFO
+                                                        && e.message()
+                                                                .equals(
+                                                                        ProviderLog.Operation
+                                                                                .SERVER_STATUS
+                                                                                .recovery))
+                                .count());
+                assertTrue(
+                        logs.stream()
+                                .noneMatch(e -> e.message().contains("private failure details")));
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void anUnusableAdmissionKeyIsNotPersistedAndTheHostStartsAgain(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Key host",
@@ -430,6 +509,103 @@ class ProviderClientTest {
         }
     }
 
+    @Test
+    void retirementRepliesAndRestartNeverExtendPersistedOriginalCutoff(@TempDir Path path)
+            throws Exception {
+        class CapturingTransport extends FakeTransport {
+            final List<List<TicketKey>> snapshots = new CopyOnWriteArrayList<>();
+
+            @Override
+            public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+                snapshots.add(List.copyOf(keys));
+                return super.installTicketKeys(keys);
+            }
+
+            List<TicketKey> latest() {
+                return snapshots.get(snapshots.size() - 1);
+            }
+        }
+        try (var stub = new IndependentProviderStub()) {
+            stub.checkInMillis = 3_600_000;
+            var config =
+                    new ProviderClient.Configuration(
+                            URI.create(stub.origin), "nxs-admission-v1", "Rotation");
+            var firstTransport = new CapturingTransport();
+            var first =
+                    new ProviderClient(
+                            config,
+                            new ProviderStateStore(path),
+                            firstTransport,
+                            () -> null,
+                            () -> new ProviderClient.Health(true, 10, "fixture", null),
+                            message -> {});
+            long originalCutoff;
+            try {
+                first.start().get(20, TimeUnit.SECONDS);
+                originalCutoff = System.currentTimeMillis() + 300_000;
+                JsonObject oldKey = new JsonObject();
+                oldKey.addProperty("keyId", "T001");
+                oldKey.addProperty("retireAfter", originalCutoff);
+                stub.heartbeatRetirements = new JsonArray();
+                stub.heartbeatRetirements.add(oldKey);
+                first.rotateTicketKey().get(10, TimeUnit.SECONDS);
+                assertEquals(
+                        List.of("T001", "T002"),
+                        firstTransport.latest().stream()
+                                .map(ProviderTransport.TicketKey::keyId)
+                                .toList());
+                assertEquals(originalCutoff, firstTransport.latest().get(0).retireAfter());
+                assertEquals(Long.MAX_VALUE, firstTransport.latest().get(1).retireAfter());
+                // Repeated responses are idempotent; even a provider erroneously rebasing a later
+                // response cannot extend the original local retirement bound.
+                first.readiness().get(10, TimeUnit.SECONDS);
+                JsonArray laterReply = stub.heartbeatRetirements.deepCopy();
+                laterReply
+                        .get(0)
+                        .getAsJsonObject()
+                        .addProperty("retireAfter", originalCutoff + 300_000);
+                stub.heartbeatRetirements = laterReply;
+                first.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(originalCutoff, firstTransport.latest().get(0).retireAfter());
+            } finally {
+                first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+            var saved =
+                    JsonParser.parseString(Files.readString(path.resolve("provider-state.json")))
+                            .getAsJsonObject()
+                            .getAsJsonArray("ticketKeys");
+            assertEquals(
+                    originalCutoff, saved.get(0).getAsJsonObject().get("retireAfter").getAsLong());
+            var resumedTransport = new CapturingTransport();
+            var resumed =
+                    new ProviderClient(
+                            config,
+                            new ProviderStateStore(path),
+                            resumedTransport,
+                            () -> null,
+                            () -> new ProviderClient.Health(true, 10, "fixture", null),
+                            message -> {});
+            try {
+                resumed.start().get(20, TimeUnit.SECONDS);
+                resumed.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(2, stub.generation);
+                assertFalse(resumedTransport.snapshots.isEmpty());
+                for (var snapshot : resumedTransport.snapshots) {
+                    assertEquals(
+                            List.of("T001", "T002"),
+                            snapshot.stream().map(ProviderTransport.TicketKey::keyId).toList());
+                    assertEquals(
+                            originalCutoff,
+                            snapshot.get(0).retireAfter(),
+                            "The very first native installation after restart must retain the saved deadline");
+                    assertEquals(Long.MAX_VALUE, snapshot.get(1).retireAfter());
+                }
+            } finally {
+                resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     private static void eventually(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
@@ -465,14 +641,19 @@ class ProviderClientTest {
             eventually(() -> stub.lastHeartbeat.has("serverStatus")
                     && stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt() == 5);
             assertTrue(stub.heartbeats - before <= 2, "Burst must coalesce within heartbeat cadence");
-            for (String value : List.of("future-state", "draining", "closed")) {
-                stub.desiredState = value;
+            int beforeAck = stub.acknowledgements;
+            for (String desired : List.of("future-state", "draining", "closed")) {
+                stub.desiredState = desired;
                 stub.desiredRevision = 2;
                 client.readiness().get(10, TimeUnit.SECONDS);
-                assertEquals(0, host.drains, "Provider responses cannot control the listener");
+                assertEquals(
+                        0, host.drains, "Provider responses must not control the game listener");
                 assertTrue(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             }
-            assertTrue(stub.appliedRevision < 2, "Only matching echoes are acknowledged");
+            assertTrue(
+                    stub.appliedRevision < 2,
+                    "Host must not acknowledge an instruction it did not apply");
+            assertEquals(beforeAck, stub.acknowledgements);
             client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
         }
     }
@@ -480,6 +661,10 @@ class ProviderClientTest {
     @Test
     void outcomeOutageBacksOffWhileHeartbeatsContinue(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.extensionMetadata =
+                    JsonParser.parseString(
+                                    "{\"dev.opencollab.nxs.connectivity\":{\"version\":1,\"critical\":false,\"data\":{}}}")
+                            .getAsJsonObject();
             FakeTransport host = new FakeTransport();
             stub.failOutcomes = true;
             var client = new ProviderClient(
@@ -489,9 +674,15 @@ class ProviderClientTest {
             });
             try {
                 client.start().get(20, TimeUnit.SECONDS);
-                host.events.add(JsonParser.parseString(
-                                "{\"ticketId\":\"fixture-ticket\",\"stage\":\"ticket.failed\",\"occurredAt\":\"2026-09-07T00:00:00Z\"}")
-                        .getAsJsonObject());
+                JsonObject observed =
+                        JsonParser.parseString(
+                                        """
+                        {"ticketId":"fixture-ticket","stage":"ticket.data_channels_open",
+                         "occurredAt":"2026-09-07T00:00:00Z","reason":"both_channels_open",
+                         "remoteAddress":"2001:db8::1234","remotePort":54321,"sdp":"must-not-persist"}
+                        """)
+                                .getAsJsonObject();
+                host.events.add(observed);
                 eventually(() -> stub.outcomeAttempts == 1);
                 int before = stub.heartbeats;
                 eventually(() -> stub.heartbeats >= before + 2);
@@ -500,12 +691,53 @@ class ProviderClientTest {
                         JsonParser.parseString(Files.readString(path.resolve("provider-state.json")))
                                 .getAsJsonObject();
                 assertEquals(1, saved.getAsJsonArray("pendingEvents").size());
+                JsonObject pending = saved.getAsJsonArray("pendingEvents").get(0).getAsJsonObject();
+                assertEquals("2001:db8::1234", pending.get("remoteAddress").getAsString());
+                assertEquals(54321, pending.get("remotePort").getAsInt());
+                assertFalse(pending.has("sdp"));
                 assertTrue(saved.get("profilePublishedAt").getAsLong() > 0);
             } finally {
                 stub.failOutcomes = false;
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }
             assertEquals(1, stub.events.size(), "Shutdown retries the durable outcome without losing it");
+            assertEquals("2001:db8::1234", stub.events.get(0).get("remoteAddress").getAsString());
+            assertEquals(54321, stub.events.get(0).get("remotePort").getAsInt());
+            assertFalse(stub.events.get(0).has("sdp"));
+        }
+    }
+
+    @Test
+    void outcomesOmitUnadvertisedConnectivityMetadata(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            var client =
+                    new ProviderClient(
+                            new ProviderClient.Configuration(
+                                    URI.create(stub.origin), "nxs-admission-v1", "Example"),
+                            new ProviderStateStore(path),
+                            host,
+                            () -> null,
+                            () -> new ProviderClient.Health(true, 10, "fixture", null),
+                            ignored -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(
+                        1, stub.appliedRevision, "Legacy heartbeat acknowledgement is retained");
+                host.events.add(
+                        JsonParser.parseString(
+                                        """
+                        {"ticketId":"fixture-ticket","stage":"ticket.data_channels_open",
+                         "occurredAt":"2026-09-07T00:00:00Z","remoteAddress":"8.8.8.8","remotePort":54321}
+                        """)
+                                .getAsJsonObject());
+                eventually(() -> !stub.events.isEmpty());
+                assertEquals(
+                        Set.of("ticketId", "stage", "occurredAt"), stub.events.get(0).keySet());
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
         }
     }
 

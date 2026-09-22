@@ -1,0 +1,1377 @@
+{
+  "format": "nethernet-control-origin-fixtures-v1",
+  "profile": "ascii-dns-canonical-ip-literals-v1",
+  "note": "Intentional narrower profile: reject all IDN/xn-- labels, trailing dots, numeric-starting final DNS labels and noncanonical IPv4/IPv6 spellings. Never normalize signed input.",
+  "vectors": [
+    {
+      "origin": "https://provider.example",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://provider.example:1",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://provider.example:65535",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://provider.example:80",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://a",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://localhost",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://a-b.example",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://123.example",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://a123",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://0xabc.example",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://ab--cd.example",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://0.0.0.0",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://192.0.2.128",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://255.255.255.255",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://127.0.0.1:8443",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[::]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[::1]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[2001:db8::1]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[2001:db8::1]:8443",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[1:2:3:4:5:6:7:8]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[2001:db8:0:1:2:3:4:5]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[1::2:0:0:3:4]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[1:0:0:2::3]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[1:2:3:4:5:6::]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[::ffff:c000:280]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "https://[::ffff:7f00:1]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "http://localhost",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "http://localhost:443",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "http://127.0.0.1",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "http://127.0.0.1:8080",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "http://[::1]",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "http://[::1]:65535",
+      "accepted": true,
+      "category": "canonical"
+    },
+    {
+      "origin": "",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "HTTPS://provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https:/provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https:provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "wss://provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "ws://localhost",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "ftp://provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://Provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.EXAMPLE",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example/",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example/path",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example?",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example?query",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example#",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example#fragment",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://user@provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://user:pass@provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://@provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": " https://provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example ",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example\n",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example\r",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example\t",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.ex\nample",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "﻿https://provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example\u0000",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example\\path",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example%2f",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider%2eexample",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example%3a443",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example%40evil.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example%23",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:0",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:-0",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:-1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:+443",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:443",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:0443",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:08443",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:65536",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:999999999999999999",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:1.0",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:1e3",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:0x50",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example:80:81",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.example.",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider..example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://.provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://-provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider-.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider_example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.123",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.123a",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.0x10",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider.0x",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://127.1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://127.0.1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://2130706433",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://0177.0.0.1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://127.00.0.1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://127.0.0.01",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://0x7f000001",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://0x7f.0.0.1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://4294967295",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://4294967296",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://256.1.1.1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://1.2.3.4.5",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://1.2.3.-0",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://bücher.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://xn--bcher-kva.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://xn--fa-hia.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://xn--a.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://xn--.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://xn--invalid-.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://XN--BCHER-KVA.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://provider。example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[0:0:0:0:0:0:0:1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[0000::1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[2001:DB8::1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[2001:0db8::1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[1:0:0:2::3:4]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[1::2:0:0:0:3]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[1:2:3:4:5:6::8]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[1:2:3:4:5:6:0:0]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[::ffff:192.0.2.128]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[::127.0.0.1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[fe80::1%eth0]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[fe80::1%25eth0]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://2001:db8::1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[:::]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[1::2::3]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[1:2:3:4:5:6:7]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[1:2:3:4:5:6:7:8:9]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[12345::1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[gggg::1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[::1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://::1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://[::1]]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://provider.example",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://127.0.0.2",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://127.1",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://localhost.",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://sub.localhost",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://[::ffff:7f00:1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://[0:0:0:0:0:0:0:1]",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "http://[::1]:80",
+      "accepted": false,
+      "category": "alias-invalid-or-excluded"
+    },
+    {
+      "origin": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+      "accepted": true,
+      "category": "dns-label-boundary"
+    },
+    {
+      "origin": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+      "accepted": false,
+      "category": "dns-label-boundary"
+    },
+    {
+      "origin": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "accepted": true,
+      "category": "dns-total-boundary"
+    },
+    {
+      "origin": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "accepted": false,
+      "category": "dns-total-boundary"
+    },
+    {
+      "origin": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "accepted": false,
+      "category": "origin-size"
+    },
+    {
+      "origin": "https://[c2d0:0:8482:79f9::aed6:183d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[c2d0:0000:8482:79f9:0000:0000:aed6:183d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:1577:746a:18c1:1b2c:dc9b:e93e:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:1577:746a:18c1:1b2c:dc9b:e93e:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[6b20:23ff:6152:9089:e054:cfa3:70a6:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[6b20:23ff:6152:9089:e054:cfa3:70a6:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[2ec8:387:eb3a::23ab:e50e:2915]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[2ec8:0387:eb3a:0000:0000:23ab:e50e:2915]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[6770:d40f:0:8b19::ab5d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[6770:d40f:0000:8b19:0000:0000:0000:ab5d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[b518:b597:560a:0:8dcc:6ebb:14de:76a5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[b518:b597:560a:0000:8dcc:6ebb:14de:76a5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[b7c0:c81f:0:69a9:0:a5c3:1046:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[b7c0:c81f:0000:69a9:0000:a5c3:1046:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[f68:2ba7:b4da:0:e51c:0:78ae:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0f68:2ba7:b4da:0000:e51c:0000:78ae:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[5c10:0:afc2:2c39:e844::ce7d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[5c10:0000:afc2:2c39:e844:0000:0000:ce7d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[3db8::506c:10db:107e:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[3db8:0000:0000:0000:506c:10db:107e:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[5460:7c3f:0:d2c9:bd94:0:7fe6:160d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[5460:7c3f:0000:d2c9:bd94:0000:7fe6:160d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:63c7:4e7a:8b91:0:67eb:dc4e:3755]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:63c7:4e7a:8b91:0000:67eb:dc4e:3755]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[::7d62:5d59:26e4:0:0:819d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:0000:7d62:5d59:26e4:0000:0000:819d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[1658::6821:630c:c2fb:dc1e:14e5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[1658:0000:0000:6821:630c:c2fb:dc1e:14e5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[4100:405f:1232:0:2434:8203:bf86:112d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[4100:405f:1232:0000:2434:8203:bf86:112d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[c0a8:0:b81a:a8b1:a5c:220b:fee:9675]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[c0a8:0000:b81a:a8b1:0a5c:220b:0fee:9675]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[3550:886f:1b02:1e79:0:c313:6d56:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[3550:886f:1b02:1e79:0000:c313:6d56:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[3ef8:f5f7:daea:4d41:c5ac:851b:77be:bc05]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0:147f:97d2:0:dad4:0:cf26:9c4d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:147f:97d2:0000:dad4:0000:cf26:9c4d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[9148:407:f1ba:55d1:94fc:0:138e:8595]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[9148:0407:f1ba:55d1:94fc:0000:138e:8595]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[19f0:0:88a2:0:9424:d133::]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[19f0:0000:88a2:0000:9424:d133:0000:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:d617:fc8a:c261:784c:573b:0:f325]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:d617:fc8a:c261:784c:573b:0000:f325]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:f89f:0:6e29:e174:0:aec6:b76d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:f89f:0000:6e29:e174:0000:aec6:b76d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[::fb5a:92f1:6f9c:c64b:e72e:4b5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:0000:fb5a:92f1:6f9c:c64b:e72e:04b5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[4e90:50af:c642:0:c2c4:ef53:2c96:fafd]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[4e90:50af:c642:0000:c2c4:ef53:2c96:fafd]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:c637:ee2a:0:7aec:395b:1efe:ba45]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:c637:ee2a:0000:7aec:395b:1efe:ba45]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[e6e0:ecbf:1312:1749:0:c463:5e66:628d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[e6e0:ecbf:1312:1749:0000:c463:5e66:628d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[2288:e447:d4fa::8ace:13d5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[2288:e447:d4fa:0000:0000:0000:8ace:13d5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[d330:cccf:d3e2:c1d9:4164:1d73:0:ee1d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[d330:cccf:d3e2:c1d9:4164:1d73:0000:ee1d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[::afca:5ca1:cd8c:0:2a9e:1165]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:0000:afca:5ca1:cd8c:0000:2a9e:1165]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[1380:f0df:0:5069:deb4:0:de06:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[1380:f0df:0000:5069:deb4:0000:de06:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[e328:6c67:0:bd31:14dc:aa8b::]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[e328:6c67:0000:bd31:14dc:aa8b:0000:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[a7d0:58ef:b182::5b93:2bd6:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[a7d0:58ef:b182:0000:0000:5b93:2bd6:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[::416a:81c1:702c:2d9b:0:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:0000:416a:81c1:702c:2d9b:0000:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[9020:0:ce52:1989:0:40a3:2da6:68cd]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[9020:0000:ce52:1989:0000:40a3:2da6:68cd]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[f3c8:487:f83a:aa51:df7c:0:420e:e215]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[f3c8:0487:f83a:aa51:df7c:0000:420e:e215]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:f50f:5f22:5419:2ea4::]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:f50f:5f22:5419:2ea4:0000:0000:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[ba18::62cc:0:b1de:6fa5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[ba18:0000:0000:0000:62cc:0000:b1de:6fa5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[5cc0:291f:0:72a9:1bf4:96c3:4d46:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[5cc0:291f:0000:72a9:1bf4:96c3:4d46:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[5468:aca7:41da:2771:fa1c:cecb:0:a135]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[5468:aca7:41da:2771:fa1c:cecb:0000:a135]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[4110:a12f:dcc2:0:9d44:7d3:0:277d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[4110:a12f:dcc2:0000:9d44:07d3:0000:277d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[::d4aa:7c01:0:0:2d7e:76c5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:0000:d4aa:7c01:0000:0000:2d7e:76c5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[7960:5d3f:c992:0:b294:fce3:3ce6:af0d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[7960:5d3f:c992:0000:b294:fce3:3ce6:af0d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:64c7:0:3491:64bc:0:394e:f055]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:64c7:0000:3491:64bc:0000:394e:f055]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:5d4f:2a62:0:5be4:75f3:c2b6:5a9d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:5d4f:2a62:0000:5be4:75f3:c2b6:5a9d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[1b58:66d7:d64a::93fb:791e:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[1b58:66d7:d64a:0000:0000:93fb:791e:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[e600::d4e9:9934:7303:fc86:2a2d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[e600:0000:0000:d4e9:9934:7303:fc86:2a2d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[5a8:2ce7:451a:d1b1:1f5c:0:ecee:cf75]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[05a8:2ce7:451a:d1b1:1f5c:0000:ecee:cf75]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[1a50::6a84:f413:ea56:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[1a50:0000:0000:0000:6a84:f413:ea56:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[::a7ea:b641:1aac:0:0:3505]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:0000:a7ea:b641:1aac:0000:0000:3505]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:f57f:0:de09:cfd4:0:8c26:354d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:f57f:0000:de09:cfd4:0000:8c26:354d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[5648:507:feba:fed1:0:7d2b:708e:3e95]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[5648:0507:feba:fed1:0000:7d2b:708e:3e95]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:58f::c924:0:e1f6:70dd]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:058f:0000:0000:c924:0000:e1f6:70dd]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:1717:498a:ab61:0:283b:805e:ec25]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:1717:498a:ab61:0000:283b:805e:ec25]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[af40:599f:da72::8f43:ebc6:d06d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[af40:599f:da72:0000:0000:8f43:ebc6:d06d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[f6e8:ed27:885a::3db5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[f6e8:ed27:885a:0000:0000:0000:0000:3db5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[3390:f1af:f342:0:77c4:2053:a996:53fd]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[3390:f1af:f342:0000:77c4:2053:a996:53fd]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[538:8737:0:3081:cfec:8a5b:3bfe:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0538:8737:0000:3081:cfec:8a5b:3bfe:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:cdbf:8012:a049:0:3563:0:fb8d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:cdbf:8012:a049:0000:3563:0000:fb8d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[e788:0:e1fa:911:2f3c:416b:0:ccd5]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[e788:0000:e1fa:0911:2f3c:416b:0000:ccd5]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:edcf:80e2:8ad9:7664::c71d]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:edcf:80e2:8ad9:7664:0000:0000:c71d]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[0:757:0:45a1:0:fc7b:c79e:a65]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[0000:0757:0000:45a1:0000:fc7b:c79e:0a65]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[b880:51df:f5b2:5969:53b4::]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[b880:51df:f5b2:5969:53b4:0000:0000:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    },
+    {
+      "origin": "https://[2828:0:b9a:0:29dc:bb8b:db6e:0]",
+      "accepted": true,
+      "category": "whatwg-generated-ipv6"
+    },
+    {
+      "origin": "https://[2828:0000:0b9a:0000:29dc:bb8b:db6e:0000]",
+      "accepted": false,
+      "category": "whatwg-generated-ipv6-alias"
+    }
+  ]
+}

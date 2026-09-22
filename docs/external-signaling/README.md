@@ -35,9 +35,10 @@ cannot start another generation or reveal its secrets again.
 Every live replica needs its own key and private state directory. Account/token
 issuance, ownership claims and fleet administration belong to the provider.
 
-The Java client uses HTTPS by default. Explicit `AUTO` configuration enables the
-[optional WebSocket carrier](control-v1.md) when discovery advertises it. Both
-carriers share registration, signatures, sequencing and recovery.
+The Java client defaults to HTTP. Its optional `controlTransport=AUTO` uses the
+noncritical `dev.opencollab.nxs.websocket` discovery extension when advertised. The
+same lifecycle signs and handles ordinary operations over either carrier;
+registration and recovery remain HTTPS. See [control transport](control-v1.md).
 
 ## 2. Heartbeat to the provider
 
@@ -61,7 +62,9 @@ Applications supply
 `new ProviderClient.Health(acceptingPlayers, capacity, build, playerCount)`.
 
 The game server owns its serving state. The provider may stop routing new
-players to it, but never sends a serve/drain/close instruction.
+players to it, but never sends a serve/drain/close instruction. Only explicitly
+enabled assisted joins (players or connectivity checks) may be unsolicited, and
+those require WebSocket transport.
 
 Some implementations may still send or accept historic fields not listed in this
 specification. Those fields will be removed soon; new implementations must not
@@ -129,3 +132,13 @@ Hosts can request automatic registration: the provider uses token authority to
 choose account provisioning or attachment. Anonymous hosts create new services.
 Geyser exposes only signaling mode, advertised endpoints, token, provider origin
 and registration metadata; see the [Geyser configuration](https://github.com/onebeastchris/Geyser/blob/feature/nethernet-wip/PROVIDER.md).
+
+### Optional connectivity
+
+The host publishes fresh endpoints immediately and uses completed regional checks
+to adjust subsequent offers. Assistance is an explicit host choice; checks never
+enable it or change the listener's serving state. See the
+[connectivity extension](wire-reference.md#optional-connectivity-observation) for
+publication and feedback fields, and [diagnostics](diagnostic-v1.md) for signed
+admission and the single PING/PONG exchange. These extensions add no registration
+or heartbeat operations.

@@ -45,6 +45,8 @@ class ProviderWebSocketTest {
             HostProfileSnapshot snapshot =
                     new HostProfileSnapshot(
                             profile,
+                            captured,
+                            captured,
                             () -> {
                                 if (closed.isDone()) {
                                     throw new IllegalStateException("Native listener closed");
@@ -705,6 +707,336 @@ class ProviderWebSocketTest {
         }
     }
 
+    @Test
+    void configuredAssistanceIsAdvertisedAtStartupAndUnaffectedByFeedback(@TempDir Path directory)
+            throws Exception {
+        for (boolean enabled : List.of(false, true)) {
+            for (boolean candidateFree : List.of(false, true)) {
+                try (Provider provider = new Provider()) {
+                    var transport =
+                            new ProviderClientTest.FakeTransport() {
+                                @Override
+                                public CompletionStage<HostProfileSnapshot> captureHostProfile() {
+                                    return hostProfile()
+                                            .thenApply(
+                                                    profile -> {
+                                                        if (candidateFree) {
+                                                            profile.add(
+                                                                    "candidates", new JsonArray());
+                                                        }
+                                                        return new HostProfileSnapshot(
+                                                                profile,
+                                                                1,
+                                                                0,
+                                                                profile.getAsJsonArray(
+                                                                        "candidates"),
+                                                                Set.of(4, 6),
+                                                                () -> {});
+                                                    });
+                                }
+
+                                @Override
+                                public boolean supportsAssistedJoins() {
+                                    return true;
+                                }
+                            };
+                    var config =
+                            new ProviderClient.Configuration(
+                                    URI.create(provider.stub.origin),
+                                    "nxs-admission-v1",
+                                    "configured assistance",
+                                    ProviderClient.NEW_SERVICE,
+                                    ProviderClient.BEARER_TOKEN,
+                                    "independent-provider-token",
+                                    null,
+                                    null,
+                                    Map.of(),
+                                    ProviderClient.ControlTransport.AUTO,
+                                    false,
+                                    "discovered",
+                                    enabled);
+                    var client =
+                            new ProviderClient(
+                                    config,
+                                    new ProviderStateStore(
+                                            directory.resolve(enabled + "-" + candidateFree)),
+                                    transport,
+                                    () -> null,
+                                    () -> new ProviderClient.Health(true, 10, "test", null),
+                                    message -> {});
+                    try {
+                        client.start().get(20, TimeUnit.SECONDS);
+                        assertEquals(
+                                enabled,
+                                provider.stub
+                                        .lastHeartbeat
+                                        .getAsJsonObject("hostProfile")
+                                        .getAsJsonObject("statelessAdmission")
+                                        .has("assisted"),
+                                "Configuration applies before any feedback");
+                        for (String outcome :
+                                List.of(
+                                        "unknown",
+                                        "not-established",
+                                        "established",
+                                        "unavailable")) {
+                            var data =
+                                    provider.stub
+                                            .lastHeartbeat
+                                            .getAsJsonObject("extensions")
+                                            .getAsJsonObject("dev.opencollab.nxs.connectivity")
+                                            .getAsJsonObject("data");
+                            assertEquals(
+                                    enabled ? "[4,6]" : "[]",
+                                    data.getAsJsonArray("assistedFamilies").toString());
+                            assertEquals(
+                                    enabled ? "per_join" : "discovered",
+                                    data.get("method").getAsString());
+                            var feedback = connectivityFeedback(System.currentTimeMillis());
+                            feedback.getAsJsonObject("data")
+                                    .getAsJsonArray("checks")
+                                    .get(0)
+                                    .getAsJsonObject()
+                                    .addProperty("outcome", outcome);
+                            provider.stub.extensionMetadata.add(
+                                    "dev.opencollab.nxs.connectivity", feedback);
+                            client.readiness().get(10, TimeUnit.SECONDS);
+                        }
+                        var data =
+                                provider.stub
+                                        .lastHeartbeat
+                                        .getAsJsonObject("extensions")
+                                        .getAsJsonObject("dev.opencollab.nxs.connectivity")
+                                        .getAsJsonObject("data");
+                        assertEquals(
+                                enabled ? "[4,6]" : "[]",
+                                data.getAsJsonArray("assistedFamilies").toString());
+                    } finally {
+                        client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void assistedPushUsesOwnedNativeCaptureAndSuppressesLatePreparedAnswer(@TempDir Path directory)
+            throws Exception {
+        try (Provider provider = new Provider()) {
+            var started =
+                    new LinkedBlockingQueue<
+                            org.cloudburstmc.netty.signaling.control.AssistedJoin>();
+            var nativeResult = new AtomicReference<CompletableFuture<String>>();
+            var transport =
+                    new ProviderClientTest.FakeTransport() {
+                        @Override
+                        public CompletionStage<JsonObject> hostProfile() {
+                            return super.hostProfile()
+                                    .thenApply(
+                                            profile -> {
+                                                profile.getAsJsonArray("candidates")
+                                                        .get(0)
+                                                        .getAsJsonObject()
+                                                        .addProperty("address", "8.8.8.8");
+                                                return profile;
+                                            });
+                        }
+
+                        @Override
+                        public CompletionStage<HostProfileSnapshot> captureHostProfile() {
+                            return hostProfile()
+                                    .thenApply(
+                                            profile ->
+                                                    new HostProfileSnapshot(
+                                                            profile,
+                                                            1,
+                                                            0,
+                                                            profile.getAsJsonArray("candidates"),
+                                                            Set.of(4),
+                                                            () -> {
+                                                                if (closed.isDone()) {
+                                                                    throw new IllegalStateException(
+                                                                            "Native listener closed");
+                                                                }
+                                                            }));
+                        }
+
+                        @Override
+                        public boolean supportsAssistedJoins() {
+                            return true;
+                        }
+
+                        @Override
+                        public CompletionStage<String> assistedJoin(
+                                org.cloudburstmc.netty.signaling.control.AssistedJoin join,
+                                Runnable guard) {
+                            guard.run();
+                            var result = new CompletableFuture<String>();
+                            nativeResult.set(result);
+                            started.add(join);
+                            return result;
+                        }
+                    };
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            ProviderClient client =
+                    new ProviderClient(
+                            new ProviderClient.Configuration(
+                                    URI.create(provider.stub.origin),
+                                    "nxs-admission-v1",
+                                    "assisted",
+                                    ProviderClient.NEW_SERVICE,
+                                    ProviderClient.BEARER_TOKEN,
+                                    "independent-provider-token",
+                                    null,
+                                    null,
+                                    Map.of(),
+                                    ProviderClient.ControlTransport.AUTO,
+                                    false,
+                                    "discovered",
+                                    true),
+                            new ProviderStateStore(directory),
+                            transport,
+                            () -> null,
+                            () -> new ProviderClient.Health(true, 10, "test", null),
+                            logs::add);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                var scheduled = ProviderClient.class.getDeclaredField("nextHeartbeat");
+                scheduled.setAccessible(true);
+                long untilNext = scheduled.getLong(client) - System.nanoTime();
+                assertTrue(
+                        untilNext > 0 && untilNext <= TimeUnit.MINUTES.toNanos(4),
+                        "A 15-minute idle provider schedule must renew the original five-minute assisted authority early");
+                JsonObject profile = provider.stub.lastHeartbeat.getAsJsonObject("hostProfile");
+                assertEquals(
+                        "nethernet.websocket-assisted.v1",
+                        profile.getAsJsonObject("statelessAdmission")
+                                .get("assisted")
+                                .getAsString());
+                int upgrades = provider.upgrades.get();
+                provider.stub.extensionMetadata.add(
+                        "dev.opencollab.nxs.connectivity", connectivityFeedback(null));
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(
+                        upgrades,
+                        provider.upgrades.get(),
+                        "An empty feedback gap must not remove assistance and reconnect");
+                var generator = java.security.KeyPairGenerator.getInstance("EC");
+                generator.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
+                JsonObject join = new JsonObject();
+                join.addProperty("kind", "assisted-join");
+                join.addProperty("version", 1);
+                join.addProperty("id", "ab".repeat(16));
+                join.add("instanceId", provider.stub.registration.get("instanceId"));
+                join.addProperty("generation", 1);
+                join.add(
+                        "incarnation",
+                        profile.getAsJsonObject("statelessAdmission").get("incarnation"));
+                join.add("keyId", profile.get("credentialKeyId"));
+                join.add("hostFingerprint", profile.get("dtlsFingerprint"));
+                join.addProperty("expiresAt", System.currentTimeMillis() + 14000);
+                join.addProperty("networkId", "1234");
+                join.addProperty(
+                        "cpk",
+                        Base64.getEncoder()
+                                .encodeToString(
+                                        generator.generateKeyPair().getPublic().getEncoded()));
+                join.addProperty("localUfrag", "assistedHost");
+                join.addProperty("localPassword", "h".repeat(32));
+                join.addProperty(
+                        "offer",
+                        "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=setup:actpass\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=ice-ufrag:assistedClient\r\na=ice-pwd:"
+                                + "c".repeat(128)
+                                + "\r\na=fingerprint:sha-256 "
+                                + String.join(":", Collections.nCopies(32, "AA"))
+                                + "\r\na=candidate:1 1 UDP 123 127.0.0.1 19132 typ host\r\n");
+                join.add("kind", join.remove("kind")); // JSON members can arrive in any order.
+                provider.socket.writeAndFlush(
+                        new TextWebSocketFrame(
+                                " \n"
+                                        + new GsonBuilder()
+                                                .setPrettyPrinting()
+                                                .create()
+                                                .toJson(join)));
+                assertNotNull(started.poll(5, TimeUnit.SECONDS));
+                nativeResult.get().complete("actual-prepared-answer");
+                JsonObject reply = provider.assistedReplies.poll(5, TimeUnit.SECONDS);
+                assertNotNull(reply);
+                assertTrue(reply.get("accepted").getAsBoolean());
+                assertEquals("actual-prepared-answer", reply.get("answer").getAsString());
+                var authorityField = ProviderClient.class.getDeclaredField("assistedAuthority");
+                authorityField.setAccessible(true);
+                Object originalAuthority = authorityField.get(client);
+                var constructor = originalAuthority.getClass().getDeclaredConstructors()[0];
+                constructor.setAccessible(true);
+                var components = originalAuthority.getClass().getRecordComponents();
+                Object[] arguments = new Object[components.length];
+                for (int i = 0; i < components.length; i++) {
+                    var accessor = components[i].getAccessor();
+                    accessor.setAccessible(true);
+                    arguments[i] = accessor.invoke(originalAuthority);
+                }
+                for (int expiredField : List.of(3, 4)) {
+                    Object[] expired = arguments.clone();
+                    expired[expiredField] =
+                            expiredField == 3
+                                    ? System.nanoTime() - 1
+                                    : System.currentTimeMillis() - 1;
+                    authorityField.set(client, constructor.newInstance(expired));
+                    join.addProperty("id", (expiredField == 3 ? "ef" : "01").repeat(16));
+                    provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
+                    var denied = provider.assistedReplies.poll(5, TimeUnit.SECONDS);
+                    assertNotNull(denied);
+                    assertFalse(
+                            denied.get("accepted").getAsBoolean(),
+                            "Retained mode cannot extend either authority deadline");
+                    assertTrue(
+                            started.isEmpty(),
+                            "Expired authority must not reach the native transport");
+                }
+                assertEquals(
+                        2,
+                        logs.stream()
+                                .filter(
+                                        e ->
+                                                e.level() == ProviderDiagnostic.Level.WARN
+                                                        && e.message()
+                                                                .equals(
+                                                                        "A player could not connect using an assisted join."))
+                                .count());
+                authorityField.set(client, originalAuthority);
+                join.addProperty("id", "cd".repeat(16));
+                provider.socket.writeAndFlush(new TextWebSocketFrame(join.toString()));
+                assertNotNull(started.poll(5, TimeUnit.SECONDS));
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                nativeResult.get().complete("late-after-close");
+                assertNull(provider.assistedReplies.poll(200, TimeUnit.MILLISECONDS));
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static JsonObject connectivityFeedback(Long checkedAt) {
+        var checks = new JsonArray();
+        if (checkedAt != null) {
+            var check = new JsonObject();
+            check.addProperty("family", 4);
+            check.addProperty("outcome", "not-established");
+            check.addProperty("checkedAt", checkedAt);
+            check.addProperty("expiresAt", checkedAt + 60000);
+            checks.add(check);
+        }
+        var data = new JsonObject();
+        data.addProperty("candidateRevision", 1);
+        data.add("checks", checks);
+        var extension = new JsonObject();
+        extension.addProperty("version", 1);
+        extension.addProperty("critical", false);
+        extension.add("data", data);
+        return extension;
+    }
+
     private static ProviderClient client(
             Provider provider,
             Path path,
@@ -765,6 +1097,7 @@ class ProviderWebSocketTest {
         volatile Result rejectNext, rejectAfterDrop;
         volatile boolean refuseAfterDrop, rejectUpgrade;
         volatile Channel socket;
+        final LinkedBlockingQueue<JsonObject> assistedReplies = new LinkedBlockingQueue<>();
         volatile Map<String, String> droppedHeaders;
         volatile String droppedBody;
         final CompletableFuture<Throwable> failure = new CompletableFuture<>();
@@ -1043,7 +1376,16 @@ class ProviderWebSocketTest {
                                                                                                     text
                                                                                                             .text())
                                                                                             .getAsJsonObject();
-
+                                                                            if (envelope.has("kind")
+                                                                                    && envelope.get(
+                                                                                                    "kind")
+                                                                                            .getAsString()
+                                                                                            .equals(
+                                                                                                    "assisted-join-result")) {
+                                                                                assistedReplies.add(
+                                                                                        envelope);
+                                                                                return;
+                                                                            }
                                                                             assertEquals(
                                                                                     Set.of(
                                                                                             "operation",

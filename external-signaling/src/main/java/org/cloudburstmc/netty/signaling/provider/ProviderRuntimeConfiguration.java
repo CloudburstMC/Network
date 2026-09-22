@@ -46,7 +46,10 @@ public record ProviderRuntimeConfiguration(
         int udpPort,
         List<InetSocketAddress> advertisedEndpoints,
         int capacity,
-        ProviderClient.ControlTransport controlTransport) {
+        ProviderClient.ControlTransport controlTransport,
+        boolean diagnosticAdmission,
+        boolean maintainedCandidates,
+        boolean assistedJoins) {
     /**
      * @param settings   What the host has configured for the provider
      * @param directory  The host's data directory, which the state directory and any token file are
@@ -58,6 +61,10 @@ public record ProviderRuntimeConfiguration(
      */
     public static ProviderRuntimeConfiguration resolve(Settings settings, Path directory, String bindAddress,
                                                        int udpPort, int maxPlayers, String label) throws IOException {
+        if (settings.assistedJoins()
+                && settings.controlTransport() != ProviderClient.ControlTransport.AUTO) {
+            throw new IOException("nxs.assisted-joins requires nxs.control-transport=auto");
+        }
         URI origin;
         try {
             origin = URI.create(settings.endpoint());
@@ -112,7 +119,10 @@ public record ProviderRuntimeConfiguration(
                         port,
                         List.copyOf(endpoints),
                         capacity,
-                        settings.controlTransport());
+                        settings.controlTransport(),
+                        settings.diagnosticAdmission(),
+                        settings.maintainedCandidates(),
+                        settings.assistedJoins());
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
@@ -137,9 +147,57 @@ public record ProviderRuntimeConfiguration(
             String token,
             List<String> advertiseAddresses,
             Map<String, String> data,
-            ProviderClient.ControlTransport controlTransport) {
+            ProviderClient.ControlTransport controlTransport,
+            boolean diagnosticAdmission,
+            boolean maintainedCandidates,
+            boolean assistedJoins) {
         public Settings {
             Objects.requireNonNull(controlTransport);
+        }
+
+        public Settings(
+                String endpoint,
+                String token,
+                List<String> advertiseAddresses,
+                Map<String, String> data,
+                ProviderClient.ControlTransport controlTransport,
+                boolean diagnosticAdmission,
+                boolean maintainedCandidates) {
+            this(
+                    endpoint,
+                    token,
+                    advertiseAddresses,
+                    data,
+                    controlTransport,
+                    diagnosticAdmission,
+                    maintainedCandidates,
+                    false);
+        }
+
+        public Settings(
+                String endpoint,
+                String token,
+                List<String> advertiseAddresses,
+                Map<String, String> data,
+                ProviderClient.ControlTransport controlTransport,
+                boolean diagnosticAdmission) {
+            this(
+                    endpoint,
+                    token,
+                    advertiseAddresses,
+                    data,
+                    controlTransport,
+                    diagnosticAdmission,
+                    false);
+        }
+
+        public Settings(
+                String endpoint,
+                String token,
+                List<String> advertiseAddresses,
+                Map<String, String> data,
+                ProviderClient.ControlTransport controlTransport) {
+            this(endpoint, token, advertiseAddresses, data, controlTransport, false);
         }
 
         public Settings(
@@ -168,7 +226,10 @@ public record ProviderRuntimeConfiguration(
                 region,
                 pool,
                 tags,
-                controlTransport);
+                controlTransport,
+                diagnosticAdmission,
+                advertisedEndpoints.isEmpty() ? "discovered" : "defined",
+                assistedJoins);
     }
 
     private static InetSocketAddress endpoint(String value) throws IOException {
@@ -221,6 +282,19 @@ public record ProviderRuntimeConfiguration(
             values.add(value);
         }
         return values.toString();
+    }
+
+    /** Ordinary native factory options, with explicit endpoints suppressing discovery/STUN. */
+    public Map<String, String> nativeHostOptions() {
+        var options = new HashMap<String, String>();
+        options.put("stateDirectory", stateDirectory.toString());
+        options.put("advertisedEndpoints", encodedAdvertisedEndpoints());
+        options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
+        options.put("diagnosticAdmission", Boolean.toString(diagnosticAdmission));
+        options.put("assistedJoins", Boolean.toString(assistedJoins));
+        options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
+        options.put("stunWarming", Boolean.toString(maintainedCandidates));
+        return Map.copyOf(options);
     }
 
     @Override

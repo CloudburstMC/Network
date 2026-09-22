@@ -20,11 +20,8 @@ package org.cloudburstmc.netty.signaling.admission;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
 import java.util.function.LongSupplier;
 
-import javax.crypto.Cipher;
 import javax.crypto.Mac;
-import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
@@ -136,13 +133,9 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
     }
 
     // Domain separation, so each derivation gets its own use of the admission secret
-    private static final String AEAD_KEY = "nxs-stateless-aead-v1";
-    private static final String ADMISSION_AAD = "nxs-stateless-admission-v1";
-    private static final String ICE_PASSWORD = "nxs-stateless-ice-v1";
     private static final String IDENTITY_BINDING = "nxs-identity-binding-v1";
     private static final String TOKEN_PREFIX = "NXS1";
 
-    private static final Base64.Encoder BASE64 = Base64.getEncoder().withoutPadding();
     private final String audience;
     private final long maxTtlMs;
     private final LongSupplier nanoTime;
@@ -192,8 +185,13 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
                     Arrays.fill(secret, (byte) 0);
                     next.put(key.keyId(), previous);
                 } else {
-                    next.put(key.keyId(), new Material(hmac("HmacSHA256", secret,
-                            utf8(AEAD_KEY + "\0" + audience)), secret, key.notBefore(), key.retireAfter()));
+                    next.put(
+                            key.keyId(),
+                            new Material(
+                                    StatelessAdmissionCodec.encryptionKey(secret, audience),
+                                    secret,
+                                    key.notBefore(),
+                                    key.retireAfter()));
                 }
             }
         } catch (RuntimeException failed) {
@@ -243,70 +241,41 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             return null;
         }
 
-        byte[] plaintext = null;
         try {
             String token = request.localUfrag();
             if (token.length() < 8 || !token.startsWith(TOKEN_PREFIX)) {
                 return null;
             }
-
             String keyId = token.substring(4, 8);
             Material key = keys.get(keyId);
             if (key == null || nowMillis < key.notBefore || nowMillis >= key.retireAfter) {
                 return null;
             }
-
-            String encoded = token.substring(8);
-            byte[] envelope = Base64.getDecoder().decode(encoded);
-            if (envelope.length < 117 || envelope.length > 186 || !BASE64.encodeToString(envelope).equals(encoded)) {
-                return null;
-            }
-
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key.encryption, "AES"),
-                    new GCMParameterSpec(128, Arrays.copyOf(envelope, 12)));
-            cipher.updateAAD(utf8(ADMISSION_AAD + "\0" + token.substring(0, 8) + "\0" + audience + "\0"
-                    + request.remoteUfrag()));
-            plaintext = cipher.doFinal(Arrays.copyOfRange(envelope, 12, envelope.length));
-            if (plaintext.length < 89) {
-                return null;
-            }
-
-            ByteBuffer body = ByteBuffer.wrap(plaintext);
-            long expiresAt = Integer.toUnsignedLong(body.getInt()) * 1000;
+            var claims =
+                    StatelessAdmissionCodec.open(
+                            key.encryption, audience, token, request.remoteUfrag());
+            long expiresAt = claims.expiresAt();
             if (expiresAt <= nowMillis || expiresAt - nowMillis > maxTtlMs) {
                 return null;
             }
-
-            byte[] fingerprint = new byte[32];
-            body.get(fingerprint);
-            int sctp = Short.toUnsignedInt(body.getShort()), max = body.getInt();
-            byte[] identity = new byte[16];
-            body.get(identity);
-            String networkId = Long.toUnsignedString(body.getLong());
-            int length = Byte.toUnsignedInt(body.get());
-            if (length < 22 || length > VerifiedAdmission.MAX_CLIENT_PASSWORD || body.remaining() != length) {
-                return null;
-            }
-
-            String remotePassword = new String(plaintext, 67, length, StandardCharsets.US_ASCII);
-            if (sctp < 1 || max < 1 || max > NetherNetFrameDecoder.MESSAGE_LIMIT
-                    || !AdmissionRequest.iceString(remotePassword, 22, VerifiedAdmission.MAX_CLIENT_PASSWORD)) {
-                return null;
-            }
-
-            String localPassword = BASE64.encodeToString(Arrays.copyOf(
-                    hmac("HmacSHA256", key.secret, utf8(ICE_PASSWORD + "\0" + audience + "\0" + token)), 24));
-            return new VerifiedAdmission(tokenId(token), token, localPassword, request.remoteUfrag(), remotePassword,
-                    DtlsFingerprint.format(fingerprint), sctp, max,
-                    expiresAt, networkId, HexFormat.of().formatHex(identity), keyId,
-                    new Binding(key, identity, expiresAt - nowMillis));
-        } catch (Exception invalid) {
+            byte[] identity = HexFormat.of().parseHex(claims.identityBindingHex());
+            return new VerifiedAdmission(
+                    tokenId(token),
+                    token,
+                    StatelessAdmissionCodec.icePassword(key.secret, audience, token),
+                    request.remoteUfrag(),
+                    claims.password(),
+                    DtlsFingerprint.format(HexFormat.of().parseHex(claims.fingerprintHex())),
+                    claims.sctpPort(),
+                    claims.maxMessageSize(),
+                    expiresAt,
+                    claims.networkId(),
+                    claims.identityBindingHex(),
+                    keyId,
+                    new Binding(key, identity, expiresAt - nowMillis),
+                    claims.diagnostic());
+        } catch (RuntimeException invalid) {
             return null;
-        } finally {
-            if (plaintext != null) {
-                Arrays.fill(plaintext, (byte) 0);
-            }
         }
     }
 
