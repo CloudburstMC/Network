@@ -50,7 +50,10 @@ import java.util.List;
 
 
 /**
- * The key an operator signs NetherNet identity assertions with, and the name players see it under.
+ * The key an operator signs NetherNet identity assertions with, and the name it carries.
+ * <p>
+ * The name goes out as the assertion's identity provider and as the token issuer. Clients pin the
+ * key, and nothing displays the name today, so it is free to change.
  * <p>
  * A server presents it in every answer. A client presents it in its offer, derived for the player
  * it connects on behalf of with {@link #forPlayer}, which is what a proxy does toward a downstream
@@ -99,7 +102,7 @@ public class OperatorIdentity {
      * @param keyPair The key the token was issued for
      * @param token   The compact JWT the auth service issued, carrying {@code cpk}, {@code xid} and
      *                {@code xname}
-     * @param domain  The identity provider named in the assertion
+     * @param domain  The name the identity carries, see above
      * @return An identity presenting that token
      */
     public static OperatorIdentity fromToken(KeyPair keyPair, String token, String domain) {
@@ -109,7 +112,7 @@ public class OperatorIdentity {
     /**
      * Generate a brand-new server identity that is not stored
      *
-     * @param domain The domain name for the server identity
+     * @param domain The name the identity carries, see above
      * @return A new OperatorIdentity instance
      * @throws JoseException If there is an error creating the JWT
      */
@@ -126,7 +129,7 @@ public class OperatorIdentity {
      * so the token is issued without one.
      *
      * @param pem    The PEM file
-     * @param domain The domain name for the server identity, as a PEM carries no subject
+     * @param domain The name the identity carries, see above, as a PEM carries no subject
      * @return The loaded OperatorIdentity
      * @throws GeneralSecurityException If the key is malformed or not on P-384
      * @throws IOException              If there is an I/O error
@@ -145,7 +148,7 @@ public class OperatorIdentity {
      * clients pin the public key and a new one prompts every returning player again.
      *
      * @param pem    The PEM file to load or create
-     * @param domain The identity domain, as a PEM carries no subject
+     * @param domain The name the identity carries, see above, as a PEM carries no subject
      * @return The loaded OperatorIdentity
      * @throws GeneralSecurityException If the key is malformed or not on P-384
      * @throws IOException              If there is an I/O error
@@ -231,7 +234,7 @@ public class OperatorIdentity {
         }
         claims.setIssuedAtToNow();
 
-        // If we have a domain set it as the issuer, as it could be shown to the user
+        // The name also goes out as the issuer
         if (domain != null && !domain.isBlank()) {
             claims.setIssuer(domain);
         }
