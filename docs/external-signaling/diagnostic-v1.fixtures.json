@@ -1,0 +1,284 @@
+{
+  "version": 1,
+  "context": {
+    "providerOrigin": "https://provider.example",
+    "hostId": "host_01",
+    "incarnation": "0123456789abcdef0123456789abcdef",
+    "generation": 7
+  },
+  "key": {
+    "keyId": "D001",
+    "secret": "PUBLIC-diagnostic-fixture-secret-never-deploy",
+    "notBefore": 1788484700000,
+    "retireAt": 1788484900000
+  },
+  "now": 1788484800000,
+  "parentExpiresAt": 1788484860000,
+  "vectors": [
+    {
+      "name": "v4-password22",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuv",
+        "attemptIdHex": "04040404040404040404040404040416",
+        "offerDigestHex": "a95b345bb141825b26f254a5459dead1ebcea75d0d897191a33f0a53383bcfa6",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuv\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "161718191a1b1c1d1e1f2021",
+      "localUfrag": "NXS1D001FhcYGRobHB0eHyAh/Wf1eU2BHS6fb8n25M1M/Kg5ZauWm5tVP1mFVPoWWOL4WArln73gAw2flUWDux6RZFyItQJyxHGxMbZ8r5C7SHtyBBup2BrFjsF0HXlxSBVDSHrjFlxlkIu9GFZz1+rDwOu5qUKSGtv3qTwY0ox2y2+rSDf+FUyWVa98rjAhwEPeFKr1SSfjWjJZAySIaLZou9mQqv66zC1R708mxh8l6U5Pxro",
+      "icePwd": "lyvxie4v7aCCyiYEnF8mGhEXDol6Azk5"
+    },
+    {
+      "name": "v4-password24",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "04040404040404040404040404040418",
+        "offerDigestHex": "813e5becb79fe36140fb2458f690d88aa56ec6aef3f287acbd5a68233c245d92",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "18191a1b1c1d1e1f20212223",
+      "localUfrag": "NXS1D001GBkaGxwdHh8gISIjI37Va6XIMY63ZdfFqoUOWyh3oCL3HxDSKjYh4+6P8NNrU9vl26umjNMqY4z4SG7aVnoIAdcsbBuAYwLKLqHx47tXOZX7FMgDVzJHBlYsNaJGj49eLil8I0K1l5coXip+yOvdTklhdBR63W3Ha2VbK96zR1+GnwNJ8TyFN5iE76Xt01fnW5KS4gvqvCz8sEWfNcdTG4IE/Jp+2M6dDAtKG+sEQeyxGQ",
+      "icePwd": "j4IO2EVSg0RjMSp9361Bdw+Rx3K+U6Bt"
+    },
+    {
+      "name": "v4-password30",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwxyzABCD",
+        "attemptIdHex": "0404040404040404040404040404041e",
+        "offerDigestHex": "2d3e9e5627b7c23e0b16123fbb50e23dc936a1488dc4f5b2b04ff48048e602df",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwxyzABCD\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "1e1f20212223242526272829",
+      "localUfrag": "NXS1D001Hh8gISIjJCUmJygpyouNh1ZNdAEeBiAc3HSJJFQuN7/KvcWiZG1BfIfKsMD7SknHdF0K1uAwYlEEOuo2ooq561wG5DJCOYNBZZVpQC2Xa6+CzWWpYBKdLciCiW0qEb69+XzvKeOz8cdx5p1Sd+ykBAthBsgZeulezg7d/nzoNKP5FirvgShyO9JIgLsvPfONtJsgVpTjvCa3gKpaGdUVkda5DspIUBnr+Uno9doNeRWoCuUfnnGKkw",
+      "icePwd": "AcM6xVN5YIeWSrWqhlqgqtO14aYiJGOQ"
+    },
+    {
+      "name": "v6-password22",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuv",
+        "attemptIdHex": "06060606060606060606060606060616",
+        "offerDigestHex": "1d7ab97bd71088b770ea1a85b72a177cda829cfdc9dd9e9b7c122bed9854ffa9",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuv\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "2a2b2c2d2e2f303132333435",
+      "localUfrag": "NXS1D001KissLS4vMDEyMzQ1JDz7k3DDEH7x66UnC43A75v0W9OYrVOLUhrTGY3DOGOV8mDRM2qce5oDWvU2v1FDz8qZOMObFYdq6xs2PLqmozemNqZ0cxjZhfkjQD2Gyzo7fRm2x1mYarEDHv3g7lWGF246JETa8AhcJYOiyaGem4dA70MSSjRcdy9bTu5weYHSgUDS0bHz+Kcef5zWN1Y3QoVRllm7W87vtwdiWdI4Buwih2E",
+      "icePwd": "4Q5xhcG4NRhwgq0amLiP3wPYvBiX6Q7a"
+    },
+    {
+      "name": "v6-password24",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "06060606060606060606060606060618",
+        "offerDigestHex": "61e448065f1b5d461fc095ba08f1e8718b4b28fc4fc7002839d4055db255d4e7",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "2c2d2e2f3031323334353637",
+      "localUfrag": "NXS1D001LC0uLzAxMjM0NTY3VO3uV7aZUHPPMnP4soa6uzxOUHzCxcgzhXPO1UpfU6u+tXX3U0H0j5zYD0ajPaSVF0aCEswUSGHgUWAb5ysVkZQ69nlNCd5Hsyrihn4up9IWIvkNa2s284d4jMFUF+Lc1kJl18M+vKYPDIZfJop2nh3+vymCj1O6onrhHQtnT0ABdvLkVpFRVNV+dbYfc6WcaDMKz7BDxhDzRYNuBr1rh8RxvRtwxg",
+      "icePwd": "Rtuyy4Q3ValPbmOaSE/JFCqmwPoG6xHB"
+    },
+    {
+      "name": "v6-password30",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwxyzABCD",
+        "attemptIdHex": "0606060606060606060606060606061e",
+        "offerDigestHex": "d28ab4d48ccc52de3c1bc535b958709abfc6a0d7809ee6d0e21081c767df2cc8",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwxyzABCD\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ host generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "32333435363738393a3b3c3d",
+      "localUfrag": "NXS1D001MjM0NTY3ODk6Ozw9opAqPsAguhh57ewBCS3f+WL5NgTgO07Y0As9WEUU7t42joa7WLpaW/6STrtLvq1XaOwLeR3JXVPIhDSLt8PriNv76vGx7qH/O8wHnbYF9g7dAPgZZT71B2uLkh6DJ4ooHAHsZFU7kPAwRCG6O+IcLhWoKdSC5iRg9mauFDN3m/4aUOsmPGWMX2b5BghbqZzc7GxHhIA/u8paAdLjDLE5O78sjAS5J3T5g0uqfg",
+      "icePwd": "oAZN8kdQp+5itx9353FF+2wVoUb3bhUM"
+    },
+    {
+      "name": "v4-assisted",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+        "offerDigestHex": "a5d8c0fad72f891fb77c8a437cdf59551fcf410bb8aecce559c26f3a9dd0264b",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "00000000000000000000000000000000",
+        "targetPort": 0,
+        "profile": 2
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 198.51.100.2 40000 typ srflx generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "b4b4b4b4b4b4b4b4b4b4b4b4",
+      "localUfrag": "NXS1D001tLS0tLS0tLS0tLS0Jco0wIKEXNh/Bql/GPjsLR41tk1cGqknbeg9muDrrFn8qig6SWM5YDrCT3NApTbyvTCf5vTQz0+65Zf8XSrTCydmFG6ztIIhATmZ0lxLseg8o+lBSHvalvbUSIZFrO+IX6Qhm8ZBsQleVGsw1Gn6BsvB+MOrcmNgHZPdNxIKg9E3xYREkAGRT653VZJiicZ2BTxNhHm/CjCmAbrS5jWOjSNTt+HNmw",
+      "icePwd": "6jb2rcL5lqbaQ7VOAd6TQEA5D9IKuBfc"
+    },
+    {
+      "name": "v6-assisted",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6",
+        "offerDigestHex": "0d5bd211afb6e61ea6512af3eccfc0da26af192dc1cc4e3ff140dcee9a143efb",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "00000000000000000000000000000000",
+        "targetPort": 0,
+        "profile": 2
+      },
+      "remoteUfrag": "abcD",
+      "offer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:actpass\r\na=ice-ufrag:abcD\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:12345 1 udp 2113937151 2001:db8:2::2 40000 typ srflx generation 0 network-cost 999\r\na=end-of-candidates\r\n",
+      "nonceHex": "b6b6b6b6b6b6b6b6b6b6b6b6",
+      "localUfrag": "NXS1D001tra2tra2tra2tra205EREaaCgnU0e1b4Y77AjgKbFHJvQ4DxLp8oMkNceF0Fh0WFwguWrYGRGzhpBb57Dl6dEwRyFMYZ7cHj2wegmT4glnBNWR/4veGww9Jl4X4a1AcbBtm64Mp+y+a0xq4MO5lyTwbrHW0YH5jqFovycjscC3rON86NRrFRNTo/E3loYzSFwUFjWmC6u2fadFRuxIXWqHrJDGCwsaFGduJh2mqgcmlPjQ",
+      "icePwd": "cFIvYQWNl6yJL7HZ+LjyKKOxbt5GMa1s"
+    }
+  ],
+  "answers": [
+    {
+      "name": "v4-host",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "04040404040404040404040404040418",
+        "offerDigestHex": "813e5becb79fe36140fb2458f690d88aa56ec6aef3f287acbd5a68233c245d92",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXS1D001GBkaGxwdHh8gISIjI37Va6XIMY63ZdfFqoUOWyh3oCL3HxDSKjYh4+6P8NNrU9vl26umjNMqY4z4SG7aVnoIAdcsbBuAYwLKLqHx47tXOZX7FMgDVzJHBlYsNaJGj49eLil8I0K1l5coXip+yOvdTklhdBR63W3Ha2VbK96zR1+GnwNJ8TyFN5iE76Xt01fnW5KS4gvqvCz8sEWfNcdTG4IE/Jp+2M6dDAtKG+sEQeyxGQ\r\na=ice-pwd:j4IO2EVSg0RjMSp9361Bdw+Rx3K+U6Bt\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 203.0.113.8 19132 typ host\r\na=end-of-candidates\r\n"
+    },
+    {
+      "name": "v4-srflx",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "04040404040404040404040404040418",
+        "offerDigestHex": "813e5becb79fe36140fb2458f690d88aa56ec6aef3f287acbd5a68233c245d92",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "000000000000000000000000cb007108",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXS1D001GBkaGxwdHh8gISIjI37Va6XIMY63ZdfFqoUOWyh3oCL3HxDSKjYh4+6P8NNrU9vl26umjNMqY4z4SG7aVnoIAdcsbBuAYwLKLqHx47tXOZX7FMgDVzJHBlYsNaJGj49eLil8I0K1l5coXip+yOvdTklhdBR63W3Ha2VbK96zR1+GnwNJ8TyFN5iE76Xt01fnW5KS4gvqvCz8sEWfNcdTG4IE/Jp+2M6dDAtKG+sEQeyxGQ\r\na=ice-pwd:j4IO2EVSg0RjMSp9361Bdw+Rx3K+U6Bt\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 203.0.113.8 19132 typ srflx raddr 0.0.0.0 rport 0\r\na=end-of-candidates\r\n"
+    },
+    {
+      "name": "v6-host",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "06060606060606060606060606060618",
+        "offerDigestHex": "61e448065f1b5d461fc095ba08f1e8718b4b28fc4fc7002839d4055db255d4e7",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXS1D001LC0uLzAxMjM0NTY3VO3uV7aZUHPPMnP4soa6uzxOUHzCxcgzhXPO1UpfU6u+tXX3U0H0j5zYD0ajPaSVF0aCEswUSGHgUWAb5ysVkZQ69nlNCd5Hsyrihn4up9IWIvkNa2s284d4jMFUF+Lc1kJl18M+vKYPDIZfJop2nh3+vymCj1O6onrhHQtnT0ABdvLkVpFRVNV+dbYfc6WcaDMKz7BDxhDzRYNuBr1rh8RxvRtwxg\r\na=ice-pwd:Rtuyy4Q3ValPbmOaSE/JFCqmwPoG6xHB\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 2001:db8:1::8 19132 typ host\r\na=end-of-candidates\r\n"
+    },
+    {
+      "name": "v6-srflx",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "06060606060606060606060606060618",
+        "offerDigestHex": "61e448065f1b5d461fc095ba08f1e8718b4b28fc4fc7002839d4055db255d4e7",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "20010db8000100000000000000000008",
+        "targetPort": 19132,
+        "profile": 1
+      },
+      "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXS1D001LC0uLzAxMjM0NTY3VO3uV7aZUHPPMnP4soa6uzxOUHzCxcgzhXPO1UpfU6u+tXX3U0H0j5zYD0ajPaSVF0aCEswUSGHgUWAb5ysVkZQ69nlNCd5Hsyrihn4up9IWIvkNa2s284d4jMFUF+Lc1kJl18M+vKYPDIZfJop2nh3+vymCj1O6onrhHQtnT0ABdvLkVpFRVNV+dbYfc6WcaDMKz7BDxhDzRYNuBr1rh8RxvRtwxg\r\na=ice-pwd:Rtuyy4Q3ValPbmOaSE/JFCqmwPoG6xHB\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 2001:db8:1::8 19132 typ srflx raddr :: rport 0\r\na=end-of-candidates\r\n"
+    },
+    {
+      "name": "v4-assisted",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+        "offerDigestHex": "a5d8c0fad72f891fb77c8a437cdf59551fcf410bb8aecce559c26f3a9dd0264b",
+        "candidateRevision": 9,
+        "family": 4,
+        "targetAddressHex": "00000000000000000000000000000000",
+        "targetPort": 0,
+        "profile": 2
+      },
+      "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXS1D001tLS0tLS0tLS0tLS0Jco0wIKEXNh/Bql/GPjsLR41tk1cGqknbeg9muDrrFn8qig6SWM5YDrCT3NApTbyvTCf5vTQz0+65Zf8XSrTCydmFG6ztIIhATmZ0lxLseg8o+lBSHvalvbUSIZFrO+IX6Qhm8ZBsQleVGsw1Gn6BsvB+MOrcmNgHZPdNxIKg9E3xYREkAGRT653VZJiicZ2BTxNhHm/CjCmAbrS5jWOjSNTt+HNmw\r\na=ice-pwd:6jb2rcL5lqbaQ7VOAd6TQEA5D9IKuBfc\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 203.0.113.8 19135 typ srflx\r\na=end-of-candidates\r\n"
+    },
+    {
+      "name": "v6-assisted",
+      "claims": {
+        "expiresAt": 1788484830000,
+        "clientFingerprintHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "clientIcePwd": "abcdefghijklmnopqrstuvwx",
+        "attemptIdHex": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6",
+        "offerDigestHex": "0d5bd211afb6e61ea6512af3eccfc0da26af192dc1cc4e3ff140dcee9a143efb",
+        "candidateRevision": 9,
+        "family": 6,
+        "targetAddressHex": "00000000000000000000000000000000",
+        "targetPort": 0,
+        "profile": 2
+      },
+      "hostFingerprintHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "answer": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:NXS1D001tra2tra2tra2tra205EREaaCgnU0e1b4Y77AjgKbFHJvQ4DxLp8oMkNceF0Fh0WFwguWrYGRGzhpBb57Dl6dEwRyFMYZ7cHj2wegmT4glnBNWR/4veGww9Jl4X4a1AcbBtm64Mp+y+a0xq4MO5lyTwbrHW0YH5jqFovycjscC3rON86NRrFRNTo/E3loYzSFwUFjWmC6u2fadFRuxIXWqHrJDGCwsaFGduJh2mqgcmlPjQ\r\na=ice-pwd:cFIvYQWNl6yJL7HZ+LjyKKOxbt5GMa1s\r\na=fingerprint:sha-256 FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10\r\na=setup:active\r\na=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\na=candidate:1 1 UDP 2130706431 2001:db8:1::8 19135 typ srflx\r\na=end-of-candidates\r\n"
+    }
+  ],
+  "warning": "Public deterministic test material only. Diagnostics use NXS1 network ID zero; no separate offer or answer signatures."
+}

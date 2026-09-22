@@ -37,13 +37,14 @@ public final class AdmissionGate {
     }
 
     public static final class Reservation {
-        private VerifiedAdmission admission;
+        private AdmissionContext admission;
         private final String tokenId;
         private final InetSocketAddress tuple;
         private final long expiresAt, acceptedNanos, loginDeadlineNanos;
         private boolean ready, connected, closing, closed;
 
-        private Reservation(VerifiedAdmission admission, InetSocketAddress tuple, long millis, long nanos) {
+        private Reservation(
+                AdmissionContext admission, InetSocketAddress tuple, long millis, long nanos) {
             this.admission = admission;
             this.tokenId = admission.tokenId();
             this.tuple = tuple;
@@ -101,14 +102,28 @@ public final class AdmissionGate {
         if (closed) {
             return null;
         }
-
         VerifiedAdmission verifiedAdmission = validator.validate(request, nowMillis);
         if (verifiedAdmission == null) {
             invalid++;
             return null;
         }
 
-        if (claims.containsKey(verifiedAdmission.tokenId()) || tuples.containsKey(request.address())) {
+        return reserveAuthenticated(verifiedAdmission, request.address(), nowMillis, nowNanos);
+    }
+
+    synchronized Reservation reserveAuthenticated(
+            AdmissionContext verifiedAdmission,
+            InetSocketAddress address,
+            long nowMillis,
+            long nowNanos) {
+        if (closed
+                || verifiedAdmission.networkId().matches("0+")
+                || verifiedAdmission.expiresAt() <= nowMillis) {
+            invalid++;
+            verifiedAdmission.identityVerifier().close();
+            return null;
+        }
+        if (claims.containsKey(verifiedAdmission.tokenId()) || tuples.containsKey(address)) {
             replayRejected++;
             verifiedAdmission.identityVerifier().close();
             return null;
@@ -134,14 +149,14 @@ public final class AdmissionGate {
             return null;
         }
 
-        Reservation reservation = new Reservation(verifiedAdmission, request.address(), nowMillis, nowNanos);
+        Reservation reservation = new Reservation(verifiedAdmission, address, nowMillis, nowNanos);
         claims.put(reservation.tokenId, reservation);
         tuples.put(reservation.tuple, reservation);
         pending++;
         return reservation;
     }
 
-    public synchronized VerifiedAdmission admission(Reservation reservation) {
+    synchronized AdmissionContext admission(Reservation reservation) {
         return current(reservation) && !reservation.closing ? reservation.admission : null;
     }
 
@@ -217,6 +232,11 @@ public final class AdmissionGate {
 
     public synchronized void drain() {
         draining = true;
+    }
+
+    /** Admission policy state only; capacity and installed credentials are checked separately. */
+    public synchronized boolean isServing() {
+        return !closed && !draining;
     }
 
     public synchronized List<Reservation> close() {

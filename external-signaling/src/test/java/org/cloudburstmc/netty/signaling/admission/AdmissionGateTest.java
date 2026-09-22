@@ -4,7 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -211,7 +212,9 @@ class AdmissionGateTest extends AdmissionFixture {
     @Test
     void drainingRejectsNewReservations() {
         var gate = gate();
+        assertTrue(gate.isServing());
         gate.drain();
+        assertFalse(gate.isServing());
         assertNull(gate.reserve(request(), now, 0));
         assertEquals(0, gate.stats().claims());
         assertEquals(1, gate.stats().capacityRejected());

@@ -392,7 +392,12 @@
           }
         }
       },
-      "x-max-utf8-bytes": 16384
+      "x-max-utf8-bytes": 16384,
+      "properties": {
+        "dev.opencollab.nxs.connectivity": {
+          "$ref": "#/$defs/connectivityObservation"
+        }
+      }
     },
     "recovery": {
       "type": "object",
@@ -437,7 +442,7 @@
       "properties": {
         "candidates": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 32,
           "items": {
             "type": "object",
@@ -481,8 +486,30 @@
                   "srflx",
                   "relay"
                 ]
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991,
+                "description": "Optional deadline for a server-reflexive candidate, in Unix milliseconds. When absent, the host refreshes its current candidates under the heartbeat lease."
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "expiresAt"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "type": {
+                      "const": "srflx"
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         "dtlsFingerprint": {
@@ -509,12 +536,16 @@
             "capability": {
               "const": "nethernet.stateless-admission.v1"
             },
+            "assisted": {
+              "const": "nethernet.websocket-assisted.v1"
+            },
             "incarnation": {
               "type": "string",
               "pattern": "^[0-9a-f]{32}$"
             }
           }
-        }
+        },
+        "version": false
       }
     },
     "heartbeat": {
@@ -778,9 +809,36 @@
               "reason": {
                 "type": "string",
                 "maxLength": 128
+              },
+              "remoteAddress": {
+                "type": "string",
+                "maxLength": 45,
+                "pattern": "^[0-9A-Fa-f:.]+$",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ],
+                "description": "Host-observed selected peer IP at transport establishment; never a signaling address or unselected SDP candidate."
+              },
+              "remotePort": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "dependentRequired": {
+              "remoteAddress": [
+                "remotePort"
+              ],
+              "remotePort": [
+                "remoteAddress"
+              ]
+            }
           }
         }
       },
@@ -806,6 +864,209 @@
         }
       },
       "description": "Actual players connected to this runtime, including still-connected draining players. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Absence means unknown. Never derive this value from public serverStatus, load, tickets or reservations."
+    },
+    "connectivityObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "critical",
+        "data"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "critical": {
+          "const": false
+        },
+        "data": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "diagnostics",
+                "candidateRevision",
+                "method"
+              ],
+              "properties": {
+                "diagnostics": {
+                  "type": "boolean"
+                },
+                "candidateRevision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "method": {
+                  "enum": [
+                    "defined",
+                    "discovered",
+                    "warm_stun",
+                    "per_join"
+                  ]
+                },
+                "probeCandidates": {
+                  "$ref": "#/$defs/hostProfile/properties/candidates"
+                },
+                "assistedFamilies": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      4,
+                      6
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "method",
+                "candidateRevision",
+                "checks"
+              ],
+              "properties": {
+                "method": {
+                  "enum": [
+                    "defined",
+                    "discovered",
+                    "warm_stun",
+                    "per_join"
+                  ]
+                },
+                "candidateRevision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "checks": {
+                  "type": "array",
+                  "maxItems": 18,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "region",
+                      "family",
+                      "outcome",
+                      "checkedAt",
+                      "expiresAt"
+                    ],
+                    "properties": {
+                      "region": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[A-Za-z0-9_-]+$"
+                      },
+                      "family": {
+                        "enum": [
+                          4,
+                          6
+                        ]
+                      },
+                      "outcome": {
+                        "enum": [
+                          "established",
+                          "not-established",
+                          "unknown",
+                          "unavailable"
+                        ]
+                      },
+                      "checkedAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "expiresAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "method": {
+                        "enum": [
+                          "defined",
+                          "discovered",
+                          "warm_stun",
+                          "per_join"
+                        ]
+                      },
+                      "target": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "address",
+                          "port"
+                        ],
+                        "properties": {
+                          "address": {
+                            "type": "string",
+                            "maxLength": 45,
+                            "pattern": "^[0-9A-Fa-f:.]+$",
+                            "anyOf": [
+                              {
+                                "format": "ipv4"
+                              },
+                              {
+                                "format": "ipv6"
+                              }
+                            ]
+                          },
+                          "port": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "stunServers"
+              ],
+              "properties": {
+                "stunServers": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "host",
+                      "port"
+                    ],
+                    "properties": {
+                      "host": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 253,
+                        "pattern": "^[A-Za-z0-9.:-]+$"
+                      },
+                      "port": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     },
     "serverStatus": {
       "type": "object",
