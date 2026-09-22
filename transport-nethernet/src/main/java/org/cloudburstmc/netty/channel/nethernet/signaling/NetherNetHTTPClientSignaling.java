@@ -18,12 +18,13 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.signaling.HttpSignalingSettings.Scheme;
+import org.jspecify.annotations.Nullable;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
 import java.net.ConnectException;
-import java.net.http.HttpClient;
 import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.net.http.HttpRequest;
@@ -35,6 +36,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
 
 /**
  * The client half of HTTP signaling: connects out to a server's {@code /v1/join} endpoint, as a
@@ -45,10 +47,11 @@ import java.util.concurrent.ThreadLocalRandom;
  * comes back through the signal handler like any other. The offer's identity assertion is the
  * channel's business too, through {@code NetherChannelOption.NETHER_CLIENT_IDENTITY}.
  * <p>
- * Plaintext by default. With {@code secure} it speaks HTTPS instead, validating the certificate
- * against the JDK trust store and the host name of the address it was given, so a server behind
- * a real certificate has to be addressed by name. The two have to agree with the server: one
- * that serves TLS refuses plaintext by default, and one that does not cannot be reached securely.
+ * By default it does what the retail client does: probes the endpoint over HTTPS, falls back to
+ * plaintext when there is no TLS, and posts the offer over whichever answered. HTTPS validates the
+ * certificate against the JDK trust store, or the one in the settings, and the host name of the
+ * address it was given, so a server behind a certificate has to be addressed by name. A server
+ * serving TLS refuses plaintext by default. {@link HttpSignalingSettings} fixes the scheme instead.
  * <p>
  * Nothing here runs on the channel's loop, the channel moves itself back onto it.
  */
@@ -57,17 +60,12 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
 
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(10);
 
-    private static final HttpClient HTTP = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
-
     /** How much of a refusal's body is worth carrying into an exception message. */
     private static final int REASON_LIMIT = 200;
 
     private final String localNetworkId = Long.toUnsignedString(ThreadLocalRandom.current().nextLong());
-    private final List<IceServerInfo> iceServers;
-    private final boolean secure;
+    private final HttpSignalingSettings settings;
+    private volatile boolean secure;
 
     private volatile InetSocketAddress address;
     private volatile String connectionId;
@@ -75,56 +73,99 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
     private volatile FailureHandler failure;
     private volatile boolean closed;
 
-    /**
-     * Without STUN or TURN, so the offer carries the local interfaces only and goes out as soon
-     * as they are gathered.
-     */
+    /** Signals as {@link HttpSignalingSettings#DEFAULT} says. */
     public NetherNetHTTPClientSignaling() {
-        this(List.of());
+        this(HttpSignalingSettings.DEFAULT);
+    }
+
+    public NetherNetHTTPClientSignaling(HttpSignalingSettings settings) {
+        this.settings = settings;
     }
 
     /**
-     * @param iceServers The STUN and TURN servers to gather through. Every one of them has to
-     *                   answer or time out before the offer can go, since nothing trickles after it.
-     */
-    public NetherNetHTTPClientSignaling(List<IceServerInfo> iceServers) {
-        this(iceServers, false);
-    }
-
-    /**
-     * @param iceServers The STUN and TURN servers to gather through, see above
-     * @param secure     Whether to signal over HTTPS rather than plaintext HTTP
-     */
-    public NetherNetHTTPClientSignaling(List<IceServerInfo> iceServers, boolean secure) {
-        this.iceServers = List.copyOf(iceServers);
-        this.secure = secure;
-    }
-
-    /**
-     * The plaintext capability probe, see {@link #probe(InetSocketAddress, boolean)}.
-     */
-    public static CompletableFuture<Boolean> probe(InetSocketAddress address) {
-        return probe(address, false);
-    }
-
-    /**
-     * The capability probe. A non 2xx here is how a server says it does not speak NetherNet, which
-     * is what drives a fallback to RakNet. A server that requires TLS answers a plaintext probe
-     * with 426, so that counts as unreachable too unless the probe is secure.
+     * What a probe found: the scheme that answered and the status the server advertises.
      *
-     * @param address The server's signaling endpoint
-     * @param secure  Whether to probe over HTTPS
-     * @return Whether the endpoint answered as a NetherNet server
+     * @param scheme {@link Scheme#HTTPS} or {@link Scheme#HTTP}, never {@link Scheme#AUTO}
+     * @param motd   The status the server sent
      */
-    public static CompletableFuture<Boolean> probe(InetSocketAddress address, boolean secure) {
+    public record Probe(Scheme scheme, PongData motd) {
+    }
+
+    /**
+     * Asks the endpoint whether it serves NetherNet, the way the settings say, which for
+     * {@link Scheme#AUTO} is HTTPS first and plaintext when the host answered without TLS. A host
+     * that does not answer fails at once. A server that does not serve NetherNet answers 404, which
+     * fails the probe and is what drives a fallback to RakNet.
+     *
+     * @param address  The server's signaling endpoint
+     * @param settings How to reach it
+     * @return The scheme that answered and the server's status, or a failure saying why not
+     */
+    public static CompletableFuture<Probe> probe(InetSocketAddress address, HttpSignalingSettings settings) {
+        return switch (settings.scheme()) {
+            case HTTPS -> get(address, true, settings)
+                    .thenApply(response -> probed(address, response, Scheme.HTTPS, null));
+            case HTTP -> get(address, false, settings)
+                    .thenApply(response -> probed(address, response, Scheme.HTTP, null));
+            case AUTO -> get(address, true, settings).handle((response, error) -> {
+                if (error == null) {
+                    // An answer over HTTPS is final, whatever it says
+                    return CompletableFuture.completedFuture(probed(address, response, Scheme.HTTPS, null));
+                }
+                Throwable cause = unwrap(error);
+                if (!(cause instanceof SSLException)) {
+                    // Nothing answered, so plaintext would only wait through the same failure again
+                    throw refused(address + " could not be reached: " + describe(cause));
+                }
+                // Something answered and it was not TLS, which is the one case plaintext is for
+                return get(address, false, settings)
+                        .thenApply(fallback -> probed(address, fallback, Scheme.HTTP, cause));
+            }).thenCompose(Function.identity());
+        };
+    }
+
+    private static CompletableFuture<HttpResponse<String>> get(InetSocketAddress address, boolean secure,
+                                                               HttpSignalingSettings settings) {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl(address, secure) + "/v1/join"))
                 .timeout(HTTP_TIMEOUT)
                 .header("Accept", "application/json")
                 .GET()
                 .build();
-        return HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenApply(response -> response.statusCode() / 100 == 2)
-                .exceptionally(error -> false);
+        return settings.http().sendAsync(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /**
+     * Reads a probe's response into a result, or fails with the reason as a
+     * {@link CompletionException} around a {@link ConnectException}, which the future unwraps.
+     *
+     * @param httpsFailure Why the HTTPS attempt before this plaintext one failed, when there was one
+     */
+    private static Probe probed(InetSocketAddress address, HttpResponse<String> response, Scheme scheme,
+                                @Nullable Throwable httpsFailure) {
+        int code = response.statusCode();
+        if (code / 100 == 2) {
+            try {
+                return new Probe(scheme, PongData.fromJson(response.body()));
+            } catch (IllegalArgumentException e) {
+                throw refused(address + " answered the probe with something other than a NetherNet status");
+            }
+        }
+        if (code == 404) {
+            throw refused(address + " does not serve NetherNet (HTTP 404)");
+        }
+        if (code == 426) {
+            throw refused(address + " requires TLS"
+                    + (httpsFailure == null ? "" : ", and HTTPS failed: " + describe(httpsFailure)));
+        }
+        throw refused(address + " answered HTTP " + code + " to the probe" + reason(response.body()));
+    }
+
+    private static CompletionException refused(String message) {
+        return new CompletionException(new ConnectException(message));
+    }
+
+    private static Throwable unwrap(Throwable error) {
+        return error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
     }
 
     @Override
@@ -144,7 +185,14 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
                     new IllegalArgumentException("HTTP signaling needs an InetSocketAddress, not " + remoteAddress));
         }
         this.address = endpoint;
-        return CompletableFuture.completedFuture(this.iceServers);
+        if (this.settings.scheme() != Scheme.AUTO) {
+            this.secure = this.settings.scheme() == Scheme.HTTPS;
+            return CompletableFuture.completedFuture(this.settings.iceServers());
+        }
+        return probe(endpoint, this.settings).thenApply(probe -> {
+            this.secure = probe.scheme() == Scheme.HTTPS;
+            return this.settings.iceServers();
+        });
     }
 
     @Override
@@ -157,7 +205,7 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
                 .POST(HttpRequest.BodyPublishers.ofString(offer))
                 .build();
 
-        HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete(this::onAnswer);
+        this.settings.http().sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete(this::onAnswer);
     }
 
     private void onAnswer(HttpResponse<String> response, Throwable error) {
@@ -165,9 +213,7 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
             return;
         }
         if (error != null) {
-            Throwable cause = error instanceof CompletionException && error.getCause() != null
-                    ? error.getCause() : error;
-            this.fail("could not reach the signaling endpoint: " + describe(cause));
+            this.fail("could not reach the signaling endpoint: " + describe(unwrap(error)));
             return;
         }
         if (response.statusCode() / 100 != 2) {
