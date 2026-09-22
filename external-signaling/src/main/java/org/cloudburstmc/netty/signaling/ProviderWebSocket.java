@@ -44,6 +44,8 @@ final class ProviderWebSocket implements AutoCloseable {
 
     record Reply(int status, HttpHeaders headers, String body) {}
 
+    record AssistedAnswer(String sdp, Runnable requireCurrent) {}
+
     @FunctionalInterface
     interface BeforeSend {
         void persist() throws IOException;
@@ -61,6 +63,13 @@ final class ProviderWebSocket implements AutoCloseable {
                         thread.setDaemon(true);
                         return thread;
                     });
+    private final java.util.function.Function<
+                    org.cloudburstmc.netty.signaling.control.AssistedJoin,
+                    CompletionStage<AssistedAnswer>>
+            assisted;
+    private final java.util.function.Consumer<org.cloudburstmc.netty.signaling.control.AssistedJoin>
+            failedAssistedJoin;
+    private int assistedInFlight;
     private Connection current;
     private long retryAt;
     private int failures;
@@ -79,6 +88,20 @@ final class ProviderWebSocket implements AutoCloseable {
     }
 
     ProviderWebSocket(HttpClient http, URI endpoint) {
+        this(http, endpoint, null, ignored -> {});
+    }
+
+    ProviderWebSocket(
+            HttpClient http,
+            URI endpoint,
+            java.util.function.Function<
+                            org.cloudburstmc.netty.signaling.control.AssistedJoin,
+                            CompletionStage<AssistedAnswer>>
+                    assisted,
+            java.util.function.Consumer<org.cloudburstmc.netty.signaling.control.AssistedJoin>
+                    failedAssistedJoin) {
+        this.assisted = assisted;
+        this.failedAssistedJoin = failedAssistedJoin;
         this.http = http;
         this.endpoint = endpoint;
         io.setRemoveOnCancelPolicy(true);
@@ -190,6 +213,80 @@ final class ProviderWebSocket implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         try {
+            if (isAssistedJoin(text)) {
+                if (assisted == null || assistedInFlight >= 32) {
+                    throw new IOException("Assisted joins unavailable");
+                }
+                var join = org.cloudburstmc.netty.signaling.control.AssistedJoin.decode(text);
+                if (!connection.binding.equals(join.instanceId() + ":" + join.generation())) {
+                    throw new IOException("Assisted owner mismatch");
+                }
+                long remaining = join.expiresAt() - System.currentTimeMillis();
+                if (remaining <= 0
+                        || remaining
+                                > (join.diagnostic()
+                                        ? org.cloudburstmc.netty.signaling.diagnostic
+                                                .DiagnosticAdmissionCodec.MAX_ATTEMPT_MILLIS
+                                        : 30_000)) {
+                    throw new IOException("Assisted deadline");
+                }
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining);
+                assistedInFlight++;
+                CompletionStage<AssistedAnswer> work;
+                try {
+                    work = assisted.apply(join);
+                } catch (Throwable failure) {
+                    work = CompletableFuture.failedFuture(failure);
+                }
+                var failureReported = new java.util.concurrent.atomic.AtomicBoolean();
+                Runnable reportFailure =
+                        () -> {
+                            if (failureReported.compareAndSet(false, true)) {
+                                failedAssistedJoin.accept(join);
+                            }
+                        };
+                work.handle(
+                                (guard, failure) -> {
+                                    if (failure != null) {
+                                        reportFailure.run();
+                                    }
+                                    JsonObject reply = new JsonObject();
+                                    reply.addProperty("kind", "assisted-join-result");
+                                    reply.addProperty("id", join.id());
+                                    reply.addProperty("accepted", failure == null);
+                                    if (failure == null) {
+                                        reply.addProperty("answer", guard.sdp());
+                                    }
+                                    return connection.transport.sendText(
+                                            JSON.toJson(reply),
+                                            () -> {
+                                                synchronized (ProviderWebSocket.this) {
+                                                    if (closed
+                                                            || current != connection
+                                                            || System.nanoTime() >= deadline
+                                                            || System.currentTimeMillis()
+                                                                    >= join.expiresAt()) {
+                                                        throw new IllegalStateException(
+                                                                "Assisted socket expired");
+                                                    }
+                                                    if (failure == null) {
+                                                        guard.requireCurrent().run();
+                                                    }
+                                                }
+                                            });
+                                })
+                        .thenCompose(stage -> stage)
+                        .whenComplete(
+                                (ignored, failure) -> {
+                                    synchronized (ProviderWebSocket.this) {
+                                        assistedInFlight--;
+                                    }
+                                    if (failure != null) {
+                                        reportFailure.run();
+                                    }
+                                });
+                return CompletableFuture.completedFuture(null);
+            }
             Parsed parsed = parse(text);
             if (connection.pending == null || !parsed.id.equals(connection.id)) {
                 throw new IOException("Unexpected provider response");
@@ -203,6 +300,21 @@ final class ProviderWebSocket implements AutoCloseable {
     }
 
     private record Parsed(String id, Reply reply) {}
+
+    /** Select the decoder without making JSON whitespace or member order part of the protocol. */
+    private static boolean isAssistedJoin(String wire) throws IOException {
+        try (JsonReader reader = new JsonReader(new StringReader(wire))) {
+            reader.setStrictness(Strictness.STRICT);
+            reader.beginObject();
+            while (reader.hasNext()) {
+                if (reader.nextName().equals("kind")) {
+                    return string(reader).equals("assisted-join");
+                }
+                reader.skipValue();
+            }
+            return false;
+        }
+    }
 
     /** Closed, shallow carrier envelope; the operation body remains an untouched string. */
     private static Parsed parse(String wire) throws IOException {
