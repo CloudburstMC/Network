@@ -16,7 +16,10 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 
 /**
  * Data structure for Pong advertisement data.
@@ -40,6 +43,71 @@ public record PongData(String serverName, int protocol, String version, String l
                        String nonce) {
 
     public static final PongData DEFAULT = new Builder().build();
+
+    /**
+     * @param json A status as {@link #toJson} writes it
+     * @return The status, with the defaults for whatever the JSON leaves out
+     * @throws IllegalArgumentException If the text is not a JSON status
+     */
+    public static PongData fromJson(String json) {
+        try {
+            JsonElement parsed = JsonParser.parseString(json);
+            if (!parsed.isJsonObject()) {
+                throw new IllegalArgumentException("Not a JSON object");
+            }
+            JsonObject info = parsed.getAsJsonObject();
+            Builder builder = new Builder();
+            if (info.has("dataVersion")) {
+                builder.setDataVersion(info.get("dataVersion").getAsInt());
+            }
+            if (info.has("name")) {
+                builder.setServerName(info.get("name").getAsString());
+            }
+            if (info.has("protocol")) {
+                builder.setProtocol(info.get("protocol").getAsInt());
+            }
+            if (info.has("version")) {
+                builder.setVersion(info.get("version").getAsString());
+            }
+            if (info.has("level")) {
+                builder.setLevelName(info.get("level").getAsString());
+            }
+            if (info.has("players")) {
+                builder.setPlayerCount(info.get("players").getAsInt());
+            }
+            if (info.has("maxPlayers")) {
+                builder.setMaxPlayerCount(info.get("maxPlayers").getAsInt());
+            }
+            if (info.has("gameType")) {
+                builder.setGameType(info.get("gameType").getAsInt());
+            }
+            if (info.has("editor")) {
+                builder.setIsEditorWorld(info.get("editor").getAsBoolean());
+            }
+            if (info.has("hardcore")) {
+                builder.setIsHardcore(info.get("hardcore").getAsBoolean());
+            }
+            if (info.has("onlineAuth")) {
+                builder.setOnlineAuth(info.get("onlineAuth").getAsBoolean());
+            }
+            if (info.has("selfSignedAuth")) {
+                builder.setSelfSignedAuth(info.get("selfSignedAuth").getAsBoolean());
+            }
+            if (info.has("nonce")) {
+                builder.setNonce(info.get("nonce").getAsString());
+            }
+            if (info.has("transportLayer")) {
+                builder.setTransportLayer(info.get("transportLayer").getAsInt());
+            }
+            if (info.has("connection")) {
+                builder.setConnectionType(info.get("connection").getAsInt());
+            }
+            return builder.build();
+        } catch (JsonParseException | IllegalStateException | UnsupportedOperationException
+                 | NumberFormatException e) {
+            throw new IllegalArgumentException("Not a NetherNet status", e);
+        }
+    }
 
     /**
      * The document a client reads from {@code GET /v1/join}, in the order the schema lists.

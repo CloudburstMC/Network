@@ -69,7 +69,7 @@ new Bootstrap()
         .connect(serverAddress);
 ```
 
-The server has to trust an operator signed identity, which is `TokenTrust.ANY`; the default refuses it with 401. The client speaks plaintext unless built with `secure`, and a server serving TLS refuses plaintext by default.
+The server has to trust an operator signed identity, which is `TokenTrust.ANY`; the default refuses it with 401. The client does what the retail client does: it probes over HTTPS, falls back to plaintext when there is no TLS, and posts the offer over whichever answered. `HttpSignalingSettings` fixes the scheme instead, `HTTPS` for a hop that must stay private, and carries the trust for a private CA and the ICE servers. A server serving TLS refuses plaintext by default.
 
 A client that knows the server can pin it: the connect then fails unless the answer is signed by the identity behind `serverKey`. The server side reads that key as `identity.publicKey()`, and `IdentityUtils.encodePublicKey` and `decodePublicKey` carry it through a config as text. Without the option the answer's identity is not checked.
 

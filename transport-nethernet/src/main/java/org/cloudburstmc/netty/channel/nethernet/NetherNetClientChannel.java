@@ -47,6 +47,7 @@ import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
@@ -187,7 +188,8 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 failConnect(connectException("Failed to start WebRTC handshake", e));
             }
         }, eventLoop()).exceptionally(e -> {
-            failConnect(connectException("Signaling connection failed", e));
+            Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
+            failConnect(connectException("Signaling connection failed", cause));
             return null;
         });
     }
