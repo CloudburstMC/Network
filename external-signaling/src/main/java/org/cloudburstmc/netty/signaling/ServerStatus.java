@@ -21,16 +21,26 @@ import java.util.List;
 /**
  * Complete atomic snapshot. Advertised maxPlayers is independent of routing capacity.
  */
-public record ServerStatus(String name, int protocol, String version, String level, int players, int maxPlayers,
-                           int gameType) {
+public record ServerStatus(String name, String level, Integer players, int maxPlayers, int gameType) {
+    /** Use the heartbeat's actual player count for the listing. */
+    public ServerStatus(String name, String level, int maxPlayers, int gameType) {
+        this(name, level, null, maxPlayers, gameType);
+    }
+
+    /** Temporary source adapter; advertised protocol and version belong to the provider. */
+    @Deprecated(forRemoval = true)
+    public ServerStatus(String name, int protocol, String version, String level, int players, int maxPlayers, int gameType) {
+        this(name, level, players, maxPlayers, gameType);
+    }
+
     public ServerStatus {
-        if (name == null || name.isEmpty() || name.codePointCount(0, name.length()) > 128 || version == null
-                || version.isEmpty() || version.length() > 64 ||
-                level == null || level.codePointCount(0, level.length()) > 128 || protocol < 1 || players < 0
-                || players > 1_000_000 || maxPlayers < 0 || maxPlayers > 1_000_000 || gameType < 0 || gameType > 2) {
+        if (name == null || name.isEmpty() || name.codePointCount(0, name.length()) > 128
+                || level == null || level.codePointCount(0, level.length()) > 128
+                || players != null && (players < 0 || players > 1_000_000)
+                || maxPlayers < 0 || maxPlayers > 1_000_000 || gameType < 0 || gameType > 2) {
             throw new IllegalArgumentException("Invalid complete server status snapshot");
         }
-        for (String value : List.of(name, version, level)) {
+        for (String value : List.of(name, level)) {
             if (value.codePoints().anyMatch(
                     c -> Character.getType(c) == Character.CONTROL || Character.getType(c) == Character.SURROGATE)) {
                 throw new IllegalArgumentException("Invalid status text");

@@ -69,8 +69,8 @@ public final class ProviderNativeBench {
             provider = new ProviderClient(
                     new ProviderClient.Configuration(origin, "nxs-admission-v1", "Provider native integration"),
                     new ProviderStateStore(state), nativeHost,
-                    () -> new ServerStatus("Automatic native server", 1234, "fixture-only", "Integration", 0, 4, 0),
-                    () -> new ProviderClient.Health(true, true, 4, 0, "nethernet", "provider-native-bench"),
+                    () -> new ServerStatus("Automatic native server", "Integration", 0, 4, 0),
+                    () -> new ProviderClient.Health(true, 4, "provider-native-bench", null),
                     System.err::println);
             JsonObject registration = provider.start().get(45, TimeUnit.SECONDS);
             if (args.length > 4) {
@@ -95,8 +95,7 @@ public final class ProviderNativeBench {
                 }
                 if (!updated && Files.exists(state.resolve("update-status"))) {
                     provider.setServerStatus(
-                            new ServerStatus("Updated native server", 1235, "fixture-updated", "Updated level", 1, 8,
-                                    1));
+                            new ServerStatus("Updated native server", "Updated level", 1, 8, 1));
                     updated = true;
                 }
                 var endpoint = nativeHost.channel();

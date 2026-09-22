@@ -57,8 +57,8 @@ requires proof that the instance owns its signing key.
 | `heartbeatIntervalMs` | 1000–30000 |
 | `leaseMs` | Advertised lease duration |
 
-`checkInVersion: 1` enables the provider to set the next check-in time in its
-response. A provider MUST advertise every limit it enforces, reject oversized
+The provider may set the next check-in time in its heartbeat response.
+A provider MUST advertise every limit it enforces, reject oversized
 bodies, and return errors as `{"code":"lowercase_machine_code"}` with an
 appropriate HTTP failure status. Clients limit response size before parsing.
 
@@ -216,27 +216,38 @@ endpoint alongside the runtime.
 
 ## `heartbeat`
 
-Required fields: `healthy,acceptingPlayers,capacity,load,protocolVersion,clockUnixMillis,
-checkInVersion,state,appliedStateRevision,gameOutcomes`.
-Optional fields: `build,region,serverStatus,hostProfile,hostProfileRevision,
-installedKeyIds,keyRequestId,extensions`.
+Required fields: `acceptingPlayers,capacity,clockUnixMillis`.
+Optional observations: `playerCount,build,serverStatus,gameOutcomes,extensions`.
+Profile/key exchange: `hostProfile,hostProfileRevision,installedKeyIds,keyRequestId`.
 
-- `healthy` is application health. `acceptingPlayers` is explicit willingness to accept new players; false while draining or closed. A serving host may pause acceptance and later report true without changing lifecycle. Neither field is derived from player counts. Report acceptance changes promptly.
-- `capacity` is an integer from 0 to 1000000; `load` is a finite number from 0 to 1.
-- `state` is `serving`, `draining` or `closed`. A draining endpoint cannot resume
-  serving in the same generation; a fresh endpoint requires recovery/completion.
+- `acceptingPlayers` is the host's willingness and ability to accept new players.
+  Set it false during a fault, pause or shutdown and true to resume. Keep counting
+  existing players while paused. Missing heartbeats independently expire routing.
+  Neither acceptance nor actual counts are derived from public listing values.
+- `capacity` is an integer from 0 to 1000000.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
-  rejection, otherwise `unavailable`.
-- `appliedStateRevision` is a nonnegative integer. A response carries
-  `desiredState: {revision,state}`. Reject unknown states or regressing revisions;
-  acknowledge only state that finished applying. Pending application triggers
-  a bounded earlier heartbeat. Receipt alone is not acknowledgement.
+  rejection, otherwise `unavailable`. Send it with the initial profile and whenever
+  it changes. Omission preserves the value in this generation, initially unavailable.
+- The game server owns admission. The provider may stop routing players to it,
+  but cannot command its listener.
 - `clockUnixMillis` is an increasing snapshot clock within the generation and
   must be within 30000 milliseconds of provider time.
-- `region` cannot change authorized placement. `serverStatus` contains
-  `name,protocol,version,level,players,maxPlayers,gameType`; it is independent of
-  routing capacity/load. Omitted or failed status publication does not refresh
-  a previous status snapshot.
+- `serverStatus` carries `name,level,maxPlayers,gameType` and optional `players`.
+  When players is omitted, use the supplied actual `playerCount`; without either,
+  the listing is incomplete. Providers own advertised protocol and version.
+  Renew metadata together: omission does not refresh a previous snapshot.
+  Providers may ignore host listing metadata when several hosts share a public endpoint.
+  `name` is 1–128 Unicode characters and `level` is 0–128; neither permits
+  control characters or unpaired surrogates. `players` and `maxPlayers` are
+  integers from 0 to 1000000. `gameType` is 0 (survival), 1 (creative) or
+  2 (adventure).
+
+The reply returns the receipt, readiness, lease/schedule and profile/key
+acknowledgements. Registration already supplies identity and placement.
+
+Some implementations may still send or accept historic fields not listed in this
+specification. Those fields will be removed soon; new implementations must not
+depend on them.
 
 ### Actual player counts
 
@@ -245,7 +256,7 @@ players connected to this runtime, including existing players while it is draini
 `connectedPlayers` is an integer from 0 to 1000000; `sampledAt` is Unix milliseconds
 from the host clock. The heartbeat's admission `capacity` must come from the same
 observation. Count may exceed capacity after a capacity reduction. Capacity zero
-means no admission. `load` remains a separate health/load observation.
+means no admission.
 
 This count is independent of the public `serverStatus.players` and its advertised
 `maxPlayers`. A public/global override must never change the count or admission
@@ -331,9 +342,9 @@ checkIn: {version:1,afterMillis,nextCheckInAt,leaseExpiresAt,minUpdateIntervalMi
 ```
 
 Schedule timestamps are epoch milliseconds. `nextCheckInAt` precedes lease
-expiry. `checkInVersion: 1` requests scheduling; while an initial usable profile
-is unavailable the provider can omit `checkIn` and use its discovery cadence
-and `staleAfter` ISO8601 deadline. A draining/closed host is never routable.
+expiry. While an initial usable profile is unavailable the provider can omit
+`checkIn` and use its discovery cadence and `staleAfter` ISO8601 deadline.
+A host reporting `acceptingPlayers: false` is never routable.
 
 Readiness is a current provider observation; only the recorded `checkIn` or
 `staleAfter` grants a lease. Request replay returns that original grant. Hosts

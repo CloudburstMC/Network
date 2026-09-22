@@ -32,7 +32,7 @@
     "context": {
       "mode": "attach-instance",
       "profile": "nxs-admission-v1",
-      "label": "EU café 🦊\n<proxy>",
+      "label": "EU caf\u00e9 \ud83e\udd8a\n<proxy>",
       "authorizationId": "auth_fixture",
       "serviceId": "service_neutral",
       "region": "EU",
@@ -69,7 +69,7 @@
       "idempotencyKey": "intent_fixture_0001",
       "generation": 2,
       "sequence": 17,
-      "body": "{\"name\":\"café 🦊\",\"players\":0}\n"
+      "body": "{\"name\":\"caf\u00e9 \ud83e\udd8a\",\"players\":0}\n"
     },
     "payload": "[\"nethernet-external-signaling-v1\",\"nxs-es384-v1\",\"https://provider.example\",\"POST\",\"/renew?region=EU&label=caf%C3%A9\",1788484200123,\"machine_neutral\",\"key_fixture\",\"intent_fixture_0001\",2,17,\"hW1_XbRZsu7XCnVbFpxNepqnGsOafEGkN_VFWwKb4jQ\"]",
     "signature": "n_qwu9F6cg2jXxiHPZjHLSpMlzQMm2c2y659MTKGHn1xn_XrWampW4FXv-kkP6eRAK7CTObHfFNxxzMwOfENoGKEGOrNp2ynO4yb0wve-lIwyp-RNM0d0pVGKQUEONQ2"
@@ -97,14 +97,8 @@
       }
     },
     "heartbeat": {
-      "healthy": true,
       "capacity": 20,
-      "load": 0.9,
-      "protocolVersion": "nethernet",
       "clockUnixMillis": 1788799970100,
-      "checkInVersion": 1,
-      "state": "serving",
-      "appliedStateRevision": 1,
       "gameOutcomes": "unavailable",
       "playerCount": {
         "connectedPlayers": 3,
@@ -112,11 +106,9 @@
       },
       "serverStatus": {
         "name": "Network listing",
-        "version": "fixture",
         "players": 25000,
         "maxPlayers": 30000,
         "gameType": 0,
-        "protocol": 1234,
         "level": "world"
       },
       "acceptingPlayers": true

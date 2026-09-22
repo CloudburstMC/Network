@@ -105,8 +105,14 @@ assert.equal(f.fleetExamples.heartbeat.serverStatus.players, 25000);
 assert(f.fleetExamples.heartbeat.playerCount.sampledAt <= f.fleetExamples.heartbeat.clockUnixMillis);
 
 assert.deepEqual(Object.keys(f.fleetExamples.heartbeat.serverStatus).sort(),
-    ['name', 'protocol', 'version', 'level', 'players', 'maxPlayers', 'gameType'].sort());
+    ['name', 'level', 'players', 'maxPlayers', 'gameType'].sort());
 console.log('NXS canonical signing, stateless encryption, fleet examples, and fixture hashes verified.');
 
 assert(schema.$defs.heartbeat.required.includes('acceptingPlayers'));
 assert.equal(f.fleetExamples.heartbeat.acceptingPlayers, true);
+
+// The standard heartbeat examples contain only specified fields.
+assert.deepEqual(schema.$defs.heartbeat.required, ['acceptingPlayers', 'capacity', 'clockUnixMillis']);
+for (const field of Object.keys(f.fleetExamples.heartbeat)) {
+  assert(field in schema.$defs.heartbeat.properties);
+}

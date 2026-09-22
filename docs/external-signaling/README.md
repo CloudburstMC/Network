@@ -40,22 +40,28 @@ issuance, ownership claims and fleet administration belong to the provider.
 Send a signed `heartbeat` immediately after startup and whenever its returned
 schedule says to check in. The request carries:
 
-- Health, admission capacity, load, optional actual player counts with sample time,
+- Acceptance, admission capacity, build, snapshot time, actual player counts with sample time,
   and independent optional public server status.
 - `hostProfile` when endpoint details change; otherwise `hostProfileRevision`.
 - `installedKeyIds`, listing installed admission epochs with the active one last.
-- Local `state` (`serving`, `draining` or `closed`), the applied provider-state
-  revision, and whether the integration can report game outcomes.
+- Whether the integration can report game outcomes, with the initial profile
+  and whenever that capability changes.
 
-The reply returns the accepted profile revision, readiness, lease/schedule,
-provider state and any admission-key updates. A host becomes routable only with
+The reply returns the accepted profile revision, readiness, lease/schedule
+and any admission-key updates. A host becomes routable only with
 a live lease, usable profile and acknowledged installed key.
 
-Report `healthy` and `acceptingPlayers` independently on every heartbeat. A healthy draining host reports false acceptance and continues reporting its actual remaining players. A serving host can pause and resume acceptance without changing lifecycle.
+Report `acceptingPlayers: false` to pause admission, including during a fault or
+shutdown. Keep reporting actual remaining players. Report true to resume.
+Applications supply
+`new ProviderClient.Health(acceptingPlayers, capacity, build, playerCount)`.
 
-Apply provider state before acknowledging its revision. `draining` stops new
-joins and preserves existing sessions; `closed` closes the transport. Provider
-routing and credential decisions take effect independently of host check-in.
+The game server owns its serving state. The provider may stop routing new
+players to it, but never sends a serve/drain/close instruction.
+
+Some implementations may still send or accept historic fields not listed in this
+specification. Those fields will be removed soon; new implementations must not
+depend on them.
 
 For a replacement admission key, include a fresh `keyRequestId`. Save and install
 the returned key, then immediately heartbeat with the updated profile and
@@ -63,7 +69,7 @@ installed IDs. The provider cannot issue new tokens under that epoch before the
 acknowledgement. Retain older keys until their reported retirement deadlines.
 
 On orderly shutdown, stop accepting new joins and immediately heartbeat with
-`state: "draining"`. Do not wait for the periodic timer. A provider outage lets
+`acceptingPlayers: false`. Do not wait for the periodic timer. A provider outage lets
 routing leases expire; it does not by itself close established sessions.
 
 ## 3. Accept a stateless join and report the outcome
@@ -85,7 +91,8 @@ Send signed `outcomes` batches asynchronously, independently of heartbeat timing
 | An authenticated observed attempt fails before transport becomes usable | `ticket.failed`, with a bounded reason |
 | The game admits or rejects the player | `ticket.game_joined` or `ticket.game_rejected`, when the integration observes this boundary |
 
-Declare game-outcome support as `available` or `unavailable` in heartbeat. A
+Declare game-outcome support as `available` or `unavailable` with the first profile
+and when it changes. A
 transport connection never proves successful gameplay. Intermediate ICE, DTLS
 and SCTP stages are optional diagnostics in the same stream.
 
@@ -104,7 +111,7 @@ request signature. URLs come from discovery.
 | --- | --- |
 | `register` | Request an enrollment or recovery challenge |
 | `complete` | Prove the challenge and start the process generation |
-| `heartbeat` | Exchange host health, profile, keys, lifecycle state and readiness |
+| `heartbeat` | Report acceptance, counts and profile/key acknowledgements |
 | `outcomes` | Report transport and game observations |
 | `rotate` | Prove and install a replacement machine signing key |
 | `retire` | Retire the previous machine signing key |
@@ -117,4 +124,4 @@ request fields, key handling, token layout, bounds and retries are in the
 Hosts can request automatic registration: the provider uses token authority to
 choose account provisioning or attachment. Anonymous hosts create new services.
 Geyser exposes only signaling mode, advertised endpoints, token, provider origin
-and registration metadata; see the [Geyser configuration](https://github.com/teamziax/GeyserNetherNet/blob/nxs-dev/PROVIDER.md).
+and registration metadata; see the [Geyser configuration](https://github.com/onebeastchris/Geyser/blob/feature/nethernet-wip/PROVIDER.md).

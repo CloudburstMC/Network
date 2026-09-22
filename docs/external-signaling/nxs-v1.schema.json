@@ -424,13 +424,6 @@
         }
       ]
     },
-    "hostState": {
-      "enum": [
-        "serving",
-        "draining",
-        "closed"
-      ]
-    },
     "hostProfile": {
       "type": "object",
       "required": [
@@ -527,47 +520,17 @@
     "heartbeat": {
       "type": "object",
       "required": [
-        "healthy",
         "acceptingPlayers",
         "capacity",
-        "load",
-        "protocolVersion",
-        "clockUnixMillis",
-        "checkInVersion",
-        "state",
-        "appliedStateRevision",
-        "gameOutcomes"
+        "clockUnixMillis"
       ],
       "properties": {
-        "healthy": {
-          "type": "boolean"
-        },
         "capacity": {
           "type": "integer",
           "minimum": 0,
           "maximum": 1000000
         },
-        "load": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "protocolVersion": {
-          "type": "string",
-          "maxLength": 128
-        },
         "clockUnixMillis": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "checkInVersion": {
-          "const": 1
-        },
-        "state": {
-          "$ref": "#/$defs/hostState"
-        },
-        "appliedStateRevision": {
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
@@ -576,18 +539,16 @@
           "enum": [
             "available",
             "unavailable"
-          ]
+          ],
+          "description": "Report with the initial host profile and whenever this capability changes. Omission preserves the current generation value; initially unavailable."
         },
         "build": {
           "type": "string",
           "maxLength": 128
         },
-        "region": {
-          "type": "string",
-          "maxLength": 32
-        },
         "serverStatus": {
-          "type": "object"
+          "$ref": "#/$defs/serverStatus",
+          "description": "Renew listing metadata together. Omit players when the heartbeat supplies playerCount."
         },
         "hostProfile": {
           "$ref": "#/$defs/hostProfile"
@@ -617,27 +578,33 @@
         },
         "acceptingPlayers": {
           "type": "boolean",
-          "description": "Explicit application willingness to accept new players, independent of health and sampled counts. Must be false while draining or closed."
+          "description": "Application ability and willingness to accept new players, independent of sampled counts."
         }
       },
       "allOf": [
         {
           "if": {
-            "properties": {
-              "state": {
-                "enum": [
-                  "draining",
-                  "closed"
-                ]
-              }
-            }
+            "required": [
+              "serverStatus"
+            ]
           },
           "then": {
-            "properties": {
-              "acceptingPlayers": {
-                "const": false
+            "anyOf": [
+              {
+                "required": [
+                  "playerCount"
+                ]
+              },
+              {
+                "properties": {
+                  "serverStatus": {
+                    "required": [
+                      "players"
+                    ]
+                  }
+                }
               }
-            }
+            ]
           }
         }
       ]
@@ -687,7 +654,6 @@
         "activeKeyId",
         "leaseGeneration",
         "readiness",
-        "desiredState",
         "retirements"
       ],
       "properties": {
@@ -718,24 +684,11 @@
           "maximum": 9007199254740991
         },
         "readiness": {
-          "$ref": "#/$defs/readiness"
-        },
-        "desiredState": {
           "type": "object",
           "required": [
-            "revision",
-            "state"
-          ],
-          "properties": {
-            "revision": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 9007199254740991
-            },
-            "state": {
-              "$ref": "#/$defs/hostState"
-            }
-          }
+            "routable",
+            "reasons"
+          ]
         },
         "checkIn": {
           "$ref": "#/$defs/checkIn"
@@ -853,6 +806,49 @@
         }
       },
       "description": "Actual players connected to this runtime, including still-connected draining players. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Absence means unknown. Never derive this value from public serverStatus, load, tickets or reservations."
+    },
+    "serverStatus": {
+      "type": "object",
+      "required": [
+        "name",
+        "level",
+        "maxPlayers",
+        "gameType"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f-\\u009f\\ud800-\\udfff]"
+          }
+        },
+        "level": {
+          "type": "string",
+          "maxLength": 128,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f-\\u009f\\ud800-\\udfff]"
+          }
+        },
+        "players": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "maxPlayers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "gameType": {
+          "enum": [
+            0,
+            1,
+            2
+          ]
+        }
+      }
     }
   },
   "x-context-order": [
@@ -870,7 +866,7 @@
   ],
   "x-signature-format": "ES384 P1363 r||s 96 bytes unpadded base64url",
   "x-canonicalization": "UTF-8 JSON arrays, no whitespace, no Unicode normalization, epoch milliseconds as integers, absent context strings are empty",
-  "description": "Registration, heartbeat and stateless join feedback for the experimental NXS contract.",
+  "description": "Some implementations may still send or accept historic fields not listed in this specification. Those fields will be removed soon and new implementations must not depend on them.",
   "x-profile": "nxs-admission-v1",
   "x-discovery-path": "/.well-known/nethernet-external-signaling",
   "x-headers": [

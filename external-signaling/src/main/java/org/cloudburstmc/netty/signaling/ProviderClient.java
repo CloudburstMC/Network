@@ -119,20 +119,24 @@ public final class ProviderClient implements AutoCloseable {
     /**
      * Capacity and playerCount describe the same observation. Public server status is independent.
      */
-    public record Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion, String build,
-                         PlayerCount playerCount) {
+    public record Health(boolean acceptingPlayers, int capacity, String build, PlayerCount playerCount) {
         public Health {
-            if (capacity < 0 || capacity > 1000000 || !Double.isFinite(load) || load < 0 || load > 1
-                    || protocolVersion == null) {
+            if (capacity < 0 || capacity > 1000000) {
                 throw new IllegalArgumentException("Invalid health");
             }
         }
 
-        /**
-         * Hosts without actual player telemetry report unknown, never a synthetic zero.
-         */
+        /** Temporary source adapter; obsolete load and protocol arguments are ignored. */
+        @Deprecated(forRemoval = true)
+        public Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion,
+                      String build, PlayerCount playerCount) {
+            this(healthy && acceptingPlayers, capacity, build, playerCount);
+        }
+
+        /** Temporary source adapter for hosts without actual player telemetry. */
+        @Deprecated(forRemoval = true)
         public Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion, String build) {
-            this(healthy, acceptingPlayers, capacity, load, protocolVersion, build, null);
+            this(healthy && acceptingPlayers, capacity, build, null);
         }
     }
 
@@ -183,6 +187,7 @@ public final class ProviderClient implements AutoCloseable {
     private boolean started;
     private boolean closed;
     private boolean scheduledCheckIns;
+    private Boolean lastReportedGameOutcomes;
     private long nextOutcomes;
     private long nextStatusUpdate;
     private long minUpdateIntervalMs = 1000;
@@ -597,7 +602,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     /**
-     * A full immutable snapshot. Callers may update every one of the seven fields.
+     * A complete immutable listing snapshot, independent of actual player telemetry.
      */
     public void setServerStatus(ServerStatus status) {
         explicitStatus.set(Objects.requireNonNull(status));
@@ -640,12 +645,10 @@ public final class ProviderClient implements AutoCloseable {
         ServerStatus status = currentStatus();
         Health health = healthSupplier.get();
         return !Objects.equals(status, lastReportedStatus) || lastReportedHealth == null
-                || health.healthy() != lastReportedHealth.healthy()
                 || health.acceptingPlayers() != lastReportedHealth.acceptingPlayers()
                 || health.capacity() != lastReportedHealth.capacity()
                 || !Objects.equals(connectedPlayers(health), connectedPlayers(lastReportedHealth))
-                || !Objects.equals(health.protocolVersion(), lastReportedHealth.protocolVersion()) || !Objects.equals(
-                health.build(), lastReportedHealth.build());
+                || !Objects.equals(health.build(), lastReportedHealth.build());
     }
 
     private static Integer connectedPlayers(Health health) {
@@ -653,7 +656,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private void heartbeat() throws Exception {
-        // Key delivery and application acknowledgements can need an immediate second exchange.
+        // Key delivery can need an immediate second exchange.
         for (int exchange = 0; exchange < 3; exchange++) {
             JsonObject body = new JsonObject(), profile = null;
             if (installedKeyId != null && hostState.equals("serving")) {
@@ -680,30 +683,30 @@ public final class ProviderClient implements AutoCloseable {
                 body.add("keyRequestId", state.get("keyRequestId"));
             }
             Health health = healthSupplier.get();
-            body.addProperty("healthy", health.healthy());
             body.addProperty("acceptingPlayers", health.acceptingPlayers() && installedKeyId != null && hostState.equals("serving"));
             if (!heartbeatExtensions.isEmpty()) body.add("extensions", heartbeatExtensions.deepCopy());
             body.addProperty("capacity", health.capacity());
-            body.addProperty("load", health.load());
             if (health.playerCount() != null) {
                 body.add("playerCount", JSON.toJsonTree(health.playerCount()));
             }
-            body.addProperty("protocolVersion", health.protocolVersion());
             if (health.build() != null) body.addProperty("build", health.build());
-            if (config.region() != null) {
-                body.addProperty("region", config.region());
-            }
             snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
             body.addProperty("clockUnixMillis", snapshotClock);
-            body.addProperty("checkInVersion", 1);
-            body.addProperty("state", hostState);
+            // Temporary historic field; acknowledging an echo never controls the listener.
             body.addProperty("appliedStateRevision", appliedStateRevision);
-            body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
+            boolean gameOutcomes = transport.supportsGameOutcomes();
+            if (body.has("hostProfile") || !Objects.equals(lastReportedGameOutcomes, gameOutcomes)) {
+                body.addProperty("gameOutcomes", gameOutcomes ? "available" : "unavailable");
+            }
             ServerStatus status = null;
             try {
                 status = currentStatus();
                 if (status != null) {
-                    body.add("serverStatus", JSON.toJsonTree(status));
+                    if (status.players() == null && health.playerCount() == null)
+                        throw new IllegalStateException("Server status requires players or an actual player count");
+                    JsonObject listing = JSON.toJsonTree(status).getAsJsonObject();
+                    if (health.playerCount() != null) listing.remove("players");
+                    body.add("serverStatus", listing);
                 }
             } catch (RuntimeException failure) {
                 diagnostics.accept("status_refresh_failed");
@@ -781,33 +784,14 @@ public final class ProviderClient implements AutoCloseable {
                     scheduledCheckIns ? minUpdateIntervalMs : intervalMs);
             lastReportedStatus = status;
             lastReportedHealth = health;
+            lastReportedGameOutcomes = gameOutcomes;
             lastHeartbeat = response.deepCopy();
-            JsonObject desired = response.getAsJsonObject("desiredState");
-            if (desired == null || !desired.has("revision") || !desired.has("state")) {
-                throw new IOException("Provider state missing");
-            }
-            long revision = desired.getAsJsonPrimitive("revision").getAsBigDecimal().longValueExact();
-            String target = desired.get("state").getAsString();
-            if (revision < appliedStateRevision || !Set.of("serving", "draining", "closed").contains(target)) {
-                throw new IOException("Unsupported provider state");
-            }
-            if (revision > appliedStateRevision && target.equals("serving") && !hostState.equals("serving")) {
-                // This endpoint's drain is permanent. Recovery with a fresh endpoint must apply resume.
-                diagnostics.accept("provider_resume_requires_recovery");
-                return;
-            }
-            if (revision > appliedStateRevision) {
-                ProviderTransport.ApplyResult applied = target.equals("serving") ? ProviderTransport.ApplyResult.APPLIED
-                        : transport.applyState(target).toCompletableFuture().get(10, TimeUnit.SECONDS);
-                if (applied == ProviderTransport.ApplyResult.APPLIED) {
-                    appliedStateRevision = revision;
-                    if (!target.equals("serving")) {
-                        hostState = target;
-                        again = true;
-                    }
-                } else {
-                    diagnostics.accept("provider_state_not_applied");
-                    nextHeartbeat = Math.min(nextHeartbeat, System.nanoTime() + TimeUnit.SECONDS.toNanos(1));
+            // Serving state belongs to this host. Provider routing decisions never command its listener.
+            if (response.has("desiredState") && response.get("desiredState").isJsonObject()) {
+                JsonObject echo = response.getAsJsonObject("desiredState");
+                if (echo.has("state") && hostState.equals(echo.get("state").getAsString()) && echo.has("revision")) {
+                    long revision = echo.get("revision").getAsBigDecimal().longValueExact();
+                    if (revision >= appliedStateRevision && revision <= 9007199254740991L) appliedStateRevision = revision;
                 }
             }
             if (!again) {

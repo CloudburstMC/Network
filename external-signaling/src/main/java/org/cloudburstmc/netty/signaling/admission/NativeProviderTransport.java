@@ -216,20 +216,6 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     @Override
-    public CompletionStage<ApplyResult> applyState(String state) {
-        if (state == null) {
-            return CompletableFuture.completedFuture(ApplyResult.REJECTED);
-        }
-
-        return switch (state) {
-            case "serving" -> CompletableFuture.completedFuture(ApplyResult.APPLIED);
-            case "draining" -> drain().thenApply(ignored -> ApplyResult.APPLIED);
-            case "closed" -> close().thenApply(ignored -> ApplyResult.APPLIED);
-            default -> CompletableFuture.completedFuture(ApplyResult.REJECTED);
-        };
-    }
-
-    @Override
     public List<JsonObject> pollEvents() {
         return channel.pollEvents().stream().map(event -> {
             JsonObject result = new JsonObject();
