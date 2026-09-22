@@ -758,7 +758,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * so no domain of its own.
          *
          * @param identityPem PEM file holding the EC P-384 identity key
-         * @param domain      The identity domain, surfaced to players in the first use prompt
+         * @param domain      The name the identity carries, see {@link OperatorIdentity}
          * @return This builder
          * @throws IllegalArgumentException If the key cannot be read
          */
