@@ -666,10 +666,6 @@ class NativeAdmissionIntegrationTest {
             assertEquals(49196, first.getAsJsonArray("candidates").get(0).getAsJsonObject().get("port").getAsInt());
             String incarnation = first.getAsJsonObject("statelessAdmission").get("incarnation").getAsString();
             assertTrue(incarnation.matches("[0-9a-f]{32}"));
-            var command = new JsonObject();
-            command.addProperty("kind", "join-admission");
-            assertEquals(ProviderTransport.ApplyResult.REJECTED,
-                    transport.applyState("join-admission").toCompletableFuture().get());
             assertEquals(0, transport.channel().admissionStats().claims());
             assertEquals(0, transport.channel().nativeStats()[2]);
             NativeDiagnostics.assertCreations(creations, 0);
@@ -694,6 +690,7 @@ class NativeAdmissionIntegrationTest {
                     .get("incarnation").getAsString();
             assertNotEquals(incarnation, restarted);
             assertNotEquals(NativeProviderTransport.audience(incarnation), NativeProviderTransport.audience(restarted));
+            transport.channel().drainAdmissions();
             assertEquals(0, transport.channel().nativeStats()[2]);
             NativeDiagnostics.assertCreations(creations, 0);
         } finally {

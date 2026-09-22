@@ -28,7 +28,7 @@ class ProviderClientTest {
             FakeTransport refusing = new FakeTransport();
             refusing.refuseKeys = true;
             ProviderClient first = new ProviderClient(config, new ProviderStateStore(directory), refusing, () -> null,
-                    () -> new ProviderClient.Health(true, true, 20, 0, "nethernet", "fixture"), message -> {
+                    () -> new ProviderClient.Health(true, 20, "fixture", null), message -> {
             });
             try {
                 assertThrows(Exception.class, () -> first.start().get(20, TimeUnit.SECONDS));
@@ -41,7 +41,7 @@ class ProviderClientTest {
             assertFalse(persisted.contains("\"ticketKeys\":[{"), "a refused admission key was persisted: " + persisted);
 
             ProviderClient second = new ProviderClient(config, new ProviderStateStore(directory), new FakeTransport(),
-                    () -> null, () -> new ProviderClient.Health(true, true, 20, 0, "nethernet", "fixture"), message -> {
+                    () -> null, () -> new ProviderClient.Health(true, 20, "fixture", null), message -> {
             });
             try {
                 assertNotNull(second.start().get(20, TimeUnit.SECONDS));
@@ -65,7 +65,7 @@ class ProviderClientTest {
                     ProviderClient client = new ProviderClient(config,
                             new ProviderStateStore(path.resolve(standalone ? "standalone" : "pool")),
                             new FakeTransport(), () -> null,
-                            () -> new ProviderClient.Health(true, true, 20, 0, "nethernet", "fixture"), message -> {
+                            () -> new ProviderClient.Health(true, 20, "fixture", null), message -> {
                     });
                     try {
                         JsonObject current = client.start().get(20, TimeUnit.SECONDS);
@@ -104,8 +104,8 @@ class ProviderClientTest {
             ProviderClient client = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Counts"),
                     new ProviderStateStore(path), transport,
-                    () -> new ServerStatus("Global listing", 1234, "fixture", "world", 25000, 30000, 0),
-                    () -> new ProviderClient.Health(true, accepting.get(), 20, .9, "nethernet", "fixture", sample.get()), message -> {
+                    () -> new ServerStatus("Global listing", "world", 25000, 30000, 0),
+                    () -> new ProviderClient.Health(accepting.get(), 20, "fixture", sample.get()), message -> {
             });
             try {
                 JsonObject extensions = com.google.gson.JsonParser.parseString("{\"org.example.location\":{\"version\":1,\"critical\":false,\"data\":{\"country\":\"NL\"}}}").getAsJsonObject();
@@ -117,12 +117,12 @@ class ProviderClientTest {
                 assertEquals(sample.get().sampledAt(),
                         stub.lastHeartbeat.getAsJsonObject("playerCount").get("sampledAt").getAsLong());
                 assertEquals(20, stub.lastHeartbeat.get("capacity").getAsInt());
-                assertEquals(25000, stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt());
+                assertFalse(stub.lastHeartbeat.getAsJsonObject("serverStatus").has("players"));
                 assertTrue(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
                 accepting.set(false);
                 client.requestStatusRefresh();
                 eventually(() -> !stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
-                assertTrue(stub.lastHeartbeat.get("healthy").getAsBoolean());
+                assertFalse(stub.lastHeartbeat.has("healthy"));
                 accepting.set(true);
                 client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
@@ -135,21 +135,64 @@ class ProviderClientTest {
                 client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt()
                         == 4);
-                assertEquals(25000, stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt());
+                assertFalse(stub.lastHeartbeat.getAsJsonObject("serverStatus").has("players"));
                 client.drain().get(10, TimeUnit.SECONDS);
                 assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
                 sample.set(new ProviderClient.PlayerCount(5, System.currentTimeMillis()));
                 client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt() == 5);
-                assertTrue(stub.lastHeartbeat.get("healthy").getAsBoolean());
+                assertFalse(stub.lastHeartbeat.has("healthy"));
                 assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             } finally {
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }
             assertTrue(stub.draining);
-            assertTrue(stub.lastHeartbeat.get("healthy").getAsBoolean());
+            assertFalse(stub.lastHeartbeat.has("healthy"));
             assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             assertEquals(5, stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt());
+        }
+    }
+
+    @Test
+    void heartbeatsUseTheStandardFormatAndPauseWithoutChangingGeneration(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.desiredState = null;
+            stub.checkInMillis = 60000;
+            var accepting = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var transport = new FakeTransport();
+            transport.stateless = true;
+            ProviderClient client = new ProviderClient(
+                    new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Compact"),
+                    new ProviderStateStore(path), transport,
+                    () -> new ServerStatus("Game", "world", 30, 0),
+                    () -> new ProviderClient.Health(accepting.get(), 20, "fixture",
+                            new ProviderClient.PlayerCount(3, System.currentTimeMillis())), message -> { });
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                long generation = stub.generation;
+                for (String field : List.of("healthy", "load", "protocolVersion", "checkInVersion", "state")) {
+                    assertFalse(stub.lastHeartbeat.has(field), field);
+                }
+                for (String field : List.of("protocol", "version", "players")) {
+                    assertFalse(stub.lastHeartbeat.getAsJsonObject("serverStatus").has(field), field);
+                }
+                assertTrue(stub.lastHeartbeat.has("gameOutcomes"));
+                assertTrue(stub.lastHeartbeat.has("appliedStateRevision"));
+                accepting.set(false);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
+                assertFalse(stub.lastHeartbeat.has("gameOutcomes"));
+                assertEquals(3, stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt());
+                assertTrue(stub.lastHeartbeat.has("hostProfileRevision"));
+                assertFalse(stub.lastHeartbeat.has("hostProfile"));
+                accepting.set(true);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertTrue(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
+                assertEquals(generation, stub.generation);
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+            assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
         }
     }
 
@@ -162,7 +205,7 @@ class ProviderClientTest {
                             "customers", Map.of("plan", "premium"));
             ProviderClient client =
                     new ProviderClient(config, new ProviderStateStore(path), new FakeTransport(), () -> null,
-                            () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "fixture"), message -> {
+                            () -> new ProviderClient.Health(true, 10, "fixture", null), message -> {
                     });
             try {
                 JsonObject registration = client.start().get(20, TimeUnit.SECONDS);
@@ -187,7 +230,7 @@ class ProviderClientTest {
             ProviderClient client = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example"),
                     new ProviderStateStore(path), new FakeTransport(), () -> null,
-                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", null), message -> {
+                    () -> new ProviderClient.Health(true, 10, null, null), message -> {
             });
             try {
                 JsonObject extensions = JsonParser.parseString(
@@ -223,8 +266,8 @@ class ProviderClientTest {
             ProviderClient client = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Scheduled"),
                     new ProviderStateStore(path), transport,
-                    () -> new ServerStatus("Scheduled", 1234, "fixture", "world", players.get(), 40, 0),
-                    () -> new ProviderClient.Health(true, true, 40, players.get() / 40.0, "nethernet", "fixture"),
+                    () -> new ServerStatus("Scheduled", "world", players.get(), 40, 0),
+                    () -> new ProviderClient.Health(true, 40, "fixture", null),
                     message -> {
                     });
             try {
@@ -265,8 +308,8 @@ class ProviderClientTest {
             ProviderClient resumed = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Scheduled"),
                     new ProviderStateStore(path), replacement,
-                    () -> new ServerStatus("Restarted", 1234, "fixture", "world", 0, 40, 0),
-                    () -> new ProviderClient.Health(true, true, 40, 0, "nethernet", "fixture"), message -> {
+                    () -> new ServerStatus("Restarted", "world", 0, 40, 0),
+                    () -> new ProviderClient.Health(true, 40, "fixture", null), message -> {
             });
             try {
                 resumed.start().get(20, TimeUnit.SECONDS);
@@ -284,10 +327,9 @@ class ProviderClientTest {
     static final class FakeTransport implements ProviderTransport {
         final CompletableFuture<Void> closed = new CompletableFuture<>();
         final Queue<JsonObject> events = new ConcurrentLinkedQueue<>();
-        volatile int installed, applied, admissions, drains;
+        volatile int installed, drains;
         boolean stateless = true;
         String ticketKeyId = "T001";
-        volatile ApplyResult result = ApplyResult.APPLIED;
 
         public CompletionStage<JsonObject> hostProfile() {
             JsonObject p = new JsonObject();
@@ -326,18 +368,6 @@ class ProviderClientTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        public CompletionStage<ApplyResult> applyState(String state) {
-            applied++;
-            String kind = state;
-            if (kind.equals("join-admission")) {
-                admissions++;
-            }
-            if (kind.equals("draining")) {
-                drains++;
-            }
-            return CompletableFuture.completedFuture(kind.equals("join-admission") ? result : ApplyResult.APPLIED);
-        }
-
         public List<JsonObject> pollEvents() {
             List<JsonObject> batch = new ArrayList<>();
             for (JsonObject event; (event = events.poll()) != null; ) {
@@ -363,8 +393,8 @@ class ProviderClientTest {
             FakeTransport host = new FakeTransport();
             var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example");
             ProviderClient client = new ProviderClient(config, new ProviderStateStore(path), host,
-                    () -> new ServerStatus("Example", 1234, "preview-fixture", "", players.get(), 40, 0),
-                    () -> new ProviderClient.Health(true, true, 100, 0.1, "nethernet", "fixture"), message -> {
+                    () -> new ServerStatus("Example", "", players.get(), 40, 0),
+                    () -> new ProviderClient.Health(true, 100, "fixture", null), message -> {
             });
             JsonObject registration = client.start().get(20, TimeUnit.SECONDS);
             assertEquals("example-machine-1", registration.get("instanceId").getAsString());
@@ -374,7 +404,7 @@ class ProviderClientTest {
             assertEquals(40, stub.lastHeartbeat.getAsJsonObject("serverStatus").get("maxPlayers").getAsInt());
             players.set(7);
             eventually(() -> stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt() == 7);
-            client.setServerStatus(new ServerStatus("Renamed", 1234, "preview-fixture", "World", 8, 30, 2));
+            client.setServerStatus(new ServerStatus("Renamed", "World", 8, 30, 2));
             eventually(() -> "Renamed".equals(
                     stub.lastHeartbeat.getAsJsonObject("serverStatus").get("name").getAsString()));
             assertTrue(client.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
@@ -384,8 +414,8 @@ class ProviderClientTest {
             client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             FakeTransport restarted = new FakeTransport();
             ProviderClient resumed = new ProviderClient(config, new ProviderStateStore(path), restarted,
-                    () -> new ServerStatus("Restarted", 1234, "preview-fixture", "", 1, 50, 1),
-                    () -> new ProviderClient.Health(true, true, 100, 0, "nethernet", "fixture"), message -> {
+                    () -> new ServerStatus("Restarted", "", 1, 50, 1),
+                    () -> new ProviderClient.Health(true, 100, "fixture", null), message -> {
             });
             try {
                 assertEquals("example-machine-1",
@@ -413,13 +443,12 @@ class ProviderClientTest {
             FakeTransport host = new FakeTransport();
             var config = new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example");
             var health =
-                    (Supplier<ProviderClient.Health>) () -> new ProviderClient.Health(true, true, 100, 0.1,
-                            "nethernet", "fixture");
+                    (Supplier<ProviderClient.Health>) () -> new ProviderClient.Health(true, 100, "fixture", null);
             ProviderClient client = new ProviderClient(config, new ProviderStateStore(path), host, () -> {
                 if (players.get() < 0) {
                     throw new IllegalStateException("query unavailable");
                 }
-                return new ServerStatus("Example", 1234, "fixture", "", players.get(), 40, 0);
+                return new ServerStatus("Example", "", players.get(), 40, 0);
             }, health, message -> {
             });
             client.start().get(20, TimeUnit.SECONDS);
@@ -434,17 +463,14 @@ class ProviderClientTest {
             eventually(() -> stub.lastHeartbeat.has("serverStatus")
                     && stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt() == 5);
             assertTrue(stub.heartbeats - before <= 2, "Burst must coalesce within heartbeat cadence");
-            int beforeAck = stub.acknowledgements;
-            stub.desiredState = "future-state";
-            stub.desiredRevision = 2;
-            assertThrows(ExecutionException.class, () -> client.readiness().get(10, TimeUnit.SECONDS));
-            assertEquals(0, host.admissions, "NXS has no per-join provider state");
-            assertTrue(stub.appliedRevision < 2, "Unknown state cannot be acknowledged");
-            stub.desiredState = "draining";
-            client.readiness().get(10, TimeUnit.SECONDS);
-            assertTrue(host.drains > 0);
-            assertEquals(2, stub.appliedRevision);
-            assertTrue(stub.acknowledgements > beforeAck);
+            for (String value : List.of("future-state", "draining", "closed")) {
+                stub.desiredState = value;
+                stub.desiredRevision = 2;
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(0, host.drains, "Provider responses cannot control the listener");
+                assertTrue(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
+            }
+            assertTrue(stub.appliedRevision < 2, "Only matching echoes are acknowledged");
             client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
         }
     }
@@ -457,7 +483,7 @@ class ProviderClientTest {
             var client = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example"),
                     new ProviderStateStore(path), host, () -> null,
-                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "fixture"), message -> {
+                    () -> new ProviderClient.Health(true, 10, "fixture", null), message -> {
             });
             try {
                 client.start().get(20, TimeUnit.SECONDS);
@@ -488,7 +514,7 @@ class ProviderClientTest {
             var client = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Example"),
                     new ProviderStateStore(path), host, () -> null,
-                    () -> new ProviderClient.Health(true, true, 10, 0, "nethernet", "fixture"), message -> {
+                    () -> new ProviderClient.Health(true, 10, "fixture", null), message -> {
             });
             client.start().get(20, TimeUnit.SECONDS);
             Files.move(path.resolve("provider-state.json"), path.resolve("saved-state.json"));

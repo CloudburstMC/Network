@@ -25,8 +25,6 @@ import java.util.concurrent.CompletionStage;
  * Transport boundary. Provider code performs no native allocation or game packet handling.
  */
 public interface ProviderTransport {
-    enum ApplyResult {PENDING, APPLIED, REJECTED}
-
     /**
      * Existing PublishHostProfileRequest, exported from actual bound native metadata.
      */
@@ -36,11 +34,6 @@ public interface ProviderTransport {
      * Atomic snapshot; completion means every supplied key is persisted and usable.
      */
     CompletionStage<Void> installTicketKeys(List<TicketKey> keys);
-
-    /**
-     * Apply serving/draining/closed background state before acknowledging its revision.
-     */
-    CompletionStage<ApplyResult> applyState(String state);
 
     /**
      * Whether this integration can observe the application join/rejection boundary.

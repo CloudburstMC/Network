@@ -57,10 +57,6 @@ public final class ProviderBench {
                 return CompletableFuture.completedFuture(p);
             }
 
-            public CompletionStage<ApplyResult> applyState(String state) {
-                return CompletableFuture.completedFuture(ApplyResult.REJECTED);
-            }
-
             public List<JsonObject> pollEvents() {
                 return List.of();
             }
@@ -88,8 +84,8 @@ public final class ProviderBench {
         var config = new ProviderClient.Configuration(provider, "nxs-admission-v1", "Java conformance backend",
                 registrationMode, authorization, token, region, pool, tags);
         var client = new ProviderClient(config, new ProviderStateStore(state), transport,
-                () -> new ServerStatus("Java bench", 1234, "fixture-only", "Fixture", 2, 50, 0),
-                () -> new ProviderClient.Health(true, true, 100, 0.02, "nethernet", "java-conformance"), System.err::println);
+                () -> new ServerStatus("Java bench", "Fixture", 2, 50, 0),
+                () -> new ProviderClient.Health(true, 100, "java-conformance", null), System.err::println);
         try {
             JsonObject registration = client.start().get(30, TimeUnit.SECONDS);
             String extensionsFile = System.getProperty("providerExtensionsFile");

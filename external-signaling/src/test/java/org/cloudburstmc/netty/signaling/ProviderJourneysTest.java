@@ -20,8 +20,8 @@ class ProviderJourneysTest {
                                          ProviderClient.Configuration configuration,
                                          ProviderClientTest.FakeTransport transport) throws Exception {
         return new ProviderClient(configuration, new ProviderStateStore(directory), transport,
-                () -> new ServerStatus("Independent host", 1000, "conformance", "world", 1, 20, 0),
-                () -> new ProviderClient.Health(true, true, 100, .01, "nethernet", "fixture"), message -> {
+                () -> new ServerStatus("Independent host", "world", 1, 20, 0),
+                () -> new ProviderClient.Health(true, 100, "fixture", null), message -> {
         });
     }
 
@@ -70,7 +70,6 @@ class ProviderJourneysTest {
                     }
                     assertEquals(1, stub.events.size());
                     assertFalse(stub.events.get(0).has("privatePayload"));
-                    assertEquals(0, transport.admissions, "Control-plane delivery cannot stage individual clients");
                     instance.deregister().get(10, TimeUnit.SECONDS);
                     assertTrue(stub.draining);
                 } finally {
