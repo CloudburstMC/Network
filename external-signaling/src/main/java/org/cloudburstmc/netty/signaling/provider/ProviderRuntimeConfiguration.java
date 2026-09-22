@@ -35,10 +35,18 @@ import java.util.regex.Pattern;
  * Validated NXS settings, with the listener and capacity inherited from whatever is hosting.
  */
 public record ProviderRuntimeConfiguration(
-    URI origin, Path stateDirectory, String authorizationToken, String region, String pool,
-    Map<String, String> tags, String label, String bindAddress, int udpPort,
-    List<InetSocketAddress> advertisedEndpoints, int capacity
-) {
+        URI origin,
+        Path stateDirectory,
+        String authorizationToken,
+        String region,
+        String pool,
+        Map<String, String> tags,
+        String label,
+        String bindAddress,
+        int udpPort,
+        List<InetSocketAddress> advertisedEndpoints,
+        int capacity,
+        ProviderClient.ControlTransport controlTransport) {
     /**
      * @param settings   What the host has configured for the provider
      * @param directory  The host's data directory, which the state directory and any token file are
@@ -62,8 +70,12 @@ public record ProviderRuntimeConfiguration(
         Map<String, String> tags = new TreeMap<>(settings.data());
         String region = tags.remove("region"), pool = tags.remove("pool");
         if (region != null || pool != null || !tags.isEmpty()) {
-            if (region == null) region = "global";
-            if (pool == null) pool = "default";
+            if (region == null) {
+                region = "global";
+            }
+            if (pool == null) {
+                pool = "default";
+            }
         }
 
         Path state = directory.resolve("provider-state");
@@ -87,8 +99,20 @@ public record ProviderRuntimeConfiguration(
             throw new IOException("Invalid inherited routing capacity");
         }
 
-        var runtime = new ProviderRuntimeConfiguration(origin, state, token, region, pool, Map.copyOf(tags), label,
-            bind, port, List.copyOf(endpoints), capacity);
+        var runtime =
+                new ProviderRuntimeConfiguration(
+                        origin,
+                        state,
+                        token,
+                        region,
+                        pool,
+                        Map.copyOf(tags),
+                        label,
+                        bind,
+                        port,
+                        List.copyOf(endpoints),
+                        capacity,
+                        settings.controlTransport());
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
@@ -108,8 +132,23 @@ public record ProviderRuntimeConfiguration(
      * @param data               Instance metadata; {@code region} and {@code pool} place it and
      *                           anything else is a registration tag
      */
-    public record Settings(String endpoint, String token, List<String> advertiseAddresses,
-                           Map<String, String> data) {
+    public record Settings(
+            String endpoint,
+            String token,
+            List<String> advertiseAddresses,
+            Map<String, String> data,
+            ProviderClient.ControlTransport controlTransport) {
+        public Settings {
+            Objects.requireNonNull(controlTransport);
+        }
+
+        public Settings(
+                String endpoint,
+                String token,
+                List<String> advertiseAddresses,
+                Map<String, String> data) {
+            this(endpoint, token, advertiseAddresses, data, ProviderClient.ControlTransport.HTTP);
+        }
     }
 
     public String profile() {
@@ -117,9 +156,19 @@ public record ProviderRuntimeConfiguration(
     }
 
     public ProviderClient.Configuration clientConfiguration() {
-        return new ProviderClient.Configuration(origin, profile(), label, ProviderClient.AUTOMATIC,
-            authorizationToken == null ? ProviderClient.ANONYMOUS_PROOF_OF_WORK : ProviderClient.BEARER_TOKEN,
-            authorizationToken, region, pool, tags);
+        return new ProviderClient.Configuration(
+                origin,
+                profile(),
+                label,
+                ProviderClient.AUTOMATIC,
+                authorizationToken == null
+                        ? ProviderClient.ANONYMOUS_PROOF_OF_WORK
+                        : ProviderClient.BEARER_TOKEN,
+                authorizationToken,
+                region,
+                pool,
+                tags,
+                controlTransport);
     }
 
     private static InetSocketAddress endpoint(String value) throws IOException {

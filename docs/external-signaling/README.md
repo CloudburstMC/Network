@@ -35,6 +35,10 @@ cannot start another generation or reveal its secrets again.
 Every live replica needs its own key and private state directory. Account/token
 issuance, ownership claims and fleet administration belong to the provider.
 
+The Java client uses HTTPS by default. Explicit `AUTO` configuration enables the
+[optional WebSocket carrier](control-v1.md) when discovery advertises it. Both
+carriers share registration, signatures, sequencing and recovery.
+
 ## 2. Heartbeat to the provider
 
 Send a signed `heartbeat` immediately after startup and whenever its returned

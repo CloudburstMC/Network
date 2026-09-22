@@ -81,11 +81,30 @@ public final class ProviderBench {
                 registrationMode.equals(ProviderClient.ATTACH_INSTANCE) ? "EU" : null);
         String pool = System.getProperty("providerPool",
                 registrationMode.equals(ProviderClient.ATTACH_INSTANCE) ? "proxy" : null);
-        var config = new ProviderClient.Configuration(provider, "nxs-admission-v1", "Java conformance backend",
-                registrationMode, authorization, token, region, pool, tags);
-        var client = new ProviderClient(config, new ProviderStateStore(state), transport,
-                () -> new ServerStatus("Java bench", "Fixture", 2, 50, 0),
-                () -> new ProviderClient.Health(true, 100, "java-conformance", null), System.err::println);
+        var config =
+                new ProviderClient.Configuration(
+                        provider,
+                        "nxs-admission-v1",
+                        "Java conformance backend",
+                        registrationMode,
+                        authorization,
+                        token,
+                        region,
+                        pool,
+                        tags,
+                        ProviderClient.ControlTransport.valueOf(
+                                System.getProperty("providerControlTransport", "HTTP")
+                                        .toUpperCase(Locale.ROOT)));
+        var client =
+                new ProviderClient(
+                        config,
+                        new ProviderStateStore(state),
+                        transport,
+                        () -> new ServerStatus("Java bench", "Fixture", 2, 50, 0),
+                        () -> new ProviderClient.Health(true, 100, "java-conformance", null),
+                        diagnostic ->
+                                System.err.println(
+                                        diagnostic.level() + ": " + diagnostic.message()));
         try {
             JsonObject registration = client.start().get(30, TimeUnit.SECONDS);
             String extensionsFile = System.getProperty("providerExtensionsFile");
@@ -96,6 +115,7 @@ public final class ProviderBench {
                     registration.has("serviceId") ? registration.get("serviceId").getAsString() : "unassigned"));
             JsonObject readiness = client.readiness().get(10, TimeUnit.SECONDS);
             readiness.remove("extensions");
+            readiness.addProperty("controlCarrier", client.lastControlCarrier());
             System.out.println(readiness);
             long hold = Long.parseLong(System.getProperty("providerHoldSeconds", "0"));
             String stopFile = System.getProperty("providerStopFile");
