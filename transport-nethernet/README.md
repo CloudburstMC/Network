@@ -84,6 +84,11 @@ These projects use this library to provide Nethernet support. You can see their 
 - [WaterdogPE/WaterdogPE](https://github.com/WaterdogPE/WaterdogPE): Uses server and client to proxy Bedrock players between servers.
 - [GeyserMC/Geyser](https://github.com/GeyserMC/Geyser): Uses server to let Bedrock players join a Java server.
 
+## Reading a client's error screen
+
+The codeword the retail client shows is a theme, and the number after the stage in its details is
+the actual reason. Both are decoded in [client-disconnect-reasons.md](../docs/nethernet/client-disconnect-reasons.md).
+
 ## Packet Flow
 
 ### Client

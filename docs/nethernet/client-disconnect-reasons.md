@@ -1,0 +1,164 @@
+# Client disconnect reasons
+
+The client's disconnect screen ends its detail line in `<stage>-<number>`. The number is the
+ordinal of `DisconnectFailReason`, the same enum as `org.cloudburstmc.protocol.bedrock.data.DisconnectFailReason`.
+The codeword is the theme of that reason.
+
+Reasons and numbers are `json/DisconnectFailReason.json` in Mojang's
+[bedrock-protocol-docs](https://github.com/Mojang/bedrock-protocol-docs). Codewords and titles are
+`definitions/disconnection_errors/disconnection_error_messaging.json` in the client's assets.
+
+Last updated for 1.26.50.
+
+| # | client reason | Protocol constant | codeword | theme | title key |
+|---|---|---|---|---|---|
+| 0 | Unknown | UNKNOWN | Creeper | UnknownFailReason | disconnectionScreen.title.errorOccurred |
+| 1 | CantConnectNoInternet | CANT_CONNECT_NO_INTERNET | NetherNet | Networking | disconnectionScreen.cantConnect |
+| 2 | NoPermissions | NO_PERMISSIONS | Spyglass | Permissions | disconnectionScreen.title.unableToConnect |
+| 3 | UnrecoverableError | UNRECOVERABLE_ERROR | Chest | Storage | disconnectionScreen.title.errorEncountered |
+| 4 | ThirdPartyBlocked | THIRD_PARTY_BLOCKED | Fox | OneOff | disconnectionScreen.cantConnect |
+| 5 | ThirdPartyNoInternet | THIRD_PARTY_NO_INTERNET | NetherNet | Networking | disconnectionScreen.title.errorOccurred |
+| 6 | ThirdPartyBadIP | THIRD_PARTY_BAD_IP | Squid | OneOff | disconnectionScreen.cantConnect |
+| 7 | ThirdPartyNoServerOrServerLocked | THIRD_PARTY_NO_SERVER_OR_SERVER_LOCKED | Silverfish | OneOff | disconnectionScreen.cantConnect |
+| 8 | VersionMismatch | VERSION_MISMATCH | Chain | VersionMismatch | disconnectionScreen.title.versionMismatch |
+| 9 | SkinIssue | SKIN_ISSUE | Armor | Skins | disconnectionScreen.title.skinIssue |
+| 10 | InviteSessionNotFound | INVITE_SESSION_NOT_FOUND | NetherNet | Networking | disconnectionScreen.cantConnect |
+| 11 | EduLevelSettingsMissing | EDU_LEVEL_SETTINGS_MISSING | Gold | Education | disconnectionScreen.title.errorOccurred |
+| 12 | LocalServerNotFound | LOCAL_SERVER_NOT_FOUND | Panda | OneOff | disconnectionScreen.title.localServerNotFound |
+| 13 | LegacyDisconnect | LEGACY_DISCONNECT | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 14 | INTERNAL_UserLeaveGameAttempted | USER_LEAVE_GAME_ATTEMPTED | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 15 | PlatformLockedSkinsError | PLATFORM_LOCKED_SKINS_ERROR | Armor | Skins | disconnectionScreen.title.skinError |
+| 16 | RealmsWorldUnassigned | REALMS_WORLD_UNASSIGNED | Arrow | MinecraftOnline | disconnectionScreen.title.realmsWorldUnassigned |
+| 17 | RealmsServerCantConnect | REALMS_SERVER_CANT_CONNECT | Arrow | MinecraftOnline | disconnectionScreen.cantConnectToRealms |
+| 18 | RealmsServerHidden | REALMS_SERVER_HIDDEN | Arrow | MinecraftOnline | disconnectionScreen.internalError.cantFindRealm |
+| 19 | RealmsServerDisabledBeta | REALMS_SERVER_DISABLED_BETA | Arrow | MinecraftOnline | disconnectionScreen.title.errorOccurred |
+| 20 | RealmsServerDisabled | REALMS_SERVER_DISABLED | Arrow | MinecraftOnline | disconnectionScreen.title.errorOccurred |
+| 21 | CrossPlatformDisabled | CROSS_PLATFORM_DISABLED | Spyglass | Permissions | disconnectionScreen.title.unableToConnect |
+| 22 | TESTONLY_CantConnect | CANT_CONNECT | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 23 | SessionNotFound | SESSION_NOT_FOUND | Goat | OneOff | disconnectionScreen.cantConnect |
+| 24 | ClientSettingsIncompatibleWithServer | CLIENT_SETTINGS_INCOMPATIBLE_WITH_SERVER | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 25 | ServerFull | SERVER_FULL | Hopper | OneOff | disconnectionScreen.title.worldFull |
+| 26 | InvalidPlatformSkin | INVALID_PLATFORM_SKIN | Armor | Skins | disconnectionScreen.invalidSkin |
+| 27 | EditionVersionMismatch | EDITION_VERSION_MISMATCH | Chain | VersionMismatch | disconnectionScreen.title.versionMismatchHost |
+| 28 | EditionMismatch | EDITION_MISMATCH | Chain | VersionMismatch | disconnectionScreen.title.incompatibleWorld |
+| 29 | LevelNewerThanExeVersion | LEVEL_NEWER_THAN_EXE_VERSION | Breeze | OneOff | disconnectionScreen.title.errorOccurred |
+| 30 | INTERNAL_NoFailOccurred | NO_FAIL_OCCURRED | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 31 | BannedSkin | BANNED_SKIN | Armor | Skins | disconnectionScreen.title.invalidSkin |
+| 32 | Timeout | TIMEOUT | Kelp | OneOff | disconnectionScreen.title.connectionTimeout |
+| 33 | ServerNotFound | SERVER_NOT_FOUND | Clay | OneOff | disconnectionScreen.title.serverNotFound |
+| 34 | OutdatedServer | OUTDATED_SERVER | Chain | VersionMismatch | authentication.unableToConnect |
+| 35 | OutdatedClient | OUTDATED_CLIENT | Chain | VersionMismatch | disconnectionScreen.title.versionOutOfDate |
+| 36 | NoPremiumPlatform | NO_PREMIUM_PLATFORM | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 37 | MultiplayerDisabled | MULTIPLAYER_DISABLED | Spyglass | Permissions | disconnectionScreen.title.multiplayerDisabled |
+| 38 | NoWiFi | NO_WIFI | NetherNet | Networking | disconnectionScreen.title.noWifi |
+| 39 | WorldCorruption | WORLD_CORRUPTION | Chest | Storage | disconnectionScreen.worldCorruption |
+| 40 | NoReason | NO_REASON | Creeper | UnknownFailReason | disconnectionScreen.title.errorOccurred |
+| 41 | Disconnected | DISCONNECTED | Bat | OneOff | disconnectionScreen.title.disconnectedFromHost |
+| 42 | InvalidPlayer | INVALID_PLAYER | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 43 | LoggedInOtherLocation | LOGGED_IN_OTHER_LOCATION | Guardian | Authentication | authentication.unableToConnect |
+| 44 | ServerIdConflict | SERVER_ID_CONFLICT | Blaze | OneOffGeneral | disconnectionScreen.title.errorOccurred |
+| 45 | NotAllowed | NOT_ALLOWED | Spyglass | Permissions | disconnectionScreen.title.unableToConnect |
+| 46 | NotAuthenticated | NOT_AUTHENTICATED | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 47 | InvalidTenant | INVALID_TENANT | Gold | Education | disconnectionScreen.title.invalidTenantId |
+| 48 | UnknownPacket | UNKNOWN_PACKET | Block | Packet | disconnectionScreen.title.errorOccurred |
+| 49 | UnexpectedPacket | UNEXPECTED_PACKET | Block | Packet | disconnectionScreen.title.errorOccurred |
+| 50 | InvalidCommandRequestPacket | INVALID_COMMAND_REQUEST_PACKET | Block | Packet | disconnectionScreen.title.errorOccurred |
+| 51 | HostSuspended | HOST_SUSPENDED | Boat | GameSetupShutdown | disconnectionScreen.title.errorOccurred |
+| 52 | LoginPacketNoRequest | LOGIN_PACKET_NO_REQUEST | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 53 | LoginPacketNoCert | LOGIN_PACKET_NO_CERT | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 54 | MissingClient | MISSING_CLIENT | Snowball | OneOff | disconnectionScreen.disconnected |
+| 55 | Kicked | KICKED | Evoker | Kicked | disconnectionScreen.title.kickedFromWorld |
+| 56 | KickedForExploit | KICKED_FOR_EXPLOIT | Evoker | Kicked | disconnectionScreen.title.errorOccurred |
+| 57 | KickedForIdle | KICKED_FOR_IDLE | Evoker | Kicked | disconnectionScreen.title.disconnected |
+| 58 | ResourcePackProblem | RESOURCE_PACK_PROBLEM | Rabbit | ResourcePack | disconnectionScreen.title.resourcePackLoad |
+| 59 | IncompatiblePack | INCOMPATIBLE_PACK | Rabbit | ResourcePack | disconnectionScreen.title.incompatiblePack |
+| 60 | OutOfStorage | OUT_OF_STORAGE | Chest | Storage | disconnectionScreen.title.outOfStorage |
+| 61 | InvalidLevel | INVALID_LEVEL | Boat | GameSetupShutdown | disconnectionScreen.invalidLevel |
+| 62 | DisconnectPacket | DISCONNECT_PACKET_DEPRECATED | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 63 | BlockMismatch | BLOCK_MISMATCH | Boat | GameSetupShutdown | disconnectionScreen.title.errorOccurred |
+| 64 | InvalidHeights | INVALID_HEIGHTS | Lead | OneOff | disconnectionScreen.title.errorOccurred |
+| 65 | InvalidWidths | INVALID_WIDTHS | Ladder | OneOff | disconnectionScreen.title.errorOccurred |
+| 66 | ConnectionLost | CONNECTION_LOST | Terracotta | OneOff | disconnectionScreen.disconnected |
+| 67 | ZombieConnection | ZOMBIE_CONNECTION | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 68 | Shutdown | SHUTDOWN | Cobweb | OneOffGeneral | disconnectionScreen.title.errorOccurred |
+| 69 | ReasonNotSet | REASON_NOT_SET | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 70 | LoadingStateTimeout | LOADING_STATE_TIMEOUT | Boat | GameSetupShutdown | disconnectionScreen.title.worldFailedLoad |
+| 71 | ResourcePackLoadingFailed | RESOURCE_PACK_LOADING_FAILED | Rabbit | ResourcePack | disconnectionScreen.title.resourcePackLoad |
+| 72 | SearchingForSessionLoadingScreenFailed | SEARCHING_FOR_SESSION_LOADING_SCREEN_FAILED | Compass | OneOffGeneral | disconnectionScreen.title.errorOccurred |
+| 73 | NetherNetProtocolVersion | CONN_PROTOCOL_VERSION | NetherNet | Networking | disconnectionScreen.title.versionMismatchHost |
+| 74 | SubsystemStatusError | SUBSYSTEM_STATUS_ERROR | Echo Shard | OneOffGeneral | disconnectionScreen.title.errorOccurred |
+| 75 | EmptyAuthFromDiscovery | EMPTY_AUTH_FROM_DISCOVERY | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 76 | EmptyUrlFromDiscovery | EMPTY_URL_FROM_DISCOVERY | TNT | OneOff | disconnectionScreen.title.errorOccurred |
+| 77 | ExpiredAuthFromDiscovery | EXPIRED_AUTH_FROM_DISCOVERY | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 78 | UnknownSignalServiceSignInFailure | UNKNOWN_SIGNAL_SERVICE_SIGN_IN_FAILURE | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 79 | XBLJoinLobbyFailure | XBL_JOIN_LOBBY_FAILURE | Boat | GameSetupShutdown | disconnectionScreen.title.errorOccurred |
+| 80 | UnspecifiedClientInstanceDisconnection | UNSPECIFIED_CLIENT_INSTANCE_DISCONNECTION | Feather | OneOff | disconnectionScreen.title.errorOccurred |
+| 81 | NetherNetSessionNotFound | CONN_SESSION_NOT_FOUND | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 82 | NetherNetCreatePeerConnection | CONN_CREATE_PEER_CONNECTION | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 83 | NetherNetICE | CONN_ICE | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 84 | NetherNetConnectRequest | CONN_CONNECT_REQUEST | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 85 | NetherNetConnectResponse | CONN_CONNECT_RESPONSE | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 86 | NetherNetNegotiationTimeout | CONN_NEGOTIATION_TIMEOUT | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 87 | NetherNetInactivityTimeout | CONN_INACTIVITY_TIMEOUT | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 88 | StaleConnectionBeingReplaced | STALE_CONNECTION_BEING_REPLACED | NetherNet | Networking | disconnectionScreen.title.errorOccurred |
+| 89 | RealmsSessionNotFound | REALMS_SESSION_NOT_FOUND_DEPRECATED | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 90 | BadPacket | BAD_PACKET | Block | Packet | disconnectionScreen.title.errorOccurred |
+| 91 | NetherNetFailedToCreateOffer | CONN_FAILED_TO_CREATE_OFFER | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 92 | NetherNetFailedToCreateAnswer | CONN_FAILED_TO_CREATE_ANSWER | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 93 | NetherNetFailedToSetLocalDescription | CONN_FAILED_TO_SET_LOCAL_DESCRIPTION | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 94 | NetherNetFailedToSetRemoteDescription | CONN_FAILED_TO_SET_REMOTE_DESCRIPTION | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 95 | NetherNetNegotiationTimeoutWaitingForResponse | CONN_NEGOTIATION_TIMEOUT_WAITING_FOR_RESPONSE | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 96 | NetherNetNegotiationTimeoutWaitingForAccept | CONN_NEGOTIATION_TIMEOUT_WAITING_FOR_ACCEPT | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 97 | NetherNetIncomingConnectionIgnored | CONN_INCOMING_CONNECTION_IGNORED | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 98 | NetherNetSignalingParsingFailure | CONN_SIGNALING_PARSING_FAILURE | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 99 | NetherNetSignalingUnknownError | CONN_SIGNALING_UNKNOWN_ERROR | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 100 | NetherNetSignalingUnicastDeliveryFailed | CONN_SIGNALING_UNICAST_DELIVERY_FAILED | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 101 | NetherNetSignalingBroadcastDeliveryFailed | CONN_SIGNALING_BROADCAST_DELIVERY_FAILED | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 102 | NetherNetSignalingGenericDeliveryFailed | CONN_SIGNALING_GENERIC_DELIVERY_FAILED | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 103 | EditorMismatchEditorWorld | EDITOR_MISMATCH_EDITOR_WORLD | Emerald | Editor | disconnectionScreen.title.errorOccurred |
+| 104 | EditorMismatchVanillaWorld | EDITOR_MISMATCH_VANILLA_WORLD | Emerald | Editor | disconnectionScreen.title.errorOccurred |
+| 105 | WorldTransferNotPrimaryClient | WORLD_TRANSFER_NOT_PRIMARY_CLIENT | Block | Packet | disconnectionScreen.title.errorOccurred |
+| 106 | INTERNAL_RequestServerShutdown | SERVER_SHUTDOWN | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 107 | ClientGameSetupCancelled | GAME_SETUP_CANCELLED | Boat | GameSetupShutdown | disconnectionScreen.title.errorOccurred |
+| 108 | ClientGameSetupFailed | GAME_SETUP_FAILED | Boat | GameSetupShutdown | disconnectionScreen.cantConnect |
+| 109 | NoVenue | NO_VENUE | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
+| 110 | NetherNetSignalingSigninFailed | CONN_SIGNALING_SIGN_IN_FAILED | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 111 | SessionAccessDenied | SESSION_ACCESS_DENIED | Guardian | Authentication | disconnectionScreen.cantConnect |
+| 112 | ServiceSigninIssue | SERVICE_SIGN_IN_ISSUE | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 113 | NetherNetNoSignalingChannel | CONN_NO_SIGNALING_CHANNEL | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 114 | NetherNetNotLoggedIn | CONN_NOT_LOGGED_IN | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 115 | NetherNetClientSignalingError | CONN_CLIENT_SIGNALING_ERROR | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 116 | SubClientLoginDisabled | SUB_CLIENT_LOGIN_DISABLED | Coal | OneOff | disconnectionScreen.title.errorOccurred |
+| 117 | DeepLinkTryingToOpenDemoWorldWhileSignedIn | DEEP_LINK_TRYING_TO_OPEN_DEMO_WORLD_WHILE_SIGNED_IN | Honeycomb | OneOff | disconnectionScreen.title.errorOccurred |
+| 118 | AsyncJoinTaskDenied | ASYNC_JOIN_TASK_DENIED | Arrow | MinecraftOnline | disconnectionScreen.title.errorOccurred |
+| 119 | RealmsTimelineRequired | REALMS_TIMELINE_REQUIRED | Arrow | MinecraftOnline | disconnectionScreen.cantConnectToRealm |
+| 120 | GuestWithoutHost | GUEST_WITHOUT_HOST | Bamboo | OneOff | disconnectionScreen.title.errorOccurred |
+| 121 | FailedToJoinExperience | FAILED_TO_JOIN_EXPERIENCE | Terracotta | OneOff | disconnectionScreen.internalError.cantFindServer |
+| 122 | NetherNetDataChannelClosed | NETHER_NET_DATA_CHANNEL_CLOSED | NetherNet | Networking | disconnectionScreen.title.multiplayerConnection |
+| 123 | DiscoveryEnvironmentMismatch | DISCOVERY_ENVIRONMENT_MISMATCH | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 124 | HostWithoutKeys | HOST_WITHOUT_KEYS | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 125 | HostSignedOut | HOST_SIGNED_OUT | Terracotta | OneOff | disconnectionScreen.disconnected |
+| 126 | ScriptWatchdogException | SCRIPT_WATCHDOG_EXCEPTION | Terracotta | OneOff | disconnectionScreen.title.errorOccurred |
+| 127 | ScriptMemoryLimitExceeded | SCRIPT_MEMORY_LIMIT_EXCEEDED | Terracotta | OneOff | disconnectionScreen.title.errorOccurred |
+| 128 | StorageLowDuringGameplay | STORAGE_LOW_DURING_GAMEPLAY | Chest | Storage | disconnectionScreen.title.errorEncountered |
+| 129 | StorageFullDuringGameplay | STORAGE_FULL_DURING_GAMEPLAY | Chest | Storage | disconnectionScreen.title.errorEncountered |
+| 130 | LevelStorageCorruption | LEVEL_STORAGE_CORRUPTION | Chest | Storage | disconnectionScreen.title.errorEncountered |
+| 131 | EditionMismatchVanillaToEdu | EDITION_MISMATCH_VANILLA_TO_EDU | Chain | VersionMismatch | disconnectionScreen.title.incompatibleWorld |
+| 132 | EditionMismatchEduToVanilla | EDITION_MISMATCH_EDU_TO_VANILLA | Chain | VersionMismatch | disconnectionScreen.title.incompatibleWorld |
+| 133 | EditorMismatchEditorToVanilla | EDITOR_MISMATCH_EDITOR_TO_VANILLA | Emerald | Editor | disconnectionScreen.title.errorOccurred |
+| 134 | EditorMismatchVanillaToEditor | EDITOR_MISMATCH_VANILLA_TO_EDITOR | Emerald | Editor | disconnectionScreen.title.errorOccurred |
+| 135 | DenyListed | DENY_LISTED | Spyglass | Permissions | disconnectionScreen.title.bannedByHost |
+| 136 | NonceMissing | NONCE_MISSING | Spyglass | Permissions | disconnectionScreen.title.unableToConnect |
+| 137 | NonceNotFound | NONCE_NOT_FOUND | Spyglass | Permissions | disconnectionScreen.title.unableToConnect |
+| 138 | NonceExpired | NONCE_EXPIRED | Spyglass | Permissions | disconnectionScreen.title.unableToConnect |
+| 139 | NonceNotValid | NONCE_NOT_VALID | Spyglass | Permissions | disconnectionScreen.title.unableToConnect |
+| 140 | HostDisconnected | HOST_DISCONNECTED | Goat | OneOff | disconnectionScreen.title.disconnectedFromHost |
+| 141 | EditorJoinIntentPolicyFailure | EDITOR_JOIN_INTENT_POLICY_FAILURE | Emerald | Editor | disconnectionScreen.title.errorOccurred |
+| 142 | NetherNetIdentityNotAllowed | NETHER_NET_IDENTITY_NOT_ALLOWED | Door | Signaling | disconnectionScreen.title.multiplayerConnection |
+| 143 | InvalidName | INVALID_NAME | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 144 | ExpiredToken | EXPIRED_TOKEN | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 145 | HostAcceptsNoTypeOfAuth | HOST_ACCEPTS_NO_TYPE_OF_AUTH | Boat | GameSetupShutdown | disconnectionScreen.title.errorOccurred |
+| 146 | NotAuthenticatedFastFail | NOT_AUTHENTICATED_FAST_FAIL | Guardian | Authentication | disconnectionScreen.title.errorOccurred |
+| 147 | EditorNotAllowed | EDITOR_NOT_ALLOWED | Emerald | Editor | disconnectionScreen.title.errorOccurred |
+| 148 | MissingStructureData | MISSING_STRUCTURE_DATA | Boat | GameSetupShutdown | disconnectionScreen.title.errorOccurred |
+| 149 | UnsupportedTransport | UNSUPPORTED_TRANSPORT | Terracotta | fallback | disconnectionScreen.title.errorOccurred |
