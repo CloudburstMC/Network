@@ -23,8 +23,13 @@ import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import tel.schich.libdatachannel.*;
 
 import java.net.SocketAddress;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /** A real Netty acceptor and native peer pair, with in-process SDP signaling. */
 final class NetherNetTestServer implements AutoCloseable {
@@ -62,10 +67,47 @@ final class NetherNetTestServer implements AutoCloseable {
         return accepted.get(5, TimeUnit.SECONDS);
     }
 
+    /**
+     * Accepts from off the loop, as signaling does, and runs {@code beforeRegistration} while the
+     * loop is held, so the child cannot have registered yet.
+     */
+    Accepted acceptOffLoop(String offer, Runnable beforeRegistration) throws Exception {
+        var release = new CountDownLatch(1);
+        server.eventLoop().execute(() -> {
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        try {
+            server.acceptConnection("1", offer, "client");
+            beforeRegistration.run();
+        } finally {
+            release.countDown();
+        }
+        return accepted.get(5, TimeUnit.SECONDS);
+    }
+
     NetherNetChildChannel connect(PeerConnection client) throws Exception {
         accept(offer(client));
         client.setRemoteDescription(signaling.answer.get(5, TimeUnit.SECONDS), SessionDescriptionType.ANSWER);
+        return active();
+    }
+
+    NetherNetChildChannel active() throws Exception {
         return active.get(5, TimeUnit.SECONDS);
+    }
+
+    /** The SDP with its candidate lines removed, as a client that trickles them sends it. */
+    static String withoutCandidates(String sdp) {
+        return sdp.lines().filter(line -> !line.startsWith("a=candidate:") && !line.equals("a=end-of-candidates"))
+                .collect(Collectors.joining("\r\n", "", "\r\n"));
+    }
+
+    /** The SDP's candidates in the form a {@code CANDIDATEADD} carries them. */
+    static List<String> candidates(String sdp) {
+        return sdp.lines().filter(line -> line.startsWith("a=candidate:")).map(line -> line.substring(2)).toList();
     }
 
     static String offer(PeerConnection client) throws Exception {
@@ -87,17 +129,22 @@ final class NetherNetTestServer implements AutoCloseable {
     static final class Signaling implements NetherNetServerSignaling {
         final CompletableFuture<String> answer = new CompletableFuture<>();
         final CompletableFuture<Void> removed = new CompletableFuture<>();
-        boolean failSetup, failRemoval;
+        /** What the server trickles, one {@code CONNECTRESPONSE} or {@code CANDIDATEADD} each. */
+        final BlockingQueue<String> sent = new LinkedBlockingQueue<>();
+        boolean failSetup, failRemoval, trickle;
+        volatile SignalHandler handler;
 
         public void setSignalHandler(String id, SignalHandler handler) {
             if (failSetup) throw new IllegalStateException("signaling setup failed");
+            this.handler = handler;
         }
         public void removeSignalHandler(String id) {
             removed.complete(null);
             if (failRemoval) throw new IllegalStateException("signaling cleanup failed");
         }
         public void sendDescription(String remoteNetworkId, String sdp) { answer.complete(sdp); }
-        public boolean usesTrickleIce() { return false; }
+        public void sendSignal(String targetNetworkId, String data) { sent.add(data); }
+        public boolean usesTrickleIce() { return trickle; }
         public void bind(SocketAddress address, EventLoop loop) { }
         public void setNewConnectionHandler(NewConnectionHandler handler) { }
         public void setAdvertisementData(PongData data) { }
