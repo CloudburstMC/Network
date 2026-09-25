@@ -25,6 +25,7 @@ import org.jspecify.annotations.Nullable;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
+import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.SignalHandler;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
@@ -41,6 +42,8 @@ import tel.schich.libdatachannel.*;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public class NetherNetServerChannel extends AbstractServerChannel {
@@ -175,13 +178,23 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
             TransportIdentityBinding.install(child, identityVerifier);
         }
+        child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
+
+        // Listen now rather than once the child is registered: the client trickles its candidates
+        // straight after the offer, and any that arrive before a handler exists are dropped
+        PendingSignals remoteSignals = new PendingSignals();
+        RuntimeException setupFailure = listenEarly(connectionId, remoteSignals);
 
         // Negotiate only after registration: initializer failure, timeout and disconnect all
         // close through the child channel, which owns the peer and its data channels.
         child.pipeline().addLast(new ChannelInitializer<NetherNetChildChannel>() {
             @Override
             protected void initChannel(NetherNetChildChannel channel) throws Exception {
-                initializeConnection(channel, pc, connectionId, remoteNetworkId, offerSdp, clientAddress);
+                if (setupFailure != null) {
+                    throw setupFailure;
+                }
+                initializeConnection(channel, pc, connectionId, remoteNetworkId, offerSdp, clientAddress,
+                        remoteSignals);
             }
         });
         NetherServerMetrics serverMetrics = serverMetrics();
@@ -191,9 +204,20 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         pipeline().fireChannelRead(child);
     }
 
+    /** Registers the join's handler, handing back any failure for the child to close on. */
+    private @Nullable RuntimeException listenEarly(String connectionId, PendingSignals remoteSignals) {
+        try {
+            signaling.setSignalHandler(connectionId, remoteSignals);
+            return null;
+        } catch (RuntimeException e) {
+            return e;
+        }
+    }
+
     private void initializeConnection(NetherNetChildChannel child, PeerConnection pc, String connectionId,
                                       String remoteNetworkId, String offerSdp,
-                                      @Nullable InetSocketAddress clientAddress) throws Exception {
+                                      @Nullable InetSocketAddress clientAddress,
+                                      PendingSignals remoteSignals) throws Exception {
         int handshakeTimeoutSeconds =
                 this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
         ScheduledFuture<?> timeout = child.eventLoop().schedule(() -> {
@@ -205,12 +229,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
         }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
         child.closeFuture().addListener(future -> timeout.cancel(false));
-        child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
 
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId,
                 offerSdp, clientAddress, child, pc, timeout);
         observer.register(pc);
-        signaling.setSignalHandler(connectionId, signal -> {
+        SignalHandler handler = signal -> {
             NetherNetConstants.Signal parsed = NetherNetConstants.parseSignal(signal);
             if (parsed == null) {
                 return;
@@ -235,10 +258,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                     child.close();
                 }
             }
-        });
+        };
 
         pc.setRemoteDescription(offerSdp, SessionDescriptionType.OFFER);
         log.trace("Remote description set for {}", connectionId);
+        // Candidates only apply once the offer is in, so this is the earliest they can go
+        remoteSignals.deliverTo(handler);
         pc.setLocalDescription("answer");
 
         // Anything without trickle answers once from onGatheringStateChange instead.
@@ -246,6 +271,38 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             log.trace("Sending Answer SDP for {}", connectionId);
             signaling.sendSignal(remoteNetworkId, NetherNetConstants.buildSignalConnectResponse(connectionId,
                     serverIdentity.withAssertion(pc.localDescription())));
+            // Gathering starts inside setLocalDescription, so some candidates are already waiting
+            observer.localCandidates.deliverTo(signal -> signaling.sendSignal(remoteNetworkId, signal));
+        }
+    }
+
+    /**
+     * Holds signals until whoever handles them is ready, then hands them over in order. Signals
+     * and the handler come from different threads, so both go through the lock.
+     */
+    static final class PendingSignals implements SignalHandler {
+        /** Far more than one join sends before it is ready, so only a flood reaches it. */
+        static final int MAX_PENDING = 64;
+
+        private final List<String> pending = new ArrayList<>();
+        private @Nullable SignalHandler target;
+
+        @Override
+        public synchronized void onSignal(String signal) {
+            if (this.target != null) {
+                this.target.onSignal(signal);
+            } else if (this.pending.size() < MAX_PENDING) {
+                this.pending.add(signal);
+            } else {
+                log.debug("Dropping a signal, {} are already pending", MAX_PENDING);
+            }
+        }
+
+        /** Replays what is pending, then passes everything after straight through. */
+        synchronized void deliverTo(SignalHandler handler) {
+            this.target = handler;
+            this.pending.forEach(handler::onSignal);
+            this.pending.clear();
         }
     }
 
@@ -264,6 +321,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         private final PeerConnection peerConnection;
         private volatile boolean fullSdpSent = false;
+        private final PendingSignals localCandidates = new PendingSignals();
 
         private final String offerSdp;
         private final InetSocketAddress clientAddress;
@@ -321,10 +379,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 return;
             }
 
-            signaling.sendSignal(
-                    remoteNetworkId,
-                    NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate)
-            );
+            // Held until the answer is out, as a client cannot apply a candidate before it
+            localCandidates.onSignal(NetherNetConstants.buildSignalCandidateAdd(connectionId, candidate));
         }
 
         private String extractCandidateType(String sdp) {
