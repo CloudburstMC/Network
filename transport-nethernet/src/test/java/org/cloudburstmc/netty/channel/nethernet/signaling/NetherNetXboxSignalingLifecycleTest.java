@@ -82,6 +82,20 @@ class NetherNetXboxSignalingLifecycleTest {
     }
 
     @Test
+    void credentialsPushedAfterTheConnectReplaceTheOldOnes() {
+        try (Signaling signaling = new Signaling()) {
+            EmbeddedChannel socket = signaling.newSocket();
+            CompletableFuture<?> pending = signaling.install(socket);
+            socket.writeInbound(credentials("turn:first.invalid"));
+            assertTrue(pending.isDone());
+
+            socket.writeInbound(credentials("turn:refreshed.invalid"));
+
+            assertEquals(List.of("turn:refreshed.invalid"), signaling.getIceServers().get(0).urls());
+        }
+    }
+
+    @Test
     void staleHandshakeAndExceptionLeaveTheReplacementAlone() {
         try (Signaling signaling = new Signaling()) {
             EmbeddedChannel previous = signaling.newSocket();

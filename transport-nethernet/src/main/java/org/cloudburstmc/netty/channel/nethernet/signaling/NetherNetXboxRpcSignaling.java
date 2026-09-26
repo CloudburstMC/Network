@@ -44,6 +44,13 @@ import java.util.concurrent.TimeoutException;
 @Sharable
 public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     private static final Gson gson = new GsonBuilder().serializeNulls().create();
+
+    /**
+     * How often TURN credentials are fetched again, so peers created late on a long-lived socket
+     * are not handed expired ones.
+     */
+    private static final long TURN_REFRESH_INTERVAL_SECONDS = 30 * 60;
+
     private final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
 
     /**
@@ -118,12 +125,15 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         scheduleRecurring(ctx, "rpc-ping", () ->
                 sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_PING, new JsonObject()), 30, 50);
 
+        scheduleRecurring(ctx, "turn-refresh", this::refreshTurnCredentials,
+                TURN_REFRESH_INTERVAL_SECONDS, TURN_REFRESH_INTERVAL_SECONDS);
+
         refreshTurnCredentials();
     }
 
     /**
      * Fetches TURN credentials over the current socket and applies them. A failure fails the
-     * connect if it is still waiting for them.
+     * connect if it is still waiting for them, and otherwise keeps the previous credentials.
      */
     private void refreshTurnCredentials() {
         Channel source = channel;

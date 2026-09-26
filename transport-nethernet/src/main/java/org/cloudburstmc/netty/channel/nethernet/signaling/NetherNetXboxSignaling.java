@@ -101,7 +101,9 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
                 }
                 case NetherNetConstants.XBOX_SIGNAL_CREDENTIALS -> {
                     log.trace("Received Credentials");
-                    if (json.has("Message") && connectFuture != null && !connectFuture.isDone()) {
+                    // Applied whenever they arrive, not only while connecting, so peers created
+                    // later get the newest ones
+                    if (json.has("Message")) {
                         String rawMsg = json.get("Message").getAsString();
                         JsonObject credentials = JsonParser.parseString(rawMsg).getAsJsonObject();
 

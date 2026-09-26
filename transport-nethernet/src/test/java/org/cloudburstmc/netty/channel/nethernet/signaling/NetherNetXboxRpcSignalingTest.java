@@ -34,6 +34,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.reflect.Field;
 import java.nio.channels.ClosedChannelException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -252,6 +253,38 @@ class NetherNetXboxRpcSignalingTest {
         }
     }
 
+    @Test
+    void turnCredentialsAreFetchedAgainOnALongLivedSocket() {
+        try (Signaling signaling = new Signaling()) {
+            CompletableFuture<?> pending = signaling.install(signaling.transport);
+            signaling.transport.pipeline().fireUserEventTriggered(
+                    WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE);
+            String first = signaling.readOutbound().get("id").getAsString();
+            signaling.respond(signaling.transport, first, "result", turnServers("turn:first.invalid"));
+            assertTrue(pending.isDone());
+
+            signaling.advance(30 * 60);
+
+            List<JsonObject> refreshes = signaling.readRequests(NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH);
+            assertEquals(1, refreshes.size());
+            signaling.respond(signaling.transport, refreshes.get(0).get("id").getAsString(), "result",
+                    turnServers("turn:refreshed.invalid"));
+            assertEquals(List.of("turn:refreshed.invalid"), signaling.getIceServers().get(0).urls());
+        }
+    }
+
+    private static JsonObject turnServers(String url) {
+        JsonArray urls = new JsonArray();
+        urls.add(url);
+        JsonObject server = new JsonObject();
+        server.add("Urls", urls);
+        JsonArray servers = new JsonArray();
+        servers.add(server);
+        JsonObject result = new JsonObject();
+        result.add("TurnAuthServers", servers);
+        return result;
+    }
+
     private static final class Signaling extends NetherNetXboxRpcSignaling implements AutoCloseable {
         private final EmbeddedChannel transport;
 
@@ -280,6 +313,25 @@ class NetherNetXboxRpcSignalingTest {
             } finally {
                 frame.release();
             }
+        }
+
+        /** Reads every frame written so far and returns the requests for the given method. */
+        private List<JsonObject> readRequests(String method) {
+            List<JsonObject> requests = new ArrayList<>();
+            Object message;
+            while ((message = transport.readOutbound()) != null) {
+                try {
+                    if (message instanceof TextWebSocketFrame frame) {
+                        JsonObject request = JsonParser.parseString(frame.text()).getAsJsonObject();
+                        if (request.has("method") && method.equals(request.get("method").getAsString())) {
+                            requests.add(request);
+                        }
+                    }
+                } finally {
+                    ReferenceCountUtil.release(message);
+                }
+            }
+            return requests;
         }
 
         private void respond(EmbeddedChannel socket, String id, String field, JsonElement value) {
