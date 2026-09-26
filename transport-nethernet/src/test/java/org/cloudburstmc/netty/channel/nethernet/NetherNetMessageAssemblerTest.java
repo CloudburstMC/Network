@@ -172,6 +172,21 @@ class NetherNetMessageAssemblerTest {
     }
 
     @Test
+    void aSingleFramePastTheSizeLimitIsDropped() {
+        try (var assembler = new NetherNetMessageAssembler("reliable", 4)) {
+            assertNull(assembler.decode(frame(0, 1, 2, 3, 4, 5), allocator));
+            assertTrue(allocator.buffers.isEmpty(), "a dropped frame is never copied");
+            ByteBuf message = assembler.decode(frame(0, 6, 7, 8, 9), allocator);
+            try {
+                assertArrayEquals(new byte[]{6, 7, 8, 9}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+    }
+
+    @Test
     void aMessagePastTheSizeLimitIsDroppedWithoutTakingTheNextWithIt() {
         try (var assembler = new NetherNetMessageAssembler("reliable", 4)) {
             assertNull(assembler.decode(frame(3, 1, 2), allocator));
