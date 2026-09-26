@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -28,6 +29,7 @@ import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
@@ -39,11 +41,14 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     public static final int WRITE_LIMIT = 1 << 20;
     public static final int NATIVE_WRITE_LIMIT = 1 << 19;
     public static final int INBOUND_FRAMES = 128;
+    /** Bounds the frames queued between reads by size as well as by count. */
+    public static final int INBOUND_BYTES = 1_280_000;
 
     private record Incoming(ByteBuf bytes, boolean reliable) {
     }
 
     private final ArrayBlockingQueue<Incoming> incoming = new ArrayBlockingQueue<>(INBOUND_FRAMES);
+    private final AtomicInteger incomingBytes = new AtomicInteger();
     private final NetherNetFrameDecoder decoder = new NetherNetFrameDecoder();
     private final AtomicBoolean failed = new AtomicBoolean();
     private final CompletableFuture<Void> nativeTermination = new CompletableFuture<>();
@@ -113,11 +118,17 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             if (!isOpen()) {
                 return;
             }
-            if (bytes.remaining() < 2 || bytes.remaining() > NetherNetFrameDecoder.FRAME_LIMIT) {
+            int size = bytes.remaining();
+            if (size < 2 || size > NetherNetFrameDecoder.MESSAGE_LIMIT) {
                 failed.set(true);
                 return;
             }
-            ByteBuf copy = alloc().buffer(bytes.remaining());
+            // Past the bound the channel closes, so the count need not be undone
+            if (incomingBytes.addAndGet(size) > INBOUND_BYTES) {
+                failed.set(true);
+                return;
+            }
+            ByteBuf copy = alloc().buffer(size);
             copy.writeBytes(bytes);
             if (!incoming.offer(new Incoming(copy, reliable))) {
                 copy.release();
@@ -159,6 +170,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                     if (frame == null) {
                         break;
                     }
+                    incomingBytes.addAndGet(-frame.bytes().readableBytes());
 
                     ByteBuf message = decoder.decode(frame.bytes(), frame.reliable());
                     if (message != null) {
@@ -192,13 +204,19 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         ByteBuf payload = payload(message);
         boolean reliable = !(message instanceof NetherNetPacket p) || p.reliable();
         int size = payload.readableBytes();
-        if (size < 1 || size > (reliable ? NetherNetFrameDecoder.MESSAGE_LIMIT :
-                NetherNetFrameDecoder.FRAME_LIMIT - 1)) {
+        // Unordered traffic is never fragmented, so it has to fit one segment
+        if (size < 1 || size > (reliable ? NetherNetConstants.MAX_ASSEMBLED_MESSAGE_SIZE : maxSegmentPayload())) {
             throw new IllegalArgumentException("NetherNet message exceeds channel framing limit");
         }
 
         ChannelOutboundBuffer out = unsafe().outboundBuffer();
-        if (out == null || out.totalPendingWriteBytes() + size + 128 > WRITE_LIMIT) {
+        if (out == null) {
+            throw new IllegalStateException("NetherNet outbound queue full");
+        }
+        // A message larger than the limit still goes out once the queue ahead of it is within the limit. The
+        // queue is then past it, so only one such message is ever queued beyond the limit.
+        long counted = size + 128 > WRITE_LIMIT ? 0 : size + 128;
+        if (out.totalPendingWriteBytes() + counted > WRITE_LIMIT) {
             throw new IllegalStateException("NetherNet outbound queue full");
         }
 
@@ -226,17 +244,32 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         while (out.current() != null) {
             Object message = out.current();
             ByteBuf payload = payload(message);
-            DataChannel dc =
-                    message instanceof NetherNetPacket packet && !packet.reliable() ? unreliableChannel : reliableChannel;
-            int length = payload.readableBytes(), chunks = (length + 9998) / 9999;
-            if (dc.bufferedAmount() + length + chunks > NATIVE_WRITE_LIMIT) {
+            boolean reliable = !(message instanceof NetherNetPacket packet) || packet.reliable();
+            DataChannel dc = reliable ? reliableChannel : unreliableChannel;
+            int length = payload.readableBytes();
+            int maxPayload = maxSegmentPayload();
+            int chunks;
+            try {
+                // Checked before the first frame goes out, so the peer is never left inside a message
+                chunks = NetherNetConstants.segmentCount(length, maxPayload);
+                if (!reliable && chunks > 1) {
+                    throw new IllegalArgumentException("An unreliable message of " + length
+                            + " bytes does not fit one segment of " + maxPayload);
+                }
+            } catch (IllegalArgumentException refused) {
+                out.remove(refused);
+                continue;
+            }
+            int buffered = dc.bufferedAmount();
+            // A message larger than the limit goes out on its own, once the native buffer has drained
+            if (buffered > 0 && buffered + length + chunks > NATIVE_WRITE_LIMIT) {
                 out.setUserDefinedWritability(1, false);
                 return;
             }
 
             try {
                 for (int i = 0, offset = payload.readerIndex(); i < chunks; i++) {
-                    int count = Math.min(9999, length - i * 9999);
+                    int count = Math.min(maxPayload, length - i * maxPayload);
                     ByteBuffer frame = ByteBuffer.allocateDirect(count + 1);
                     frame.put((byte) (chunks - i - 1));
                     payload.getBytes(offset, frame);
@@ -310,6 +343,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     private void discardQueuedFrames() {
         Incoming frame = incoming.poll();
         while (frame != null) {
+            incomingBytes.addAndGet(-frame.bytes().readableBytes());
             frame.bytes().release();
             frame = incoming.poll();
         }

@@ -685,9 +685,8 @@ class NativeAdmissionIntegrationTest {
                         byte[] expected = new byte[reliable ? 20013 : 7];
                         Arrays.fill(expected, (byte) (reliable ? 11 : 22));
                         assertArrayEquals(expected, ByteBufUtil.getBytes(data));
-                        if (reliable) {
-                            assertEquals(3, assertInstanceOf(CompositeByteBuf.class, data).numComponents());
-                        }
+                        // The host splits at the 262,144 bytes the client advertised, so the echo is one frame
+                        assertFalse(data instanceof CompositeByteBuf);
                         echoed.countDown();
                     }
 

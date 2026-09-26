@@ -158,6 +158,57 @@ class NetherNetMessageAssemblerTest {
     }
 
     @Test
+    void aMessageMayReachTheSizeLimit() {
+        try (var assembler = new NetherNetMessageAssembler("reliable", 4)) {
+            assertNull(assembler.decode(frame(1, 1, 2), allocator));
+            ByteBuf message = assembler.decode(frame(0, 3, 4), allocator);
+            try {
+                assertArrayEquals(new byte[]{1, 2, 3, 4}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+    }
+
+    @Test
+    void aSingleFramePastTheSizeLimitIsDropped() {
+        try (var assembler = new NetherNetMessageAssembler("reliable", 4)) {
+            assertNull(assembler.decode(frame(0, 1, 2, 3, 4, 5), allocator));
+            assertTrue(allocator.buffers.isEmpty(), "a dropped frame is never copied");
+            ByteBuf message = assembler.decode(frame(0, 6, 7, 8, 9), allocator);
+            try {
+                assertArrayEquals(new byte[]{6, 7, 8, 9}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+    }
+
+    @Test
+    void aMessagePastTheSizeLimitIsDroppedWithoutTakingTheNextWithIt() {
+        try (var assembler = new NetherNetMessageAssembler("reliable", 4)) {
+            assertNull(assembler.decode(frame(3, 1, 2), allocator));
+            assertNull(assembler.decode(frame(2, 3, 4), allocator));
+            // A fifth byte passes the limit, so the rest of this message is followed out and dropped
+            assertNull(assembler.decode(frame(1, 5), allocator));
+            allocator.assertReleased();
+            assertNull(assembler.decode(frame(0, 6), allocator));
+            assertNull(assembler.decode(frame(1, 7), allocator));
+            ByteBuf message = assembler.decode(frame(0, 8), allocator);
+
+            assertNotNull(message, "the following message should still complete");
+            try {
+                assertArrayEquals(new byte[]{7, 8}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+    }
+
+    @Test
     void aMessageThatLosesItsTailDoesNotEatTheNextOne() {
         try (var assembler = new NetherNetMessageAssembler("unreliable")) {
             assertNull(assembler.decode(frame(2, 1), allocator));

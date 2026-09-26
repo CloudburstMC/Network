@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
@@ -688,7 +689,9 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
 
     private void initialize(
             AdmissionGate.Reservation reservation, AdmissionContext a, PeerConnection peer) {
+        int maxMessageSize = NetherNetConstants.parseMaxMessageSize(a.remoteDescription());
         var child = new AdmittedNetherNetChildChannel(this, peer, reservation.tuple(), address);
+        child.setMaxOutboundMessageSize(maxMessageSize);
         var session = new Session(reservation, child, peer);
         creations.incrementAndGet();
         liveNativePeers.incrementAndGet();

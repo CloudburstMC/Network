@@ -404,6 +404,12 @@ public class NetherNetClientChannel extends NetherNetChannel {
                         }
                     }
                     try {
+                        setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(data));
+                    } catch (IllegalArgumentException e) {
+                        failConnect(connectException("The server's message size is unusable", e));
+                        return;
+                    }
+                    try {
                         peerConnection.setRemoteDescription(data, SessionDescriptionType.ANSWER);
                     } catch (Exception e) {
                         log.debug("Failed to apply answer for {}: {}", connectionId,

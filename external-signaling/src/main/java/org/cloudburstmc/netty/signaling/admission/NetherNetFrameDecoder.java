@@ -18,15 +18,25 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 
 /**
  * Bounded countdown framing. Unordered traffic must fit one SCTP message.
  */
 public final class NetherNetFrameDecoder {
-    public static final int FRAME_LIMIT = 10000;
+    /** The SCTP message size this side advertises, and so the largest frame. */
     public static final int MESSAGE_LIMIT = 262144;
+    private final int assembledLimit;
     private CompositeByteBuf assembly;
     private int expected = -1;
+
+    public NetherNetFrameDecoder() {
+        this(NetherNetConstants.MAX_ASSEMBLED_MESSAGE_SIZE);
+    }
+
+    NetherNetFrameDecoder(int assembledLimit) {
+        this.assembledLimit = assembledLimit;
+    }
 
     /**
      * Consumes the frame and returns a completed message, or {@code null} while one is still assembling. The
@@ -45,7 +55,8 @@ public final class NetherNetFrameDecoder {
 
     private ByteBuf assemble(ByteBuf frame, boolean reliable) {
         int length = frame.readableBytes();
-        if (length < 2 || length > FRAME_LIMIT) {
+        // The peer may send one frame as large as the message size this side advertises
+        if (length < 2 || length > MESSAGE_LIMIT) {
             throw new IllegalArgumentException("Invalid NetherNet frame length");
         }
 
@@ -63,8 +74,7 @@ public final class NetherNetFrameDecoder {
         }
 
         int size = this.assembly == null ? 0 : this.assembly.readableBytes();
-        if (remaining >= (MESSAGE_LIMIT + FRAME_LIMIT - 2) / (FRAME_LIMIT - 1) ||
-                (this.expected != -1 && this.expected != remaining) || size + payload > MESSAGE_LIMIT) {
+        if ((this.expected != -1 && this.expected != remaining) || size + payload > this.assembledLimit) {
             this.clear();
             throw new IllegalArgumentException("Invalid NetherNet fragment sequence");
         }
