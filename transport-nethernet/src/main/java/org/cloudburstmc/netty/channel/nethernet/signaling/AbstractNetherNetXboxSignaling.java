@@ -506,18 +506,39 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     /**
      * Applies TURN credentials the service sent on the given socket, and completes the connect if
-     * it was waiting for them. Credentials from a socket that has been replaced are dropped.
+     * it was waiting for them. Credentials from a socket that has been replaced are dropped. An
+     * update without a usable server keeps the previous credentials, and the connect completes
+     * with those.
      */
     protected void updateIceServers(Channel source, List<IceServerInfo> servers) {
         synchronized (this) {
             if (!isCurrentChannel(source)) {
                 return;
             }
-            this.iceServers = servers;
+            // parseTurnServers returns what it could read, so a malformed response comes out empty
+            if (!hasUsableServer(servers) && hasUsableServer(this.iceServers)) {
+                log.warn("Keeping the previous TURN credentials, the service sent none that could be used");
+            } else {
+                this.iceServers = servers;
+            }
             if (connectFuture != null && !connectFuture.isDone()) {
-                connectFuture.complete(servers);
+                connectFuture.complete(this.iceServers);
             }
         }
+    }
+
+    private static boolean hasUsableServer(List<IceServerInfo> servers) {
+        for (IceServerInfo server : servers) {
+            if (server.urls() == null) {
+                continue;
+            }
+            for (String url : server.urls()) {
+                if (url != null && !url.isBlank()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     protected List<IceServerInfo> parseTurnServers(JsonObject json) {

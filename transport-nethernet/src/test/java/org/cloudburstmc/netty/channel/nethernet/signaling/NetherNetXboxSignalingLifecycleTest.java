@@ -99,6 +99,45 @@ class NetherNetXboxSignalingLifecycleTest {
     }
 
     @Test
+    void anEmptyFirstPushOnAReplacementKeepsPreviousCredentialsAndCompletesTheConnect() {
+        try (Signaling signaling = new Signaling()) {
+            EmbeddedChannel previous = signaling.newSocket();
+            signaling.install(previous);
+            previous.writeInbound(credentials("turn:working.invalid"));
+            EmbeddedChannel replacement = signaling.newSocket();
+            CompletableFuture<List<IceServerInfo>> pending = signaling.install(replacement);
+            JsonObject message = new JsonObject();
+            message.addProperty("Type", 2);
+            message.addProperty("Message", "{}");
+
+            replacement.writeInbound(new TextWebSocketFrame(message.toString()));
+
+            assertEquals(List.of("turn:working.invalid"), pending.join().get(0).urls());
+            assertEquals(List.of("turn:working.invalid"), signaling.getIceServers().get(0).urls());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"TurnAuthServers\":[]}", "{\"TurnAuthServers\":{}}",
+            "{\"TurnAuthServers\":[{}]}", "{\"TurnAuthServers\":[null]}",
+            "{\"TurnAuthServers\":[{\"Urls\":[]}]}", "{\"TurnAuthServers\":[{\"Urls\":[\" \"]}]}"})
+    void credentialPushWithoutAUsableServerKeepsPreviousCredentials(String response) {
+        try (Signaling signaling = new Signaling()) {
+            EmbeddedChannel socket = signaling.newSocket();
+            signaling.install(socket);
+            socket.writeInbound(credentials("turn:working.invalid"));
+            JsonObject message = new JsonObject();
+            message.addProperty("Type", 2);
+            message.addProperty("Message", response);
+
+            socket.writeInbound(new TextWebSocketFrame(message.toString()));
+
+            assertEquals(1, signaling.getIceServers().size());
+            assertEquals(List.of("turn:working.invalid"), signaling.getIceServers().get(0).urls());
+        }
+    }
+
+    @Test
     void staleHandshakeAndExceptionLeaveTheReplacementAlone() {
         try (Signaling signaling = new Signaling()) {
             EmbeddedChannel previous = signaling.newSocket();
