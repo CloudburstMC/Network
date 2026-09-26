@@ -218,6 +218,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                                       String remoteNetworkId, String offerSdp,
                                       @Nullable InetSocketAddress clientAddress,
                                       PendingSignals remoteSignals) throws Exception {
+        child.setMaxOutboundMessageSize(NetherNetConstants.parseMaxMessageSize(offerSdp));
         int handshakeTimeoutSeconds =
                 this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
         ScheduledFuture<?> timeout = child.eventLoop().schedule(() -> {

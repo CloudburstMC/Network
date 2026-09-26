@@ -105,7 +105,8 @@ public record VerifiedAdmission(
             throw new IllegalArgumentException("DTLS fingerprint");
         }
 
-        if (remoteSctpPort < 1 || remoteSctpPort > 65535 || remoteMaxMessageSize < 1
+        // A one-byte limit has no room for payload past the segment header
+        if (remoteSctpPort < 1 || remoteSctpPort > 65535 || remoteMaxMessageSize < 2
                 || remoteMaxMessageSize > NetherNetFrameDecoder.MESSAGE_LIMIT) {
             throw new IllegalArgumentException("SCTP parameters");
         }

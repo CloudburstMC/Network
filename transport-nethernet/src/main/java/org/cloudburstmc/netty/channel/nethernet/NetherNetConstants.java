@@ -74,8 +74,11 @@ public class NetherNetConstants {
     public static final String XBOX_RPC_INNER_METHOD_DELIVERY = "Signaling_DeliveryNotification_V1_0";
 
     // SCTP Constants
-    public static final int MAX_SCTP_MESSAGE_SIZE = 10000;
     public static final int MAX_ADVERTISED_MESSAGE_SIZE = 256 * 1024; // 256 KB
+    /** The RFC 8841 limit of a peer whose description has no {@code a=max-message-size}. */
+    public static final int DEFAULT_SCTP_MESSAGE_SIZE = 65536;
+    /** The largest message this side sends, even to a peer that accepts any size. */
+    public static final int MAX_OUTBOUND_MESSAGE_SIZE = 256 * 1024;
     /** A segment's countdown header is one byte, so one message spans at most this many segments. */
     public static final int MAX_SEGMENTS = 256;
 
@@ -196,6 +199,87 @@ public class NetherNetConstants {
                     + " segments, more than the " + MAX_SEGMENTS + " its countdown can number");
         }
         return segments;
+    }
+
+    /**
+     * Reads the largest message this side may send from the peer's description. A missing attribute
+     * means the RFC 8841 default and zero means any size; both, like every other value, are held to
+     * {@link #MAX_OUTBOUND_MESSAGE_SIZE}. With several active SCTP sections or attributes, the
+     * smallest limit is the one safe for all.
+     *
+     * @param sdp The remote description, or null for the default
+     * @return The limit in bytes, header included
+     * @throws IllegalArgumentException for a malformed value or a limit of one byte
+     */
+    public static int parseMaxMessageSize(String sdp) {
+        return parseMaxMessageSize(sdp, DEFAULT_SCTP_MESSAGE_SIZE);
+    }
+
+    /**
+     * As {@link #parseMaxMessageSize(String)}, with the limit to use when the attribute is missing.
+     *
+     * @param sdp      The remote description, or null for the fallback
+     * @param fallback The limit when the attribute is missing, at least two bytes, or zero for any size
+     * @return The limit in bytes, header included
+     * @throws IllegalArgumentException for a malformed value or a limit of one byte
+     */
+    public static int parseMaxMessageSize(String sdp, int fallback) {
+        fallback = outboundMessageSize(fallback);
+        if (sdp == null) {
+            return fallback;
+        }
+        boolean sctp = false;
+        boolean found = false;
+        int sectionLimit = -1;
+        int limit = MAX_OUTBOUND_MESSAGE_SIZE;
+        for (String line : sdp.split("\\r?\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("m=")) {
+                if (sctp) {
+                    limit = Math.min(limit, sectionLimit < 0 ? fallback : sectionLimit);
+                }
+                String[] media = trimmed.substring(2).split("\\s+");
+                // A zero port rejects the section, so its attributes do not apply
+                sctp = media.length >= 4 && media[0].equals("application")
+                        && !media[1].equals("0") && media[2].endsWith("/SCTP");
+                found |= sctp;
+                sectionLimit = -1;
+            } else if (sctp && (trimmed.startsWith("a=max-message-size:")
+                    || trimmed.equals("a=max-message-size"))) {
+                String value = trimmed.substring("a=max-message-size".length());
+                value = value.startsWith(":") ? value.substring(1).trim() : "";
+                int parsed = parseMessageSize(value);
+                sectionLimit = sectionLimit < 0 ? parsed : Math.min(sectionLimit, parsed);
+            }
+        }
+        if (sctp) {
+            limit = Math.min(limit, sectionLimit < 0 ? fallback : sectionLimit);
+        }
+        return found ? limit : fallback;
+    }
+
+    private static int parseMessageSize(String value) {
+        if (value.isEmpty()) {
+            throw new IllegalArgumentException("Empty max-message-size attribute");
+        }
+        int size = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char digit = value.charAt(i);
+            if (digit < '0' || digit > '9') {
+                throw new IllegalArgumentException("max-message-size must contain only decimal digits");
+            }
+            // Saturate while still validating the whole value, so a huge one cannot overflow
+            size = Math.min(MAX_OUTBOUND_MESSAGE_SIZE, size * 10 + digit - '0');
+        }
+        return outboundMessageSize(size);
+    }
+
+    /** Holds a peer's limit to what this side sends; zero means the peer accepts any size. */
+    static int outboundMessageSize(int size) {
+        if (size < 0 || size == 1) {
+            throw new IllegalArgumentException("A message size must be zero (any size) or at least two bytes");
+        }
+        return size == 0 ? MAX_OUTBOUND_MESSAGE_SIZE : Math.min(size, MAX_OUTBOUND_MESSAGE_SIZE);
     }
 
     /**

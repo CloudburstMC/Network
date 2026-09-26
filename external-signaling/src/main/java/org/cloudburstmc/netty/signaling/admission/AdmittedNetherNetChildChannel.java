@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -237,9 +238,19 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         while (out.current() != null) {
             Object message = out.current();
             ByteBuf payload = payload(message);
-            DataChannel dc =
-                    message instanceof NetherNetPacket packet && !packet.reliable() ? unreliableChannel : reliableChannel;
-            int length = payload.readableBytes(), chunks = (length + 9998) / 9999;
+            boolean reliable = !(message instanceof NetherNetPacket packet) || packet.reliable();
+            DataChannel dc = reliable ? reliableChannel : unreliableChannel;
+            int length = payload.readableBytes();
+            // Unordered traffic is never fragmented, so it always goes out as one frame
+            int maxPayload = reliable ? maxSegmentPayload() : length;
+            int chunks;
+            try {
+                // Checked before the first frame goes out, so the peer is never left inside a message
+                chunks = NetherNetConstants.segmentCount(length, maxPayload);
+            } catch (IllegalArgumentException refused) {
+                out.remove(refused);
+                continue;
+            }
             if (dc.bufferedAmount() + length + chunks > NATIVE_WRITE_LIMIT) {
                 out.setUserDefinedWritability(1, false);
                 return;
@@ -247,7 +258,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
 
             try {
                 for (int i = 0, offset = payload.readerIndex(); i < chunks; i++) {
-                    int count = Math.min(9999, length - i * 9999);
+                    int count = Math.min(maxPayload, length - i * maxPayload);
                     ByteBuffer frame = ByteBuffer.allocateDirect(count + 1);
                     frame.put((byte) (chunks - i - 1));
                     payload.getBytes(offset, frame);

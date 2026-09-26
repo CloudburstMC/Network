@@ -231,6 +231,10 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
                 PASSWORD, FINGERPRINT, 65536, 262144), "an sctp port past the top of the range");
         assertThrows(IllegalArgumentException.class, () -> admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag",
                 PASSWORD, FINGERPRINT, 5000, 0), "no message size at all");
+        assertThrows(IllegalArgumentException.class, () -> admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag",
+                PASSWORD, FINGERPRINT, 5000, 1), "a message size with no room past the header");
+        assertNotNull(admission(TOKEN_ID, "localUfrag", PASSWORD, "clientUfrag", PASSWORD, FINGERPRINT, 5000, 2),
+                "the smallest message size that carries payload");
     }
 
     @Test

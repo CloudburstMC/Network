@@ -80,6 +80,12 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     protected volatile boolean open = true;
 
+    /**
+     * The largest SCTP message this channel sends, from the peer's {@code a=max-message-size}. Read
+     * at every write, so a limit learned after the pipeline was built still applies.
+     */
+    private volatile int maxOutboundMessageSize = NetherNetConstants.DEFAULT_SCTP_MESSAGE_SIZE;
+
     private volatile DataChannels pending;
     /** Read from the libdatachannel callback thread, so it cannot be plain. */
     private volatile boolean activeFired;
@@ -188,6 +194,35 @@ public abstract class NetherNetChannel extends AbstractChannel {
         } catch (Exception notConnected) {
             return 0;
         }
+    }
+
+    /**
+     * Sets the largest SCTP message this channel sends, normally the {@code a=max-message-size} the
+     * peer advertised. Zero means the peer accepts any size;
+     * {@link NetherNetConstants#MAX_OUTBOUND_MESSAGE_SIZE} still applies.
+     *
+     * @param size The peer's limit in bytes, header included
+     * @throws IllegalArgumentException if negative, or too small for a header and payload
+     */
+    public void setMaxOutboundMessageSize(int size) {
+        this.maxOutboundMessageSize = NetherNetConstants.outboundMessageSize(size);
+    }
+
+    public int getMaxOutboundMessageSize() {
+        return this.maxOutboundMessageSize;
+    }
+
+    /**
+     * The most payload one segment carries. libdatachannel refuses a message over its own reading of
+     * the peer's limit, which it also holds to the size this side advertises, so the smaller applies.
+     */
+    protected int maxSegmentPayload() {
+        int size = this.maxOutboundMessageSize;
+        int engine = remoteMaxMessageSize();
+        if (engine > 0) {
+            size = Math.min(size, engine);
+        }
+        return size - 1;
     }
 
     /**
@@ -343,7 +378,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return;
         }
 
-        int maxPayload = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
+        int maxPayload = maxSegmentPayload();
         // Checked before the first segment goes out, so the peer is never left inside a message
         NetherNetConstants.segmentCount(payload.readableBytes(), maxPayload);
 
