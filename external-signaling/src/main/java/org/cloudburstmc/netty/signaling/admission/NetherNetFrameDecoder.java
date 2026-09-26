@@ -45,7 +45,8 @@ public final class NetherNetFrameDecoder {
 
     private ByteBuf assemble(ByteBuf frame, boolean reliable) {
         int length = frame.readableBytes();
-        if (length < 2 || length > FRAME_LIMIT) {
+        // The peer may send one frame as large as the message size this side advertises
+        if (length < 2 || length > MESSAGE_LIMIT) {
             throw new IllegalArgumentException("Invalid NetherNet frame length");
         }
 
