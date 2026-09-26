@@ -20,13 +20,13 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
 import java.net.URI;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
 @Sharable
 public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
@@ -64,11 +64,15 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
-        ctx.executor().scheduleAtFixedRate(() -> {
+        scheduleRecurring(ctx, "app-ping", () -> {
             JsonObject ping = new JsonObject();
             ping.addProperty("Type", 0);
-            ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)));
-        }, 5, 5, TimeUnit.SECONDS);
+            ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping))).addListener(write -> {
+                if (!write.isSuccess()) {
+                    log.warn("Signaling ping failed: {}", write.cause() != null ? write.cause().getMessage() : "cancelled");
+                }
+            });
+        }, 5, 5);
     }
 
     @Override
@@ -101,7 +105,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
                         String rawMsg = json.get("Message").getAsString();
                         JsonObject credentials = JsonParser.parseString(rawMsg).getAsJsonObject();
 
-                        connectFuture.complete(parseTurnServers(credentials));
+                        updateIceServers(ctx.channel(), parseTurnServers(credentials));
                     }
                 }
                 case NetherNetConstants.XBOX_SIGNAL_ACCEPTED, NetherNetConstants.XBOX_SIGNAL_ACK ->
@@ -115,6 +119,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     public void sendSignal(String targetNetworkId, String data) {
+        Channel channel = this.channel;
         if (channel != null && channel.isActive()) {
             JsonObject msg = new JsonObject();
             msg.addProperty("Type", 1);

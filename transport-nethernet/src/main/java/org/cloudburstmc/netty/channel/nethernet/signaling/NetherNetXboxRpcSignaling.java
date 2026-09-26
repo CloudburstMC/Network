@@ -23,8 +23,11 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.util.concurrent.ScheduledFuture;
 
 import java.net.URI;
 import java.nio.channels.ClosedChannelException;
@@ -35,10 +38,50 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+// Sharable because every socket a reconnect opens adds this same handler to its pipeline
+@Sharable
 public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     private static final Gson gson = new GsonBuilder().serializeNulls().create();
-    private final Map<String, CompletableFuture<JsonObject>> pendingRequests = new ConcurrentHashMap<>();
+    private final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
+
+    /**
+     * A request waiting for its reply, with the socket it was written to. A reply only settles it
+     * on that socket, and only that socket going inactive fails it.
+     */
+    private static final class PendingRequest {
+        final CompletableFuture<JsonObject> future;
+        final Channel channel;
+        private ScheduledFuture<?> timeout;
+
+        PendingRequest(CompletableFuture<JsonObject> future, Channel channel) {
+            this.future = future;
+            this.channel = channel;
+        }
+
+        synchronized void setTimeout(ScheduledFuture<?> timeout) {
+            if (future.isDone()) {
+                timeout.cancel(false);
+            } else {
+                this.timeout = timeout;
+            }
+        }
+
+        synchronized void cancelTimeout() {
+            if (timeout != null) {
+                timeout.cancel(false);
+                timeout = null;
+            }
+        }
+    }
+
+    /** The service answered a request with an error. */
+    private static final class RpcResponseException extends RuntimeException {
+        RpcResponseException(String message) {
+            super(message);
+        }
+    }
 
     /**
      * Creates a NetherNetXboxRpcSignaling instance.
@@ -72,26 +115,51 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
-        ctx.executor().scheduleAtFixedRate(() -> {
-            if (channel != null && channel.isActive()) {
-                sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_PING, new JsonObject());
-            }
-        }, 30, 50, TimeUnit.SECONDS);
+        scheduleRecurring(ctx, "rpc-ping", () ->
+                sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_PING, new JsonObject()), 30, 50);
 
+        refreshTurnCredentials();
+    }
+
+    /**
+     * Fetches TURN credentials over the current socket and applies them. A failure fails the
+     * connect if it is still waiting for them.
+     */
+    private void refreshTurnCredentials() {
+        Channel source = channel;
         sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH, new JsonObject())
-                .thenAccept(response -> {
-                    List<IceServerInfo> servers = parseTurnServers(response);
-                    if (connectFuture != null && !connectFuture.isDone()) {
-                        connectFuture.complete(servers);
-                    }
-                })
+                .thenAccept(response -> updateIceServers(source, parseTurnServers(response)))
                 .exceptionally(t -> {
-                    log.error("Failed to fetch TURN credentials", t);
-                    if (connectFuture != null && !connectFuture.isDone()) {
-                        connectFuture.completeExceptionally(t);
+                    synchronized (this) {
+                        if (!isCurrentChannel(source)) {
+                            return null;
+                        }
+                        log.error("Failed to fetch TURN credentials", t);
+                        if (connectFuture != null && !connectFuture.isDone()) {
+                            connectFuture.completeExceptionally(t);
+                        }
                     }
                     return null;
                 });
+    }
+
+    @Override
+    protected void onChannelInactive(ChannelHandlerContext ctx) {
+        // Fails what was sent on this socket, but not what a replacement has sent since
+        pendingRequests.forEach((id, request) -> {
+            if (request.channel == ctx.channel()) {
+                request.future.completeExceptionally(new ClosedChannelException());
+            }
+        });
+    }
+
+    @Override
+    public void close() {
+        try {
+            super.close();
+        } finally {
+            pendingRequests.forEach((id, request) -> request.future.completeExceptionally(new ClosedChannelException()));
+        }
     }
 
     @Override
@@ -101,7 +169,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
             JsonObject json = JsonParser.parseString(text).getAsJsonObject();
 
             if (json.has("result") || (json.has("error") && json.has("id"))) {
-                handleResponse(json);
+                handleResponse(ctx.channel(), json);
             } else if (json.has("method")) {
                 handleRequest(json);
             }
@@ -110,14 +178,18 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         }
     }
 
-    private void handleResponse(JsonObject json) {
+    private void handleResponse(Channel source, JsonObject json) {
         if (!json.has("id") || json.get("id").isJsonNull()) {
             return;
         }
         String id = json.get("id").getAsString();
-        CompletableFuture<JsonObject> future = pendingRequests.remove(id);
+        PendingRequest pending = pendingRequests.get(id);
+        if (pending == null || pending.channel != source) {
+            return;
+        }
+        CompletableFuture<JsonObject> future = pending.future;
 
-        if (future != null) {
+        try {
             if (json.has("error") && !json.get("error").isJsonNull()) {
                 JsonObject error = json.getAsJsonObject("error");
                 String msg = error.has("message") ? error.get("message").getAsString() : error.toString();
@@ -130,15 +202,18 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
                     }
                 }
 
-                if (isNotFound && failureHandler != null) {
+                // Reported once, and not for a request that already timed out or a replaced socket
+                boolean completed = future.completeExceptionally(new RpcResponseException(msg));
+                if (completed && isNotFound && isCurrentChannel(source) && failureHandler != null) {
                     failureHandler.onFailure(msg);
                 }
-                future.completeExceptionally(new RuntimeException(msg));
             } else {
                 future.complete(
                         json.has("result") && !json.get("result").isJsonNull() ? json.getAsJsonObject("result") :
                                 new JsonObject());
             }
+        } catch (RuntimeException e) {
+            future.completeExceptionally(new IllegalArgumentException("Invalid signaling RPC response", e));
         }
     }
 
@@ -202,6 +277,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     public void sendSignal(String targetNetworkId, String data) {
+        Channel channel = this.channel;
         if (channel == null || !channel.isActive()) {
             throw new IllegalStateException("Signaling channel is not active");
         }
@@ -227,7 +303,11 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         return params;
     }
 
-    private CompletableFuture<JsonObject> sendJsonRpcRequest(String method, JsonObject params) {
+    /**
+     * Sends a request on the current socket. It fails if that socket closes first, or if no reply
+     * arrives within {@link #CONNECT_TIMEOUT_SECONDS}.
+     */
+    synchronized CompletableFuture<JsonObject> sendJsonRpcRequest(String method, JsonObject params) {
         String id = UUID.randomUUID().toString();
         JsonObject rpc = new JsonObject();
         rpc.add("params", params);
@@ -236,12 +316,37 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         rpc.addProperty("id", id);
 
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
-        pendingRequests.put(id, future);
 
-        if (channel != null && channel.isActive()) {
-            channel.writeAndFlush(new TextWebSocketFrame(gson.toJson(rpc)));
-        } else {
+        Channel source = this.channel;
+        if (!isCurrentChannel(source) || !source.isActive()) {
             future.completeExceptionally(new ClosedChannelException());
+            return future;
+        }
+
+        PendingRequest pending = new PendingRequest(future, source);
+        pendingRequests.put(id, pending);
+        future.whenComplete((result, error) -> {
+            pendingRequests.remove(id, pending);
+            pending.cancelTimeout();
+        });
+        TextWebSocketFrame frame = null;
+        try {
+            pending.setTimeout(source.eventLoop().schedule(() -> {
+                future.completeExceptionally(new TimeoutException("Signaling RPC timed out: " + method));
+            }, CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            frame = new TextWebSocketFrame(gson.toJson(rpc));
+            source.writeAndFlush(frame).addListener(write -> {
+                if (write.isCancelled()) {
+                    future.cancel(false);
+                } else if (!write.isSuccess()) {
+                    future.completeExceptionally(write.cause());
+                }
+            });
+        } catch (RuntimeException e) {
+            if (frame != null && frame.refCnt() > 0) {
+                frame.release();
+            }
+            future.completeExceptionally(e);
         }
         return future;
     }
@@ -251,6 +356,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         response.add("id", id);
         response.add("result", result);
         response.addProperty("jsonrpc", "2.0");
+        Channel channel = this.channel;
         if (channel != null && channel.isActive()) {
             channel.writeAndFlush(new TextWebSocketFrame(gson.toJson(response)));
         }
