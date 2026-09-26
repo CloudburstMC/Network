@@ -548,6 +548,77 @@ class NetherNetXboxRpcSignalingTest {
     }
 
     @Test
+    void anExpiredRouteProofFailsUntilAnotherProbeComesBack() throws Exception {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectAs("self");
+            signaling.deliver(Signaling.message("self", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE,
+                    new JsonObject()), false);
+            Field proven = NetherNetXboxRpcSignaling.class.getDeclaredField("lastRouteProvenAt");
+            proven.setAccessible(true);
+            proven.setLong(signaling, System.currentTimeMillis() - 60_000);
+
+            assertFalse(signaling.isRouteAlive(45_000));
+            assertTrue(signaling.isChannelAlive());
+            signaling.deliver(Signaling.message("self", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE,
+                    new JsonObject()), false);
+            assertTrue(signaling.isRouteAlive(45_000));
+        }
+    }
+
+    @Test
+    void aReturnedProbeClearsAnExplicitRouteFailure() {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectAs("self");
+            signaling.deliver(Signaling.message("self", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE,
+                    new JsonObject()), false);
+            signaling.advance(30);
+            String id = signaling.readRouteProbes().get(0).get("id").getAsString();
+            signaling.respond(signaling.transport, id, "error", notFound(false));
+            assertFalse(signaling.isRouteAlive(60_000));
+
+            signaling.deliver(Signaling.message("self", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE,
+                    new JsonObject()), false);
+
+            assertTrue(signaling.isRouteAlive(60_000));
+        }
+    }
+
+    @Test
+    void reconnectResetsOldRouteProofAndFailure() throws Exception {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectAs("self");
+            signaling.deliver(Signaling.message("self", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE,
+                    new JsonObject()), false);
+            signaling.advance(30);
+            String probe = signaling.readRouteProbes().get(0).get("id").getAsString();
+            signaling.respond(signaling.transport, probe, "error", notFound(false));
+            assertFalse(signaling.isRouteAlive(60_000));
+            CompletableFuture<Void> reconnect = CompletableFuture.runAsync(() -> {
+                try {
+                    signaling.reconnect("MCToken fresh");
+                } catch (java.net.ConnectException e) {
+                    throw new CompletionException(e);
+                }
+            });
+            EmbeddedChannel replacement = signaling.opened.poll(5, TimeUnit.SECONDS);
+            assertNotNull(replacement);
+            signaling.eventLoopGroup.next().submit(() -> {
+                replacement.pipeline().fireUserEventTriggered(
+                        WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE);
+                String turn = signaling.readOutbound(replacement).get("id").getAsString();
+                signaling.respond(replacement, turn, "result", new JsonObject());
+            }).syncUninterruptibly();
+            reconnect.get(5, TimeUnit.SECONDS);
+
+            assertTrue(signaling.isRouteAlive(60_000));
+            assertTrue(signaling.isChannelAlive(45_000));
+            Field proven = NetherNetXboxRpcSignaling.class.getDeclaredField("lastRouteProvenAt");
+            proven.setAccessible(true);
+            assertEquals(0, proven.getLong(signaling));
+        }
+    }
+
+    @Test
     void peerFailureUsesTheHandlerThatSentTheRequest() {
         try (Signaling signaling = new Signaling()) {
             AtomicInteger previous = new AtomicInteger();
