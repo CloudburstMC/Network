@@ -21,6 +21,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
@@ -41,6 +42,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -252,6 +255,24 @@ class NetherNetXboxRpcSignalingTest {
             } finally {
                 replacement.finishAndReleaseAll();
             }
+        }
+    }
+
+    @Test
+    void turnCredentialsArePublishedBeforeConnectObserversRun() {
+        try (Signaling signaling = new Signaling()) {
+            CompletableFuture<?> pending = signaling.install(signaling.transport);
+            CompletableFuture<Void> observed = pending.thenAccept(servers -> {
+                assertSame(servers, signaling.getIceServers());
+                assertFalse(Thread.holdsLock(signaling));
+            });
+            signaling.transport.pipeline().fireUserEventTriggered(
+                    WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE);
+            String id = signaling.readOutbound().get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "result", turnServers("turn:published.invalid"));
+
+            observed.join();
         }
     }
 
@@ -543,6 +564,53 @@ class NetherNetXboxRpcSignalingTest {
         }
     }
 
+    @Test
+    void reconnectWaitsForTheRequestAndItsReplyStaysOnTheOriginalSocket() throws Exception {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connect();
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch resume = new CountDownLatch(1);
+            signaling.beforeRead = () -> {
+                entered.countDown();
+                try {
+                    assertTrue(resume.await(5, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    throw new AssertionError(e);
+                }
+            };
+            AtomicInteger received = new AtomicInteger();
+            signaling.setSignalHandler("42", signal -> received.incrementAndGet());
+            io.netty.util.concurrent.Future<?> reading = signaling.eventLoopGroup.next().submit(() ->
+                    signaling.deliver(Signaling.message("peer", NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC,
+                            webRtc("CANDIDATEADD 42 candidate")), true));
+            CompletableFuture<Void> reconnect;
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                reconnect = CompletableFuture.runAsync(() -> {
+                    try {
+                        signaling.reconnect("MCToken fresh");
+                    } catch (java.net.ConnectException e) {
+                        throw new CompletionException(e);
+                    }
+                });
+                assertSame(signaling.transport, signaling.channel);
+            } finally {
+                resume.countDown();
+            }
+            reading.syncUninterruptibly();
+            EmbeddedChannel replacement = signaling.opened.poll(5, TimeUnit.SECONDS);
+            assertNotNull(replacement);
+            signaling.eventLoopGroup.next().submit(() -> signaling.updateIceServers(replacement, List.of()))
+                    .syncUninterruptibly();
+            reconnect.get(5, TimeUnit.SECONDS);
+
+            assertEquals(1, received.get());
+            assertEquals("request-1", signaling.readOutbound().get("id").getAsString());
+            assertNull(replacement.readOutbound(), "The old request must not write on the replacement");
+            assertFalse(signaling.transport.isOpen());
+        }
+    }
+
     private static JsonObject notFound(boolean identityError) {
         JsonObject error = new JsonObject();
         error.addProperty("message", identityError ? "Identity expired" : "Player not registered");
@@ -575,6 +643,24 @@ class NetherNetXboxRpcSignalingTest {
 
     private static final class Signaling extends NetherNetXboxRpcSignaling implements AutoCloseable {
         private final EmbeddedChannel transport;
+        private final LinkedBlockingQueue<EmbeddedChannel> opened = new LinkedBlockingQueue<>();
+        private final List<EmbeddedChannel> replacements = new ArrayList<>();
+        private volatile Runnable beforeRead = () -> {};
+
+        @Override
+        ChannelFuture connectChannel() {
+            EmbeddedChannel socket = new EmbeddedChannel(this);
+            socket.freezeTime();
+            replacements.add(socket);
+            opened.add(socket);
+            return socket.newSucceededFuture();
+        }
+
+        @Override
+        protected void channelRead0(ChannelHandlerContext ctx, TextWebSocketFrame frame) {
+            beforeRead.run();
+            super.channelRead0(ctx, frame);
+        }
 
         private Signaling() {
             super("local", "MCToken unused");
@@ -701,12 +787,10 @@ class NetherNetXboxRpcSignalingTest {
 
         @Override
         public void close() {
-            try {
-                super.close();
-                transport.finishAndReleaseAll();
-            } finally {
-                eventLoopGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
-            }
+            super.close();
+            eventLoopGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+            transport.finishAndReleaseAll();
+            replacements.forEach(EmbeddedChannel::finishAndReleaseAll);
         }
     }
 }
