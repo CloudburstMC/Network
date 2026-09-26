@@ -346,6 +346,31 @@ class NetherNetXboxRpcSignalingTest {
         }
     }
 
+    @Test
+    void messagesDeliveredAsAnArrayReachTheirHandlers() {
+        try (Signaling signaling = new Signaling()) {
+            List<String> received = new ArrayList<>();
+            signaling.setSignalHandler("42", received::add);
+            signaling.setSignalHandler("43", received::add);
+            JsonArray batch = new JsonArray();
+            batch.add(Signaling.message("peer", NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC,
+                    webRtc("CANDIDATEADD 42 candidate")));
+            batch.add(Signaling.message("peer", NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC,
+                    webRtc("CANDIDATEADD 43 candidate")));
+
+            signaling.deliver(batch, false);
+
+            assertEquals(List.of("CANDIDATEADD 42 candidate", "CANDIDATEADD 43 candidate"), received);
+        }
+    }
+
+    private static JsonObject webRtc(String signal) {
+        JsonObject params = new JsonObject();
+        params.addProperty("netherNetId", "123");
+        params.addProperty("message", signal);
+        return params;
+    }
+
     private static JsonObject turnServers(String url) {
         JsonArray urls = new JsonArray();
         urls.add(url);
