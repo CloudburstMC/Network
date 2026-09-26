@@ -406,6 +406,71 @@ class NetherNetXboxRpcSignalingTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"TurnAuthServers\":[]}", "{\"TurnAuthServers\":{}}",
+            "{\"TurnAuthServers\":[null]}", "{\"TurnAuthServers\":[{}]}",
+            "{\"TurnAuthServers\":[{\"Urls\":[]}]}", "{\"TurnAuthServers\":[{\"Urls\":[\" \"]}]}"})
+    void turnRefreshWithoutAUsableServerKeepsPreviousCredentials(String response) {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectWith(turnServers("turn:working.invalid"));
+            signaling.advance(30 * 60);
+            String id = signaling.readRequests(NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH).get(0)
+                    .get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "result", JsonParser.parseString(response));
+
+            assertEquals(List.of("turn:working.invalid"), signaling.getIceServers().get(0).urls());
+            assertEquals(1, signaling.getIceServers().size());
+        }
+    }
+
+    @Test
+    void failedTurnRefreshKeepsPreviousCredentials() {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectWith(turnServers("turn:working.invalid"));
+            signaling.advance(30 * 60);
+            String id = signaling.readRequests(NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH).get(0)
+                    .get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "error", notFound(false));
+
+            assertEquals(List.of("turn:working.invalid"), signaling.getIceServers().get(0).urls());
+        }
+    }
+
+    @Test
+    void turnRefreshWithSomeUsableServersReplacesPreviousCredentials() {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectWith(turnServers("turn:working.invalid"));
+            signaling.advance(30 * 60);
+            String id = signaling.readRequests(NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH).get(0)
+                    .get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "result", JsonParser.parseString(
+                    "{\"TurnAuthServers\":[{\"Urls\":[\"turn:fresh.invalid\"]},{\"Urls\":{}}]}"));
+
+            assertEquals(1, signaling.getIceServers().size());
+            assertEquals(List.of("turn:fresh.invalid"), signaling.getIceServers().get(0).urls());
+        }
+    }
+
+    @Test
+    void malformedInitialTurnResponseStillCompletesTheConnect() {
+        try (Signaling signaling = new Signaling()) {
+            CompletableFuture<?> pending = signaling.install(signaling.transport);
+            signaling.transport.pipeline().fireUserEventTriggered(
+                    WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE);
+            String id = signaling.readOutbound().get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "result",
+                    JsonParser.parseString("{\"TurnAuthServers\":{}}"));
+
+            assertTrue(pending.isDone());
+            assertFalse(pending.isCompletedExceptionally());
+            assertTrue(signaling.getIceServers().isEmpty());
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {NetherNetConstants.XBOX_RPC_METHOD_PING, NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH})
     void maintenanceErrorsDoNotReportPeerFailure(String method) {
         try (Signaling signaling = new Signaling()) {
@@ -526,10 +591,14 @@ class NetherNetXboxRpcSignalingTest {
 
         /** Connects the transport and answers the TURN request. */
         private void connect() {
+            connectWith(new JsonObject());
+        }
+
+        private void connectWith(JsonObject credentials) {
             CompletableFuture<?> pending = install(transport);
             transport.pipeline().fireUserEventTriggered(
                     WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE);
-            respond(transport, readOutbound().get("id").getAsString(), "result", new JsonObject());
+            respond(transport, readOutbound().get("id").getAsString(), "result", credentials);
             assertTrue(pending.isDone());
         }
 
