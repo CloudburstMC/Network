@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PongWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -134,6 +135,22 @@ class NetherNetXboxSignalingLifecycleTest {
             socket.writeInbound(new PongWebSocketFrame());
 
             assertTrue(signaling.isChannelAlive(45_000));
+        }
+    }
+
+    @Test
+    void aCloseFrameFromTheServiceClosesTheSocket() {
+        try (Signaling signaling = new Signaling()) {
+            EmbeddedChannel socket = signaling.newSocket();
+            CompletableFuture<?> pending = signaling.install(socket);
+            CloseWebSocketFrame close = new CloseWebSocketFrame(1008, "Policy Violation");
+
+            socket.writeInbound(close);
+
+            assertEquals(0, close.refCnt());
+            assertFalse(socket.isOpen());
+            assertTrue(pending.isCompletedExceptionally());
+            assertFalse(signaling.isChannelAlive());
         }
     }
 

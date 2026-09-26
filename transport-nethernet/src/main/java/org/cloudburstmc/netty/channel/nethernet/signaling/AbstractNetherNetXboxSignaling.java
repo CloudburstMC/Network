@@ -35,6 +35,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
@@ -208,8 +209,9 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                             ChannelPipeline p = ch.pipeline();
                             p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), 443));
                             p.addLast(new HttpClientCodec(), new HttpObjectAggregator(8192));
-                            // Pongs are passed on, so they count as received frames in channelRead
-                            p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker, true, false));
+                            // Close frames and pongs are passed on to channelRead, which logs why the
+                            // service closed the socket and counts pongs as received frames
+                            p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker, false, false));
                             p.addLast("ws-aggregator",
                                     new WebSocketFrameAggregator(16 * 1024)); // Allow 16KB aggregations
                             p.addLast("handler", AbstractNetherNetXboxSignaling.this);
@@ -295,6 +297,15 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
             }
             // Pongs included, so a socket without signals still proves it is alive
             lastMessageReceivedAt = System.currentTimeMillis();
+        }
+        if (msg instanceof CloseWebSocketFrame close) {
+            try {
+                log.warn("Signaling socket closed by the service: {} {}", close.statusCode(), close.reasonText());
+            } finally {
+                close.release();
+            }
+            ctx.close();
+            return;
         }
         super.channelRead(ctx, msg);
     }
