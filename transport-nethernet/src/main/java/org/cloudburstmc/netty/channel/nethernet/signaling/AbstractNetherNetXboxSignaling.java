@@ -86,6 +86,13 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
      */
     private static final long WS_PING_INTERVAL_SECONDS = 15;
 
+    /**
+     * The largest message the socket accepts, whether it arrives in one frame or split across
+     * several. One delivery can carry several messages. A message over the limit closes the socket,
+     * and with it every join still being signaled over it.
+     */
+    private static final int MAX_MESSAGE_SIZE = 128 * 1024;
+
     protected final InternalLogger log = InternalLoggerFactory.getInstance(getClass());
 
     protected volatile String xboxToken;
@@ -197,7 +204,8 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                             .add("Authorization", xboxToken)
                             .add("User-Agent", NetherNetConstants.SIGNALING_USER_AGENT)
                             .add("session-id", UUID.randomUUID().toString())
-                            .add("request-id", UUID.randomUUID().toString())
+                            .add("request-id", UUID.randomUUID().toString()),
+                    MAX_MESSAGE_SIZE
             );
 
             Bootstrap b = new Bootstrap();
@@ -212,8 +220,8 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                             // Close frames and pongs are passed on to channelRead, which logs why the
                             // service closed the socket and counts pongs as received frames
                             p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker, false, false));
-                            p.addLast("ws-aggregator",
-                                    new WebSocketFrameAggregator(16 * 1024)); // Allow 16KB aggregations
+                            // The service can split a message across several frames
+                            p.addLast("ws-aggregator", new WebSocketFrameAggregator(MAX_MESSAGE_SIZE));
                             p.addLast("handler", AbstractNetherNetXboxSignaling.this);
                         }
                     });
