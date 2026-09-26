@@ -41,8 +41,8 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     public static final int WRITE_LIMIT = 1 << 20;
     public static final int NATIVE_WRITE_LIMIT = 1 << 19;
     public static final int INBOUND_FRAMES = 128;
-    /** Bounds queued frames by size too, at what {@link #INBOUND_FRAMES} frames of {@code FRAME_LIMIT} bytes hold. */
-    public static final int INBOUND_BYTES = INBOUND_FRAMES * NetherNetFrameDecoder.FRAME_LIMIT;
+    /** Bounds the frames queued between reads by size as well as by count. */
+    public static final int INBOUND_BYTES = 1_280_000;
 
     private record Incoming(ByteBuf bytes, boolean reliable) {
     }

@@ -5,7 +5,6 @@ import io.netty.buffer.CompositeByteBuf;
 import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
-import static org.cloudburstmc.netty.signaling.admission.NetherNetFrameDecoder.FRAME_LIMIT;
 import static org.cloudburstmc.netty.signaling.admission.NetherNetFrameDecoder.MESSAGE_LIMIT;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -60,7 +59,6 @@ class NetherNetFrameDecoderTest {
         consumed(outOfOrder);
         consumed(partial);
         assertEquals(0, decoder.retainedBytes());
-        assertThrows(IllegalArgumentException.class, () -> decoder.decode(frame(255, 1), true));
         assertThrows(IllegalArgumentException.class, () -> decoder.decode(Unpooled.buffer(MESSAGE_LIMIT + 1)
                 .writerIndex(MESSAGE_LIMIT + 1), true));
         assertThrows(IllegalArgumentException.class, () -> decoder.decode(frame(0), true));
@@ -76,7 +74,7 @@ class NetherNetFrameDecoderTest {
     @Test
     void anUnfragmentedMessageMayFillTheAdvertisedSize() {
         var decoder = new NetherNetFrameDecoder();
-        for (int length : new int[]{FRAME_LIMIT + 1, MESSAGE_LIMIT}) {
+        for (int length : new int[]{20_000, MESSAGE_LIMIT}) {
             ByteBuf frame = Unpooled.buffer(length).writeByte(0);
             for (int b = 1; b < length; b++) {
                 frame.writeByte(b % 251);
@@ -92,11 +90,11 @@ class NetherNetFrameDecoderTest {
     @Test
     void largeFragmentedMessageReassemblesByteForByte() {
         var decoder = new NetherNetFrameDecoder();
-        int fragments = 4, payload = FRAME_LIMIT - 1;
+        int fragments = 4, payload = 9_999;
         byte[] expected = new byte[fragments * payload];
         ByteBuf last = null;
         for (int i = 0; i < fragments; i++) {
-            ByteBuf fragment = Unpooled.buffer(FRAME_LIMIT).writeByte(fragments - 1 - i);
+            ByteBuf fragment = Unpooled.buffer(payload + 1).writeByte(fragments - 1 - i);
             for (int b = 0; b < payload; b++) {
                 byte value = (byte) ((i * 31 + b) % 251);
                 expected[i * payload + b] = value;
@@ -126,7 +124,8 @@ class NetherNetFrameDecoderTest {
     @Test
     void fragmentedMessageKeepsOwnedFramesWithoutConsolidatingOrCopying() {
         var decoder = new NetherNetFrameDecoder();
-        ByteBuf[] frames = new ByteBuf[27];
+        // The full range of the countdown, from 255 down to 0
+        ByteBuf[] frames = new ByteBuf[256];
         ByteBuf message = null;
         try {
             for (int i = 0; i < frames.length; i++) {

@@ -23,7 +23,6 @@ import io.netty.buffer.CompositeByteBuf;
  * Bounded countdown framing. Unordered traffic must fit one SCTP message.
  */
 public final class NetherNetFrameDecoder {
-    public static final int FRAME_LIMIT = 10000;
     public static final int MESSAGE_LIMIT = 262144;
     private CompositeByteBuf assembly;
     private int expected = -1;
@@ -64,8 +63,7 @@ public final class NetherNetFrameDecoder {
         }
 
         int size = this.assembly == null ? 0 : this.assembly.readableBytes();
-        if (remaining >= (MESSAGE_LIMIT + FRAME_LIMIT - 2) / (FRAME_LIMIT - 1) ||
-                (this.expected != -1 && this.expected != remaining) || size + payload > MESSAGE_LIMIT) {
+        if ((this.expected != -1 && this.expected != remaining) || size + payload > MESSAGE_LIMIT) {
             this.clear();
             throw new IllegalArgumentException("Invalid NetherNet fragment sequence");
         }
