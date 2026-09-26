@@ -301,6 +301,12 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
             log.error("Failed to parse inner signaling message from " + from, e);
         }
 
+        // A delivery notification ends the exchange. Acknowledging it too starts an endless loop
+        // with a peer that does the same.
+        if (NetherNetConstants.XBOX_RPC_INNER_METHOD_DELIVERY.equals(innerMethod)) {
+            return;
+        }
+
         // Our own probe came back, so the registration is routable. It gets no delivery
         // notification, which would be routed back to us as well.
         if (NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE.equals(innerMethod) && isSelf(from)) {

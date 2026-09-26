@@ -346,6 +346,47 @@ class NetherNetXboxRpcSignalingTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void deliveryNotificationsGetNoDeliveryNotification(boolean requestHasId) {
+        try (Signaling signaling = new Signaling()) {
+            JsonObject params = new JsonObject();
+            params.addProperty("messageId", "message-0");
+
+            signaling.deliver(Signaling.message("peer", NetherNetConstants.XBOX_RPC_INNER_METHOD_DELIVERY, params),
+                    requestHasId);
+
+            if (requestHasId) {
+                JsonObject response = signaling.readOutbound();
+                assertEquals("request-1", response.get("id").getAsString());
+                assertTrue(response.get("result").isJsonNull());
+                assertFalse(response.has("method"));
+            }
+            assertNull(signaling.transport.readOutbound(), "A delivery notification must not be acknowledged");
+        }
+    }
+
+    @Test
+    void webRtcMessagesStillReachTheirHandlerAndGetADeliveryNotification() {
+        try (Signaling signaling = new Signaling()) {
+            AtomicReference<String> received = new AtomicReference<>();
+            signaling.setSignalHandler("42", received::set);
+
+            signaling.deliver(Signaling.message("peer", NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC,
+                    webRtc("CANDIDATEADD 42 candidate")), true);
+
+            assertEquals("CANDIDATEADD 42 candidate", received.get());
+            assertEquals("request-1", signaling.readOutbound().get("id").getAsString());
+            JsonObject notification = signaling.readOutbound();
+            assertEquals(NetherNetConstants.XBOX_RPC_METHOD_SEND_MESSAGE, notification.get("method").getAsString());
+            JsonObject delivery = JsonParser.parseString(notification.getAsJsonObject("params").get("message").getAsString())
+                    .getAsJsonObject();
+            assertEquals(NetherNetConstants.XBOX_RPC_INNER_METHOD_DELIVERY, delivery.get("method").getAsString());
+            assertEquals("message-1", delivery.getAsJsonObject("params").get("messageId").getAsString());
+            assertNull(signaling.transport.readOutbound());
+        }
+    }
+
     @Test
     void messagesDeliveredAsAnArrayReachTheirHandlers() {
         try (Signaling signaling = new Signaling()) {
