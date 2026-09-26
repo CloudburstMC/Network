@@ -26,6 +26,8 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.ConnectException;
 import java.util.ArrayList;
@@ -35,6 +37,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -191,6 +194,22 @@ class NetherNetXboxSignalingLifecycleTest {
         assertTrue(signaling.connect(null).isCompletedExceptionally());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"00042", "peer /?#+%", ".", "..", "玩家🎮"})
+    void theNetworkIdStaysOnePathSegmentOfTheUri(String id) {
+        try (Signaling signaling = new Signaling(id)) {
+            String prefix = "/ws/v1.0/signaling/";
+            assertEquals(id, signaling.getLocalNetworkId());
+            assertEquals("wss", signaling.uri.getScheme());
+            assertEquals("signal.franchise.minecraft-services.net", signaling.uri.getHost());
+            assertEquals(prefix + id, signaling.uri.getPath());
+            assertFalse(signaling.uri.getRawPath().substring(prefix.length()).contains("/"));
+            assertNull(signaling.uri.getRawQuery());
+            assertNull(signaling.uri.getRawFragment());
+            assertEquals(signaling.uri, signaling.uri.normalize());
+        }
+    }
+
     private static TextWebSocketFrame credentials(String url) {
         JsonArray urls = new JsonArray();
         urls.add(url);
@@ -210,7 +229,11 @@ class NetherNetXboxSignalingLifecycleTest {
         private final List<EmbeddedChannel> sockets = new ArrayList<>();
 
         private Signaling() {
-            super("1", "MCToken unused");
+            this("1");
+        }
+
+        private Signaling(String networkId) {
+            super(networkId, "MCToken unused");
         }
 
         private EmbeddedChannel newSocket() {
