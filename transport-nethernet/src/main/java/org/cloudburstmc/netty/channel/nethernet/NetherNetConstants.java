@@ -75,7 +75,7 @@ public class NetherNetConstants {
 
     // SCTP Constants
     public static final int MAX_ADVERTISED_MESSAGE_SIZE = 256 * 1024; // 256 KB
-    /** The RFC 8841 limit of a peer whose description has no {@code a=max-message-size}. */
+    /** The limit of a peer whose description has no {@code a=max-message-size} (RFC 8841 section 6.1). */
     public static final int DEFAULT_SCTP_MESSAGE_SIZE = 65536;
     /** The largest message this side sends, even to a peer that accepts any size. */
     public static final int MAX_OUTBOUND_MESSAGE_SIZE = 256 * 1024;
@@ -207,9 +207,9 @@ public class NetherNetConstants {
     }
 
     /**
-     * Reads the largest message this side may send from the peer's description. A missing attribute
-     * means the RFC 8841 default and zero means any size; both, like every other value, are held to
-     * {@link #MAX_OUTBOUND_MESSAGE_SIZE}. With several active SCTP sections or attributes, the
+     * Reads the largest message this side may send from the peer's description. Per RFC 8841 section
+     * 6.1, a missing attribute means 64 KiB and zero means any size; both, like every other value, are
+     * held to {@link #MAX_OUTBOUND_MESSAGE_SIZE}. With several active SCTP sections or attributes, the
      * smallest limit is the one safe for all.
      *
      * @param sdp The remote description, or null for the default
@@ -225,6 +225,7 @@ public class NetherNetConstants {
      *
      * @param sdp      The remote description, or null for the fallback
      * @param fallback The limit when the attribute is missing, at least two bytes, or zero for any size
+     *                 (RFC 8841 section 6.1)
      * @return The limit in bytes, header included
      * @throws IllegalArgumentException for a malformed value or a limit of one byte
      */
@@ -244,7 +245,8 @@ public class NetherNetConstants {
                     limit = Math.min(limit, sectionLimit < 0 ? fallback : sectionLimit);
                 }
                 String[] media = trimmed.substring(2).split("\\s+");
-                // A zero port rejects the section, so its attributes do not apply
+                // A zero port marks the section as not to be used (RFC 3264 sections 5.1 and 6), so its
+                // attributes do not apply
                 sctp = media.length >= 4 && media[0].equals("application")
                         && !media[1].equals("0") && media[2].endsWith("/SCTP");
                 found |= sctp;
@@ -279,10 +281,14 @@ public class NetherNetConstants {
         return outboundMessageSize(size);
     }
 
-    /** Holds a peer's limit to what this side sends; zero means the peer accepts any size. */
+    /**
+     * Holds a peer's limit to what this side sends; zero means the peer accepts any size (RFC 8841
+     * section 6.1).
+     */
     static int outboundMessageSize(int size) {
         if (size < 0 || size == 1) {
-            throw new IllegalArgumentException("A message size must be zero (any size) or at least two bytes");
+            throw new IllegalArgumentException(
+                    "A message size must be zero (any size, RFC 8841) or at least two bytes");
         }
         return size == 0 ? MAX_OUTBOUND_MESSAGE_SIZE : Math.min(size, MAX_OUTBOUND_MESSAGE_SIZE);
     }

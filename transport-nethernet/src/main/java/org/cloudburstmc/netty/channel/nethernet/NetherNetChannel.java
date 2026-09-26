@@ -198,7 +198,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
     /**
      * Sets the largest SCTP message this channel sends, normally the {@code a=max-message-size} the
-     * peer advertised. Zero means the peer accepts any size;
+     * peer advertised. Zero means the peer accepts any size (RFC 8841 section 6.1);
      * {@link NetherNetConstants#MAX_OUTBOUND_MESSAGE_SIZE} still applies.
      *
      * @param size The peer's limit in bytes, header included
