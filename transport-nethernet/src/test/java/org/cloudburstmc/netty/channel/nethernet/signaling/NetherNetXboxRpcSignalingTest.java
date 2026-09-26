@@ -86,7 +86,7 @@ class NetherNetXboxRpcSignalingTest {
         try (Signaling signaling = new Signaling()) {
             AtomicInteger notFound = new AtomicInteger();
             signaling.setFailureHandler(message -> notFound.incrementAndGet());
-            CompletableFuture<JsonObject> future = signaling.sendJsonRpcRequest("test", new JsonObject());
+            CompletableFuture<JsonObject> future = signaling.sendJsonRpcRequest("test", new JsonObject(), true);
             String id = signaling.readOutbound().get("id").getAsString();
 
             signaling.advance(19);
@@ -128,7 +128,7 @@ class NetherNetXboxRpcSignalingTest {
         try (Signaling signaling = new Signaling()) {
             AtomicInteger notFound = new AtomicInteger();
             signaling.setFailureHandler(message -> notFound.incrementAndGet());
-            CompletableFuture<JsonObject> future = signaling.sendJsonRpcRequest("test", new JsonObject());
+            CompletableFuture<JsonObject> future = signaling.sendJsonRpcRequest("test", new JsonObject(), true);
             String id = signaling.readOutbound().get("id").getAsString();
             JsonObject error = new JsonObject();
             error.addProperty("message", "Player not registered");
@@ -403,6 +403,90 @@ class NetherNetXboxRpcSignalingTest {
 
             assertEquals(List.of("CANDIDATEADD 42 candidate", "CANDIDATEADD 43 candidate"), received);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {NetherNetConstants.XBOX_RPC_METHOD_PING, NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH})
+    void maintenanceErrorsDoNotReportPeerFailure(String method) {
+        try (Signaling signaling = new Signaling()) {
+            AtomicInteger failures = new AtomicInteger();
+            signaling.setFailureHandler(message -> failures.incrementAndGet());
+            CompletableFuture<JsonObject> request = signaling.sendJsonRpcRequest(method, new JsonObject());
+            String id = signaling.readOutbound().get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "error", notFound(false));
+
+            assertTrue(request.isCompletedExceptionally());
+            assertEquals(0, failures.get());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void refusedSelfProbeDoesNotReportPeerFailure(boolean identityError) {
+        try (Signaling signaling = new Signaling()) {
+            AtomicInteger failures = new AtomicInteger();
+            signaling.setFailureHandler(message -> failures.incrementAndGet());
+            signaling.connectAs("self");
+            signaling.advance(30);
+            String id = signaling.readRouteProbes().get(0).get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "error", notFound(identityError));
+
+            assertEquals(0, failures.get());
+            assertTrue(signaling.isRouteAlive(60_000));
+            signaling.advance(30);
+            assertTrue(signaling.readRouteProbes().isEmpty());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void peerSignalsAndDeliveryNotificationsReportPeerFailure(boolean delivery) {
+        try (Signaling signaling = new Signaling()) {
+            AtomicInteger failures = new AtomicInteger();
+            signaling.setFailureHandler(message -> failures.incrementAndGet());
+            if (delivery) {
+                signaling.deliver(Signaling.message("peer", NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC,
+                        webRtc("CANDIDATEADD 42 candidate")), false);
+            } else {
+                signaling.sendSignal("peer", "CANDIDATEADD 42 candidate");
+            }
+            String id = signaling.readOutbound().get("id").getAsString();
+
+            signaling.respond(signaling.transport, id, "error", notFound(true));
+            signaling.respond(signaling.transport, id, "error", notFound(true));
+
+            assertEquals(1, failures.get());
+        }
+    }
+
+    @Test
+    void peerFailureUsesTheHandlerThatSentTheRequest() {
+        try (Signaling signaling = new Signaling()) {
+            AtomicInteger previous = new AtomicInteger();
+            AtomicInteger current = new AtomicInteger();
+            signaling.setFailureHandler(reason -> previous.incrementAndGet());
+            signaling.sendSignal("peer", "CANDIDATEADD 42 candidate");
+            String id = signaling.readOutbound().get("id").getAsString();
+            signaling.setFailureHandler(reason -> current.incrementAndGet());
+
+            signaling.respond(signaling.transport, id, "error", notFound(false));
+
+            assertEquals(1, previous.get());
+            assertEquals(0, current.get());
+        }
+    }
+
+    private static JsonObject notFound(boolean identityError) {
+        JsonObject error = new JsonObject();
+        error.addProperty("message", identityError ? "Identity expired" : "Player not registered");
+        if (identityError) {
+            JsonObject data = new JsonObject();
+            data.addProperty("Code", "MissingOrExpiredIdentity");
+            error.add("data", data);
+        }
+        return error;
     }
 
     private static JsonObject webRtc(String signal) {
