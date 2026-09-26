@@ -28,9 +28,12 @@ import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.util.concurrent.ScheduledFuture;
+import org.jspecify.annotations.Nullable;
 
 import java.net.URI;
 import java.nio.channels.ClosedChannelException;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -51,7 +54,26 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
      */
     private static final long TURN_REFRESH_INTERVAL_SECONDS = 30 * 60;
 
+    /**
+     * How often a message is sent to this host's own player id.
+     * <p>
+     * Microsoft's signaling service can keep a socket open after the registration behind it has
+     * died. It keeps answering pings, and only closes the socket once it has to route a message
+     * through it. Without a probe, that message is the first player who tries to join, so until
+     * then the socket looks alive while no join can arrive.
+     * <p>
+     * The service routes the probe back only while the registration is alive, over the same route
+     * a joining player's signals take, so a dead registration shows without waiting for a player.
+     */
+    private static final long ROUTE_PROBE_INTERVAL_SECONDS = 30;
+
     private final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
+
+    private volatile long lastRouteProvenAt;
+    private volatile @Nullable String routeFailure;
+    private volatile boolean routeProbeUnsupported;
+    private volatile int routeProbesSent;
+    private volatile boolean routeUnansweredWarned;
 
     /**
      * A request waiting for its reply, with the socket it was written to. A reply only settles it
@@ -122,8 +144,17 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
+        lastRouteProvenAt = 0;
+        routeFailure = null;
+        routeProbeUnsupported = false;
+        routeProbesSent = 0;
+        routeUnansweredWarned = false;
+
         scheduleRecurring(ctx, "rpc-ping", () ->
                 sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_PING, new JsonObject()), 30, 50);
+
+        scheduleRecurring(ctx, "route-probe", this::sendRouteProbe,
+                ROUTE_PROBE_INTERVAL_SECONDS, ROUTE_PROBE_INTERVAL_SECONDS);
 
         scheduleRecurring(ctx, "turn-refresh", this::refreshTurnCredentials,
                 TURN_REFRESH_INTERVAL_SECONDS, TURN_REFRESH_INTERVAL_SECONDS);
@@ -264,6 +295,28 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         String rawInner = msgObj.get("Message").getAsString();
         String msgId = msgObj.has("Id") ? msgObj.get("Id").getAsString() : UUID.randomUUID().toString();
 
+        JsonObject innerJson = null;
+        String innerMethod = null;
+        try {
+            innerJson = JsonParser.parseString(rawInner).getAsJsonObject();
+            if (innerJson.has("method")) {
+                innerMethod = innerJson.get("method").getAsString();
+            }
+        } catch (Exception e) {
+            log.error("Failed to parse inner signaling message from " + from, e);
+        }
+
+        // Our own probe came back, so the registration is routable. It gets no delivery
+        // notification, which would be routed back to us as well.
+        if (NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE.equals(innerMethod) && isSelf(from)) {
+            if (lastRouteProvenAt == 0) {
+                log.debug("Signaling route probe confirmed, the registration is routable");
+            }
+            lastRouteProvenAt = System.currentTimeMillis();
+            routeFailure = null;
+            return;
+        }
+
         JsonObject innerParams = new JsonObject();
         innerParams.addProperty("messageId", msgId);
         JsonObject innerMsg = new JsonObject();
@@ -273,16 +326,119 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
         sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_SEND_MESSAGE,
                 createSendParams(from, innerMsg.toString()));
 
-        try {
-            JsonObject innerJson = JsonParser.parseString(rawInner).getAsJsonObject();
-            if (innerJson.has("method") && NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC.equals(
-                    innerJson.get("method").getAsString())) {
+        if (NetherNetConstants.XBOX_RPC_INNER_METHOD_WEBRTC.equals(innerMethod)) {
+            try {
                 String payload = innerJson.getAsJsonObject("params").get("message").getAsString();
                 dispatchSignalToPipeline(from, payload);
+            } catch (Exception e) {
+                log.error("Failed to parse inner signaling message from " + from, e);
             }
-        } catch (Exception e) {
-            log.error("Failed to parse inner signaling message from " + from, e);
         }
+    }
+
+    /**
+     * The RPC signaling addresses players by the pmid claim of the MCToken, not by network id. Read
+     * from the current token, since a reconnect can install a new one.
+     *
+     * @return This host's own player id, or null if the token carries none.
+     */
+    private @Nullable String localPlayerId() {
+        String token = this.xboxToken;
+        if (token == null) {
+            return null;
+        }
+        String[] parts = token.split(" ", 2);
+        if (parts.length < 2) {
+            return null;
+        }
+        String[] jwt = parts[1].split("\\.");
+        if (jwt.length < 2) {
+            return null;
+        }
+        try {
+            String payload = new String(Base64.getUrlDecoder().decode(jwt[1]), StandardCharsets.UTF_8);
+            JsonObject claims = JsonParser.parseString(payload).getAsJsonObject();
+            return claims.has("pmid") ? claims.get("pmid").getAsString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isSelf(String from) {
+        if (from.equals(localNetworkId)) {
+            return true;
+        }
+        String playerId = localPlayerId();
+        return playerId != null && playerId.equalsIgnoreCase(from);
+    }
+
+    /**
+     * Sends a message to this host's own player id. While the registration lives, it comes back
+     * through processIncomingMessage. Once it has died, the service answers with an error instead,
+     * or closes the socket.
+     */
+    private void sendRouteProbe() {
+        Channel source = channel;
+        if (routeProbeUnsupported) {
+            return;
+        }
+
+        String playerId = localPlayerId();
+        if (playerId == null) {
+            routeProbeUnsupported = true;
+            log.warn("Signaling route probe disabled, the MCToken carries no pmid to address this host by");
+            return;
+        }
+
+        if (lastRouteProvenAt == 0 && routeProbesSent >= 3 && !routeUnansweredWarned) {
+            routeUnansweredWarned = true;
+            log.warn("Signaling route probe unanswered after {} probes, the route cannot be verified on this socket",
+                    routeProbesSent);
+        }
+        routeProbesSent++;
+
+        JsonObject innerMsg = new JsonObject();
+        innerMsg.add("params", new JsonObject());
+        innerMsg.addProperty("jsonrpc", "2.0");
+        innerMsg.addProperty("method", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE);
+        sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_SEND_MESSAGE, createSendParams(playerId, innerMsg.toString()))
+                .exceptionally(t -> {
+                    synchronized (this) {
+                        // A lost reply or a failed write does not show that the service refused the route
+                        if (!isCurrentChannel(source) || !(t instanceof RpcResponseException)) {
+                            return null;
+                        }
+                        if (lastRouteProvenAt == 0) {
+                            // Without one probe that came back, a refusal does not show that the
+                            // route to this host is broken, only that the probe is not accepted
+                            routeProbeUnsupported = true;
+                            log.warn("Signaling route probe refused on a new socket, route checks disabled: {}",
+                                    t.getMessage());
+                        } else {
+                            routeFailure = t.getMessage();
+                            log.warn("Signaling route probe refused: {}", t.getMessage());
+                        }
+                    }
+                    return null;
+                });
+    }
+
+    /**
+     * Whether the service still routes messages to this host, the check that fails when the
+     * registration died while the socket stayed open. A socket with no probe back yet counts as
+     * alive: it is either new, or the service does not route messages a host sends to itself, and
+     * neither shows that the registration died.
+     *
+     * @param maxSilenceMillis The longest time since the last probe came back that still counts.
+     * @return false if the service refused a probe after an earlier one came back, or if no probe
+     * came back within the given time.
+     */
+    public boolean isRouteAlive(long maxSilenceMillis) {
+        if (routeFailure != null) {
+            return false;
+        }
+        long proven = lastRouteProvenAt;
+        return proven == 0 || System.currentTimeMillis() - proven <= maxSilenceMillis;
     }
 
     @Override

@@ -34,7 +34,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.reflect.Field;
 import java.nio.channels.ClosedChannelException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -273,6 +275,77 @@ class NetherNetXboxRpcSignalingTest {
         }
     }
 
+    @Test
+    void routeProbeTimeoutDoesNotDisableLaterProbesOrReportNotFound() {
+        try (Signaling signaling = new Signaling()) {
+            AtomicInteger notFound = new AtomicInteger();
+            signaling.setFailureHandler(message -> notFound.incrementAndGet());
+            signaling.connectAs("self");
+
+            signaling.advance(30);
+            assertEquals(1, signaling.readRouteProbes().size());
+            signaling.advance(20);
+            assertEquals(0, notFound.get());
+            assertTrue(signaling.isRouteAlive(Long.MAX_VALUE));
+            signaling.advance(10);
+            assertEquals(1, signaling.readRouteProbes().size(), "A lost RPC reply must not disable the probe");
+        }
+    }
+
+    @Test
+    void aProbeThatComesBackProvesTheRouteUntilOneIsRefused() {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectAs("self");
+            signaling.advance(30);
+            String first = signaling.readRouteProbes().get(0).get("id").getAsString();
+            signaling.respond(signaling.transport, first, "result", new JsonObject());
+
+            signaling.deliver(Signaling.message("self", NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE,
+                    new JsonObject()), true);
+
+            assertEquals("request-1", signaling.readOutbound().get("id").getAsString());
+            assertNull(signaling.transport.readOutbound(), "A returned probe gets no delivery notification");
+            assertTrue(signaling.isRouteAlive(60_000));
+
+            signaling.advance(30);
+            String second = signaling.readRouteProbes().get(0).get("id").getAsString();
+            JsonObject error = new JsonObject();
+            error.addProperty("message", "Player not registered");
+            signaling.respond(signaling.transport, second, "error", error);
+
+            assertFalse(signaling.isRouteAlive(60_000));
+        }
+    }
+
+    @Test
+    void aProbeRefusedOnANewSocketDisablesTheCheckInsteadOfFailingIt() {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connectAs("self");
+            signaling.advance(30);
+            String first = signaling.readRouteProbes().get(0).get("id").getAsString();
+            JsonObject error = new JsonObject();
+            error.addProperty("message", "Self addressed messages are not supported");
+
+            signaling.respond(signaling.transport, first, "error", error);
+
+            assertTrue(signaling.isRouteAlive(60_000));
+            signaling.advance(30);
+            assertTrue(signaling.readRouteProbes().isEmpty());
+        }
+    }
+
+    @Test
+    void aTokenWithoutAPlayerIdSendsNoProbes() {
+        try (Signaling signaling = new Signaling()) {
+            signaling.connect();
+
+            signaling.advance(60);
+
+            assertTrue(signaling.readRouteProbes().isEmpty());
+            assertTrue(signaling.isRouteAlive(60_000));
+        }
+    }
+
     private static JsonObject turnServers(String url) {
         JsonArray urls = new JsonArray();
         urls.add(url);
@@ -301,8 +374,61 @@ class NetherNetXboxRpcSignalingTest {
             return connectFuture;
         }
 
+        /** Connects the transport and answers the TURN request. */
+        private void connect() {
+            CompletableFuture<?> pending = install(transport);
+            transport.pipeline().fireUserEventTriggered(
+                    WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE);
+            respond(transport, readOutbound().get("id").getAsString(), "result", new JsonObject());
+            assertTrue(pending.isDone());
+        }
+
+        /** Connects with a token whose pmid claim is the given player id. */
+        private void connectAs(String playerId) {
+            xboxToken = "MCToken unused." + Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    ("{\"pmid\":\"" + playerId + "\"}").getBytes(StandardCharsets.UTF_8)) + ".unused";
+            connect();
+        }
+
+        private static JsonObject message(String from, String method, JsonObject params) {
+            JsonObject inner = new JsonObject();
+            inner.addProperty("jsonrpc", "2.0");
+            inner.addProperty("method", method);
+            inner.add("params", params);
+            JsonObject message = new JsonObject();
+            message.addProperty("From", from);
+            message.addProperty("Id", "message-1");
+            message.addProperty("Message", inner.toString());
+            return message;
+        }
+
+        /** Delivers messages as the service does, one as an object or several as an array. */
+        private void deliver(JsonElement params, boolean requestHasId) {
+            JsonObject request = new JsonObject();
+            request.addProperty("jsonrpc", "2.0");
+            request.addProperty("method", NetherNetConstants.XBOX_RPC_METHOD_RECEIVE_MESSAGE);
+            if (requestHasId) {
+                request.addProperty("id", "request-1");
+            }
+            request.add("params", params);
+            transport.writeInbound(new TextWebSocketFrame(request.toString()));
+        }
+
         private JsonObject readOutbound() {
             return readOutbound(transport);
+        }
+
+        /** Reads every frame written so far and returns the route probes among them. */
+        private List<JsonObject> readRouteProbes() {
+            List<JsonObject> probes = new ArrayList<>();
+            for (JsonObject request : readRequests(NetherNetConstants.XBOX_RPC_METHOD_SEND_MESSAGE)) {
+                JsonObject inner = JsonParser.parseString(request.getAsJsonObject("params").get("message").getAsString())
+                        .getAsJsonObject();
+                if (NetherNetConstants.XBOX_RPC_INNER_METHOD_ROUTE_PROBE.equals(inner.get("method").getAsString())) {
+                    probes.add(request);
+                }
+            }
+            return probes;
         }
 
         private JsonObject readOutbound(EmbeddedChannel socket) {
