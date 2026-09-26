@@ -19,7 +19,10 @@ package org.cloudburstmc.netty.channel.nethernet;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelFuture;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import tel.schich.libdatachannel.PeerConnection;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -88,6 +91,50 @@ class NetherNetChannelSegmentTest {
             assembled.release();
         }
         allocator.assertReleased();
+    }
+
+    @Test
+    void theCountdownRunsItsFullRange() {
+        List<byte[]> sent = segmentsOf(Unpooled.wrappedBuffer(new byte[NetherNetConstants.MAX_SEGMENTS]), 1);
+
+        assertEquals(NetherNetConstants.MAX_SEGMENTS, sent.size());
+        assertEquals((byte) 255, sent.get(0)[0]);
+        assertEquals(0, sent.get(sent.size() - 1)[0]);
+        allocator.assertReleased();
+    }
+
+    @Test
+    void aMessageTheCountdownCannotNumberIsRefusedBeforeAnythingIsSent() {
+        ByteBuf message = Unpooled.wrappedBuffer(new byte[NetherNetConstants.MAX_SEGMENTS + 1]);
+
+        assertThrows(IllegalArgumentException.class, () -> NetherNetChannel.segment(
+                message, allocator, 1, view -> fail("nothing should be sent")));
+        assertTrue(allocator.buffers.isEmpty());
+    }
+
+    @Test
+    void aSegmentWithoutRoomForPayloadIsRefused() {
+        assertThrows(IllegalArgumentException.class, () -> NetherNetChannel.segment(
+                Unpooled.wrappedBuffer(new byte[]{1}), allocator, 0, view -> fail("nothing should be sent")));
+        assertTrue(allocator.buffers.isEmpty());
+    }
+
+    @Test
+    @Timeout(15)
+    void aWriteTheCountdownCannotNumberFails() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            NetherNetChildChannel child = server.connect(client);
+            int length = NetherNetConstants.MAX_SEGMENTS * (NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1) + 1;
+            ByteBuf message = Unpooled.buffer(length).writerIndex(length);
+
+            ChannelFuture write = child.writeAndFlush(message).awaitUninterruptibly();
+            assertInstanceOf(IllegalArgumentException.class, write.cause());
+            assertEquals(0, message.refCnt());
+        }
     }
 
     @Test

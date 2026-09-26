@@ -53,6 +53,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public abstract class NetherNetChannel extends AbstractChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
     protected static final ChannelMetadata METADATA = new ChannelMetadata(false);
+    private static final int MAX_SEGMENT_PAYLOAD = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
 
     /**
      * One side of the selected pair carries the address the socket uses and the candidate type it
@@ -292,6 +293,15 @@ public abstract class NetherNetChannel extends AbstractChannel {
     }
 
     @Override
+    protected Object filterOutboundMessage(Object msg) {
+        if (msg instanceof ByteBuf payload) {
+            // Refused before it is queued, so the write's promise fails and nothing is sent
+            NetherNetConstants.segmentCount(payload.readableBytes(), MAX_SEGMENT_PAYLOAD);
+        }
+        return msg;
+    }
+
+    @Override
     protected void doWrite(ChannelOutboundBuffer in) throws Exception {
         if (!isActive()) {
             Object msg;
@@ -334,8 +344,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
         int totalLength = framed.readableBytes();
 
         try {
-            int segments = segment(framed, alloc(), NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1,
-                    reliableChannel::sendMessage);
+            int segments = segment(framed, alloc(), MAX_SEGMENT_PAYLOAD, reliableChannel::sendMessage);
             if (segments == 0) {
                 log.debug("Nothing sent for an empty outbound message");
             } else {
@@ -365,11 +374,12 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * @param maxPayload The most payload one segment may carry, excluding the header byte
      * @param sender     Takes each segment, in order
      * @return How many segments were handed over
+     * @throws IllegalArgumentException as {@link NetherNetConstants#segmentCount}, before any segment is handed over
      */
     static int segment(ByteBuf framed, ByteBufAllocator allocator, int maxPayload,
                        Consumer<ByteBuffer> sender) {
         int totalLength = framed.readableBytes();
-        int segments = (totalLength + maxPayload - 1) / maxPayload;
+        int segments = NetherNetConstants.segmentCount(totalLength, maxPayload);
         int start = framed.readerIndex();
 
         for (int i = 0, offset = 0; i < segments; i++, offset += maxPayload) {
