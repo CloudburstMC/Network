@@ -18,6 +18,8 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
@@ -33,7 +35,12 @@ import java.net.ConnectException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -249,6 +256,304 @@ class NetherNetXboxSignalingLifecycleTest {
         }
     }
 
+    @Test
+    void directConnectFutureCompletionStillPublishesCredentials() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            CompletableFuture<List<IceServerInfo>> pending = signaling.connect(null);
+            signaling.nextSocket();
+            List<IceServerInfo> servers = List.of(new IceServerInfo.Builder()
+                    .setUrls(List.of("turn:subclass.invalid")).build());
+
+            signaling.onLoop(() -> signaling.connectFuture.complete(servers));
+
+            assertSame(servers, pending.join());
+            assertSame(servers, signaling.getIceServers());
+        }
+    }
+
+    @Test
+    void supersededDirectCompletionCannotPublishCredentials() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            CompletableFuture<List<IceServerInfo>> previous = signaling.connect(null);
+            signaling.nextSocket();
+            signaling.onLoop(() -> signaling.connectFuture = new CompletableFuture<>());
+            List<IceServerInfo> stale = List.of(new IceServerInfo.Builder()
+                    .setUrls(List.of("turn:stale.invalid")).build());
+
+            previous.complete(stale);
+
+            assertTrue(signaling.getIceServers().isEmpty());
+            assertFalse(signaling.connectFuture.isDone());
+        }
+    }
+
+    @Test
+    void credentialsArePublishedBeforeConnectObserversRun() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            CompletableFuture<List<IceServerInfo>> pending = signaling.connect(null);
+            CompletableFuture<Void> observed = pending.thenAccept(servers -> {
+                assertSame(servers, signaling.getIceServers());
+                assertFalse(Thread.holdsLock(signaling));
+                CompletableFuture.runAsync(() -> signaling.sendSignal("peer", "CANDIDATEADD 42 candidate"))
+                        .orTimeout(5, TimeUnit.SECONDS).join();
+            });
+            EmbeddedChannel socket = signaling.nextSocket();
+
+            signaling.receive(socket, credentials("turn:published.invalid"));
+
+            observed.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void anInactiveObserverCanStartTheNextAttempt() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            CompletableFuture<List<IceServerInfo>> previous = signaling.connect(null);
+            EmbeddedChannel socket = signaling.nextSocket();
+            CompletableFuture<CompletableFuture<List<IceServerInfo>>> next = previous.handle((servers, error) -> {
+                assertFalse(Thread.holdsLock(signaling));
+                assertTrue(error != null);
+                return signaling.connect(null);
+            });
+
+            signaling.onLoop(() -> socket.close());
+
+            CompletableFuture<List<IceServerInfo>> pending = next.get(5, TimeUnit.SECONDS);
+            assertFalse(pending == previous);
+            EmbeddedChannel replacement = signaling.nextSocket();
+            signaling.receive(replacement, credentials("turn:next.invalid"));
+            assertEquals(List.of("turn:next.invalid"), pending.get(5, TimeUnit.SECONDS).get(0).urls());
+            assertTrue(replacement.isOpen());
+        }
+    }
+
+    @Test
+    void supersededBindCannotCloseTheReplacement() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            CompletableFuture<Void> bind = CompletableFuture.runAsync(() -> {
+                try {
+                    signaling.bind(null, null);
+                } catch (ConnectException e) {
+                    throw new CompletionException(e);
+                }
+            });
+            EmbeddedChannel previous = signaling.nextSocket();
+            CompletableFuture<Void> reconnect = signaling.reconnectAsync("MCToken fresh");
+            EmbeddedChannel replacement = signaling.nextSocket();
+            signaling.receive(replacement, credentials("turn:replacement.invalid"));
+
+            reconnect.get(5, TimeUnit.SECONDS);
+            assertThrows(CompletionException.class, bind::join);
+            assertFalse(previous.isOpen());
+            assertTrue(replacement.isOpen());
+            assertSame(replacement, signaling.channel);
+            assertEquals("MCToken fresh", signaling.xboxToken);
+        }
+    }
+
+    @Test
+    void failedBindClosesSignalingEvenWhenInactiveClearedTheAttempt() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            CompletableFuture<Void> bind = CompletableFuture.runAsync(() -> {
+                try {
+                    signaling.bind(null, null);
+                } catch (ConnectException e) {
+                    throw new CompletionException(e);
+                }
+            });
+            EmbeddedChannel socket = signaling.nextSocket();
+            signaling.onLoop(() -> socket.close());
+
+            assertThrows(CompletionException.class, bind::join);
+            assertTrue(signaling.closedEvent.await(5, TimeUnit.SECONDS));
+            assertTrue(signaling.connect(null).isCompletedExceptionally());
+        }
+    }
+
+    @Test
+    void failedReconnectCanBeRetriedWithoutLosingHandlers() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            signaling.connectReady();
+            AtomicInteger received = new AtomicInteger();
+            signaling.setSignalHandler("42", signal -> received.incrementAndGet());
+            CompletableFuture<Void> failed = signaling.reconnectAsync("MCToken rejected");
+            EmbeddedChannel rejected = signaling.nextSocket();
+            signaling.onLoop(() -> rejected.close());
+            assertThrows(CompletionException.class, failed::join);
+
+            CompletableFuture<Void> retry = signaling.reconnectAsync("MCToken accepted");
+            EmbeddedChannel replacement = signaling.nextSocket();
+            signaling.receive(replacement, credentials("turn:retry.invalid"));
+            retry.get(5, TimeUnit.SECONDS);
+            signaling.receive(replacement, signal("CANDIDATEADD 42 candidate"));
+
+            assertEquals(1, received.get());
+            assertEquals("MCToken accepted", signaling.xboxToken);
+            assertTrue(replacement.isOpen());
+        }
+    }
+
+    @Test
+    void closeWaitsForTheWholeFrameWithoutHoldingTheMonitor() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            EmbeddedChannel socket = signaling.connectReady();
+            ChannelHandlerContext context = socket.pipeline().context(signaling);
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch resume = new CountDownLatch(1);
+            AtomicInteger received = new AtomicInteger();
+            signaling.beforeRead = () -> {
+                entered.countDown();
+                await(resume);
+            };
+            signaling.setSignalHandler("42", message -> {
+                assertFalse(Thread.holdsLock(signaling));
+                assertTrue(signaling.isChannelAlive());
+                CompletableFuture.runAsync(() -> signaling.sendSignal("peer", message)).orTimeout(5, TimeUnit.SECONDS).join();
+                received.incrementAndGet();
+            });
+            io.netty.util.concurrent.Future<?> reading = signaling.eventLoopGroup.next().submit(
+                    () -> socket.writeInbound(signal("CANDIDATEADD 42 candidate")));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                signaling.requestClose();
+                assertTrue(signaling.isChannelAlive());
+            } finally {
+                resume.countDown();
+            }
+            reading.syncUninterruptibly();
+            assertTrue(signaling.closedEvent.await(5, TimeUnit.SECONDS));
+            assertEquals(1, received.get());
+            TextWebSocketFrame stale = signal("CANDIDATEADD 42 late");
+            signaling.channelRead(context, stale);
+            assertEquals(0, stale.refCnt());
+            assertEquals(1, received.get());
+        }
+    }
+
+    @Test
+    void reconnectDeadlineClosesTheHalfOpenSocketAndAllowsRetry() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            signaling.connectReady();
+            CompletableFuture<Void> stalled = signaling.reconnectAsync("MCToken stalled");
+            EmbeddedChannel halfOpen = signaling.nextSocket();
+
+            java.util.concurrent.ExecutionException failure = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> stalled.get(25, TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof ConnectException);
+            assertTrue(failure.getCause().getCause() instanceof java.util.concurrent.TimeoutException);
+            assertFalse(halfOpen.isOpen());
+            CompletableFuture<Void> retry = signaling.reconnectAsync("MCToken retry");
+            EmbeddedChannel replacement = signaling.nextSocket();
+            signaling.receive(replacement, credentials("turn:retry.invalid"));
+            retry.get(5, TimeUnit.SECONDS);
+            assertTrue(replacement.isOpen());
+        }
+    }
+
+    @Test
+    void blockingLifecycleCallsOnTheSignalingLoopFailWithoutChangingTheSocket() throws Exception {
+        try (LoopSignaling signaling = new LoopSignaling()) {
+            EmbeddedChannel socket = signaling.connectReady();
+            signaling.onLoop(() -> {
+                assertThrows(ConnectException.class, () -> signaling.reconnect("MCToken fresh"));
+                assertThrows(ConnectException.class, () -> signaling.bind(null, null));
+            });
+            assertSame(socket, signaling.channel);
+            assertTrue(socket.isOpen());
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+    }
+
+    private static TextWebSocketFrame signal(String signal) {
+        JsonObject message = new JsonObject();
+        message.addProperty("Type", 1);
+        message.addProperty("From", "peer");
+        message.addProperty("Message", signal);
+        return new TextWebSocketFrame(message.toString());
+    }
+
+    private static final class LoopSignaling extends NetherNetXboxSignaling {
+        private final LinkedBlockingQueue<EmbeddedChannel> opened = new LinkedBlockingQueue<>();
+        private final List<EmbeddedChannel> sockets = new CopyOnWriteArrayList<>();
+        private final CountDownLatch closedEvent = new CountDownLatch(1);
+        private volatile Runnable beforeRead = () -> {};
+
+        private LoopSignaling() {
+            super("1", "MCToken initial");
+        }
+
+        @Override
+        ChannelFuture connectChannel() {
+            EmbeddedChannel socket = new EmbeddedChannel(this);
+            socket.freezeTime();
+            sockets.add(socket);
+            opened.add(socket);
+            return socket.newSucceededFuture();
+        }
+
+        @Override
+        protected void channelRead0(ChannelHandlerContext ctx, TextWebSocketFrame frame) {
+            beforeRead.run();
+            super.channelRead0(ctx, frame);
+        }
+
+        @Override
+        protected void onClosed() {
+            closedEvent.countDown();
+        }
+
+        private EmbeddedChannel nextSocket() throws InterruptedException {
+            EmbeddedChannel socket = opened.poll(5, TimeUnit.SECONDS);
+            assertTrue(socket != null, "The attempt must open a socket");
+            return socket;
+        }
+
+        private void onLoop(Runnable action) {
+            eventLoopGroup.next().submit(action).syncUninterruptibly();
+        }
+
+        private void receive(EmbeddedChannel socket, TextWebSocketFrame frame) {
+            onLoop(() -> socket.writeInbound(frame));
+        }
+
+        private EmbeddedChannel connectReady() throws Exception {
+            CompletableFuture<?> pending = connect(null);
+            EmbeddedChannel socket = nextSocket();
+            receive(socket, credentials("turn:initial.invalid"));
+            pending.get(5, TimeUnit.SECONDS);
+            return socket;
+        }
+
+        private CompletableFuture<Void> reconnectAsync(String token) {
+            return CompletableFuture.runAsync(() -> {
+                try {
+                    reconnect(token);
+                } catch (ConnectException e) {
+                    throw new CompletionException(e);
+                }
+            });
+        }
+
+        private void requestClose() {
+            super.close();
+        }
+
+        @Override
+        public void close() {
+            requestClose();
+            eventLoopGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+            sockets.forEach(EmbeddedChannel::finishAndReleaseAll);
+        }
+    }
+
     private static TextWebSocketFrame credentials(String url) {
         JsonArray urls = new JsonArray();
         urls.add(url);
@@ -290,12 +595,9 @@ class NetherNetXboxSignalingLifecycleTest {
 
         @Override
         public void close() {
-            try {
-                super.close();
-                sockets.forEach(EmbeddedChannel::finishAndReleaseAll);
-            } finally {
-                eventLoopGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
-            }
+            super.close();
+            eventLoopGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+            sockets.forEach(EmbeddedChannel::finishAndReleaseAll);
         }
     }
 }
