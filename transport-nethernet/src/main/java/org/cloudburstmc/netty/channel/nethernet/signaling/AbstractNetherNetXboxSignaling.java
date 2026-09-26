@@ -35,6 +35,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
@@ -78,6 +79,12 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     private static final AttributeKey<CopyOnWriteArrayList<ScheduledFuture<?>>> CHANNEL_TASKS =
             AttributeKey.valueOf("nethernet-signaling-channel-tasks");
 
+    /**
+     * The interval of the WebSocket protocol ping. The service must answer it with a pong (RFC 6455
+     * section 5.5.2), so a live socket receives a frame at least this often even when idle.
+     */
+    private static final long WS_PING_INTERVAL_SECONDS = 15;
+
     protected final InternalLogger log = InternalLoggerFactory.getInstance(getClass());
 
     protected volatile String xboxToken;
@@ -88,6 +95,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     protected volatile Channel channel;
     protected CompletableFuture<List<IceServerInfo>> connectFuture;
     protected volatile List<IceServerInfo> iceServers = new ArrayList<>();
+    protected volatile long lastMessageReceivedAt;
     private volatile boolean closed;
 
     protected final Map<String, SignalHandler> handlers = new ConcurrentHashMap<>();
@@ -200,7 +208,8 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                             ChannelPipeline p = ch.pipeline();
                             p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), 443));
                             p.addLast(new HttpClientCodec(), new HttpObjectAggregator(8192));
-                            p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker));
+                            // Pongs are passed on, so they count as received frames in channelRead
+                            p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker, true, false));
                             p.addLast("ws-aggregator",
                                     new WebSocketFrameAggregator(16 * 1024)); // Allow 16KB aggregations
                             p.addLast("handler", AbstractNetherNetXboxSignaling.this);
@@ -265,6 +274,9 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                     return;
                 }
                 log.debug("{} WebSocket Connected", getClass().getSimpleName());
+                lastMessageReceivedAt = System.currentTimeMillis();
+                scheduleRecurring(ctx, "ws-ping", () -> ctx.writeAndFlush(new PingWebSocketFrame()),
+                        WS_PING_INTERVAL_SECONDS, WS_PING_INTERVAL_SECONDS);
                 onConnected(ctx);
             }
         } else {
@@ -276,9 +288,13 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         // A socket that was replaced can still deliver frames, which must not touch the new one's
         // state. The lock is not held past the check: handlers start peer connections from here.
-        if (!isCurrentChannel(ctx.channel())) {
-            ReferenceCountUtil.release(msg);
-            return;
+        synchronized (this) {
+            if (!isCurrentChannel(ctx.channel())) {
+                ReferenceCountUtil.release(msg);
+                return;
+            }
+            // Pongs included, so a socket without signals still proves it is alive
+            lastMessageReceivedAt = System.currentTimeMillis();
         }
         super.channelRead(ctx, msg);
     }
@@ -391,10 +407,39 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         super.channelInactive(ctx);
     }
 
+    /**
+     * Whether the socket to the signaling service is open. A socket whose connection died without
+     * closing still counts as open, see {@link #isChannelAlive(long)}.
+     */
     @Override
-    public boolean isActive() {
+    public boolean isChannelAlive() {
         Channel ch = this.channel;
         return ch != null && ch.isActive();
+    }
+
+    /**
+     * Whether the socket is open and received a frame within the given time. The service answers
+     * the ping sent every 15 seconds, so two or three times that holds on a live socket even when
+     * no signals flow.
+     *
+     * @param maxSilenceMillis The longest time since the last received frame that still counts.
+     * @return true if the socket is open and not silent for longer than that.
+     */
+    public boolean isChannelAlive(long maxSilenceMillis) {
+        if (!isChannelAlive()) {
+            return false;
+        }
+        long silence = getMillisSinceLastMessage();
+        return silence >= 0 && silence <= maxSilenceMillis;
+    }
+
+    /**
+     * @return The milliseconds since the last frame received on the current socket, or -1 if none
+     * has arrived yet.
+     */
+    public long getMillisSinceLastMessage() {
+        long last = this.lastMessageReceivedAt;
+        return last == 0 ? -1 : System.currentTimeMillis() - last;
     }
 
     @Override

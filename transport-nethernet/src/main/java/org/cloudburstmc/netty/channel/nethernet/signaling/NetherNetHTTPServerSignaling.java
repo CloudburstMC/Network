@@ -689,7 +689,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     }
 
     @Override
-    public boolean isActive() {
+    public boolean isChannelAlive() {
         Channel ch = this.serverChannel;
         return ch != null && ch.isActive();
     }

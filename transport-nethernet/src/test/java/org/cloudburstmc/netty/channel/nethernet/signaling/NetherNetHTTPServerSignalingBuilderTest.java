@@ -84,7 +84,7 @@ class NetherNetHTTPServerSignalingBuilderTest {
         assertFalse(signaling.allowsIceOnLocalPort());
         assertEquals(List.of(turn), signaling.getIceServers());
         assertNotNull(signaling.serverIdentity());
-        assertFalse(signaling.isActive(), "nothing is serving until it is bound");
+        assertFalse(signaling.isChannelAlive(), "nothing is serving until it is bound");
         signaling.close();
     }
 
