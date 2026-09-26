@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.buffer.*;
 import io.netty.channel.*;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
@@ -54,6 +55,37 @@ class NativeAdmissionWriteTest {
             assertFalse(fits.await().isSuccess());
             assertEquals(0, fitting.refCnt());
             assertEquals(0, oversized.refCnt());
+        } finally {
+            channel.close().awaitUninterruptibly();
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
+    @Test
+    void aMessageOverTheWriteLimitIsQueuedOnItsOwn() throws Exception {
+        var group = new DefaultEventLoopGroup(1);
+        var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2));
+        int largeSize = 2 * AdmittedNetherNetChildChannel.WRITE_LIMIT;
+        int tooLargeSize = NetherNetConstants.MAX_ASSEMBLED_MESSAGE_SIZE + 1;
+        ByteBuf tooLarge = Unpooled.buffer(tooLargeSize).writerIndex(tooLargeSize);
+        ByteBuf large = Unpooled.buffer(largeSize).writeZero(largeSize);
+        ByteBuf behind = Unpooled.buffer(1).writeZero(1);
+        try {
+            group.register(channel).sync();
+            ChannelFuture refused = channel.write(tooLarge);
+            assertTrue(refused.await(5, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalArgumentException.class, refused.cause());
+            ChannelFuture queued = channel.write(large);
+            ChannelFuture full = channel.write(behind);
+            assertTrue(full.await(5, TimeUnit.SECONDS), "nothing joins a queue already past the limit");
+            assertInstanceOf(IllegalStateException.class, full.cause());
+            assertFalse(queued.isDone(), "the large message waits for the handshake");
+            channel.close().sync();
+            assertTrue(queued.await(5, TimeUnit.SECONDS));
+            assertFalse(queued.isSuccess());
+            assertEquals(0, tooLarge.refCnt());
+            assertEquals(0, large.refCnt());
+            assertEquals(0, behind.refCnt());
         } finally {
             channel.close().awaitUninterruptibly();
             group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();

@@ -62,13 +62,20 @@ class NetherNetFrameDecoderTest {
         assertThrows(IllegalArgumentException.class, () -> decoder.decode(Unpooled.buffer(MESSAGE_LIMIT + 1)
                 .writerIndex(MESSAGE_LIMIT + 1), true));
         assertThrows(IllegalArgumentException.class, () -> decoder.decode(frame(0), true));
-        for (int i = 26; i > 0; i--) {
-            ByteBuf fragment = Unpooled.buffer(10000).writeByte(i).writerIndex(10000);
-            assertNull(decoder.decode(fragment, true));
-        }
-        assertThrows(IllegalArgumentException.class, () -> decoder.decode(Unpooled.buffer(10000)
-                .writerIndex(10000), true));
         assertEquals(0, decoder.retainedBytes());
+    }
+
+    @Test
+    void aMessagePastTheAssembledLimitIsRejectedWithoutLeaking() {
+        var decoder = new NetherNetFrameDecoder(4);
+        ByteBuf head = frame(1, 1, 2, 3);
+        assertNull(decoder.decode(head, true));
+        ByteBuf tail = frame(0, 4, 5);
+        assertThrows(IllegalArgumentException.class, () -> decoder.decode(tail, true));
+        consumed(head);
+        consumed(tail);
+        assertEquals(0, decoder.retainedBytes());
+        assertArrayEquals(new byte[]{1, 2, 3, 4}, drain(decoder.decode(frame(0, 1, 2, 3, 4), true)));
     }
 
     @Test
@@ -90,7 +97,8 @@ class NetherNetFrameDecoderTest {
     @Test
     void largeFragmentedMessageReassemblesByteForByte() {
         var decoder = new NetherNetFrameDecoder();
-        int fragments = 4, payload = 9_999;
+        // Four frames of the advertised size, past the SCTP message size in total
+        int fragments = 4, payload = MESSAGE_LIMIT - 1;
         byte[] expected = new byte[fragments * payload];
         ByteBuf last = null;
         for (int i = 0; i < fragments; i++) {

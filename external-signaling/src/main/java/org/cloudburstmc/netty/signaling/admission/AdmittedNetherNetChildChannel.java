@@ -205,12 +205,18 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         boolean reliable = !(message instanceof NetherNetPacket p) || p.reliable();
         int size = payload.readableBytes();
         // Unordered traffic is never fragmented, so it has to fit one segment
-        if (size < 1 || size > (reliable ? NetherNetFrameDecoder.MESSAGE_LIMIT : maxSegmentPayload())) {
+        if (size < 1 || size > (reliable ? NetherNetConstants.MAX_ASSEMBLED_MESSAGE_SIZE : maxSegmentPayload())) {
             throw new IllegalArgumentException("NetherNet message exceeds channel framing limit");
         }
 
         ChannelOutboundBuffer out = unsafe().outboundBuffer();
-        if (out == null || out.totalPendingWriteBytes() + size + 128 > WRITE_LIMIT) {
+        if (out == null) {
+            throw new IllegalStateException("NetherNet outbound queue full");
+        }
+        // A message larger than the limit still goes out once the queue ahead of it is within the limit. The
+        // queue is then past it, so only one such message is ever queued beyond the limit.
+        long counted = size + 128 > WRITE_LIMIT ? 0 : size + 128;
+        if (out.totalPendingWriteBytes() + counted > WRITE_LIMIT) {
             throw new IllegalStateException("NetherNet outbound queue full");
         }
 
@@ -254,7 +260,9 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                 out.remove(refused);
                 continue;
             }
-            if (dc.bufferedAmount() + length + chunks > NATIVE_WRITE_LIMIT) {
+            int buffered = dc.bufferedAmount();
+            // A message larger than the limit goes out on its own, once the native buffer has drained
+            if (buffered > 0 && buffered + length + chunks > NATIVE_WRITE_LIMIT) {
                 out.setUserDefinedWritability(1, false);
                 return;
             }

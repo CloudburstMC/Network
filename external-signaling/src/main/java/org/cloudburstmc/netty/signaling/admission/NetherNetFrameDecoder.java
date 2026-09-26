@@ -18,14 +18,25 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 
 /**
  * Bounded countdown framing. Unordered traffic must fit one SCTP message.
  */
 public final class NetherNetFrameDecoder {
+    /** The SCTP message size this side advertises, and so the largest frame. */
     public static final int MESSAGE_LIMIT = 262144;
+    private final int assembledLimit;
     private CompositeByteBuf assembly;
     private int expected = -1;
+
+    public NetherNetFrameDecoder() {
+        this(NetherNetConstants.MAX_ASSEMBLED_MESSAGE_SIZE);
+    }
+
+    NetherNetFrameDecoder(int assembledLimit) {
+        this.assembledLimit = assembledLimit;
+    }
 
     /**
      * Consumes the frame and returns a completed message, or {@code null} while one is still assembling. The
@@ -63,7 +74,7 @@ public final class NetherNetFrameDecoder {
         }
 
         int size = this.assembly == null ? 0 : this.assembly.readableBytes();
-        if ((this.expected != -1 && this.expected != remaining) || size + payload > MESSAGE_LIMIT) {
+        if ((this.expected != -1 && this.expected != remaining) || size + payload > this.assembledLimit) {
             this.clear();
             throw new IllegalArgumentException("Invalid NetherNet fragment sequence");
         }

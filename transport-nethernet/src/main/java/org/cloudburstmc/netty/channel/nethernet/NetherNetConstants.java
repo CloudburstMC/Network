@@ -81,6 +81,11 @@ public class NetherNetConstants {
     public static final int MAX_OUTBOUND_MESSAGE_SIZE = 256 * 1024;
     /** A segment's countdown header is one byte, so one message spans at most this many segments. */
     public static final int MAX_SEGMENTS = 256;
+    /**
+     * The largest message joined from segments. The countdown alone would allow 256 segments of the
+     * largest SCTP message, 64 MiB at the advertised 256 KiB.
+     */
+    public static final int MAX_ASSEMBLED_MESSAGE_SIZE = 16 * 1024 * 1024;
 
     public static final String RELIABLE_CHANNEL_LABEL = "ReliableDataChannel";
     public static final String UNRELIABLE_CHANNEL_LABEL = "UnreliableDataChannel";

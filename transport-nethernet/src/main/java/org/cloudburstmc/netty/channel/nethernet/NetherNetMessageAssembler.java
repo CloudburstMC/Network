@@ -28,12 +28,6 @@ import java.nio.ByteBuffer;
 final class NetherNetMessageAssembler implements AutoCloseable {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetMessageAssembler.class);
 
-    /**
-     * The largest message this joins from fragments. The countdown alone would allow 256 fragments of the
-     * largest SCTP message, 64 MiB at the advertised 256 KiB.
-     */
-    static final int MAX_ASSEMBLED_SIZE = 16 * 1024 * 1024;
-
     private final String label;
     private final int maxAssembledSize;
     private CompositeByteBuf assembly;
@@ -42,7 +36,7 @@ final class NetherNetMessageAssembler implements AutoCloseable {
     private boolean closed;
 
     NetherNetMessageAssembler(String label) {
-        this(label, MAX_ASSEMBLED_SIZE);
+        this(label, NetherNetConstants.MAX_ASSEMBLED_MESSAGE_SIZE);
     }
 
     NetherNetMessageAssembler(String label, int maxAssembledSize) {
