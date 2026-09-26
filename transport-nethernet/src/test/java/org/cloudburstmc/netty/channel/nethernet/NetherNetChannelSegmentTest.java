@@ -91,6 +91,32 @@ class NetherNetChannelSegmentTest {
     }
 
     @Test
+    void theCountdownRunsItsFullRange() {
+        List<byte[]> sent = segmentsOf(Unpooled.wrappedBuffer(new byte[NetherNetConstants.MAX_SEGMENTS]), 1);
+
+        assertEquals(NetherNetConstants.MAX_SEGMENTS, sent.size());
+        assertEquals((byte) 255, sent.get(0)[0]);
+        assertEquals(0, sent.get(sent.size() - 1)[0]);
+        allocator.assertReleased();
+    }
+
+    @Test
+    void aMessageTheCountdownCannotNumberIsRefusedBeforeAnythingIsSent() {
+        ByteBuf message = Unpooled.wrappedBuffer(new byte[NetherNetConstants.MAX_SEGMENTS + 1]);
+
+        assertThrows(IllegalArgumentException.class, () -> NetherNetChannel.segment(
+                message, allocator, 1, view -> fail("nothing should be sent")));
+        assertTrue(allocator.buffers.isEmpty());
+    }
+
+    @Test
+    void aSegmentWithoutRoomForPayloadIsRefused() {
+        assertThrows(IllegalArgumentException.class, () -> NetherNetChannel.segment(
+                Unpooled.wrappedBuffer(new byte[]{1}), allocator, 0, view -> fail("nothing should be sent")));
+        assertTrue(allocator.buffers.isEmpty());
+    }
+
+    @Test
     void theMessageKeepsItsOwnIndexes() {
         ByteBuf message = Unpooled.wrappedBuffer(new byte[]{1, 2, 3});
         segmentsOf(message, 2);

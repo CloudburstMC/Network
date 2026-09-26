@@ -76,6 +76,8 @@ public class NetherNetConstants {
     // SCTP Constants
     public static final int MAX_SCTP_MESSAGE_SIZE = 10000;
     public static final int MAX_ADVERTISED_MESSAGE_SIZE = 256 * 1024; // 256 KB
+    /** A segment's countdown header is one byte, so one message spans at most this many segments. */
+    public static final int MAX_SEGMENTS = 256;
 
     public static final String RELIABLE_CHANNEL_LABEL = "ReliableDataChannel";
     public static final String UNRELIABLE_CHANNEL_LABEL = "UnreliableDataChannel";
@@ -173,6 +175,27 @@ public class NetherNetConstants {
         payload.readUnsignedShortLE(); // Length prefix
 
         return payload;
+    }
+
+    /**
+     * Counts the segments a message is split into.
+     *
+     * @param length     The message length in bytes
+     * @param maxPayload The most payload one segment carries, excluding the header byte
+     * @return How many segments the message needs, {@code 0} for an empty one
+     * @throws IllegalArgumentException if no payload fits a segment, or the message needs more
+     *                                  segments than the countdown header can number
+     */
+    public static int segmentCount(int length, int maxPayload) {
+        if (maxPayload < 1) {
+            throw new IllegalArgumentException("A segment has no room for payload");
+        }
+        int segments = length == 0 ? 0 : (length - 1) / maxPayload + 1;
+        if (segments > MAX_SEGMENTS) {
+            throw new IllegalArgumentException("A message of " + length + " bytes needs " + segments
+                    + " segments, more than the " + MAX_SEGMENTS + " its countdown can number");
+        }
+        return segments;
     }
 
     /**

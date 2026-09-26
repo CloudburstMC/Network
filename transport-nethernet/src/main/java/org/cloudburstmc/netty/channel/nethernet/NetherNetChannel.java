@@ -307,6 +307,9 @@ public abstract class NetherNetChannel extends AbstractChannel {
             Object msg = pendingWrites.poll();
             try {
                 writeInternal(msg);
+            } catch (IllegalArgumentException refused) {
+                // Its promise completed when it was queued, so only the pipeline can still hear of it
+                pipeline().fireExceptionCaught(refused);
             } finally {
                 ReferenceCountUtil.release(msg);
             }
@@ -314,11 +317,21 @@ public abstract class NetherNetChannel extends AbstractChannel {
 
         Object msg;
         while ((msg = in.current()) != null) {
-            writeInternal(msg);
+            try {
+                writeInternal(msg);
+            } catch (IllegalArgumentException refused) {
+                in.remove(refused);
+                continue;
+            }
             in.remove();
         }
     }
 
+    /**
+     * Sends one message over the reliable channel. A failure while sending reaches the pipeline.
+     *
+     * @throws IllegalArgumentException if the message cannot be segmented, in which case nothing was sent
+     */
     private void writeInternal(Object msg) {
         if (!(msg instanceof ByteBuf payload)) {
             log.debug("Dropping an outbound {}, which this channel cannot frame",
@@ -330,12 +343,15 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return;
         }
 
+        int maxPayload = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
+        // Checked before the first segment goes out, so the peer is never left inside a message
+        NetherNetConstants.segmentCount(payload.readableBytes(), maxPayload);
+
         ByteBuf framed = payload.retainedDuplicate();
         int totalLength = framed.readableBytes();
 
         try {
-            int segments = segment(framed, alloc(), NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1,
-                    reliableChannel::sendMessage);
+            int segments = segment(framed, alloc(), maxPayload, reliableChannel::sendMessage);
             if (segments == 0) {
                 log.debug("Nothing sent for an empty outbound message");
             } else {
@@ -365,11 +381,12 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * @param maxPayload The most payload one segment may carry, excluding the header byte
      * @param sender     Takes each segment, in order
      * @return How many segments were handed over
+     * @throws IllegalArgumentException as {@link NetherNetConstants#segmentCount}, before any segment is handed over
      */
     static int segment(ByteBuf framed, ByteBufAllocator allocator, int maxPayload,
                        Consumer<ByteBuffer> sender) {
         int totalLength = framed.readableBytes();
-        int segments = (totalLength + maxPayload - 1) / maxPayload;
+        int segments = NetherNetConstants.segmentCount(totalLength, maxPayload);
         int start = framed.readerIndex();
 
         for (int i = 0, offset = 0; i < segments; i++, offset += maxPayload) {
