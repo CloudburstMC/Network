@@ -28,14 +28,26 @@ import java.nio.ByteBuffer;
 final class NetherNetMessageAssembler implements AutoCloseable {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetMessageAssembler.class);
 
+    /**
+     * The largest message this joins from fragments. The countdown alone would allow 256 fragments of the
+     * largest SCTP message, 64 MiB at the advertised 256 KiB.
+     */
+    static final int MAX_ASSEMBLED_SIZE = 16 * 1024 * 1024;
+
     private final String label;
+    private final int maxAssembledSize;
     private CompositeByteBuf assembly;
     private int expected = -1;
     private boolean dropping;
     private boolean closed;
 
     NetherNetMessageAssembler(String label) {
+        this(label, MAX_ASSEMBLED_SIZE);
+    }
+
+    NetherNetMessageAssembler(String label, int maxAssembledSize) {
         this.label = label;
+        this.maxAssembledSize = maxAssembledSize;
     }
 
     /** The returned message belongs to the caller and may outlive the native callback. */
@@ -78,6 +90,15 @@ final class NetherNetMessageAssembler implements AutoCloseable {
             }
 
             if (data.hasRemaining()) {
+                int assembled = assembly == null ? 0 : assembly.readableBytes();
+                if (data.remaining() > maxAssembledSize - assembled) {
+                    log.debug("Dropping a message over {} bytes on the {} channel", maxAssembledSize, label);
+                    clear();
+                    // Follow the rest of its countdown out, as for a gap, so the next message starts clean
+                    expected = remaining == 0 ? -1 : remaining - 1;
+                    dropping = remaining != 0;
+                    return null;
+                }
                 if (assembly == null) {
                     // Allow every remaining fragment, avoiding CompositeByteBuf's automatic consolidation.
                     assembly = allocator.compositeBuffer(remaining + 1);
