@@ -204,8 +204,8 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         ByteBuf payload = payload(message);
         boolean reliable = !(message instanceof NetherNetPacket p) || p.reliable();
         int size = payload.readableBytes();
-        if (size < 1 || size > (reliable ? NetherNetFrameDecoder.MESSAGE_LIMIT :
-                NetherNetFrameDecoder.FRAME_LIMIT - 1)) {
+        // Unordered traffic is never fragmented, so it has to fit one segment
+        if (size < 1 || size > (reliable ? NetherNetFrameDecoder.MESSAGE_LIMIT : maxSegmentPayload())) {
             throw new IllegalArgumentException("NetherNet message exceeds channel framing limit");
         }
 
@@ -241,12 +241,15 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             boolean reliable = !(message instanceof NetherNetPacket packet) || packet.reliable();
             DataChannel dc = reliable ? reliableChannel : unreliableChannel;
             int length = payload.readableBytes();
-            // Unordered traffic is never fragmented, so it always goes out as one frame
-            int maxPayload = reliable ? maxSegmentPayload() : length;
+            int maxPayload = maxSegmentPayload();
             int chunks;
             try {
                 // Checked before the first frame goes out, so the peer is never left inside a message
                 chunks = NetherNetConstants.segmentCount(length, maxPayload);
+                if (!reliable && chunks > 1) {
+                    throw new IllegalArgumentException("An unreliable message of " + length
+                            + " bytes does not fit one segment of " + maxPayload);
+                }
             } catch (IllegalArgumentException refused) {
                 out.remove(refused);
                 continue;
