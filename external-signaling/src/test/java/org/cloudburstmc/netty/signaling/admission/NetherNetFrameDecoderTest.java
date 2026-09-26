@@ -6,6 +6,7 @@ import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
 import static org.cloudburstmc.netty.signaling.admission.NetherNetFrameDecoder.FRAME_LIMIT;
+import static org.cloudburstmc.netty.signaling.admission.NetherNetFrameDecoder.MESSAGE_LIMIT;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NetherNetFrameDecoderTest {
@@ -60,8 +61,8 @@ class NetherNetFrameDecoderTest {
         consumed(partial);
         assertEquals(0, decoder.retainedBytes());
         assertThrows(IllegalArgumentException.class, () -> decoder.decode(frame(255, 1), true));
-        assertThrows(IllegalArgumentException.class, () -> decoder.decode(Unpooled.buffer(10001)
-                .writerIndex(10001), true));
+        assertThrows(IllegalArgumentException.class, () -> decoder.decode(Unpooled.buffer(MESSAGE_LIMIT + 1)
+                .writerIndex(MESSAGE_LIMIT + 1), true));
         assertThrows(IllegalArgumentException.class, () -> decoder.decode(frame(0), true));
         for (int i = 26; i > 0; i--) {
             ByteBuf fragment = Unpooled.buffer(10000).writeByte(i).writerIndex(10000);
@@ -69,6 +70,22 @@ class NetherNetFrameDecoderTest {
         }
         assertThrows(IllegalArgumentException.class, () -> decoder.decode(Unpooled.buffer(10000)
                 .writerIndex(10000), true));
+        assertEquals(0, decoder.retainedBytes());
+    }
+
+    @Test
+    void anUnfragmentedMessageMayFillTheAdvertisedSize() {
+        var decoder = new NetherNetFrameDecoder();
+        for (int length : new int[]{FRAME_LIMIT + 1, MESSAGE_LIMIT}) {
+            ByteBuf frame = Unpooled.buffer(length).writeByte(0);
+            for (int b = 1; b < length; b++) {
+                frame.writeByte(b % 251);
+            }
+            byte[] message = drain(decoder.decode(frame, true));
+            assertEquals(length - 1, message.length);
+            assertEquals((byte) ((length - 1) % 251), message[length - 2]);
+            consumed(frame);
+        }
         assertEquals(0, decoder.retainedBytes());
     }
 

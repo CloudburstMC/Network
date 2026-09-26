@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
@@ -39,11 +40,14 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     public static final int WRITE_LIMIT = 1 << 20;
     public static final int NATIVE_WRITE_LIMIT = 1 << 19;
     public static final int INBOUND_FRAMES = 128;
+    /** Bounds queued frames by size too, at what {@link #INBOUND_FRAMES} frames of {@code FRAME_LIMIT} bytes hold. */
+    public static final int INBOUND_BYTES = INBOUND_FRAMES * NetherNetFrameDecoder.FRAME_LIMIT;
 
     private record Incoming(ByteBuf bytes, boolean reliable) {
     }
 
     private final ArrayBlockingQueue<Incoming> incoming = new ArrayBlockingQueue<>(INBOUND_FRAMES);
+    private final AtomicInteger incomingBytes = new AtomicInteger();
     private final NetherNetFrameDecoder decoder = new NetherNetFrameDecoder();
     private final AtomicBoolean failed = new AtomicBoolean();
     private final CompletableFuture<Void> nativeTermination = new CompletableFuture<>();
@@ -113,11 +117,17 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             if (!isOpen()) {
                 return;
             }
-            if (bytes.remaining() < 2 || bytes.remaining() > NetherNetFrameDecoder.FRAME_LIMIT) {
+            int size = bytes.remaining();
+            if (size < 2 || size > NetherNetFrameDecoder.MESSAGE_LIMIT) {
                 failed.set(true);
                 return;
             }
-            ByteBuf copy = alloc().buffer(bytes.remaining());
+            // Past the bound the channel closes, so the count need not be undone
+            if (incomingBytes.addAndGet(size) > INBOUND_BYTES) {
+                failed.set(true);
+                return;
+            }
+            ByteBuf copy = alloc().buffer(size);
             copy.writeBytes(bytes);
             if (!incoming.offer(new Incoming(copy, reliable))) {
                 copy.release();
@@ -159,6 +169,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                     if (frame == null) {
                         break;
                     }
+                    incomingBytes.addAndGet(-frame.bytes().readableBytes());
 
                     ByteBuf message = decoder.decode(frame.bytes(), frame.reliable());
                     if (message != null) {
@@ -310,6 +321,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     private void discardQueuedFrames() {
         Incoming frame = incoming.poll();
         while (frame != null) {
+            incomingBytes.addAndGet(-frame.bytes().readableBytes());
             frame.bytes().release();
             frame = incoming.poll();
         }
