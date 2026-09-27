@@ -327,6 +327,14 @@ class SdpUtilTest {
     }
 
     @Test
+    void givesEachTranslationItsOwnPriority() {
+        String result = SdpUtil.withAdvertisedCandidates(GATHERED, Set.of("203.0.113.99", "198.51.100.7"));
+
+        assertEquals(2, result.lines().filter(line -> line.contains(" typ srflx "))
+                .map(line -> line.split(" ")[3]).distinct().count());
+    }
+
+    @Test
     void leavesANameAloneRatherThanGuessingAnAddress() {
         assertEquals(GATHERED, SdpUtil.withAdvertisedCandidates(GATHERED, Set.of("proxy.example")));
     }

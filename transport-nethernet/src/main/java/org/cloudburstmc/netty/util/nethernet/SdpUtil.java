@@ -271,7 +271,10 @@ public final class SdpUtil {
         return out.toString();
     }
 
-    /** RFC 8445 section 5.1.2.1 with the server reflexive type preference, below any host. */
+    /**
+     * RFC 8445 section 5.1.2.1 with the server reflexive type preference, below any host. Each
+     * further translation takes the next lower local preference, which must be unique per type.
+     */
     private static final long TRANSLATED_PRIORITY = (100L << 24) | (65535L << 8) | 255;
 
     /**
@@ -295,7 +298,8 @@ public final class SdpUtil {
                     continue;
                 }
                 log.debug("Announcing {} as a translation of this host on port {}", address, host[5]);
-                candidates.add(CANDIDATE_PREFIX + foundation++ + " 1 " + host[2] + " " + TRANSLATED_PRIORITY + " "
+                long priority = TRANSLATED_PRIORITY - ((long) candidates.size() << 8);
+                candidates.add(CANDIDATE_PREFIX + foundation++ + " 1 " + host[2] + " " + priority + " "
                         + address + " " + host[5] + " typ srflx raddr " + host[4] + " rport " + host[5]);
             }
         }
