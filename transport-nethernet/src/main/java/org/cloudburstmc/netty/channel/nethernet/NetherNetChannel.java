@@ -376,8 +376,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
      * @return How many segments were handed over
      * @throws IllegalArgumentException as {@link NetherNetConstants#segmentCount}, before any segment is handed over
      */
-    static int segment(ByteBuf framed, ByteBufAllocator allocator, int maxPayload,
-                       Consumer<ByteBuffer> sender) {
+    protected static int segment(ByteBuf framed, ByteBufAllocator allocator, int maxPayload,
+                                 Consumer<ByteBuffer> sender) {
         int totalLength = framed.readableBytes();
         int segments = NetherNetConstants.segmentCount(totalLength, maxPayload);
         int start = framed.readerIndex();
