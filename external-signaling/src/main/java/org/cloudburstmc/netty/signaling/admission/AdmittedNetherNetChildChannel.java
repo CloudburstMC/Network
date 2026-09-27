@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -203,12 +204,15 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         ByteBuf payload = payload(message);
         boolean reliable = !(message instanceof NetherNetPacket p) || p.reliable();
         int size = payload.readableBytes();
-        if (size < 1 || size > (reliable ? NetherNetFrameDecoder.MESSAGE_LIMIT : SEGMENT_PAYLOAD)) {
+        if (size < 1 || (!reliable && size > SEGMENT_PAYLOAD)) {
             throw new IllegalArgumentException("NetherNet message exceeds channel framing limit");
         }
+        // Vanilla hosts send far larger messages, so reliable ones are held only to the countdown
+        NetherNetConstants.segmentCount(size, SEGMENT_PAYLOAD);
 
         ChannelOutboundBuffer out = unsafe().outboundBuffer();
-        if (out == null || out.totalPendingWriteBytes() + size + 128 > WRITE_LIMIT) {
+        // A message too large to share the queue is taken once at most half of it is used
+        if (out == null || out.totalPendingWriteBytes() + Math.min(size + 128, WRITE_LIMIT / 2) > WRITE_LIMIT) {
             throw new IllegalStateException("NetherNet outbound queue full");
         }
 
@@ -239,7 +243,8 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             DataChannel dc =
                     message instanceof NetherNetPacket packet && !packet.reliable() ? unreliableChannel : reliableChannel;
             int length = payload.readableBytes(), chunks = (length + SEGMENT_PAYLOAD - 1) / SEGMENT_PAYLOAD;
-            if (dc.bufferedAmount() + length + chunks > NATIVE_WRITE_LIMIT) {
+            // A message too large to share the native buffer goes out once at most half of it is used
+            if (dc.bufferedAmount() + Math.min(length + chunks, NATIVE_WRITE_LIMIT / 2) > NATIVE_WRITE_LIMIT) {
                 out.setUserDefinedWritability(1, false);
                 return;
             }

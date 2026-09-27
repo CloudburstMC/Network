@@ -2,7 +2,9 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.buffer.*;
 import io.netty.channel.*;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.net.InetSocketAddress;
 import java.util.*;
@@ -68,6 +70,39 @@ class NativeAdmissionWriteTest {
                 assertTrue(write.isDone());
                 assertFalse(write.isSuccess());
             }
+            for (ByteBuf buffer : buffers) {
+                assertEquals(0, buffer.refCnt());
+            }
+        } finally {
+            channel.close().awaitUninterruptibly();
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
+    @Test
+    @Timeout(15)
+    void aMessageTooLargeToShareTheQueueIsTakenWhileItIsAtMostHalfUsed() throws Exception {
+        var group = new DefaultEventLoopGroup(1);
+        var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2));
+        int largest = NetherNetConstants.MAX_SEGMENTS * (NetherNetFrameDecoder.FRAME_LIMIT - 1);
+        List<ByteBuf> buffers = List.of(Unpooled.buffer(largest + 1).writerIndex(largest + 1),
+                Unpooled.buffer(largest).writerIndex(largest), Unpooled.buffer(largest).writerIndex(largest),
+                Unpooled.buffer(1).writeByte(1));
+        try {
+            group.register(channel).sync();
+            // Written from the event loop, as encoded batches are, so no write is still in flight
+            List<ChannelFuture> writes = channel.eventLoop().submit(() -> buffers.stream().map(channel::write).toList())
+                    .get(5, TimeUnit.SECONDS);
+            ChannelFuture large = writes.get(1);
+
+            assertInstanceOf(IllegalArgumentException.class, writes.get(0).cause());
+            assertFalse(large.isDone()); // acceptance waits for actual native send
+            assertInstanceOf(IllegalStateException.class, writes.get(2).cause());
+            assertInstanceOf(IllegalStateException.class, writes.get(3).cause());
+
+            channel.close().sync();
+            assertTrue(large.await(5, TimeUnit.SECONDS));
+            assertFalse(large.isSuccess());
             for (ByteBuf buffer : buffers) {
                 assertEquals(0, buffer.refCnt());
             }
