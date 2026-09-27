@@ -24,12 +24,13 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Helpers for the SDP documents exchanged during signaling.
@@ -38,6 +39,7 @@ public final class SdpUtil {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(SdpUtil.class);
 
     private static final String CANDIDATE_PREFIX = "a=candidate:";
+    private static final Pattern ADVERTISED_ENDPOINT = Pattern.compile("(?:\\[([^\\]]+)\\]|([^:]+)):([0-9]{1,5})");
 
     /**
      * How many ports are guessed at for one peer. A peer gathers one port per interface it holds,
@@ -192,8 +194,10 @@ public final class SdpUtil {
      * addresses are reachable can announce only those.
      * <p>
      * An allowed address this host did not gather is the public side of a NAT that forwards the
-     * media port here, and is announced as a server reflexive candidate on the port of a host
-     * candidate of the same family. That works because libjuice matches inbound traffic by its
+     * media port here, and is announced as a server reflexive candidate. An entry may specify an
+     * external port as {@code IPv4:port} or {@code [IPv6]:port}; otherwise it uses the port of a host
+     * candidate of the same family. The related address and port still identify that local host
+     * candidate. That works because libjuice matches inbound traffic by its
      * source and never by the address it was sent to. Nothing here can tell a forward from a
      * mistake, so the list only ever narrows the host candidates, and only to addresses this host
      * holds: one naming none of them leaves every candidate in place, and a wrong address costs the
@@ -201,7 +205,7 @@ public final class SdpUtil {
      * since they are what the outside sees rather than an interface.
      *
      * @param sdp     The description to filter
-     * @param allowed The addresses that may be announced, empty to announce everything
+     * @param allowed IP addresses or UDP endpoints that may be announced, empty to announce everything
      * @return The filtered description
      */
     public static String withAdvertisedCandidates(String sdp, Set<String> allowed) {
@@ -209,35 +213,36 @@ public final class SdpUtil {
             return sdp;
         }
         String[] lines = sdp.split("\r\n|\n");
-        Set<String> gathered = new HashSet<>();
+        List<String[]> gathered = new ArrayList<>();
         List<String[]> hosts = new ArrayList<>();
         for (String line : lines) {
             if (!line.startsWith(CANDIDATE_PREFIX)) {
                 continue;
             }
-            String address = candidateAddress(line);
-            if (address != null) {
-                gathered.add(normaliseAddress(address));
-            }
             String[] parts = line.split(" ");
+            gathered.add(parts);
             if (isHostCandidate(line) && "udp".equalsIgnoreCase(parts[2])) {
                 hosts.add(parts);
             }
         }
 
-        Set<String> held = new HashSet<>();
-        List<String> foreign = new ArrayList<>();
-        for (String address : allowed) {
-            String normalised = normaliseAddress(address);
-            if (gathered.contains(normalised)) {
-                held.add(normalised);
+        Set<AdvertisedAddress> held = new HashSet<>();
+        List<AdvertisedAddress> foreign = new ArrayList<>();
+        for (String value : allowed) {
+            AdvertisedAddress address = AdvertisedAddress.parse(value);
+            if (address == null) {
+                log.warn("Advertised endpoint {} must be an IP literal with a port between 1 and 65535", value);
+                continue;
+            }
+            if (gathered.stream().anyMatch(address::matches)) {
+                held.add(address);
             } else {
-                foreign.add(normalised);
+                foreign.add(address);
             }
         }
-        Collections.sort(foreign);
+        foreign.sort(Comparator.comparing(AdvertisedAddress::address).thenComparingInt(AdvertisedAddress::port));
         // A held host is the more honest base for a translation, so it goes first for its family
-        hosts.sort(Comparator.comparing((String[] host) -> !held.contains(normaliseAddress(host[4]))));
+        hosts.sort(Comparator.comparing((String[] host) -> held.stream().noneMatch(address -> address.matches(host))));
         List<String> translated = translatedCandidates(hosts, foreign);
         if (held.isEmpty() && translated.isEmpty()) {
             log.warn("None of the gathered ICE candidates match the advertised addresses {}, "
@@ -255,8 +260,8 @@ public final class SdpUtil {
             if (line.startsWith(CANDIDATE_PREFIX)) {
                 seenCandidates = true;
                 if (!held.isEmpty() && !isReflexiveOrRelayed(line)) {
-                    String address = candidateAddress(line);
-                    if (address == null || !held.contains(normaliseAddress(address))) {
+                    String[] parts = line.split(" ");
+                    if (held.stream().noneMatch(address -> address.matches(parts))) {
                         continue;
                     }
                 }
@@ -279,27 +284,55 @@ public final class SdpUtil {
      * of the same family. One per address and port, since every interface shares the socket and
      * would otherwise give the same line.
      */
-    private static List<String> translatedCandidates(List<String[]> hosts, List<String> foreign) {
+    private static List<String> translatedCandidates(List<String[]> hosts, List<AdvertisedAddress> foreign) {
         List<String> candidates = new ArrayList<>();
         Set<String> emitted = new HashSet<>();
         int foundation = 80000000;
-        for (String address : foreign) {
+        for (AdvertisedAddress endpoint : foreign) {
+            String address = endpoint.address();
             byte[] raw = NetUtil.createByteArrayFromIpAddressString(address);
             if (raw == null) {
                 log.warn("Advertised address {} is not an IP literal, so it cannot be announced", address);
                 continue;
             }
             for (String[] host : hosts) {
+                String port = endpoint.port() == 0 ? host[5] : Integer.toString(endpoint.port());
                 byte[] local = NetUtil.createByteArrayFromIpAddressString(host[4]);
-                if (local == null || local.length != raw.length || !emitted.add(address + " " + host[5])) {
+                if (local == null || local.length != raw.length || !emitted.add(address + " " + port)) {
                     continue;
                 }
-                log.debug("Announcing {} as a translation of this host on port {}", address, host[5]);
+                log.debug("Announcing {}:{} as a translation of {}:{}", address, port, host[4], host[5]);
                 candidates.add(CANDIDATE_PREFIX + foundation++ + " 1 " + host[2] + " " + TRANSLATED_PRIORITY + " "
-                        + address + " " + host[5] + " typ srflx raddr " + host[4] + " rport " + host[5]);
+                        + address + " " + port + " typ srflx raddr " + host[4] + " rport " + host[5]);
             }
         }
         return candidates;
+    }
+
+    /** A zero port means the entry selects an address regardless of its gathered port. */
+    private record AdvertisedAddress(String address, int port) {
+        private static AdvertisedAddress parse(String value) {
+            // Check a bare IPv6 literal before looking for a port. Do not resolve names here.
+            if (NetUtil.createByteArrayFromIpAddressString(value) != null || value.indexOf(':') < 0) {
+                return new AdvertisedAddress(normaliseAddress(value), 0);
+            }
+            Matcher matcher = ADVERTISED_ENDPOINT.matcher(value);
+            if (!matcher.matches()) {
+                return null;
+            }
+            String address = matcher.group(1) == null ? matcher.group(2) : matcher.group(1);
+            int port = Integer.parseInt(matcher.group(3));
+            if (NetUtil.createByteArrayFromIpAddressString(address) == null || port < 1 || port > 65535) {
+                return null;
+            }
+            return new AdvertisedAddress(normaliseAddress(address), port);
+        }
+
+        private boolean matches(String[] candidate) {
+            return candidate.length >= 5 && address.equals(normaliseAddress(candidate[4]))
+                    && (port == 0 || (candidate.length >= 6 && "udp".equalsIgnoreCase(candidate[2])
+                    && Integer.toString(port).equals(candidate[5])));
+        }
     }
 
     private static String candidateType(String candidate) {

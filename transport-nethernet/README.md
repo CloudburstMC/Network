@@ -52,6 +52,27 @@ new ServerBootstrap()
 
 The identity file is created on first start and pinned by clients, so keep it. `NetherNetChildChannel.PLAYER_INFO` on an accepted channel carries the validated player, and `TransportIdentityBinding` ties the login chain to it.
 
+#### Advertising a forwarded UDP port
+
+When a NAT or UDP tunnel exposes a different port from the local media socket, pass the external
+endpoints to the signaling builder:
+
+```java
+.setAdvertisedAddresses(List.of("203.0.113.10:56789", "[2001:db8::10]:46565"))
+```
+
+For a local media socket on port `19133`, the first entry announces `203.0.113.10:56789` while
+keeping the local address and port as the candidate's related address and port. Each endpoint must
+forward UDP traffic to that socket; this option does not set up forwarding or change the bind port.
+Use IP literals, with brackets around IPv6 when specifying a port. Bare IP addresses use the gathered
+port. Malformed endpoints are ignored with a warning.
+
+An endpoint already gathered selects that UDP candidate by both address and port. Otherwise, an
+additional server-reflexive candidate is announced using a local UDP host candidate of the same
+address family. As with bare addresses, a list that selects no gathered candidates leaves them in
+place, and reflexive and relayed candidates are always retained. This is not an exclusive routing
+policy for a tunnel. An empty list leaves the gathered description unchanged.
+
 ### Client
 
 ```java

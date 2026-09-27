@@ -933,9 +933,12 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * Sets the addresses announced as ICE candidates; empty, the default, announces everything
          * ICE gathers. Listed addresses this host holds narrow its host candidates to those; one it
          * does not hold is announced as the public side of a NAT forwarding the media port here.
+         * Use {@code IPv4:port} or {@code [IPv6]:port} when the external UDP port differs from the
+         * local media port. Bare IP addresses use the gathered port. Entries with an explicit port
+         * select a gathered UDP candidate only when both its address and port match.
          * A signaling proxy's address does not belong here unless it also forwards the media port.
          *
-         * @param advertisedAddresses Addresses reachable by connecting peers
+         * @param advertisedAddresses IP addresses or UDP endpoints reachable by connecting peers
          * @return This builder
          * @see SdpUtil#withAdvertisedCandidates
          */
