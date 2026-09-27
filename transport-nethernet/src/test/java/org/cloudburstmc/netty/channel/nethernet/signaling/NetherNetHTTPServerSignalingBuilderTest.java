@@ -24,7 +24,6 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
-import java.util.Set;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -99,8 +98,15 @@ class NetherNetHTTPServerSignalingBuilderTest {
         assertTrue(signaling.allowsIceOnLocalPort(), "ICE may use the signaling port unless told otherwise");
         assertEquals(List.of(), signaling.getIceServers());
         // Nothing configured means nothing is filtered out of an answer
-        assertEquals(SDP, SdpUtil.withAdvertisedCandidates(SDP, Set.of()));
+        assertEquals(SDP, SdpUtil.withAdvertisedCandidates(SDP, List.of()));
         signaling.close();
+    }
+
+    @Test
+    void reportsAMalformedAdvertisedAddressAtConfigurationTime() {
+        // A typo has to fail where it is written, not warn on every join
+        assertThrows(IllegalArgumentException.class, () -> new NetherNetHTTPServerSignaling.Builder()
+                .setAdvertisedAddresses(List.of("203.0.113.10", "proxy.example:19133")));
     }
 
     @Test

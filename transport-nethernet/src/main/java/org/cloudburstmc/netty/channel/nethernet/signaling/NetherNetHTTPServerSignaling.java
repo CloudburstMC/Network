@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
@@ -40,7 +41,6 @@ import java.nio.channels.ClosedChannelException;
 import javax.net.ssl.SSLException;
 import io.netty.handler.codec.DecoderException;
 import org.jose4j.jwt.consumer.InvalidJwtException;
-import java.util.Set;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import io.netty.bootstrap.ServerBootstrap;
@@ -124,7 +124,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
     private final IpRangeSet trustedProxies;
     private final boolean iceOnLocalPort;
-    private final Set<String> advertisedAddresses;
+    private final List<InetSocketAddress> advertisedAddresses;
     private final List<IceServerInfo> iceServers;
     private final TokenTrust tokenTrust;
     private final boolean serveHttp;
@@ -730,7 +730,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         private int maxPendingJoins = 64;
         private int answerTimeoutSeconds = 30;
         private boolean iceOnLocalPort = true;
-        private Set<String> advertisedAddresses = Set.of();
+        private List<InetSocketAddress> advertisedAddresses = List.of();
         private List<IceServerInfo> iceServers = List.of();
         private TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
         private boolean serveHttp = true;
@@ -930,17 +930,21 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the addresses announced as ICE candidates; empty, the default, announces everything
-         * ICE gathers. Listed addresses this host holds narrow its host candidates to those; one it
-         * does not hold is announced as the public side of a NAT forwarding the media port here.
-         * A signaling proxy's address does not belong here unless it also forwards the media port.
+         * Sets the endpoints announced as ICE candidates; empty, the default, announces everything
+         * ICE gathers. Each is an IP literal, {@code IPv4:port} or {@code [IPv6]:port}, and a bare
+         * address takes the media port. Listed endpoints this host holds narrow its host candidates
+         * to those; any other is announced as the public side of a NAT forwarding it to the media
+         * port here. A signaling proxy's address does not belong here unless it also forwards the
+         * media port.
          *
-         * @param advertisedAddresses Addresses reachable by connecting peers
+         * @param advertisedAddresses Endpoints reachable by connecting peers
          * @return This builder
+         * @throws IllegalArgumentException If an entry is none of those forms
          * @see SdpUtil#withAdvertisedCandidates
          */
         public Builder setAdvertisedAddresses(Collection<String> advertisedAddresses) {
-            this.advertisedAddresses = advertisedAddresses == null ? Set.of() : Set.copyOf(advertisedAddresses);
+            this.advertisedAddresses = advertisedAddresses == null ? List.of()
+                    : advertisedAddresses.stream().map(EndpointAddress::parseEndpoint).distinct().toList();
             return this;
         }
 
