@@ -23,7 +23,6 @@ import io.netty.util.concurrent.ScheduledFuture;
 import tel.schich.libdatachannel.*;
 
 import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +41,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     public static final int INBOUND_FRAMES = 128;
     /** Bounds queued frames by size too, at what {@link #INBOUND_FRAMES} frames of {@code FRAME_LIMIT} bytes hold. */
     public static final int INBOUND_BYTES = INBOUND_FRAMES * NetherNetFrameDecoder.FRAME_LIMIT;
+    private static final int SEGMENT_PAYLOAD = NetherNetFrameDecoder.FRAME_LIMIT - 1;
 
     private record Incoming(ByteBuf bytes, boolean reliable) {
     }
@@ -203,8 +203,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         ByteBuf payload = payload(message);
         boolean reliable = !(message instanceof NetherNetPacket p) || p.reliable();
         int size = payload.readableBytes();
-        if (size < 1 || size > (reliable ? NetherNetFrameDecoder.MESSAGE_LIMIT :
-                NetherNetFrameDecoder.FRAME_LIMIT - 1)) {
+        if (size < 1 || size > (reliable ? NetherNetFrameDecoder.MESSAGE_LIMIT : SEGMENT_PAYLOAD)) {
             throw new IllegalArgumentException("NetherNet message exceeds channel framing limit");
         }
 
@@ -239,22 +238,14 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             ByteBuf payload = payload(message);
             DataChannel dc =
                     message instanceof NetherNetPacket packet && !packet.reliable() ? unreliableChannel : reliableChannel;
-            int length = payload.readableBytes(), chunks = (length + 9998) / 9999;
+            int length = payload.readableBytes(), chunks = (length + SEGMENT_PAYLOAD - 1) / SEGMENT_PAYLOAD;
             if (dc.bufferedAmount() + length + chunks > NATIVE_WRITE_LIMIT) {
                 out.setUserDefinedWritability(1, false);
                 return;
             }
 
             try {
-                for (int i = 0, offset = payload.readerIndex(); i < chunks; i++) {
-                    int count = Math.min(9999, length - i * 9999);
-                    ByteBuffer frame = ByteBuffer.allocateDirect(count + 1);
-                    frame.put((byte) (chunks - i - 1));
-                    payload.getBytes(offset, frame);
-                    frame.flip();
-                    dc.sendMessage(frame);
-                    offset += count;
-                }
+                segment(payload, alloc(), SEGMENT_PAYLOAD, dc::sendMessage);
                 out.remove();
             } catch (Exception failure) {
                 out.remove(failure);
