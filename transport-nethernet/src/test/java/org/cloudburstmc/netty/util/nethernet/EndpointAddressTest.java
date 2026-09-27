@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.util.nethernet;
 import org.junit.jupiter.api.Test;
 
 import java.net.Inet4Address;
+import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -61,5 +62,26 @@ class EndpointAddressTest {
         // A leading zero reads as decimal, never octal, so the two forms name the same host
         assertEquals("10.0.0.1", EndpointAddress.parse("010.0.0.1").getHostAddress());
         assertEquals("192.168.1.1", EndpointAddress.parse("::ffff:192.168.001.1").getHostAddress());
+    }
+
+    @Test
+    void readsEndpointsAndBareAddressesAsPortZero() {
+        assertEquals(new InetSocketAddress("203.0.113.99", 56789), EndpointAddress.parseEndpoint("203.0.113.99:56789"));
+        assertEquals(new InetSocketAddress("2001:db8::99", 1), EndpointAddress.parseEndpoint("[2001:db8::99]:1"));
+        assertEquals(new InetSocketAddress("203.0.113.99", 65535), EndpointAddress.parseEndpoint("203.0.113.99:65535"));
+        assertEquals(new InetSocketAddress("203.0.113.99", 0), EndpointAddress.parseEndpoint("203.0.113.99"));
+        assertEquals(new InetSocketAddress("2001:db8::99", 0), EndpointAddress.parseEndpoint("[2001:db8::99]"));
+        // Without brackets the digits after the last colon are part of the address
+        assertEquals(new InetSocketAddress("2001:db8::99:5678", 0), EndpointAddress.parseEndpoint("2001:db8::99:5678"));
+    }
+
+    @Test
+    void rejectsMalformedEndpoints() {
+        for (String endpoint : new String[]{"203.0.113.99:0", "203.0.113.99:65536", "203.0.113.99:-1",
+                "203.0.113.99:99999999999999999999", "203.0.113.99:", "203.0.113.99:abc", "[2001:db8::99]:0",
+                "[2001:db8::99]:", "[2001:db8::99:56789", "[[2001:db8::99]]", "proxy.example",
+                "proxy.example:56789", "999.1.2.3:56789", "203.0.113.99:56789\r\na=invalid"}) {
+            assertThrows(IllegalArgumentException.class, () -> EndpointAddress.parseEndpoint(endpoint), endpoint);
+        }
     }
 }

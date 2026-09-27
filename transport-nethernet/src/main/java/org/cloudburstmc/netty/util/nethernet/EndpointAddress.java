@@ -19,12 +19,17 @@ package org.cloudburstmc.netty.util.nethernet;
 import io.netty.util.NetUtil;
 
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * Numeric endpoint classification, shared by provider adapters. No DNS or reachability claims.
+ * Numeric endpoint parsing and classification, shared by the signaling paths. No DNS or reachability claims.
  */
 public final class EndpointAddress {
+    private static final Pattern ENDPOINT = Pattern.compile("(?:\\[([^\\]]+)\\]|([^:]+)):([0-9]{1,5})");
+
     public enum Scope {
         /** Globally reachable unicast. */
         PUBLIC,
@@ -52,6 +57,30 @@ public final class EndpointAddress {
             throw new UnknownHostException("Invalid IP address");
         }
         return address; // Also normalizes IPv4-mapped IPv6.
+    }
+
+    /**
+     * Reads {@code IPv4:port} or {@code [IPv6]:port}, or a bare IP literal, bracketed or not, as
+     * port 0. Never a name.
+     *
+     * @throws IllegalArgumentException If the value is none of those
+     */
+    public static InetSocketAddress parseEndpoint(String value) {
+        Matcher endpoint = ENDPOINT.matcher(value);
+        try {
+            if (!endpoint.matches()) {
+                boolean bracketed = value.startsWith("[") && value.endsWith("]");
+                return new InetSocketAddress(parse(bracketed ? value.substring(1, value.length() - 1) : value), 0);
+            }
+            int port = Integer.parseInt(endpoint.group(3));
+            if (port >= 1 && port <= 65535) {
+                return new InetSocketAddress(parse(endpoint.group(1) == null ? endpoint.group(2) : endpoint.group(1)),
+                        port);
+            }
+        } catch (UnknownHostException invalid) {
+            // Falls through to the one message
+        }
+        throw new IllegalArgumentException("Expected an IP literal, IPv4:port or [IPv6]:port, got " + value);
     }
 
     /**

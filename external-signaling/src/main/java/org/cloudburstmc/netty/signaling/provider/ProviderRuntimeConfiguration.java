@@ -24,12 +24,10 @@ import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.util.nethernet.SecretValue;
 
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.regex.Pattern;
 
 /**
  * Validated NXS settings, with the listener and capacity inherited from whatever is hosting.
@@ -234,25 +232,16 @@ public record ProviderRuntimeConfiguration(
 
     private static InetSocketAddress endpoint(String value) throws IOException {
         try {
-            var match = Pattern.compile("(?:\\[([^\\]]+)\\]|([^:]+)):([0-9]{1,5})").matcher(value);
-            if (!match.matches()) {
-                throw new IllegalArgumentException();
+            InetSocketAddress endpoint = EndpointAddress.parseEndpoint(value);
+            if (endpoint.getPort() != 0
+                    && EndpointAddress.scope(endpoint.getAddress()) != EndpointAddress.Scope.UNUSABLE) {
+                return endpoint;
             }
-
-            int port = Integer.parseInt(match.group(3));
-            if (port < 1 || port > 65535) {
-                throw new IllegalArgumentException();
-            }
-
-            InetAddress address = EndpointAddress.parse(match.group(1) == null ? match.group(2) : match.group(1));
-            if (EndpointAddress.scope(address) == EndpointAddress.Scope.UNUSABLE) {
-                throw new IllegalArgumentException();
-            }
-
-            return new InetSocketAddress(address, port);
-        } catch (Exception invalid) {
-            throw new IOException("nxs.advertise-addresses entries must be numeric IPv4:port or [IPv6]:port with ports 1-65535");
+        } catch (RuntimeException invalid) {
+            // Falls through to the one message
         }
+        throw new IOException(
+                "nxs.advertise-addresses entries must be numeric IPv4:port or [IPv6]:port with ports 1-65535");
     }
 
     private static String token(String value, Path directory) throws IOException {
