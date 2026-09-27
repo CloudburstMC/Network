@@ -24,6 +24,7 @@ dependencies {
     api(libs.expiringmap)
 
     testImplementation(libs.bundles.junit)
+    testImplementation(variantOf(libs.netty.transport.native.epoll) { classifier("linux-x86_64") })
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
