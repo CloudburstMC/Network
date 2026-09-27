@@ -52,6 +52,8 @@ new ServerBootstrap()
 
 The identity file is created on first start and pinned by clients, so keep it. `NetherNetChildChannel.PLAYER_INFO` on an accepted channel carries the validated player, and `TransportIdentityBinding` ties the login chain to it.
 
+Behind a NAT or UDP tunnel, pass its public endpoint to `setAdvertisedAddresses`, such as `203.0.113.10:56789`. It is announced as a server reflexive candidate of the media port, so ICE needs a fixed port (the signaling port by default, or `NETHER_SERVER_ICE_ADDRESS`), and the forward has to answer from that same public endpoint, as a stateful port forward does.
+
 ### Client
 
 ```java
