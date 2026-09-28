@@ -21,6 +21,8 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
+import org.jspecify.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 
@@ -38,18 +40,24 @@ final class NetherNetMessageAssembler implements AutoCloseable {
         this.label = label;
     }
 
-    /** The returned message belongs to the caller and may outlive the native callback. */
-    synchronized ByteBuf decode(ByteBuffer data, ByteBufAllocator allocator) {
+    /**
+     * The returned message belongs to the caller and may outlive the native callback. Null while a
+     * split message is still arriving and for anything that cannot be delivered, which the metrics
+     * count apart.
+     */
+    synchronized ByteBuf decode(ByteBuffer data, ByteBufAllocator allocator, @Nullable NetherChannelMetrics metrics) {
         if (closed) {
             return null;
         }
         if (!data.hasRemaining()) {
             log.debug("Empty message on the {} channel", label);
+            failed(metrics);
             return null;
         }
 
         int remaining = data.get() & 0xFF;
         if (expected != -1 && remaining != expected) {
+            failed(metrics);
             if (remaining > expected) {
                 // A countdown only ever falls, so the rest of the message being assembled will
                 // never arrive and this fragment opens a new one
@@ -74,7 +82,11 @@ final class NetherNetMessageAssembler implements AutoCloseable {
 
         try {
             if (expected == -1 && remaining == 0) {
-                return data.hasRemaining() ? copy(data, allocator) : null;
+                if (data.hasRemaining()) {
+                    return copy(data, allocator);
+                }
+                failed(metrics);
+                return null;
             }
 
             if (data.hasRemaining()) {
@@ -87,15 +99,28 @@ final class NetherNetMessageAssembler implements AutoCloseable {
             }
             expected = remaining - 1;
             if (remaining != 0) {
+                if (metrics != null) {
+                    metrics.fragmentsIn(1);
+                }
                 return null;
             }
 
             ByteBuf message = assembly;
             assembly = null;
+            if (message == null) {
+                // Every fragment was a bare header
+                failed(metrics);
+            }
             return message;
         } catch (RuntimeException | Error e) {
             clear();
             throw e;
+        }
+    }
+
+    private static void failed(@Nullable NetherChannelMetrics metrics) {
+        if (metrics != null) {
+            metrics.decodeFail(1);
         }
     }
 

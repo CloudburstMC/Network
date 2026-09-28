@@ -254,11 +254,8 @@ public abstract class NetherNetChannel extends AbstractChannel {
         NetherChannelMetrics metrics = config.getMetrics();
 
         // The native ByteBuffer expires when this callback returns.
-        ByteBuf packet = assembler.decode(data, alloc());
+        ByteBuf packet = assembler.decode(data, alloc(), metrics);
         if (packet == null) {
-            if (metrics != null) {
-                metrics.decodeFail(1);
-            }
             return;
         }
 
