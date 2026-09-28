@@ -39,6 +39,14 @@ public interface NetherChannelMetrics {
     default void messagesOut(int count) {
     }
 
+    /** Frames carrying part of a split message other than the last, which counts in {@link #messagesIn}. */
+    default void fragmentsIn(int count) {
+    }
+
+    /**
+     * Inbound messages that cannot be delivered: one abandoned because fragments went missing or the
+     * next began first, and an empty frame or message.
+     */
     default void decodeFail(int count) {
     }
 
