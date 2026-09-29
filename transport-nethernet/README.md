@@ -5,7 +5,7 @@
 > [!IMPORTANT]
 > This library uses [libdatachannel-java](https://github.com/opencollab-incubator/libdatachannel-java) and needs its platform-specific native library at runtime. The main artifact contains no natives, so you have to add them yourself.
 
-For a build that ships to more than one platform, add `libdatachannel-java-arch-detect`. It bundles every architecture and selects the matching one at runtime.
+For a build that ships to more than one platform, add `libdatachannel-java-arch-detect`. It bundles the supported platforms and selects the matching native at runtime. Linux bundles with libc-specific natives also distinguish glibc from musl (Alpine).
 
 ```kotlin
 dependencies {
@@ -25,7 +25,21 @@ dependencies {
 }
 ```
 
-The classifiers are `linux-x86_64`, `linux-aarch64`, `windows-x86_64`, `windows-aarch64`, `macos-x86_64` and `macos-arm64`. Android ships from its own `libdatachannel-java-android` module.
+The [libc-aware binding](https://github.com/opencollab-incubator/libdatachannel-java/pull/4) uses `linux-glibc-x86_64`, `linux-glibc-aarch64`,
+`linux-musl-x86_64`, and `linux-musl-aarch64` for Linux. Other classifiers remain
+`windows-x86_64`, `windows-aarch64`, `macos-x86_64`, and `macos-arm64`.
+Android ships from its own `libdatachannel-java-android` module.
+
+The currently pinned binding predates these Linux classifiers and still uses
+`linux-x86_64` and `linux-aarch64` (glibc only). Alpine support requires upgrading
+the binding and its natives together to a published libc-aware version. Using
+`libdatachannel-java-arch-detect` avoids hard-coding classifiers in applications
+and tests across this transition.
+
+For Alpine, install `libssl3` and `libstdc++`; `gcompat` is not required by the
+musl build. The binding detects the libc loaded by the JVM through
+`/proc/self/maps`. If procfs is unavailable, supply `-Dlibdatachannel.libc=musl`
+or `-Dlibdatachannel.libc=glibc` to match the JVM.
 
 > [!WARNING]
 > Every classifier of one operating system carries its native under the same path, so putting several of them on one classpath resolves to whichever comes first. Use `arch-detect` instead of listing them.
