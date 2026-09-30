@@ -15,8 +15,10 @@
  */
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
@@ -42,7 +44,8 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
     private final int maxConnectionsPerAddress;
     private final Map<InetAddress, Integer> connectionsPerAddress;
     private final Supplier<NetherServerMetrics> metrics;
-    private InetAddress counted;
+    /** Whether the connection was let through. Nothing it sent goes any further until it is. */
+    private boolean admitted;
 
     /**
      * @param connectionsPerAddress The counts, shared by every connection of one endpoint
@@ -57,11 +60,34 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
     }
 
     @Override
-    public void channelActive(ChannelHandlerContext ctx) {
-        InetAddress peer = ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress();
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        // Not on channelActive, which a connection handed over by its host has already had. An
+        // accepted connection that is not active here is already closed.
+        if (ctx.channel().isActive()) {
+            this.admitted = admit(ctx);
+        }
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        // A host passes on what it read before the handover even once this has closed the connection
+        if (this.admitted) {
+            ctx.fireChannelRead(msg);
+        } else {
+            ReferenceCountUtil.release(msg);
+        }
+    }
+
+    /**
+     * Counts the connection against its address, or closes it when that address holds too many.
+     *
+     * @return Whether the connection was let through
+     */
+    private boolean admit(ChannelHandlerContext ctx) {
+        InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+        InetAddress peer = remote.getAddress();
         if (trustedProxies.contains(peer)) {
-            ctx.fireChannelActive();
-            return;
+            return true;
         }
 
         if (connectionsPerAddress.merge(peer, 1, Integer::sum) > maxConnectionsPerAddress) {
@@ -69,22 +95,15 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
             log.debug("Refused a connection from {}, already holding {}", peer, maxConnectionsPerAddress);
             NetherServerMetrics metrics = this.metrics.get();
             if (metrics != null) {
-                metrics.addressRefused((InetSocketAddress) ctx.channel().remoteAddress());
+                metrics.addressRefused(remote);
             }
             ctx.close();
-            return;
+            return false;
         }
-        this.counted = peer;
-        ctx.fireChannelActive();
-    }
-
-    @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
-        if (this.counted != null) {
-            release(this.counted);
-            this.counted = null;
-        }
-        ctx.fireChannelInactive();
+        // Given back on the close itself, which a host's handlers cannot hold up the way they can
+        // channelInactive
+        ctx.channel().closeFuture().addListener((ChannelFutureListener) future -> release(peer));
+        return true;
     }
 
     private void release(InetAddress peer) {

@@ -29,6 +29,8 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.DecoderException;
@@ -53,6 +55,7 @@ import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.AsciiString;
 import io.netty.util.NetUtil;
 import io.netty.util.concurrent.FutureListener;
+import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.concurrent.Promise;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
@@ -113,7 +116,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final InternalLogger log = InternalLoggerFactory.getInstance(getClass());
 
     private final OperatorIdentity serverIdentity;
-    private SslContext sslContext;
+    private final SslContext sslContext;
     private final IpRangeSet trustedProxies;
     private final int maxConnectionsPerAddress;
     private final int maxPendingJoins;
@@ -133,6 +136,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     /** The joins whose child has not answered yet, by the connection id the channel was handed. */
     private final Map<String, Promise<String>> pendingByConnection = new ConcurrentHashMap<>();
     private final Map<InetAddress, Integer> connectionsPerAddress = new ConcurrentHashMap<>();
+    /** Every connection served, so closing ends those a host handed in along with the accepted ones. */
+    private final ChannelGroup connections =
+            new DefaultChannelGroup("NetherNet signaling", GlobalEventExecutor.INSTANCE, true);
+    private final ChannelInitializer<Channel> connectionInitializer = new ConnectionInitializer();
 
     private NewConnectionHandler newConnectionHandler;
     private volatile NetherServerMetrics metrics;
@@ -143,6 +150,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private volatile EventLoop eventLoop;
     /** Identity validation runs here rather than on the loop, since a trust anchor may fetch keys. */
     private volatile ExecutorService validation;
+    private volatile boolean closed;
 
     private NetherNetHTTPServerSignaling(Builder builder) {
         this.serverIdentity = builder.identity;
@@ -164,6 +172,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
     @Override
     public void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException {
+        // Whatever reached it would be closed on arrival, so a second life would serve nothing
+        if (this.closed) {
+            throw new IllegalStateException("Signaling cannot be bound again once closed");
+        }
         if (!(localAddress instanceof InetSocketAddress)) {
             throw new IllegalArgumentException("Unsupported address type");
         }
@@ -208,36 +220,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(acceptor)
                 .channelFactory((ChannelFactory<NioServerSocketChannel>) () -> new NioServerSocketChannel(channel))
-                .childHandler(new ChannelInitializer<>() {
-                    @Override
-                    protected void initChannel(Channel ch) {
-                        ChannelPipeline p = ch.pipeline();
-                        // Counted before anything is read, so a peer holding sockets open is capped
-                        // whatever it goes on to send
-                        p.addLast(new ConnectionLimiter(trustedProxies, maxConnectionsPerAddress,
-                                connectionsPerAddress, () -> metrics));
-
-                        // A PROXY header precedes the TLS handshake, so it is read before any of this
-                        if (proxyProtocol) {
-                            p.addLast(new OptionalProxyProtocol(trustedProxies));
-                        }
-
-                        // Both schemes reach one port: the first bytes say which this is, and a
-                        // client that finds no TLS falls back to plaintext on the same port
-                        if (sslContext != null) {
-                            p.addLast(new OptionalSslHandler(sslContext));
-                        } else {
-                            p.addLast(new TlsRejectingHandler());
-                        }
-
-                        p.addLast(new HttpServerCodec());
-                        p.addLast(new HttpObjectAggregator(8 * 1024));
-                        p.addLast(new HttpLoggingHandler(log));
-                        // A kept connection that goes quiet is one nobody will come back to
-                        p.addLast(new IdleStateHandler(IDLE_SECONDS, 0, 0));
-                        p.addLast(new SignalingHandler());
-                    }
-                });
+                .childHandler(this.connectionInitializer);
 
         ChannelFuture regFuture = bootstrap.register();
         serverChannel = regFuture.channel();
@@ -253,11 +236,34 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         });
     }
 
+    /**
+     * Serves signaling on a TCP connection the host accepted itself, such as one on a port it
+     * shares with another protocol, usually with {@code serveHttp} off. Call it on the connection's
+     * event loop. What the host already read may be passed on after this returns, untouched and
+     * PROXY header included, for instance by removing the decoder that held it. A connection handed
+     * in after {@link #close} is closed.
+     *
+     * @param channel The accepted connection
+     * @throws IllegalArgumentException If the channel is not an IP connection
+     */
+    public void initChannel(Channel channel) {
+        if (!(channel.remoteAddress() instanceof InetSocketAddress)) {
+            throw new IllegalArgumentException("Signaling needs an IP connection, not " + channel.remoteAddress());
+        }
+        channel.pipeline().addLast(this.connectionInitializer);
+    }
+
+    /**
+     * Stops serving for good. Every connection is closed, those a host handed in included, and the
+     * signaling cannot be bound again.
+     */
     @Override
     public void close() {
+        this.closed = true;
         if (serverChannel != null) {
             serverChannel.close();
         }
+        connections.close();
         EventLoopGroup acceptor = this.acceptor;
         if (acceptor != null) {
             acceptor.shutdownGracefully(0, 1, TimeUnit.SECONDS);
@@ -566,6 +572,41 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         ChannelFuture written = ctx.writeAndFlush(response);
         if (!keepAlive) {
             written.addListener(ChannelFutureListener.CLOSE);
+        }
+    }
+
+    /** Builds the pipeline of every connection, accepted here or handed in by a host. */
+    private class ConnectionInitializer extends ChannelInitializer<Channel> {
+        @Override
+        protected void initChannel(Channel ch) {
+            // Ahead of the handlers, so one handed in after close is closed before they look at it
+            connections.add(ch);
+
+            ChannelPipeline p = ch.pipeline();
+            // Counted before any of what it sent is passed on, so a peer holding sockets open is
+            // capped whatever it goes on to send
+            p.addLast(new ConnectionLimiter(trustedProxies, maxConnectionsPerAddress,
+                    connectionsPerAddress, () -> metrics));
+
+            // A PROXY header precedes the TLS handshake, so it is read before any of this
+            if (proxyProtocol) {
+                p.addLast(new OptionalProxyProtocol(trustedProxies));
+            }
+
+            // Both schemes reach one port: the first bytes say which this is, and a
+            // client that finds no TLS falls back to plaintext on the same port
+            if (sslContext != null) {
+                p.addLast(new OptionalSslHandler(sslContext));
+            } else {
+                p.addLast(new TlsRejectingHandler());
+            }
+
+            p.addLast(new HttpServerCodec());
+            p.addLast(new HttpObjectAggregator(8 * 1024));
+            p.addLast(new HttpLoggingHandler(log));
+            // A kept connection that goes quiet is one nobody will come back to
+            p.addLast(new IdleStateHandler(IDLE_SECONDS, 0, 0));
+            p.addLast(new SignalingHandler());
         }
     }
 
@@ -1007,9 +1048,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
         /**
          * Sets whether to serve the HTTP join endpoint. Defaults to true. With it off nothing is
-         * listened on and offers have to be handed in through
-         * {@link NetherNetHTTPServerSignaling#acceptOffer}, which is how an endpoint outside this process
-         * drives signaling.
+         * listened on: a host hands in the connections it accepted through
+         * {@link NetherNetHTTPServerSignaling#initChannel}, or an endpoint outside this process hands
+         * in offers through {@link NetherNetHTTPServerSignaling#acceptOffer}.
          *
          * @param serveHttp Whether to bind the join endpoint
          * @return This builder

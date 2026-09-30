@@ -133,6 +133,17 @@ class NetherNetHTTPServerSignalingBuilderTest {
     }
 
     @Test
+    void refusesToBindOnceClosed() throws Exception {
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
+                .build();
+        signaling.close();
+
+        assertThrows(IllegalStateException.class,
+                () -> signaling.bind(new java.net.InetSocketAddress("127.0.0.1", 0), null));
+    }
+
+    @Test
     void reportsAnUnreadableKeystoreAtConfigurationTime(@TempDir Path dir) {
         // A bad TLS configuration has to fail where it is written, not on the first join
         File missing = dir.resolve("nothing.p12").toFile();
