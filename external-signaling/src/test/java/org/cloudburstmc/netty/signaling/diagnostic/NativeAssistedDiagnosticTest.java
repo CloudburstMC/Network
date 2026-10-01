@@ -27,6 +27,7 @@ class NativeAssistedDiagnosticTest {
     final class Fixture implements AutoCloseable {
         final InetAddress bind;
         final int hostPort, probePort;
+        final DatagramSocket probeReservation;
         final long expiry;
         final Context context =
                 new Context(
@@ -51,7 +52,6 @@ class NativeAssistedDiagnosticTest {
         Fixture(String numeric, long lifetime) throws Exception {
             bind = InetAddress.getByName(numeric);
             hostPort = NativeDiagnosticProbeAttemptTest.port(bind);
-            probePort = NativeDiagnosticProbeAttemptTest.port(bind);
             expiry = (System.currentTimeMillis() + lifetime) / 1000 * 1000;
             var helper = new NativeDiagnosticProbeAttemptTest();
             helper.directory = directory;
@@ -96,6 +96,9 @@ class NativeAssistedDiagnosticTest {
                     .bind(bind, hostPort)
                     .sync();
             gate = host.enableDiagnostics(policy).toCompletableFuture().get(3, TimeUnit.SECONDS);
+            // Keep auxiliary NAT/STUN sockets from taking the probe port before native gathering.
+            probeReservation = new DatagramSocket(new InetSocketAddress(bind, 0));
+            probePort = probeReservation.getLocalPort();
         }
 
         JsonObject wire(NativeDiagnosticProbeAttempt.Request request) {
@@ -130,10 +133,16 @@ class NativeAssistedDiagnosticTest {
             return AssistedJoin.decode(wire(request).toString());
         }
 
+        InetSocketAddress releaseProbeAddress() {
+            // Hand the reserved port to the native peer after auxiliary sockets have bound.
+            probeReservation.close();
+            return new InetSocketAddress(bind, probePort);
+        }
+
         NativeDiagnosticProbeAttempt attempt(InetSocketAddress stun) {
             return new NativeDiagnosticProbeAttempt(
                     job,
-                    new InetSocketAddress(bind, probePort),
+                    releaseProbeAddress(),
                     authorized::get,
                     Clock.system(),
                     true,
@@ -165,9 +174,33 @@ class NativeAssistedDiagnosticTest {
         }
 
         public void close() throws Exception {
+            probeReservation.close();
             host.close().awaitUninterruptibly();
             host.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
             group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
+    @Test
+    @Timeout(15)
+    void probePortIsReservedUntilAuxiliarySocketsAreReady() throws Exception {
+        for (String numeric : List.of("127.0.0.1", "::1")) {
+            try (var f = new Fixture(numeric);
+                    var stun = new StunServer(f.bind)) {
+                assertThrows(
+                        BindException.class,
+                        () -> {
+                            try (var competing =
+                                    new DatagramSocket(new InetSocketAddress(f.bind, f.probePort))) {
+                                // The probe must still own this port while fixture sockets are allocated.
+                            }
+                        });
+                try (var attempt = f.attempt(stun.address())) {
+                    var result = attempt.run(f::respond);
+                    assertTrue(result.success(), result.toString());
+                    assertTrue(result.cleanupComplete());
+                }
+            }
         }
     }
 
@@ -401,7 +434,7 @@ class NativeAssistedDiagnosticTest {
                 try (var attempt =
                         new NativeDiagnosticProbeAttempt(
                                 f.job,
-                                new InetSocketAddress(f.bind, f.probePort),
+                                f.releaseProbeAddress(),
                                 f.authorized::get,
                                 clock,
                                 true)) {
