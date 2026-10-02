@@ -24,6 +24,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
@@ -34,6 +35,8 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
@@ -42,6 +45,9 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
 import io.netty.handler.codec.http.websocketx.WebSocketVersion;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.util.AttributeKey;
+import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jspecify.annotations.Nullable;
@@ -58,20 +64,50 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboundHandler<TextWebSocketFrame>
         implements NetherNetClientSignaling, NetherNetServerSignaling {
 
+    /** How long a connect, including its TURN credentials, or a request may wait for the service. */
+    protected static final long CONNECT_TIMEOUT_SECONDS = 20;
+
+    /**
+     * The recurring tasks of one socket, cancelled when it goes inactive, so a reconnect does not
+     * leave the previous socket's loops running on the shared event loop.
+     */
+    private static final AttributeKey<CopyOnWriteArrayList<ScheduledFuture<?>>> CHANNEL_TASKS =
+            AttributeKey.valueOf("nethernet-signaling-channel-tasks");
+
+    /**
+     * The interval of the WebSocket protocol ping. The service must answer it with a pong (RFC 6455
+     * section 5.5.2), so a live socket receives a frame at least this often even when idle.
+     */
+    private static final long WS_PING_INTERVAL_SECONDS = 15;
+
+    /**
+     * The largest message the socket accepts, whether it arrives in one frame or split across
+     * several. One delivery can carry several messages. A message over the limit closes the socket,
+     * and with it every join still being signaled over it.
+     */
+    private static final int MAX_MESSAGE_SIZE = 128 * 1024;
+
     protected final InternalLogger log = InternalLoggerFactory.getInstance(getClass());
 
-    protected final String xboxToken;
+    protected volatile String xboxToken;
     protected final String localNetworkId;
     protected final URI uri;
     protected final EventLoopGroup eventLoopGroup;
+    private final EventLoop signalingEventLoop;
 
-    protected Channel channel;
+    protected volatile Channel channel;
     protected CompletableFuture<List<IceServerInfo>> connectFuture;
+    // channelInactive clears connectFuture before a failed bind can decide whether to shut down.
+    private CompletableFuture<List<IceServerInfo>> latestConnectFuture;
     protected volatile List<IceServerInfo> iceServers = new ArrayList<>();
+    protected volatile long lastMessageReceivedAt;
+    private volatile boolean closed;
 
     protected final Map<String, SignalHandler> handlers = new ConcurrentHashMap<>();
     protected NetherNetServerSignaling.NewConnectionHandler newConnectionHandler;
@@ -82,6 +118,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         this.xboxToken = xboxToken;
         this.uri = uri;
         this.eventLoopGroup = new NioEventLoopGroup(1);
+        this.signalingEventLoop = eventLoopGroup.next();
     }
 
     @Override
@@ -96,18 +133,75 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException {
-        try {
-            connectInternal().join();
-        } catch (Exception e) {
-            Throwable cause = e.getCause() != null ? e.getCause() : e;
-            close();
-            if (cause instanceof ConnectException) {
-                throw (ConnectException) cause;
+        checkBlockingCaller();
+        joinConnect(connectInternal(), true);
+    }
+
+    /**
+     * Replaces the socket to the signaling service with one that connects with a fresh token. Only
+     * the socket changes: the handlers, and the server channel and peer connections built on this
+     * signaling, stay as they are. A failed attempt leaves the signaling open, so it can be retried.
+     * <p>
+     * Blocks until the new socket has its TURN credentials, so it must not be called from this
+     * signaling's event loop.
+     *
+     * @param freshToken The Minecraft Bedrock Session authorization header ('MCToken ***').
+     * @throws ConnectException If the signaling is closed or the new socket fails to connect.
+     */
+    public void reconnect(String freshToken) throws ConnectException {
+        checkBlockingCaller();
+        CompletableFuture<CompletableFuture<List<IceServerInfo>>> started = new CompletableFuture<>();
+        onSignalingLoop(() -> {
+            Channel old;
+            CompletableFuture<List<IceServerInfo>> pending;
+            synchronized (this) {
+                if (closed) {
+                    started.complete(CompletableFuture.failedFuture(new ClosedChannelException()));
+                    return;
+                }
+                this.xboxToken = freshToken;
+                old = this.channel;
+                this.channel = null;
+                pending = this.connectFuture;
+                this.connectFuture = null;
+                lastMessageReceivedAt = 0;
             }
-            ConnectException ce = new ConnectException("Failed to connect to Xbox Signaling: " + cause.getMessage());
-            ce.initCause(cause);
-            throw ce;
+            if (pending != null) {
+                pending.completeExceptionally(new ClosedChannelException());
+            }
+            if (old != null) {
+                old.close();
+            }
+            started.complete(connectInternal());
+        }).exceptionally(error -> {
+            started.complete(CompletableFuture.failedFuture(error));
+            return null;
+        });
+        joinConnect(started.join());
+    }
+
+    private void checkBlockingCaller() throws ConnectException {
+        if (signalingEventLoop.inEventLoop()) {
+            throw new ConnectException("Cannot wait for Xbox signaling on its event loop");
         }
+    }
+
+    private CompletableFuture<Void> onSignalingLoop(Runnable action) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        try {
+            // Even a callback on this loop must finish its frame before a socket can be replaced.
+            signalingEventLoop.execute(() -> {
+                try {
+                    action.run();
+                    result.complete(null);
+                } catch (Throwable error) {
+                    result.completeExceptionally(error);
+                }
+            });
+        } catch (RuntimeException error) {
+            result.completeExceptionally(error);
+        }
+        return result;
     }
 
     /**
@@ -124,64 +218,221 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     protected synchronized CompletableFuture<List<IceServerInfo>> connectInternal() {
+        if (closed) {
+            CompletableFuture<List<IceServerInfo>> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new ClosedChannelException());
+            return failed;
+        }
         if (connectFuture != null) {
             return connectFuture;
         }
 
-        connectFuture = new CompletableFuture<>();
-        connectFuture.thenAccept(servers -> this.iceServers = servers);
+        CompletableFuture<List<IceServerInfo>> future = new CompletableFuture<>();
+        connectFuture = future;
+        latestConnectFuture = future;
+        // Subclasses may complete the protected future directly instead of using updateIceServers.
+        future.thenAccept(servers -> {
+            synchronized (this) {
+                if (connectFuture == future) {
+                    iceServers = servers;
+                }
+            }
+        });
 
+        onSignalingLoop(() -> {
+            boolean current;
+            synchronized (this) {
+                current = !closed && connectFuture == future;
+            }
+            if (!current) {
+                future.completeExceptionally(new ClosedChannelException());
+                return;
+            }
+            try {
+                ChannelFuture connect = connectChannel();
+                this.channel = connect.channel();
+                connect.addListener(f -> {
+                    if (!f.isSuccess()) {
+                        future.completeExceptionally(f.cause());
+                    }
+                });
+            } catch (Exception e) {
+                future.completeExceptionally(e.getCause() != null ? e.getCause() : e);
+            }
+        }).exceptionally(error -> {
+            future.completeExceptionally(error);
+            return null;
+        });
+        return future;
+    }
+
+    /**
+     * Opens a socket on this signaling's event loop. A test transport that replaces it must use
+     * the same loop, since socket swaps must not overtake its incoming frames.
+     */
+    ChannelFuture connectChannel() throws Exception {
+        SslContext sslCtx = signalingSslContext();
+        WebSocketClientHandshaker handshaker = newHandshaker();
+        return new Bootstrap()
+                .group(signalingEventLoop)
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ch.pipeline().addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), 443));
+                        configureWebSocketPipeline(ch.pipeline(), handshaker);
+                    }
+                }).connect(uri.getHost(), 443);
+    }
+
+    WebSocketClientHandshaker newHandshaker() {
+        return WebSocketClientHandshakerFactory.newHandshaker(
+                uri, WebSocketVersion.V13, null, false,
+                new DefaultHttpHeaders()
+                        .add("Authorization", xboxToken)
+                        .add("User-Agent", NetherNetConstants.SIGNALING_USER_AGENT)
+                        .add("session-id", UUID.randomUUID().toString())
+                        .add("request-id", UUID.randomUUID().toString()),
+                MAX_MESSAGE_SIZE);
+    }
+
+    void configureWebSocketPipeline(ChannelPipeline pipeline, WebSocketClientHandshaker handshaker) {
+        pipeline.addLast(new HttpClientCodec(), new HttpObjectAggregator(8192));
+        // Close frames and pongs reach channelRead for close reasons and receive-time tracking.
+        pipeline.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker, false, false));
+        pipeline.addLast("ws-aggregator", new WebSocketFrameAggregator(MAX_MESSAGE_SIZE));
+        pipeline.addLast("handler", this);
+    }
+
+    /**
+     * Waits for a connect attempt to get its TURN credentials, and closes its socket if it fails or
+     * takes longer than {@link #CONNECT_TIMEOUT_SECONDS}.
+     */
+    protected void joinConnect(CompletableFuture<List<IceServerInfo>> future) throws ConnectException {
+        joinConnect(future, false);
+    }
+
+    private void joinConnect(CompletableFuture<List<IceServerInfo>> future, boolean closeOnFailure)
+            throws ConnectException {
+        checkBlockingCaller();
         try {
-            SslContext sslCtx = signalingSslContext();
-            WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
-                    uri, WebSocketVersion.V13, null, false,
-                    new DefaultHttpHeaders()
-                            .add("Authorization", xboxToken)
-                            .add("User-Agent", NetherNetConstants.SIGNALING_USER_AGENT)
-                            .add("session-id", UUID.randomUUID().toString())
-                            .add("request-id", UUID.randomUUID().toString())
-            );
-
-            Bootstrap b = new Bootstrap();
-            b.group(eventLoopGroup)
-                    .channel(NioSocketChannel.class)
-                    .handler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel ch) {
-                            ChannelPipeline p = ch.pipeline();
-                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), 443));
-                            p.addLast(new HttpClientCodec(), new HttpObjectAggregator(8192));
-                            p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker));
-                            p.addLast("ws-aggregator",
-                                    new WebSocketFrameAggregator(16 * 1024)); // Allow 16KB aggregations
-                            p.addLast("handler", AbstractNetherNetXboxSignaling.this);
-                        }
-                    });
-
-            this.channel = b.connect(uri.getHost(), 443).sync().channel();
+            future.orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
         } catch (Exception e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            if (connectFuture != null) {
-                connectFuture.completeExceptionally(cause);
+            abortConnect(future, closeOnFailure);
+            if (cause instanceof ConnectException) {
+                throw (ConnectException) cause;
             }
+            ConnectException ce = new ConnectException("Failed to connect to Xbox Signaling: " + cause.getMessage());
+            ce.initCause(cause);
+            throw ce;
         }
-        return connectFuture;
+    }
+
+    /** A failed bind may close the signaling, but only while it still owns the attempt. */
+    private void abortConnect(CompletableFuture<List<IceServerInfo>> attempt, boolean closeOnFailure) {
+        onSignalingLoop(() -> {
+            synchronized (this) {
+                if ((closeOnFailure ? latestConnectFuture : connectFuture) != attempt) {
+                    return;
+                }
+            }
+            if (closeOnFailure) {
+                closeOnLoop();
+                return;
+            }
+            Channel c;
+            synchronized (this) {
+                c = this.channel;
+                this.channel = null;
+                this.connectFuture = null;
+            }
+            attempt.completeExceptionally(new ClosedChannelException());
+            if (c != null) {
+                c.close();
+            }
+        }).exceptionally(error -> null).join();
     }
 
     @Override
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt == WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE) {
-            log.debug("{} WebSocket Connected", getClass().getSimpleName());
+            synchronized (this) {
+                if (!isCurrentChannel(ctx.channel())) {
+                    return;
+                }
+                log.debug("{} WebSocket Connected", getClass().getSimpleName());
+                lastMessageReceivedAt = System.currentTimeMillis();
+            }
+            scheduleRecurring(ctx, "ws-ping", () -> ctx.writeAndFlush(new PingWebSocketFrame()),
+                    WS_PING_INTERVAL_SECONDS, WS_PING_INTERVAL_SECONDS);
             onConnected(ctx);
         } else {
             super.userEventTriggered(ctx, evt);
         }
     }
 
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        // Socket replacement runs on this same loop, after the whole frame has been processed.
+        // Handlers run without the monitor: a native callback may need it to send a signal.
+        synchronized (this) {
+            if (!isCurrentChannel(ctx.channel())) {
+                ReferenceCountUtil.release(msg);
+                return;
+            }
+            // Pongs included, so a socket without signals still proves it is alive
+            lastMessageReceivedAt = System.currentTimeMillis();
+        }
+        if (msg instanceof CloseWebSocketFrame close) {
+            try {
+                log.warn("Signaling socket closed by the service: {} {}", close.statusCode(), close.reasonText());
+            } finally {
+                close.release();
+            }
+            ctx.close();
+            return;
+        }
+        super.channelRead(ctx, msg);
+    }
+
+    protected final synchronized boolean isCurrentChannel(@Nullable Channel source) {
+        return !closed && source != null && source == channel;
+    }
+
+    /**
+     * Schedules a task that repeats for as long as the given socket is the current one. It is
+     * cancelled when the socket goes inactive, and an exception it throws is logged instead of
+     * silently cancelling it, which is what {@code scheduleAtFixedRate} does.
+     */
+    protected void scheduleRecurring(ChannelHandlerContext ctx, String name, Runnable task,
+                                     long initialDelaySeconds, long periodSeconds) {
+        ScheduledFuture<?> future = ctx.executor().scheduleAtFixedRate(() -> {
+            try {
+                if (!isCurrentChannel(ctx.channel()) || !ctx.channel().isActive()) {
+                    return;
+                }
+                task.run();
+            } catch (Throwable t) {
+                log.warn("Signaling task {} failed: {}", name, t.getMessage());
+            }
+        }, initialDelaySeconds, periodSeconds, TimeUnit.SECONDS);
+
+        ctx.channel().attr(CHANNEL_TASKS).setIfAbsent(new CopyOnWriteArrayList<>());
+        ctx.channel().attr(CHANNEL_TASKS).get().add(future);
+    }
+
     /**
      * Called when the WebSocket handshake is complete.
      */
     protected abstract void onConnected(ChannelHandlerContext ctx);
+
+    /**
+     * Called when one of this signaling's sockets goes inactive, the current one or one that was
+     * replaced, so a subclass can fail what was waiting on that socket.
+     */
+    protected void onChannelInactive(ChannelHandlerContext ctx) {
+    }
 
     @Override
     public List<IceServerInfo> getIceServers() {
@@ -215,37 +466,123 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        if (connectFuture != null && !connectFuture.isDone()) {
-            connectFuture.completeExceptionally(cause);
+        boolean current;
+        CompletableFuture<List<IceServerInfo>> pending;
+        synchronized (this) {
+            current = isCurrentChannel(ctx.channel());
+            pending = current ? connectFuture : null;
         }
-        log.error("Signaling Exception: {}", cause.getMessage(), cause);
+        if (pending != null) {
+            pending.completeExceptionally(cause);
+        }
+        if (current) {
+            log.error("Signaling Exception: {}", cause.getMessage(), cause);
+        }
         ctx.close();
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        synchronized (this) {
-            if (connectFuture != null && !connectFuture.isDone()) {
-                connectFuture.completeExceptionally(new ClosedChannelException());
+        CopyOnWriteArrayList<ScheduledFuture<?>> tasks = ctx.channel().attr(CHANNEL_TASKS).getAndSet(null);
+        if (tasks != null) {
+            for (ScheduledFuture<?> task : tasks) {
+                task.cancel(false);
             }
-            connectFuture = null;
-            this.channel = null;
         }
+        CompletableFuture<List<IceServerInfo>> pending = null;
+        synchronized (this) {
+            // A replaced socket must leave its replacement's state alone.
+            if (ctx.channel() == this.channel) {
+                pending = connectFuture;
+                connectFuture = null;
+                this.channel = null;
+            }
+        }
+        if (pending != null) {
+            pending.completeExceptionally(new ClosedChannelException());
+        }
+        onChannelInactive(ctx);
         super.channelInactive(ctx);
     }
 
+    /**
+     * Whether the socket to the signaling service is open. A socket whose connection died without
+     * closing still counts as open, see {@link #isChannelAlive(long)}.
+     */
     @Override
-    public boolean isActive() {
+    public boolean isChannelAlive() {
         Channel ch = this.channel;
         return ch != null && ch.isActive();
     }
 
+    /**
+     * Whether the socket is open and received a frame within the given time. The service answers
+     * the ping sent every 15 seconds, so two or three times that holds on a live socket even when
+     * no signals flow.
+     *
+     * @param maxSilenceMillis The longest time since the last received frame that still counts.
+     * @return true if the socket is open and not silent for longer than that.
+     */
+    public boolean isChannelAlive(long maxSilenceMillis) {
+        if (!isChannelAlive()) {
+            return false;
+        }
+        long silence = getMillisSinceLastMessage();
+        return silence >= 0 && silence <= maxSilenceMillis;
+    }
+
+    /**
+     * @return The milliseconds since the last frame received on the current socket, or -1 if none
+     * has arrived yet.
+     */
+    public long getMillisSinceLastMessage() {
+        long last = this.lastMessageReceivedAt;
+        return last == 0 ? -1 : System.currentTimeMillis() - last;
+    }
+
+    /**
+     * Queues terminal cleanup after the current frame. It does not wait, since a native callback
+     * can request closure while the signaling loop waits for that callback to return.
+     */
     @Override
     public void close() {
-        if (channel != null) {
-            channel.close();
+        if (!closed) {
+            onSignalingLoop(this::closeOnLoop).exceptionally(error -> {
+                log.debug("Could not close Xbox signaling on its event loop", error);
+                return null;
+            });
         }
-        eventLoopGroup.shutdownGracefully();
+    }
+
+    private void closeOnLoop() {
+        Channel c;
+        CompletableFuture<List<IceServerInfo>> pending;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            c = this.channel;
+            this.channel = null;
+            pending = connectFuture;
+            connectFuture = null;
+            latestConnectFuture = null;
+        }
+        if (pending != null) {
+            pending.completeExceptionally(new ClosedChannelException());
+        }
+        try {
+            if (c != null) {
+                c.close();
+            }
+            onClosed();
+        } finally {
+            eventLoopGroup.shutdownGracefully();
+        }
+    }
+
+    /** Releases subclass state after the terminal socket swap, on the signaling event loop. */
+    protected void onClosed() {
     }
 
     protected void dispatchSignalToPipeline(String sender, String rawMsg) {
@@ -271,6 +608,47 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         } catch (Exception e) {
             log.error("Failed to dispatch signal: {}", rawMsg, e);
         }
+    }
+
+    /**
+     * Applies TURN credentials the service sent on the given socket, and completes the connect if
+     * it was waiting for them. Credentials from a socket that has been replaced are dropped. An
+     * update without a usable server keeps the previous credentials, and the connect completes
+     * with those.
+     */
+    protected void updateIceServers(Channel source, List<IceServerInfo> servers) {
+        CompletableFuture<List<IceServerInfo>> pending;
+        List<IceServerInfo> applied;
+        synchronized (this) {
+            if (!isCurrentChannel(source)) {
+                return;
+            }
+            // parseTurnServers returns what it could read, so a malformed response comes out empty
+            if (!hasUsableServer(servers) && hasUsableServer(this.iceServers)) {
+                log.warn("Keeping the previous TURN credentials, the service sent none that could be used");
+            } else {
+                this.iceServers = servers;
+            }
+            applied = this.iceServers;
+            pending = connectFuture != null && !connectFuture.isDone() ? connectFuture : null;
+        }
+        if (pending != null) {
+            pending.complete(applied);
+        }
+    }
+
+    private static boolean hasUsableServer(List<IceServerInfo> servers) {
+        for (IceServerInfo server : servers) {
+            if (server.urls() == null) {
+                continue;
+            }
+            for (String url : server.urls()) {
+                if (url != null && !url.isBlank()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     protected List<IceServerInfo> parseTurnServers(JsonObject json) {

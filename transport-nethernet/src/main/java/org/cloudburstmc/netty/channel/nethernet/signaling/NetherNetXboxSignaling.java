@@ -20,13 +20,15 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
 @Sharable
 public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
@@ -39,8 +41,16 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
      * @param xboxToken The Minecraft Bedrock Session authorization header ('MCToken ***').
      */
     public NetherNetXboxSignaling(String networkId, String xboxToken) {
-        super(networkId, xboxToken,
-                URI.create("wss://signal.franchise.minecraft-services.net/ws/v1.0/signaling/" + networkId));
+        super(networkId, xboxToken, signalingUri(networkId));
+    }
+
+    private static URI signalingUri(String networkId) {
+        String segment = URLEncoder.encode(networkId, StandardCharsets.UTF_8).replace("+", "%20");
+        // The id is one path segment: it must not turn into a dot segment that moves the endpoint
+        if (segment.equals(".") || segment.equals("..")) {
+            segment = segment.replace(".", "%2E");
+        }
+        return URI.create("wss://signal.franchise.minecraft-services.net/ws/v1.0/signaling/" + segment);
     }
 
     /**
@@ -64,11 +74,15 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
-        ctx.executor().scheduleAtFixedRate(() -> {
+        scheduleRecurring(ctx, "app-ping", () -> {
             JsonObject ping = new JsonObject();
             ping.addProperty("Type", 0);
-            ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)));
-        }, 5, 5, TimeUnit.SECONDS);
+            ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping))).addListener(write -> {
+                if (!write.isSuccess()) {
+                    log.warn("Signaling ping failed: {}", write.cause() != null ? write.cause().getMessage() : "cancelled");
+                }
+            });
+        }, 5, 5);
     }
 
     @Override
@@ -97,11 +111,13 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
                 }
                 case NetherNetConstants.XBOX_SIGNAL_CREDENTIALS -> {
                     log.trace("Received Credentials");
-                    if (json.has("Message") && connectFuture != null && !connectFuture.isDone()) {
+                    // Applied whenever they arrive, not only while connecting, so peers created
+                    // later get the newest ones
+                    if (json.has("Message")) {
                         String rawMsg = json.get("Message").getAsString();
                         JsonObject credentials = JsonParser.parseString(rawMsg).getAsJsonObject();
 
-                        connectFuture.complete(parseTurnServers(credentials));
+                        updateIceServers(ctx.channel(), parseTurnServers(credentials));
                     }
                 }
                 case NetherNetConstants.XBOX_SIGNAL_ACCEPTED, NetherNetConstants.XBOX_SIGNAL_ACK ->
@@ -115,6 +131,7 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     public void sendSignal(String targetNetworkId, String data) {
+        Channel channel = this.channel;
         if (channel != null && channel.isActive()) {
             JsonObject msg = new JsonObject();
             msg.addProperty("Type", 1);
