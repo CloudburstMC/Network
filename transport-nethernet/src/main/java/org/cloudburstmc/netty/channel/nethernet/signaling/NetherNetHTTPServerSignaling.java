@@ -218,31 +218,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 .childHandler(new ChannelInitializer<>() {
                     @Override
                     protected void initChannel(Channel ch) {
-                        ChannelPipeline p = ch.pipeline();
-                        // Counted before anything is read, so a peer holding sockets open is capped
-                        // whatever it goes on to send
-                        p.addLast(new ConnectionLimiter(trustedProxies, maxConnectionsPerAddress,
-                                connectionsPerAddress, () -> metrics));
-
-                        // A PROXY header precedes the TLS handshake, so it is read before any of this
-                        if (proxyProtocol) {
-                            p.addLast(new OptionalProxyProtocol(trustedProxies));
-                        }
-
-                        // Both schemes reach one port: the first bytes say which this is, and a
-                        // client that finds no TLS falls back to plaintext on the same port
-                        if (sslContext != null) {
-                            p.addLast(new OptionalSslHandler(sslContext));
-                        } else {
-                            p.addLast(new TlsRejectingHandler());
-                        }
-
-                        p.addLast(new HttpServerCodec());
-                        p.addLast(new HttpObjectAggregator(8 * 1024));
-                        p.addLast(new HttpLoggingHandler(log));
-                        // A kept connection that goes quiet is one nobody will come back to
-                        p.addLast(new IdleStateHandler(IDLE_SECONDS, 0, 0));
-                        p.addLast(new SignalingHandler());
+                        NetherNetHTTPServerSignaling.this.initChannel(ch);
                     }
                 });
 
@@ -258,6 +234,42 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 future.channel().close();
             }
         });
+    }
+
+    /**
+     * Adds the signaling handlers to a connection. A host that accepts connections itself, such as
+     * a server sharing its TCP port with signaling, hands them in here, usually with
+     * {@code serveHttp} off. The channel may already be active and hold unread bytes, and the
+     * signaling must be bound first.
+     *
+     * @param channel The TCP connection to serve signaling on
+     */
+    public void initChannel(Channel channel) {
+        ChannelPipeline p = channel.pipeline();
+        // Counted before anything is read, so a peer holding sockets open is capped
+        // whatever it goes on to send
+        p.addLast(new ConnectionLimiter(trustedProxies, maxConnectionsPerAddress,
+                connectionsPerAddress, () -> metrics));
+
+        // A PROXY header precedes the TLS handshake, so it is read before any of this
+        if (proxyProtocol) {
+            p.addLast(new OptionalProxyProtocol(trustedProxies));
+        }
+
+        // Both schemes reach one port: the first bytes say which this is, and a
+        // client that finds no TLS falls back to plaintext on the same port
+        if (sslContext != null) {
+            p.addLast(new OptionalSslHandler(sslContext));
+        } else {
+            p.addLast(new TlsRejectingHandler());
+        }
+
+        p.addLast(new HttpServerCodec());
+        p.addLast(new HttpObjectAggregator(8 * 1024));
+        p.addLast(new HttpLoggingHandler(log));
+        // A kept connection that goes quiet is one nobody will come back to
+        p.addLast(new IdleStateHandler(IDLE_SECONDS, 0, 0));
+        p.addLast(new SignalingHandler());
     }
 
     /** How long a kept connection may sit unused before it is closed. */
@@ -999,7 +1011,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * Sets whether to serve the HTTP join endpoint. Defaults to true. With it off nothing is
          * listened on and offers have to be handed in through
          * {@link NetherNetHTTPServerSignaling#acceptOffer}, which is how an endpoint outside this process
-         * drives signaling.
+         * drives signaling, or connections through {@link NetherNetHTTPServerSignaling#initChannel}.
          *
          * @param serveHttp Whether to bind the join endpoint
          * @return This builder

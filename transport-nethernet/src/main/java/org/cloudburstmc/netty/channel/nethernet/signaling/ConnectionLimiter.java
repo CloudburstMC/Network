@@ -43,6 +43,8 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
     private final Map<InetAddress, Integer> connectionsPerAddress;
     private final Supplier<NetherServerMetrics> metrics;
     private InetAddress counted;
+    /** Whether the connection was let through, or null until it is looked at. */
+    private Boolean admitted;
 
     /**
      * @param connectionsPerAddress The counts, shared by every connection of one endpoint
@@ -57,11 +59,32 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        // Accepted connections are already active here, and one handed over by its host never sees channelActive
+        if (ctx.channel().isActive()) {
+            this.admitted = admit(ctx);
+        }
+    }
+
+    @Override
     public void channelActive(ChannelHandlerContext ctx) {
+        if (this.admitted == null) {
+            this.admitted = admit(ctx);
+        }
+        if (this.admitted) {
+            ctx.fireChannelActive();
+        }
+    }
+
+    /**
+     * Counts the connection against its address, or closes it when that address holds too many.
+     *
+     * @return Whether the connection was let through
+     */
+    private boolean admit(ChannelHandlerContext ctx) {
         InetAddress peer = ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress();
         if (trustedProxies.contains(peer)) {
-            ctx.fireChannelActive();
-            return;
+            return true;
         }
 
         if (connectionsPerAddress.merge(peer, 1, Integer::sum) > maxConnectionsPerAddress) {
@@ -72,10 +95,10 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
                 metrics.addressRefused((InetSocketAddress) ctx.channel().remoteAddress());
             }
             ctx.close();
-            return;
+            return false;
         }
         this.counted = peer;
-        ctx.fireChannelActive();
+        return true;
     }
 
     @Override
