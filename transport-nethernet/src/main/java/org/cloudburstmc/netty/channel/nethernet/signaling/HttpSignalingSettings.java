@@ -47,19 +47,26 @@ public final class HttpSignalingSettings {
         HTTP
     }
 
+    /** What the probe tells the server about the client. */
+    record ClientInfo(String version, int protocol, int platform) {
+    }
+
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
 
-    public static final HttpSignalingSettings DEFAULT = new HttpSignalingSettings(Scheme.AUTO, List.of(), null);
+    public static final HttpSignalingSettings DEFAULT = new HttpSignalingSettings(Scheme.AUTO, List.of(), null, null);
 
     private final Scheme scheme;
     private final List<IceServerInfo> iceServers;
     private final @Nullable SSLContext sslContext;
+    private final @Nullable ClientInfo clientInfo;
     private volatile @Nullable HttpClient http;
 
-    private HttpSignalingSettings(Scheme scheme, List<IceServerInfo> iceServers, @Nullable SSLContext sslContext) {
+    private HttpSignalingSettings(Scheme scheme, List<IceServerInfo> iceServers, @Nullable SSLContext sslContext,
+                                  @Nullable ClientInfo clientInfo) {
         this.scheme = scheme;
         this.iceServers = iceServers;
         this.sslContext = sslContext;
+        this.clientInfo = clientInfo;
     }
 
     public Scheme scheme() {
@@ -75,8 +82,13 @@ public final class HttpSignalingSettings {
         return this.sslContext;
     }
 
+    /** What the probe tells the server about the client, or null to send nothing. */
+    @Nullable ClientInfo clientInfo() {
+        return this.clientInfo;
+    }
+
     public HttpSignalingSettings withScheme(Scheme scheme) {
-        return new HttpSignalingSettings(scheme, this.iceServers, this.sslContext);
+        return new HttpSignalingSettings(scheme, this.iceServers, this.sslContext, this.clientInfo);
     }
 
     /**
@@ -85,7 +97,7 @@ public final class HttpSignalingSettings {
      * @return The settings with those servers
      */
     public HttpSignalingSettings withIceServers(Collection<IceServerInfo> iceServers) {
-        return new HttpSignalingSettings(this.scheme, List.copyOf(iceServers), this.sslContext);
+        return new HttpSignalingSettings(this.scheme, List.copyOf(iceServers), this.sslContext, this.clientInfo);
     }
 
     /**
@@ -93,7 +105,21 @@ public final class HttpSignalingSettings {
      * @return The settings with that trust
      */
     public HttpSignalingSettings withSslContext(SSLContext sslContext) {
-        return new HttpSignalingSettings(this.scheme, this.iceServers, sslContext);
+        return new HttpSignalingSettings(this.scheme, this.iceServers, sslContext, this.clientInfo);
+    }
+
+    /**
+     * Tells the server about the client in the probe's query, as the retail client does.
+     *
+     * @param version  The game version, such as {@code 1.26.60.29}
+     * @param protocol The network protocol version
+     * @param platform The <a href="https://mojang.github.io/bedrock-protocol-docs/latest/types/build-platform/">build
+     *                 platform</a>, such as {@code 8} for Win32
+     * @return The settings with that client info
+     */
+    public HttpSignalingSettings withClientInfo(String version, int protocol, int platform) {
+        return new HttpSignalingSettings(this.scheme, this.iceServers, this.sslContext,
+                new ClientInfo(version, protocol, platform));
     }
 
     HttpClient http() {
