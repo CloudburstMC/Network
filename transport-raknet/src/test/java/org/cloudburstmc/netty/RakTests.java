@@ -103,7 +103,7 @@ public class RakTests {
                 .handler(new ChannelInitializer<RakServerChannel>() {
                     @Override
                     protected void initChannel(RakServerChannel ch) throws Exception {
-                        System.out.println("Initialised server channel");
+                        System.out.println("Initialized server channel");
                     }
                 })
                 .childHandler(new ChannelInitializer<RakChildChannel>() {
