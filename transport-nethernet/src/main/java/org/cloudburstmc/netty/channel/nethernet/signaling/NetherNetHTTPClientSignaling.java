@@ -18,21 +18,25 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.signaling.HttpSignalingSettings.ClientInfo;
 import org.cloudburstmc.netty.channel.nethernet.signaling.HttpSignalingSettings.Scheme;
 import org.jspecify.annotations.Nullable;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.ConnectException;
 import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
 import javax.net.ssl.SSLException;
 import java.util.List;
+import java.util.StringJoiner;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ThreadLocalRandom;
@@ -63,7 +67,7 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
     /** How much of a refusal's body is worth carrying into an exception message. */
     private static final int REASON_LIMIT = 200;
 
-    private final String localNetworkId = Long.toUnsignedString(ThreadLocalRandom.current().nextLong());
+    private final String localNetworkId;
     private final HttpSignalingSettings settings;
     private volatile boolean secure;
 
@@ -73,13 +77,20 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
     private volatile FailureHandler failure;
     private volatile boolean closed;
 
-    /** Signals as {@link HttpSignalingSettings#DEFAULT} says. */
+    /** Signals as {@link HttpSignalingSettings#DEFAULT} says, with a random network id. */
     public NetherNetHTTPClientSignaling() {
         this(HttpSignalingSettings.DEFAULT);
     }
 
+    /** Signals as the settings say, with a random network id. */
     public NetherNetHTTPClientSignaling(HttpSignalingSettings settings) {
+        this(settings, Long.toUnsignedString(ThreadLocalRandom.current().nextLong()));
+    }
+
+    /** Signals as the settings say, with the given network id. */
+    public NetherNetHTTPClientSignaling(HttpSignalingSettings settings, String localNetworkId) {
         this.settings = settings;
+        this.localNetworkId = localNetworkId;
     }
 
     /**
@@ -92,22 +103,32 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
     }
 
     /**
+     * As {@link #probe(InetSocketAddress, HttpSignalingSettings, String)}, sending no network id.
+     */
+    public static CompletableFuture<Probe> probe(InetSocketAddress address, HttpSignalingSettings settings) {
+        return probe(address, settings, null);
+    }
+
+    /**
      * Asks the endpoint whether it serves NetherNet, the way the settings say, which for
      * {@link Scheme#AUTO} is HTTPS first and plaintext when the host answered without TLS. A host
      * that does not answer fails at once. A server that does not serve NetherNet answers 404, which
      * fails the probe and is what drives a fallback to RakNet.
      *
-     * @param address  The server's signaling endpoint
-     * @param settings How to reach it
+     * @param address   The server's signaling endpoint
+     * @param settings  How to reach it
+     * @param networkId The network id the client will join as, or null to send none
      * @return The scheme that answered and the server's status, or a failure saying why not
      */
-    public static CompletableFuture<Probe> probe(InetSocketAddress address, HttpSignalingSettings settings) {
+    public static CompletableFuture<Probe> probe(InetSocketAddress address, HttpSignalingSettings settings,
+                                                 @Nullable String networkId) {
+        String query = query(settings.clientInfo(), networkId);
         return switch (settings.scheme()) {
-            case HTTPS -> get(address, true, settings)
+            case HTTPS -> get(address, true, query, settings)
                     .thenApply(response -> probed(address, response, Scheme.HTTPS, null));
-            case HTTP -> get(address, false, settings)
+            case HTTP -> get(address, false, query, settings)
                     .thenApply(response -> probed(address, response, Scheme.HTTP, null));
-            case AUTO -> get(address, true, settings).handle((response, error) -> {
+            case AUTO -> get(address, true, query, settings).handle((response, error) -> {
                 if (error == null) {
                     // An answer over HTTPS is final, whatever it says
                     return CompletableFuture.completedFuture(probed(address, response, Scheme.HTTPS, null));
@@ -118,15 +139,29 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
                     throw refused(address + " could not be reached: " + describe(cause));
                 }
                 // Something answered and it was not TLS, which is the one case plaintext is for
-                return get(address, false, settings)
+                return get(address, false, query, settings)
                         .thenApply(fallback -> probed(address, fallback, Scheme.HTTP, cause));
             }).thenCompose(Function.identity());
         };
     }
 
+    /** The probe's query, or empty when there is nothing to send. */
+    private static String query(@Nullable ClientInfo info, @Nullable String networkId) {
+        StringJoiner query = new StringJoiner("&", "?", "").setEmptyValue("");
+        if (info != null) {
+            query.add("version=" + URLEncoder.encode(info.version(), StandardCharsets.UTF_8));
+            query.add("protocol=" + info.protocol());
+            query.add("platform=" + info.platform());
+        }
+        if (networkId != null) {
+            query.add("id=" + URLEncoder.encode(networkId, StandardCharsets.UTF_8));
+        }
+        return query.toString();
+    }
+
     private static CompletableFuture<HttpResponse<String>> get(InetSocketAddress address, boolean secure,
-                                                               HttpSignalingSettings settings) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl(address, secure) + "/v1/join"))
+                                                               String query, HttpSignalingSettings settings) {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl(address, secure) + "/v1/join" + query))
                 .timeout(HTTP_TIMEOUT)
                 .header("Accept", "application/json")
                 .GET()
@@ -189,7 +224,7 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
             this.secure = this.settings.scheme() == Scheme.HTTPS;
             return CompletableFuture.completedFuture(this.settings.iceServers());
         }
-        return probe(endpoint, this.settings).thenApply(probe -> {
+        return probe(endpoint, this.settings, this.localNetworkId).thenApply(probe -> {
             this.secure = probe.scheme() == Scheme.HTTPS;
             return this.settings.iceServers();
         });

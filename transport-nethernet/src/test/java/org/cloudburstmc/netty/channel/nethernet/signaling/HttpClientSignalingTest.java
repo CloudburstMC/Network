@@ -15,6 +15,7 @@
  */
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import com.sun.net.httpserver.HttpServer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -42,12 +43,15 @@ import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.PublicKey;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -55,6 +59,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -69,9 +74,13 @@ class HttpClientSignalingTest {
     private NetherNetHTTPServerSignaling signaling;
     private Channel server;
     private Channel client;
+    private HttpServer http;
 
     @AfterEach
     void tearDown() throws Exception {
+        if (this.http != null) {
+            this.http.stop(0);
+        }
         if (this.client != null) {
             this.client.close().sync();
         }
@@ -306,6 +315,45 @@ class HttpClientSignalingTest {
 
         assertEquals(Scheme.HTTP, probe.scheme());
         assertEquals("Probe target", probe.motd().serverName());
+    }
+
+    /** A bare endpoint that answers every request with a status and records what was asked for. */
+    private InetSocketAddress record(CompletableFuture<URI> request) throws Exception {
+        this.http = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        this.http.createContext("/v1/join", exchange -> {
+            request.complete(exchange.getRequestURI());
+            byte[] body = new PongData.Builder().build().toJson().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        this.http.start();
+        return this.http.getAddress();
+    }
+
+    @Test
+    void probeSendsTheClientInfoAndNetworkId() throws Exception {
+        CompletableFuture<URI> request = new CompletableFuture<>();
+        InetSocketAddress endpoint = this.record(request);
+        HttpSignalingSettings settings = HttpSignalingSettings.DEFAULT
+                .withScheme(Scheme.HTTP)
+                .withClientInfo("1.26.60.29", 2223, 8);
+
+        NetherNetHTTPClientSignaling.probe(endpoint, settings, "14582855633474771821").get(10, TimeUnit.SECONDS);
+
+        assertEquals(Set.of("version=1.26.60.29", "protocol=2223", "platform=8", "id=14582855633474771821"),
+                Set.of(request.get(10, TimeUnit.SECONDS).getRawQuery().split("&")));
+    }
+
+    @Test
+    void probeSendsNoQueryWhenThereIsNothingToSend() throws Exception {
+        CompletableFuture<URI> request = new CompletableFuture<>();
+        InetSocketAddress endpoint = this.record(request);
+
+        NetherNetHTTPClientSignaling.probe(endpoint, HttpSignalingSettings.DEFAULT.withScheme(Scheme.HTTP))
+                .get(10, TimeUnit.SECONDS);
+
+        assertNull(request.get(10, TimeUnit.SECONDS).getRawQuery());
     }
 
     @Test
