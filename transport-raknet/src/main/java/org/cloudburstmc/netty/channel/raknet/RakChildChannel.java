@@ -18,6 +18,8 @@ package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.channel.*;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultChannelToServerProxyMetrics;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
@@ -33,6 +35,7 @@ import java.util.function.Consumer;
 
 public class RakChildChannel extends AbstractChannel implements RakChannel {
 
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(RakChildChannel.class);
     private static final ChannelMetadata metadata = new ChannelMetadata(true);
 
     private final RakChannelConfig config;
@@ -167,7 +170,16 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
 
     @Override
     protected void doClose() throws Exception {
-        this.open = false;
+        // closeForcibly() reaches here without completing the close future, and can follow a close
+        if (this.open) {
+            this.open = false;
+            try {
+                ((RakServerChannel) this.parent()).onChildClosed(this);
+            } catch (Throwable t) {
+                // Thrown here, it would only fail the close promise, which callers rarely check
+                log.warn("Failed to release child channel {}", this, t);
+            }
+        }
     }
 
     @Override
