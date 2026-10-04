@@ -18,15 +18,18 @@ package org.cloudburstmc.netty;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.AbstractByteBufAllocator;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
+import io.netty.buffer.UnpooledByteBufAllocator;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import org.cloudburstmc.netty.channel.raknet.*;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
@@ -39,9 +42,12 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.StringJoiner;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
 public class RakTests {
@@ -159,7 +165,20 @@ public class RakTests {
     }
 
     private InetSocketAddress setupServer() {
-        serverChannel = serverBootstrap()
+        return bind(serverBootstrap());
+    }
+
+    private InetSocketAddress setupServer(BlockingQueue<RakChildChannel> children) {
+        return bind(serverBootstrap().childHandler(new ChannelInitializer<RakChildChannel>() {
+            @Override
+            protected void initChannel(RakChildChannel ch) {
+                children.add(ch);
+            }
+        }));
+    }
+
+    private InetSocketAddress bind(ServerBootstrap bootstrap) {
+        serverChannel = bootstrap
                 .bind(new InetSocketAddress("127.0.0.1", 0))
                 .syncUninterruptibly()
                 .channel();
@@ -211,6 +230,63 @@ public class RakTests {
     }
 
 
+    @Test
+    public void testServerClosesWhenDisconnectNotificationFails() throws InterruptedException {
+        BlockingQueue<RakChildChannel> children = new LinkedBlockingQueue<>();
+        InetSocketAddress address = setupServer(children);
+        // Child session pipelines allocate through the server channel's own config
+        NotificationFailingAllocator allocator = new NotificationFailingAllocator();
+        serverChannel.config().setAllocator(allocator);
+
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                .handler(new ChannelInboundHandlerAdapter())
+                .connect(address)
+                .awaitUninterruptibly()
+                .channel();
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+
+        RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+        allocator.failNotification = true;
+        child.rakPipeline().get(RakSessionCodec.class).disconnect(RakDisconnectReason.DISCONNECTED);
+
+        // The live client keeps the session from timing out, so only the disconnect can close it
+        Assertions.assertTrue(child.closeFuture().await(5, TimeUnit.SECONDS),
+                "Server child should close even if the disconnect notification fails");
+        channel.close().awaitUninterruptibly();
+    }
+
+    @Test
+    public void testRepeatedDisconnectCompletesOnClose() throws Exception {
+        InetSocketAddress address = setupServer();
+        AtomicReference<Runnable> heldClose = new AtomicReference<>();
+
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                .handler(new ChannelOutboundHandlerAdapter() {
+                    @Override
+                    public void close(ChannelHandlerContext ctx, ChannelPromise promise) {
+                        // Hold the close, so the session stays disconnecting while the channel is open
+                        heldClose.set(() -> ctx.close(promise));
+                    }
+                })
+                .connect(address)
+                .awaitUninterruptibly()
+                .channel();
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+
+        ChannelFuture first = channel.disconnect();
+        ChannelFuture second = channel.disconnect();
+        channel.eventLoop().submit(() -> { }).sync(); // Both disconnects have run once this does
+        Assertions.assertTrue(first.isSuccess(), "First disconnect should succeed");
+        Assertions.assertNull(second.cause(), "A repeated disconnect should not fail");
+        Assertions.assertNotNull(heldClose.get(), "First disconnect should close the channel");
+
+        channel.eventLoop().execute(heldClose.get());
+        Assertions.assertTrue(second.await(5, TimeUnit.SECONDS) && second.isSuccess(),
+                "A repeated disconnect should complete once the channel closes");
+        Assertions.assertFalse(channel.isOpen(), "Client should be closed");
+    }
+
     @ParameterizedTest
     @MethodSource("validMtu")
     public void testClientResend(int mtu) throws InterruptedException {
@@ -250,5 +326,34 @@ public class RakTests {
 
         Assertions.assertTrue(received.await(5, TimeUnit.SECONDS), "Client should receive the resent message");
         channel.close().awaitUninterruptibly();
+    }
+
+    private static final class NotificationFailingAllocator extends AbstractByteBufAllocator {
+        private volatile boolean failNotification;
+
+        @Override
+        public ByteBuf ioBuffer(int initialCapacity) {
+            // The disconnect notification is the only single byte allocation in the session
+            if (initialCapacity == 1 && this.failNotification) {
+                this.failNotification = false;
+                throw new OutOfMemoryError("Simulated direct memory exhaustion");
+            }
+            return super.ioBuffer(initialCapacity);
+        }
+
+        @Override
+        protected ByteBuf newHeapBuffer(int initialCapacity, int maxCapacity) {
+            return UnpooledByteBufAllocator.DEFAULT.heapBuffer(initialCapacity, maxCapacity);
+        }
+
+        @Override
+        protected ByteBuf newDirectBuffer(int initialCapacity, int maxCapacity) {
+            return UnpooledByteBufAllocator.DEFAULT.directBuffer(initialCapacity, maxCapacity);
+        }
+
+        @Override
+        public boolean isDirectBufferPooled() {
+            return false;
+        }
     }
 }

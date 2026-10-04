@@ -246,7 +246,12 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     @Override
     public void disconnect(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-        this.disconnect0(RakDisconnectReason.DISCONNECTED).addListener(future -> {
+        ChannelFuture disconnectFuture = this.disconnect0(RakDisconnectReason.DISCONNECTED);
+        if (disconnectFuture.isVoid()) {
+            // Already disconnecting or closed, so complete once the close lands
+            disconnectFuture = this.channel.closeFuture();
+        }
+        disconnectFuture.addListener(future -> {
             if (future.cause() == null) {
                 promise.trySuccess();
             } else {
@@ -843,7 +848,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private ChannelPromise disconnect0(RakDisconnectReason reason) {
-        if (this.state == RakState.UNCONNECTED || this.state == RakState.DISCONNECTING) {
+        // Disconnecting, or already closed
+        if (this.state != RakState.CONNECTED) {
             return this.channel.voidPromise();
         }
         this.setState(RakState.DISCONNECTING);
@@ -853,15 +859,18 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
         ChannelHandlerContext ctx = this.ctx();
-
-        ByteBuf buffer = ctx.alloc().ioBuffer(1);
-        buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
-        RakMessage rakMessage = new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE);
-
         ChannelPromise promise = ctx.newPromise();
         promise.addListener((ChannelFuture future) -> // The channel provided in ChannelFuture is parent channel,
                 this.channel.pipeline().fireUserEventTriggered(reason).close()); // but we want RakChannel instead
-        this.write(ctx, rakMessage, promise);
+        try {
+            ByteBuf buffer = ctx.alloc().ioBuffer(1);
+            buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
+            this.write(ctx, new RakMessage(buffer, RakReliability.RELIABLE, RakPriority.IMMEDIATE), promise);
+        } catch (Throwable t) {
+            log.warn("[{}] Failed to send disconnect notification, closing without it", this.getRemoteAddress(), t);
+            // The listener closes on failure too, so a lost notification cannot strand the session in DISCONNECTING
+            promise.tryFailure(t);
+        }
         return promise;
     }
 
