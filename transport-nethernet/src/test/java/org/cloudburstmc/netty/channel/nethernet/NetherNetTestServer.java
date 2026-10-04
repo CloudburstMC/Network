@@ -149,7 +149,7 @@ final class NetherNetTestServer implements AutoCloseable {
         public void setNewConnectionHandler(NewConnectionHandler handler) { }
         public void setAdvertisementData(PongData data) { }
         public String getLocalNetworkId() { return "server"; }
-        public boolean isActive() { return true; }
+        public boolean isChannelAlive() { return true; }
         public void close() { }
     }
 }

@@ -350,7 +350,7 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
     }
 
     @Override
-    public boolean isActive() {
+    public boolean isChannelAlive() {
         return !this.closed;
     }
 

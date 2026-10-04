@@ -78,9 +78,11 @@ public interface NetherNetSignaling extends AutoCloseable {
     String getLocalNetworkId();
 
     /**
-     * Whether the signaling is connected and able to carry messages
+     * Whether the signaling channel is open. A connection that died without closing still counts
+     * as open: Xbox signaling detects that with {@link AbstractNetherNetXboxSignaling#isChannelAlive(long)},
+     * and a registration that died on an open socket with {@link NetherNetXboxRpcSignaling#isRouteAlive(long)}.
      */
-    boolean isActive();
+    boolean isChannelAlive();
 
     /**
      * Closes the signaling channel and releases any associated resources.
