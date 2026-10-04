@@ -26,6 +26,7 @@ import io.netty.buffer.UnpooledByteBufAllocator;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
+import io.netty.util.ReferenceCountUtil;
 import org.cloudburstmc.netty.channel.raknet.*;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
@@ -39,6 +40,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.net.InetSocketAddress;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.StringJoiner;
@@ -47,6 +49,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
@@ -177,6 +180,19 @@ public class RakTests {
         }));
     }
 
+    // An event would replace the reason the disconnecting code already holds, such as a kick message
+    private static ChannelInboundHandler reasonRecorder(AtomicBoolean fired) {
+        return new ChannelInboundHandlerAdapter() {
+            @Override
+            public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
+                if (evt instanceof RakDisconnectReason) {
+                    fired.set(true);
+                }
+                ctx.fireUserEventTriggered(evt);
+            }
+        };
+    }
+
     private InetSocketAddress bind(ServerBootstrap bootstrap) {
         serverChannel = bootstrap
                 .bind(new InetSocketAddress("127.0.0.1", 0))
@@ -229,6 +245,86 @@ public class RakTests {
         channel.close().awaitUninterruptibly();
     }
 
+
+    @Test
+    public void testClientClosesOnRemoteDisconnect() throws InterruptedException {
+        BlockingQueue<RakChildChannel> children = new LinkedBlockingQueue<>();
+        InetSocketAddress address = setupServer(children);
+        AtomicBoolean inactiveWhileOpen = new AtomicBoolean();
+
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                // Long enough that only the disconnect notification can close the client in time
+                .option(RakChannelOption.RAK_SESSION_TIMEOUT, 30_000L)
+                .handler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelInactive(ChannelHandlerContext ctx) {
+                        if (ctx.channel().isOpen()) {
+                            inactiveWhileOpen.set(true);
+                        }
+                        ctx.fireChannelInactive();
+                    }
+                })
+                .connect(address)
+                .awaitUninterruptibly()
+                .channel();
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+
+        RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+        child.rakPipeline().get(RakSessionCodec.class).disconnect(RakDisconnectReason.DISCONNECTED);
+
+        Assertions.assertTrue(channel.closeFuture().await(5, TimeUnit.SECONDS),
+                "Client should close when the server disconnects");
+        Assertions.assertFalse(inactiveWhileOpen.get(), "Client should not go inactive while still open");
+    }
+
+    @Test
+    public void testServerClosesOnRemoteDisconnect() throws InterruptedException {
+        BlockingQueue<RakChildChannel> children = new LinkedBlockingQueue<>();
+        InetSocketAddress address = setupServer(children);
+        AtomicBoolean reasonFired = new AtomicBoolean();
+
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                .handler(reasonRecorder(reasonFired))
+                .connect(address)
+                .awaitUninterruptibly()
+                .channel();
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+
+        RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+        channel.disconnect().awaitUninterruptibly();
+
+        Assertions.assertTrue(child.closeFuture().await(5, TimeUnit.SECONDS),
+                "Server child should close when the client disconnects");
+        Assertions.assertFalse(reasonFired.get(), "Disconnecting a client should not fire a disconnect reason");
+    }
+
+    @Test
+    public void testServerDisconnectNotifiesClient() throws InterruptedException {
+        BlockingQueue<RakChildChannel> children = new LinkedBlockingQueue<>();
+        InetSocketAddress address = setupServer(children);
+
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                // Long enough that only the disconnect notification can close the client in time
+                .option(RakChannelOption.RAK_SESSION_TIMEOUT, 30_000L)
+                .handler(new ChannelInboundHandlerAdapter())
+                .connect(address)
+                .awaitUninterruptibly()
+                .channel();
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+
+        RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+        AtomicBoolean reasonFired = new AtomicBoolean();
+        child.pipeline().addLast(reasonRecorder(reasonFired));
+        child.disconnect();
+
+        Assertions.assertTrue(channel.closeFuture().await(5, TimeUnit.SECONDS),
+                "Client should close when the server disconnects it");
+        Assertions.assertTrue(child.closeFuture().await(5, TimeUnit.SECONDS), "Server child should close");
+        Assertions.assertFalse(reasonFired.get(), "Disconnecting a child should not fire a disconnect reason");
+    }
 
     @Test
     public void testServerClosesWhenDisconnectNotificationFails() throws InterruptedException {
@@ -285,6 +381,38 @@ public class RakTests {
         Assertions.assertTrue(second.await(5, TimeUnit.SECONDS) && second.isSuccess(),
                 "A repeated disconnect should complete once the channel closes");
         Assertions.assertFalse(channel.isOpen(), "Client should be closed");
+    }
+
+    @Test
+    public void testConnectFailsAsClosedWhenClosedDuringHandshake() throws InterruptedException {
+        // A peer that never replies keeps the client in the handshake
+        CountDownLatch handshakeStarted = new CountDownLatch(1);
+        Channel silentPeer = new Bootstrap()
+                .group(group)
+                .channel(NioDatagramChannel.class)
+                .handler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                        ReferenceCountUtil.release(msg);
+                        handshakeStarted.countDown();
+                    }
+                })
+                .bind(new InetSocketAddress("127.0.0.1", 0))
+                .syncUninterruptibly()
+                .channel();
+        try {
+            ChannelFuture future = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                    .handler(new ChannelInboundHandlerAdapter())
+                    .connect(silentPeer.localAddress());
+            Assertions.assertTrue(handshakeStarted.await(5, TimeUnit.SECONDS), "Client should start the handshake");
+            future.channel().close();
+
+            Assertions.assertTrue(future.await(5, TimeUnit.SECONDS), "Connect should complete once the client closes");
+            Assertions.assertTrue(future.cause() instanceof ClosedChannelException,
+                    "Connect should fail as closed, not cancelled: " + future.cause());
+        } finally {
+            silentPeer.close().awaitUninterruptibly();
+        }
     }
 
     @ParameterizedTest

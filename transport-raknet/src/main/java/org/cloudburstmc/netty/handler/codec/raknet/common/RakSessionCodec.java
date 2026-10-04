@@ -246,7 +246,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     @Override
     public void disconnect(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-        ChannelFuture disconnectFuture = this.disconnect0(RakDisconnectReason.DISCONNECTED);
+        ChannelFuture disconnectFuture = this.disconnect0(RakDisconnectReason.DISCONNECTED, false);
         if (disconnectFuture.isVoid()) {
             // Already disconnecting or closed, so complete once the close lands
             disconnectFuture = this.channel.closeFuture();
@@ -834,20 +834,31 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         return next;
     }
 
+    /**
+     * Sends a disconnect notification to the peer, then closes the channel. Fires no {@link RakDisconnectReason},
+     * as the caller already knows why it disconnects. {@link Channel#disconnect()} behaves the same.
+     */
     public void disconnect() {
-        this.disconnect(RakDisconnectReason.DISCONNECTED);
+        this.disconnect(RakDisconnectReason.DISCONNECTED, false);
     }
 
+    /**
+     * Like {@link #disconnect()}, but fires {@code reason} as a user event before closing.
+     */
     public void disconnect(RakDisconnectReason reason) {
+        this.disconnect(reason, true);
+    }
+
+    private void disconnect(RakDisconnectReason reason, boolean fireEvent) {
         // Ensure we disconnect on the right thread
         if (this.channel.parent().eventLoop().inEventLoop()) {
-            this.disconnect0(reason);
+            this.disconnect0(reason, fireEvent);
         } else {
-            this.channel.parent().eventLoop().execute(() -> this.disconnect0(reason));
+            this.channel.parent().eventLoop().execute(() -> this.disconnect0(reason, fireEvent));
         }
     }
 
-    private ChannelPromise disconnect0(RakDisconnectReason reason) {
+    private ChannelPromise disconnect0(RakDisconnectReason reason, boolean fireEvent) {
         // Disconnecting, or already closed
         if (this.state != RakState.CONNECTED) {
             return this.channel.voidPromise();
@@ -860,8 +871,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         ChannelHandlerContext ctx = this.ctx();
         ChannelPromise promise = ctx.newPromise();
-        promise.addListener((ChannelFuture future) -> // The channel provided in ChannelFuture is parent channel,
-                this.channel.pipeline().fireUserEventTriggered(reason).close()); // but we want RakChannel instead
+        // The channel provided in ChannelFuture is parent channel, but we want RakChannel instead
+        promise.addListener((ChannelFuture future) -> {
+            if (fireEvent) {
+                this.channel.pipeline().fireUserEventTriggered(reason);
+            }
+            this.channel.close();
+        });
         try {
             ByteBuf buffer = ctx.alloc().ioBuffer(1);
             buffer.writeByte(ID_DISCONNECTION_NOTIFICATION);
