@@ -56,11 +56,13 @@ public class RakCookieTests {
     private EventLoopGroup group;
     private Channel serverChannel;
     private BlockingQueue<Channel> acceptedChannels;
+    private BlockingQueue<DatagramPacket> responses;
 
     @BeforeEach
     public void setup() {
         group = new NioEventLoopGroup();
         acceptedChannels = new LinkedBlockingQueue<>();
+        responses = new LinkedBlockingQueue<>();
     }
 
     @AfterEach
@@ -69,6 +71,7 @@ public class RakCookieTests {
             serverChannel.close().awaitUninterruptibly();
         }
         group.shutdownGracefully().awaitUninterruptibly();
+        responses.forEach(DatagramPacket::release);
     }
 
     private void setupServer(RakServerCookieMode mode, byte[] secret) {
@@ -93,6 +96,22 @@ public class RakCookieTests {
         }
 
         this.serverChannel = b.bind(new InetSocketAddress(PORT)).awaitUninterruptibly().channel();
+    }
+
+    // Raw UDP socket queuing replies into responses. Bound to 127.0.0.1 to match the cookie's sender address.
+    private Channel rawClient() {
+        return new Bootstrap()
+                .group(group)
+                .channel(NioDatagramChannel.class)
+                .handler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                        if (msg instanceof DatagramPacket) {
+                            responses.add((DatagramPacket) msg);
+                        }
+                    }
+                })
+                .bind(new InetSocketAddress("127.0.0.1", 0)).awaitUninterruptibly().channel();
     }
 
     private Bootstrap clientBootstrap() {
@@ -146,21 +165,7 @@ public class RakCookieTests {
         setupServer(RakServerCookieMode.OFFLOADED, SECRET);
 
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
-        BlockingQueue<DatagramPacket> responses = new LinkedBlockingQueue<>();
-
-        // Raw UDP socket to send OCR2
-        Channel rawClient = new Bootstrap()
-                .group(group)
-                .channel(NioDatagramChannel.class)
-                .handler(new ChannelInboundHandlerAdapter() {
-                    @Override
-                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                        if (msg instanceof DatagramPacket) {
-                            responses.add(((DatagramPacket) msg).retain());
-                        }
-                    }
-                })
-                .bind(0).awaitUninterruptibly().channel();
+        Channel rawClient = rawClient();
 
         // Generate cookie with Valid Timestamp but Garbage Signature
         SipHash sipHash = new SipHash(SECRET);
@@ -193,21 +198,7 @@ public class RakCookieTests {
         setupServer(RakServerCookieMode.OFFLOADED_PSK, SECRET);
 
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
-        BlockingQueue<DatagramPacket> responses = new LinkedBlockingQueue<>();
-
-        // We must explicitly bind to 127.0.0.1 to ensure the same IP is used in the cookie generation.
-        Channel rawClient = new Bootstrap()
-                .group(group)
-                .channel(NioDatagramChannel.class)
-                .handler(new ChannelInboundHandlerAdapter() {
-                    @Override
-                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                        if (msg instanceof DatagramPacket) {
-                            responses.add(((DatagramPacket) msg).retain());
-                        }
-                    }
-                })
-                .bind(new InetSocketAddress("127.0.0.1", 0)).awaitUninterruptibly().channel();
+        Channel rawClient = rawClient();
 
         // Valid Cookie
         SipHash sipHash = new SipHash(SECRET);
@@ -237,20 +228,7 @@ public class RakCookieTests {
         setupServer(RakServerCookieMode.OFFLOADED_PSK, SECRET);
 
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
-        BlockingQueue<DatagramPacket> responses = new LinkedBlockingQueue<>();
-
-        Channel rawClient = new Bootstrap()
-                .group(group)
-                .channel(NioDatagramChannel.class)
-                .handler(new ChannelInboundHandlerAdapter() {
-                    @Override
-                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                        if (msg instanceof DatagramPacket) {
-                            responses.add(((DatagramPacket) msg).retain());
-                        }
-                    }
-                })
-                .bind(new InetSocketAddress("127.0.0.1", 0)).awaitUninterruptibly().channel();
+        Channel rawClient = rawClient();
 
         // Invalid Cookie (Garbage Signature)
         // Timestamp is 4 bits, Proto is 4 bits.
@@ -275,20 +253,7 @@ public class RakCookieTests {
         setupServer(RakServerCookieMode.OFF, SECRET);
 
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
-        BlockingQueue<DatagramPacket> responses = new LinkedBlockingQueue<>();
-
-        Channel rawClient = new Bootstrap()
-                .group(group)
-                .channel(NioDatagramChannel.class)
-                .handler(new ChannelInboundHandlerAdapter() {
-                    @Override
-                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                        if (msg instanceof DatagramPacket) {
-                            responses.add(((DatagramPacket) msg).retain());
-                        }
-                    }
-                })
-                .bind(0).awaitUninterruptibly().channel();
+        Channel rawClient = rawClient();
 
         // Completely garbage cookie
         int garbageCookie = 0x12345678;

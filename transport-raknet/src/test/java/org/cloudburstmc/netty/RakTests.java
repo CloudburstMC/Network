@@ -27,6 +27,10 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import org.cloudburstmc.netty.channel.raknet.*;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -35,7 +39,9 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.StringJoiner;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 public class RakTests {
@@ -57,6 +63,27 @@ public class RakTests {
 
     private static final int RESEND_PACKET_ID = 0xFF;
 
+    // Shared across tests to skip the shutdown quiet period per test. Closing the server closes its children.
+    private static EventLoopGroup group;
+    private Channel serverChannel;
+
+    @BeforeAll
+    public static void setupGroup() {
+        group = new NioEventLoopGroup();
+    }
+
+    @AfterAll
+    public static void shutdownGroup() {
+        group.shutdownGracefully().awaitUninterruptibly();
+    }
+
+    @AfterEach
+    public void teardown() {
+        if (serverChannel != null) {
+            serverChannel.close().awaitUninterruptibly();
+        }
+    }
+
     private static SimpleChannelInboundHandler<RakMessage> RESEND_HANDLER() {
         return new SimpleChannelInboundHandler<RakMessage>() {
             @Override
@@ -71,7 +98,8 @@ public class RakTests {
         };
     };
 
-    private static SimpleChannelInboundHandler<RakMessage> RESEND_RECEIVER(ByteBuf expectedMessage) {
+    private static SimpleChannelInboundHandler<RakMessage> RESEND_RECEIVER(ByteBuf expectedMessage,
+                                                                           CountDownLatch received) {
         return new SimpleChannelInboundHandler<RakMessage>() {
             @Override
             protected void channelRead0(ChannelHandlerContext ctx, RakMessage message) throws Exception {
@@ -84,6 +112,7 @@ public class RakTests {
                 ByteBuf buffer = message.content().skipBytes(1);
                 if (ByteBufUtil.equals(buffer, expectedMessage)) {
                     System.out.println("Received message is valid");
+                    received.countDown();
                 } else {
                     throw new IllegalStateException("Malformed message received\nExpected: " + ByteBufUtil.hexDump(expectedMessage) + "\nReceived: " + ByteBufUtil.hexDump(buffer));
                 }
@@ -94,7 +123,7 @@ public class RakTests {
     private static ServerBootstrap serverBootstrap() {
         return new ServerBootstrap()
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel.class))
-                .group(new NioEventLoopGroup())
+                .group(group)
                 .option(RakChannelOption.RAK_SUPPORTED_PROTOCOLS, new int[]{11})
                 .option(RakChannelOption.RAK_MAX_CONNECTIONS, 1)
                 .childOption(RakChannelOption.RAK_ORDERING_CHANNELS, 1)
@@ -118,7 +147,7 @@ public class RakTests {
     private static Bootstrap clientBootstrap(int mtu) {
         return new Bootstrap()
                 .channelFactory(RakChannelFactory.client(NioDatagramChannel.class))
-                .group(new NioEventLoopGroup())
+                .group(group)
                 .option(RakChannelOption.RAK_PROTOCOL_VERSION, 11)
                 .option(RakChannelOption.RAK_MTU, mtu)
                 .option(RakChannelOption.RAK_ORDERING_CHANNELS, 1);
@@ -129,32 +158,38 @@ public class RakTests {
                 .filter(i -> i % 12 == 0);
     }
 
-    public void setupServer() {
-        serverBootstrap()
-                .bind(new InetSocketAddress("127.0.0.1", 19132))
-                .awaitUninterruptibly();
+    private InetSocketAddress setupServer() {
+        serverChannel = serverBootstrap()
+                .bind(new InetSocketAddress("127.0.0.1", 0))
+                .syncUninterruptibly()
+                .channel();
+        return (InetSocketAddress) serverChannel.localAddress();
     }
 
     @Test
     public void testClientConnect() {
-        setupServer();
+        InetSocketAddress address = setupServer();
         int mtu = RakConstants.MAXIMUM_MTU_SIZE;
         System.out.println("Testing client with MTU " + mtu);
 
-        clientBootstrap(mtu)
+        Channel channel = clientBootstrap(mtu)
                 .handler(new ChannelInitializer<RakClientChannel>() {
                     @Override
                     protected void initChannel(RakClientChannel ch) throws Exception {
                         System.out.println("Client channel initialized");
                     }
                 })
-                .connect(new InetSocketAddress("127.0.0.1", 19132))
+                .connect(address)
                 .awaitUninterruptibly()
                 .channel();
+
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+        channel.close().awaitUninterruptibly();
     }
 
     @Test
     public void testCompatibleClientConnect() {
+        InetSocketAddress address = setupServer();
         int mtu = RakConstants.MAXIMUM_MTU_SIZE;
         System.out.println("Testing client with MTU " + mtu);
 
@@ -167,22 +202,26 @@ public class RakTests {
                         System.out.println("Client channel initialized");
                     }
                 })
-                .connect(new InetSocketAddress("127.0.0.1", 19132))
+                .connect(address)
                 .awaitUninterruptibly()
                 .channel();
+
+        Assertions.assertTrue(channel.isActive(), "Client should connect in compatibility mode");
+        channel.close().awaitUninterruptibly();
     }
 
 
     @ParameterizedTest
     @MethodSource("validMtu")
-    public void testClientResend(int mtu) {
-        setupServer();
+    public void testClientResend(int mtu) throws InterruptedException {
+        InetSocketAddress address = setupServer();
         System.out.println("Testing client with MTU " + mtu);
 
         SecureRandom random = new SecureRandom();
         byte[] bytes = new byte[mtu * 16];
         random.nextBytes(bytes);
         ByteBuf buffer = Unpooled.wrappedBuffer(bytes);
+        CountDownLatch received = new CountDownLatch(1);
 
         ChannelHandler sender = new ChannelInboundHandlerAdapter() {
             @Override
@@ -198,24 +237,18 @@ public class RakTests {
         ChannelInitializer<RakClientChannel> initializer = new ChannelInitializer<RakClientChannel>() {
             @Override
             protected void initChannel(RakClientChannel ch) throws Exception {
-                ch.pipeline().addLast(RESEND_RECEIVER(buffer));
+                ch.pipeline().addLast(RESEND_RECEIVER(buffer, received));
                 ch.pipeline().addLast(sender);
             }
         };
 
-        clientBootstrap(mtu)
+        Channel channel = clientBootstrap(mtu)
                 .handler(initializer)
-                .connect(new InetSocketAddress("127.0.0.1", 19132))
+                .connect(address)
                 .awaitUninterruptibly()
                 .channel();
 
-        Object o = new Object();
-        synchronized (o) {
-            try {
-                o.wait(1000);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-        }
+        Assertions.assertTrue(received.await(5, TimeUnit.SECONDS), "Client should receive the resent message");
+        channel.close().awaitUninterruptibly();
     }
 }
