@@ -31,6 +31,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.NonWritableChannelException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 
 public class RakChildChannel extends AbstractChannel implements RakChannel {
@@ -165,7 +166,17 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
 
     @Override
     protected void doDisconnect() throws Exception {
-        this.close();
+        RakSessionCodec sessionCodec = this.rakPipeline.get(RakSessionCodec.class);
+        if (sessionCodec == null) {
+            return; // Already closed and torn down
+        }
+        try {
+            // Notify the peer, after which the session closes this channel
+            sessionCodec.disconnect();
+        } catch (RejectedExecutionException e) {
+            // The server's event loop is shutting down, so close without notifying
+            this.close();
+        }
     }
 
     @Override
