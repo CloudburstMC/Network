@@ -39,6 +39,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -75,9 +76,12 @@ public class RakCookieTests {
     }
 
     private void setupServer(RakServerCookieMode mode, byte[] secret) {
+        bind(serverBootstrap(mode, secret).group(group));
+    }
+
+    private ServerBootstrap serverBootstrap(RakServerCookieMode mode, byte[] secret) {
         ServerBootstrap b = new ServerBootstrap()
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel.class))
-                .group(group)
                 .option(RakChannelOption.RAK_SERVER_COOKIE_MODE, mode)
                 .handler(new ChannelInitializer<RakServerChannel>() {
                     @Override
@@ -94,8 +98,27 @@ public class RakCookieTests {
         if (secret != null) {
             b.option(RakChannelOption.RAK_SERVER_COOKIE_SECRET, secret);
         }
+        return b;
+    }
 
+    private void bind(ServerBootstrap b) {
         this.serverChannel = b.bind(new InetSocketAddress(PORT)).awaitUninterruptibly().channel();
+    }
+
+    // Skips other datagrams, such as connected pings from child sessions.
+    private boolean awaitResponse(int packetId) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        DatagramPacket packet;
+        while ((packet = responses.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS)) != null) {
+            try {
+                if (packet.content().getUnsignedByte(0) == packetId) {
+                    return true;
+                }
+            } finally {
+                packet.release();
+            }
+        }
+        return false;
     }
 
     // Raw UDP socket queuing replies into responses. Bound to 127.0.0.1 to match the cookie's sender address.
@@ -265,6 +288,101 @@ public class RakCookieTests {
         Assertions.assertNotNull(response, "Server should respond to OCR2 in OFF mode with garbage cookie");
         Assertions.assertEquals(ID_OPEN_CONNECTION_REPLY_2, response.content().getUnsignedByte(0));
         response.release();
+        rawClient.close();
+    }
+
+    @Test
+    public void testReconnectKeepsReplacementMapped() throws InterruptedException {
+        // A reconnect from the same address closes the old child asynchronously on its own loop.
+        // A single child loop lets the test hold that close until the replacement is mapped.
+        EventLoopGroup childGroup = new NioEventLoopGroup(1);
+        try {
+            bind(serverBootstrap(RakServerCookieMode.OFFLOADED, SECRET).group(group, childGroup));
+
+            InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
+            Channel rawClient = rawClient();
+            int validCookie = new SipHash(SECRET).generateStatelessCookie(serverAddress, PROTOCOL_VERSION);
+            int cookie = (validCookie & 0xFF) | 0xABCDEF00; // OFFLOADED only checks the timestamp
+
+            ByteBuf ocr2 = createOCR2(rawClient.localAddress(), serverAddress, cookie, true);
+            rawClient.writeAndFlush(new DatagramPacket(ocr2, serverAddress));
+            Assertions.assertTrue(awaitResponse(ID_OPEN_CONNECTION_REPLY_2), "Server should accept the first OCR2");
+            Channel first = acceptedChannels.poll(1, TimeUnit.SECONDS);
+            Assertions.assertNotNull(first, "Server should create the first child channel");
+
+            CountDownLatch release = new CountDownLatch(1);
+            childGroup.execute(() -> {
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            ocr2 = createOCR2(rawClient.localAddress(), serverAddress, cookie, true);
+            rawClient.writeAndFlush(new DatagramPacket(ocr2, serverAddress));
+            Assertions.assertTrue(awaitResponse(ID_OPEN_CONNECTION_REPLY_2), "Server should accept the reconnect");
+            release.countDown();
+
+            Assertions.assertTrue(first.closeFuture().await(1, TimeUnit.SECONDS), "Old child channel should close");
+            Channel replacement = acceptedChannels.poll(1, TimeUnit.SECONDS);
+            Assertions.assertNotNull(replacement, "Server should create a replacement child channel");
+            RakServerChannel server = (RakServerChannel) serverChannel;
+            Assertions.assertSame(replacement, server.getChildChannel(rawClient.localAddress()),
+                    "Closing the old child must not unmap its replacement");
+            rawClient.close();
+        } finally {
+            serverChannel.close().awaitUninterruptibly();
+            childGroup.shutdownGracefully().awaitUninterruptibly();
+        }
+    }
+
+    @Test
+    public void testChildClosedDuringInitIsUnmapped() throws InterruptedException {
+        // With a single loop, the child registers and runs initChannel inline while the server creates it.
+        EventLoopGroup singleGroup = new NioEventLoopGroup(1);
+        try {
+            bind(serverBootstrap(RakServerCookieMode.OFF, SECRET)
+                    .group(singleGroup)
+                    .childHandler(new ChannelInitializer<Channel>() {
+                        @Override
+                        protected void initChannel(Channel ch) {
+                            ch.close();
+                        }
+                    }));
+
+            InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
+            Channel rawClient = rawClient();
+            ByteBuf ocr2 = createOCR2(rawClient.localAddress(), serverAddress, 0x12345678, true);
+            rawClient.writeAndFlush(new DatagramPacket(ocr2, serverAddress));
+            Assertions.assertTrue(awaitResponse(ID_OPEN_CONNECTION_REPLY_2), "Server should reply to OCR2");
+
+            // A stale entry would answer every later attempt from this address with ID_ALREADY_CONNECTED
+            Assertions.assertNull(((RakServerChannel) serverChannel).getChildChannel(rawClient.localAddress()),
+                    "A child closed during initChannel must not stay mapped");
+            rawClient.close();
+        } finally {
+            serverChannel.close().awaitUninterruptibly();
+            singleGroup.shutdownGracefully().awaitUninterruptibly();
+        }
+    }
+
+    @Test
+    public void testForceClosedChildIsUnmapped() throws Exception {
+        // Newer netty force closes an accepted child whose options fail to apply, through closeForcibly(),
+        // which never completes the close future
+        setupServer(RakServerCookieMode.OFF, SECRET);
+
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
+        Channel rawClient = rawClient();
+        ByteBuf ocr2 = createOCR2(rawClient.localAddress(), serverAddress, 0x12345678, true);
+        rawClient.writeAndFlush(new DatagramPacket(ocr2, serverAddress));
+        Assertions.assertTrue(awaitResponse(ID_OPEN_CONNECTION_REPLY_2), "Server should reply to OCR2");
+        Channel child = acceptedChannels.poll(1, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+
+        child.eventLoop().submit(() -> child.unsafe().closeForcibly()).sync();
+        Assertions.assertNull(((RakServerChannel) serverChannel).getChildChannel(rawClient.localAddress()),
+                "A force closed child must not stay mapped");
         rawClient.close();
     }
 
