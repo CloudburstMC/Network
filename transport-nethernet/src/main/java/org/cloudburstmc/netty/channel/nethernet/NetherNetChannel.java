@@ -36,6 +36,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelCallback;
 import tel.schich.libdatachannel.PeerConnection;
+import tel.schich.libdatachannel.SctpStats;
 import tel.schich.libdatachannel.PeerState;
 
 import java.util.List;
@@ -153,6 +154,24 @@ public abstract class NetherNetChannel extends AbstractChannel {
             return 0;
         }
         return peer.rtt().map(Duration::toMillis).orElse(0L);
+    }
+
+    /**
+     * What the SCTP association under this channel reports about itself, or null while there is
+     * none. Its counters are cumulative, so a rate comes from the difference between two reads.
+     *
+     * @return The association's stats, or null
+     */
+    public SctpStats sctpStats() {
+        PeerConnection peer = this.peerConnection;
+        if (peer == null) {
+            return null;
+        }
+        try {
+            return peer.sctpStats().orElse(null);
+        } catch (Exception closed) {
+            return null;
+        }
     }
 
     /**
