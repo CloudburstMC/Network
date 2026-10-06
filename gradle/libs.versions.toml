@@ -1,6 +1,6 @@
 [versions]
 netty = "4.1.130.Final"
-libdatachannel = "0.24.6.0-20260930.214316-2"
+libdatachannel = "0.24.6.0-20261006.072145-3"
 gson = "2.13.2"
 jose4j = "0.9.6"
 junit = "5.9.2"
