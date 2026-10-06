@@ -151,7 +151,7 @@ class TokenTrustTest {
         KeyPair pair = keyPair();
         JwtClaims claims = IdentityUtils.validateSdp(offer(pair, pair), TokenTrust.ANY);
 
-        PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"), "Probe", "42", null, claims);
+        PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"), "Probe", "42", null, null, claims);
         // A consumer compares this against whatever identity its own login step presents
         assertArrayEquals(pair.getPublic().getEncoded(), player.clientPublicKey().getEncoded());
     }

@@ -59,7 +59,7 @@ class ProxyProtocolTest {
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setTrustedProxies(trusted)
                 .setProxyProtocol(proxyProtocol)
-                .setMotdProvider((host, remoteAddress) -> {
+                .setMotdProvider((host, remoteAddress, client) -> {
                     seen.offer(remoteAddress);
                     return PongData.DEFAULT;
                 })

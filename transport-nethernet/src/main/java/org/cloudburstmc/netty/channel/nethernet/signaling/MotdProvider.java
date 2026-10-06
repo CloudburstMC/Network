@@ -35,7 +35,8 @@ public interface MotdProvider {
      *
      * @param host          The host header from the join request, which may be used to identify the server
      * @param remoteAddress The address the status request came from
+     * @param client        What the client says about itself, or null if it sent nothing usable
      * @return The MOTD to advertise, or null to leave the client to its other transport
      */
-    @Nullable PongData getMotd(String host, InetSocketAddress remoteAddress);
+    @Nullable PongData getMotd(String host, InetSocketAddress remoteAddress, @Nullable ClientInfo client);
 }

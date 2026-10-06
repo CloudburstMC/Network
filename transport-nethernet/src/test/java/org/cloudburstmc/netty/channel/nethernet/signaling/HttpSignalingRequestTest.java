@@ -46,8 +46,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -156,18 +161,79 @@ class HttpSignalingRequestTest {
     @Test
     void servesNoStatusWhenTheHostDoesNotTakeNetherNet() throws Exception {
         // The endpoint reads as absent, which is what sends the client back to RakNet
-        this.start(this.builder().setMotdProvider((host, client) -> null));
+        this.start(this.builder().setMotdProvider((host, remote, client) -> null));
 
         assertEquals(404, this.status("GET", "/v1/join", null));
     }
 
     @Test
     void answersWithAnErrorWhenTheMotdProviderFails() throws Exception {
-        this.start(this.builder().setMotdProvider((host, client) -> {
+        this.start(this.builder().setMotdProvider((host, remote, client) -> {
             throw new IllegalStateException("no status today");
         }));
 
         assertEquals(500, this.status("GET", "/v1/join", null));
+    }
+
+    @Test
+    void tellsTheMotdProviderWhatTheClientSaysAboutItself() throws Exception {
+        List<ClientInfo> told = new CopyOnWriteArrayList<>();
+        this.start(this.builder().setMotdProvider((host, remote, client) -> {
+            told.add(client);
+            return PongData.DEFAULT;
+        }));
+
+        this.status("GET", "/v1/join?version=1.26.60.29&protocol=2223&platform=8&id=42", null);
+        this.status("GET", "/v1/join?version=1.100.100.100.10&protocol=2223&platform=8", null);
+        this.status("GET", "/v1/join", null);
+        this.status("GET", "/v1/join?version=1.26.60.29&platform=8", null);
+        this.status("GET", "/v1/join?version=1.26.60.29&protocol=latest&platform=8", null);
+        this.status("GET", "/v1/join?version=1.100.100.100.100&protocol=2223&platform=8", null);
+        this.status("GET", "/v1/join?version=1.26.60%0A29&protocol=2223&platform=8", null);
+
+        assertEquals(Arrays.asList(new ClientInfo("1.26.60.29", 2223, 8), new ClientInfo("1.100.100.100.10", 2223, 8),
+                        null, null, null, null, null), told,
+                "all of it, or nothing when any of it is missing, malformed or past the version cap");
+    }
+
+    @Test
+    void servesTheStatusWhateverTheQueryHolds() throws Exception {
+        // The query is the client's own say, so a malformed one costs it the info and nothing more
+        CompletableFuture<Optional<ClientInfo>> told = new CompletableFuture<>();
+        this.start(this.builder().setMotdProvider((host, remote, client) -> {
+            told.complete(Optional.ofNullable(client));
+            return PongData.DEFAULT;
+        }));
+
+        try (Socket socket = new Socket("127.0.0.1", this.port)) {
+            socket.setSoTimeout(10_000);
+            socket.getOutputStream().write(
+                    "GET /v1/join?version=%zz&protocol=2223&platform=8 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+                            .getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+            assertEquals(200, readStatus(in));
+        }
+        assertEquals(Optional.empty(), told.get(10, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void tellsTheFilterWhatAJoinSaysAboutItsClient() throws Exception {
+        // A join carrying it is read just as a status check is
+        List<Optional<ClientInfo>> joined = new CopyOnWriteArrayList<>();
+        this.start(this.builder().setPlayerFilter((host, player) -> {
+            joined.add(Optional.ofNullable(player.client()));
+            return JoinRefusal.REJECTED;
+        }));
+
+        this.status("POST", "/v1/join/42?version=1.26.60.29&protocol=2223&platform=8", TestOffers.selfSigned());
+        this.status("POST", "/v1/join/43", TestOffers.selfSigned());
+        this.status("POST", "/v1/join/44?version=1.26.60.29&protocol=latest&platform=8", TestOffers.selfSigned());
+
+        assertEquals(List.of(Optional.of(new ClientInfo("1.26.60.29", 2223, 8)), Optional.empty(), Optional.empty()),
+                joined);
     }
 
     @Test
@@ -465,8 +531,8 @@ class HttpSignalingRequestTest {
         this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
                 created.incrementAndGet());
         String offer = TestOffers.selfSigned();
-        var first = this.signaling.acceptOffer("same-id", offer, null, "example.test");
-        var duplicate = this.signaling.acceptOffer("same-id", offer, null, "example.test");
+        var first = this.signaling.acceptOffer("same-id", offer, null, "example.test", null);
+        var duplicate = this.signaling.acceptOffer("same-id", offer, null, "example.test", null);
         // Offers are validated and admitted in order, off the caller's thread, so the second is
         // the one refused, once it has been looked at
         assertThrows(ExecutionException.class, () -> duplicate.get(5, java.util.concurrent.TimeUnit.SECONDS),
@@ -487,9 +553,9 @@ class HttpSignalingRequestTest {
         String offer = TestOffers.selfSigned();
         // Two callers at once: admission is serialized on the loop, so exactly one of them wins
         var first = java.util.concurrent.CompletableFuture.supplyAsync(() ->
-                this.signaling.acceptOffer("same-id", offer, null, "example.test"));
+                this.signaling.acceptOffer("same-id", offer, null, "example.test", null));
         var second = java.util.concurrent.CompletableFuture.supplyAsync(() ->
-                this.signaling.acceptOffer("same-id", offer, null, "example.test"));
+                this.signaling.acceptOffer("same-id", offer, null, "example.test", null));
         var a = first.get(5, java.util.concurrent.TimeUnit.SECONDS);
         var b = second.get(5, java.util.concurrent.TimeUnit.SECONDS);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);

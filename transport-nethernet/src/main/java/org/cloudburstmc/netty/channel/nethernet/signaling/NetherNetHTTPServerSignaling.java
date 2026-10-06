@@ -275,7 +275,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             // here decides whether the next request has anywhere to land
             boolean keepAlive = HttpUtil.isKeepAlive(req);
 
-            String path = new QueryStringDecoder(req.uri()).path();
+            QueryStringDecoder uri = new QueryStringDecoder(req.uri());
+            String path = uri.path();
             HttpMethod method = req.method();
             String host = req.headers().get(HttpHeaderNames.HOST);
             InetSocketAddress remoteAddress = clientAddress(ctx, req);
@@ -296,9 +297,11 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                     return;
                 }
 
+                ClientInfo client = ClientInfo.fromQuery(parameters(uri));
+
                 PongData motd;
                 try {
-                    motd = motdProvider.getMotd(host, remoteAddress);
+                    motd = motdProvider.getMotd(host, remoteAddress, client);
                 } catch (Exception e) {
                     log.error("MOTD provider failed", e);
                     respondEmptyWithStatus(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, keepAlive);
@@ -338,7 +341,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             String sdpOffer = req.content().toString(StandardCharsets.UTF_8);
             log.trace("Received sdp offer: " + sdpOffer);
 
-            acceptOffer(networkId, sdpOffer, remoteAddress, host).whenComplete((sdpAnswer, failure) -> {
+            ClientInfo client = ClientInfo.fromQuery(parameters(uri));
+            acceptOffer(networkId, sdpOffer, remoteAddress, host, client).whenComplete((sdpAnswer, failure) -> {
                 if (!ctx.channel().isActive()) {
                     return; // The peer left while the join was in flight
                 }
@@ -414,6 +418,15 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
     }
 
+    /** The query's parameters, or none when it does not decode. */
+    private static Map<String, List<String>> parameters(QueryStringDecoder uri) {
+        try {
+            return uri.parameters();
+        } catch (IllegalArgumentException e) {
+            return Map.of(); // A bad escape costs the client its info and nothing more
+        }
+    }
+
     /** A refusal carries no body: the client shows none, and the status says what it needs to know. */
     private void respondEmptyWithStatus(ChannelHandlerContext ctx, HttpResponseStatus status, boolean keepAlive) {
         FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.EMPTY_BUFFER);
@@ -463,7 +476,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      */
     @Override
     public void setAdvertisementData(PongData pongData) {
-        this.motdProvider = (host, remoteAddress) -> pongData;
+        this.motdProvider = (host, remoteAddress, client) -> pongData;
     }
 
     @Override
@@ -518,11 +531,13 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * @param clientAddress The address the offer came from, used for the peer's identity and to
      *                      seed the child channel, or null if it is not known
      * @param host          The host the peer asked for, passed to the player filter
+     * @param client        What the peer said about itself alongside the offer, or null if it said
+     *                      nothing usable
      * @return The signed SDP answer, or a failure carrying an {@link OfferRejected}
      */
     public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
                                                  @Nullable InetSocketAddress clientAddress,
-                                                 @Nullable String host) {
+                                                 @Nullable String host, @Nullable ClientInfo client) {
         // Validation needs the thread that bind starts. Whether a channel is listening is checked
         // once the offer has earned it, so a bad offer is refused for what it is
         EventLoop loop = this.eventLoop;
@@ -560,7 +575,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 log.debug("Refused the offer from {}: {} ({})", clientAddress, reason, failure.toString());
                 throw new CompletionException(new OfferRejected(JoinRefusal.INVALID_IDENTITY, reason, failure));
             }
-            return admit(networkId, sdpOffer, clientAddress, host, claims);
+            return admit(networkId, sdpOffer, clientAddress, host, client, claims);
         }, loop).thenCompose(Function.identity());
     }
 
@@ -590,9 +605,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      */
     private CompletableFuture<String> admit(String networkId, String sdpOffer,
                                             @Nullable InetSocketAddress clientAddress, @Nullable String host,
-                                            JwtClaims claims) {
+                                            @Nullable ClientInfo client, JwtClaims claims) {
         PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
-                claims.getClaimValueAsString("xname"), networkId, clientAddress, claims);
+                claims.getClaimValueAsString("xname"), networkId, clientAddress, client, claims);
         log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
 
         // Let the user reject the player before we start a connection for them
@@ -737,7 +752,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         private boolean proxyProtocol = false;
         private boolean requiresTls = true;
         private PlayerFilter playerFilter = (host, player) -> null;
-        private MotdProvider motdProvider = (host, remoteAddress) -> PongData.DEFAULT;
+        private MotdProvider motdProvider = (host, remoteAddress, client) -> PongData.DEFAULT;
 
         /**
          * Sets the identity used to sign SDP answers. Required.
@@ -1056,7 +1071,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * @return This builder
          */
         public Builder setMotd(PongData motd) {
-            return setMotdProvider((host, remoteAddress) -> motd);
+            return setMotdProvider((host, remoteAddress, client) -> motd);
         }
 
         /**

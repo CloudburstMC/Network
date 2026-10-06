@@ -47,10 +47,6 @@ public final class HttpSignalingSettings {
         HTTP
     }
 
-    /** What the probe tells the server about the client. */
-    record ClientInfo(String version, int protocol, int platform) {
-    }
-
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
 
     public static final HttpSignalingSettings DEFAULT = new HttpSignalingSettings(Scheme.AUTO, List.of(), null, null);
@@ -83,7 +79,7 @@ public final class HttpSignalingSettings {
     }
 
     /** What the probe tells the server about the client, or null to send nothing. */
-    @Nullable ClientInfo clientInfo() {
+    public @Nullable ClientInfo clientInfo() {
         return this.clientInfo;
     }
 
@@ -111,15 +107,11 @@ public final class HttpSignalingSettings {
     /**
      * Tells the server about the client in the probe's query, as the retail client does.
      *
-     * @param version  The game version, such as {@code 1.26.60.29}
-     * @param protocol The network protocol version
-     * @param platform The <a href="https://mojang.github.io/bedrock-protocol-docs/latest/types/build-platform/">build
-     *                 platform</a>, such as {@code 8} for Win32
+     * @param clientInfo What to tell it
      * @return The settings with that client info
      */
-    public HttpSignalingSettings withClientInfo(String version, int protocol, int platform) {
-        return new HttpSignalingSettings(this.scheme, this.iceServers, this.sslContext,
-                new ClientInfo(version, protocol, platform));
+    public HttpSignalingSettings withClientInfo(ClientInfo clientInfo) {
+        return new HttpSignalingSettings(this.scheme, this.iceServers, this.sslContext, clientInfo);
     }
 
     HttpClient http() {

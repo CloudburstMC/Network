@@ -317,6 +317,21 @@ class HttpClientSignalingTest {
         assertEquals("Probe target", probe.motd().serverName());
     }
 
+    @Test
+    void probeTellsTheServerAboutTheClient() throws Exception {
+        CompletableFuture<ClientInfo> told = new CompletableFuture<>();
+        InetSocketAddress endpoint = this.serve(this.plaintextServer().setMotdProvider((host, remote, client) -> {
+            told.complete(client);
+            return PongData.DEFAULT;
+        }));
+        ClientInfo info = new ClientInfo("1.26.60.29", 2223, 8);
+
+        NetherNetHTTPClientSignaling.probe(endpoint, HttpSignalingSettings.DEFAULT.withClientInfo(info))
+                .get(10, TimeUnit.SECONDS);
+
+        assertEquals(info, told.get(10, TimeUnit.SECONDS));
+    }
+
     /** A bare endpoint that answers every request with a status and records what was asked for. */
     private InetSocketAddress record(CompletableFuture<URI> request) throws Exception {
         this.http = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
@@ -337,7 +352,7 @@ class HttpClientSignalingTest {
         InetSocketAddress endpoint = this.record(request);
         HttpSignalingSettings settings = HttpSignalingSettings.DEFAULT
                 .withScheme(Scheme.HTTP)
-                .withClientInfo("1.26.60.29", 2223, 8);
+                .withClientInfo(new ClientInfo("1.26.60.29", 2223, 8));
 
         NetherNetHTTPClientSignaling.probe(endpoint, settings, "14582855633474771821").get(10, TimeUnit.SECONDS);
 
@@ -383,7 +398,7 @@ class HttpClientSignalingTest {
 
     @Test
     void probeFailsWhenTheServerDoesNotServeNetherNet() throws Exception {
-        InetSocketAddress endpoint = this.serve(this.plaintextServer().setMotdProvider((host, remote) -> null));
+        InetSocketAddress endpoint = this.serve(this.plaintextServer().setMotdProvider((host, remote, client) -> null));
 
         ExecutionException refused = assertThrows(ExecutionException.class,
                 () -> NetherNetHTTPClientSignaling.probe(endpoint, HttpSignalingSettings.DEFAULT)

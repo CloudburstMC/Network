@@ -18,7 +18,6 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
-import org.cloudburstmc.netty.channel.nethernet.signaling.HttpSignalingSettings.ClientInfo;
 import org.cloudburstmc.netty.channel.nethernet.signaling.HttpSignalingSettings.Scheme;
 import org.jspecify.annotations.Nullable;
 
@@ -149,9 +148,7 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
     private static String query(@Nullable ClientInfo info, @Nullable String networkId) {
         StringJoiner query = new StringJoiner("&", "?", "").setEmptyValue("");
         if (info != null) {
-            query.add("version=" + URLEncoder.encode(info.version(), StandardCharsets.UTF_8));
-            query.add("protocol=" + info.protocol());
-            query.add("platform=" + info.platform());
+            info.addTo(query);
         }
         if (networkId != null) {
             query.add("id=" + URLEncoder.encode(networkId, StandardCharsets.UTF_8));

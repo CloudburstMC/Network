@@ -60,7 +60,7 @@ class ForwardedForTest {
         signaling = new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setTrustedProxies(trustedProxies)
-                .setMotdProvider((host, remoteAddress) -> {
+                .setMotdProvider((host, remoteAddress, client) -> {
                     seen.offer(remoteAddress);
                     return PongData.DEFAULT;
                 })

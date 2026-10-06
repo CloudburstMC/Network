@@ -82,7 +82,7 @@ class AcceptOfferTest {
         s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
 
         CompletableFuture<String> answer =
-                s.acceptOffer("42", TestOffers.selfSigned(), new InetSocketAddress("203.0.113.7", 1234), null);
+                s.acceptOffer("42", TestOffers.selfSigned(), new InetSocketAddress("203.0.113.7", 1234), null, null);
         // Validation runs off the loop, so the join is registered a moment later
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (s.pendingJoins() == 0 && System.nanoTime() < deadline) {
@@ -102,7 +102,7 @@ class AcceptOfferTest {
         s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
 
         ExecutionException e = assertThrows(ExecutionException.class,
-                () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null).get(10, TimeUnit.SECONDS));
+                () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null, null).get(10, TimeUnit.SECONDS));
 
         OfferRejected rejected =
                 assertInstanceOf(OfferRejected.class, e.getCause());
@@ -115,8 +115,8 @@ class AcceptOfferTest {
         s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
 
         ExecutionException e = assertThrows(ExecutionException.class,
-                () -> s.acceptOffer("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n", null, null)
-                        .get(10, TimeUnit.SECONDS));
+                () -> s.acceptOffer("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n",
+                        null, null, null).get(10, TimeUnit.SECONDS));
 
         OfferRejected rejected =
                 assertInstanceOf(OfferRejected.class, e.getCause());
@@ -133,7 +133,7 @@ class AcceptOfferTest {
                 s.removeSignalHandler(connectionId));
 
         ExecutionException e = assertThrows(ExecutionException.class,
-                () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null).get(5, TimeUnit.SECONDS));
+                () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null, null).get(5, TimeUnit.SECONDS));
 
         OfferRejected rejected =
                 assertInstanceOf(OfferRejected.class, e.getCause());

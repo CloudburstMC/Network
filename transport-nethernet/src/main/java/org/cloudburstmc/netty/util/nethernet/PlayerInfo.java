@@ -16,7 +16,9 @@
 
 package org.cloudburstmc.netty.util.nethernet;
 
+import org.cloudburstmc.netty.channel.nethernet.signaling.ClientInfo;
 import org.jose4j.jwt.JwtClaims;
+import org.jspecify.annotations.Nullable;
 
 import java.net.InetSocketAddress;
 import java.security.GeneralSecurityException;
@@ -31,16 +33,19 @@ import java.util.Base64;
  * How much of this can be trusted depends on the {@link TokenTrust} the offer was validated with.
  * Under {@link TokenTrust#MINECRAFT_AUTH} the token is Xbox issued, so the claims are attested.
  * Under {@link TokenTrust#ANY} the peer signed its own token and every claim below is self asserted,
- * with only {@link #clientPublicKey()} bound to a key the peer had to hold.
+ * with only {@link #clientPublicKey()} bound to a key the peer had to hold. The client info is self
+ * reported under any trust.
  *
  * @param xuid          The Xbox user ID of the player, self asserted under {@link TokenTrust#ANY}
  * @param displayName   The Xbox gamertag of the player, self asserted under {@link TokenTrust#ANY}
  * @param networkId     The Network ID the player is joining with
  * @param remoteAddress The address the join request came from
+ * @param client        What the client said about itself in the join request, or null if it said
+ *                      nothing usable
  * @param claims        The full set of validated JWT claims, for anything not surfaced above
  */
 public record PlayerInfo(String xuid, String displayName, String networkId, InetSocketAddress remoteAddress,
-                         JwtClaims claims) {
+                         @Nullable ClientInfo client, JwtClaims claims) {
 
     /**
      * The key the peer proved it holds, from the token's {@code cpk} claim.

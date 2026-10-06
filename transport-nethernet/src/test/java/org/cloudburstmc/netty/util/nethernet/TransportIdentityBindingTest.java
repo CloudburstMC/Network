@@ -61,7 +61,7 @@ class TransportIdentityBindingTest {
                 .forPlayer("1234567891234678", "someone").withAssertion(OFFER);
         JwtClaims claims = IdentityUtils.validateSdp(offer, TokenTrust.ANY);
         PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
-                claims.getClaimValueAsString("xname"), "42", null, claims);
+                claims.getClaimValueAsString("xname"), "42", null, null, claims);
         Channel channel = new NetherNetChildChannel(null, null, null, null);
         channel.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
         TransportIdentityBinding.install(channel, TransportIdentityBinding.forPlayer(player));
@@ -114,7 +114,7 @@ class TransportIdentityBindingTest {
         var original = (ECPublicKey) generator.generateKeyPair().getPublic();
         var claims = new JwtClaims();
         claims.setStringClaim("cpk", Base64.getEncoder().encodeToString(original.getEncoded()));
-        var player = new PlayerInfo("same-xuid", "fixture", "42", null, claims);
+        var player = new PlayerInfo("same-xuid", "fixture", "42", null, null, claims);
         ECPublicKey otherProvider = new ECPublicKey() {
             @Override
             public ECPoint getW() {
