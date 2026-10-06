@@ -16,33 +16,6 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
-import org.jspecify.annotations.Nullable;
-import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
-import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
-import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
-import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
-import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
-import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
-import org.cloudburstmc.netty.util.nethernet.SdpUtil;
-import org.cloudburstmc.netty.util.nethernet.TokenTrust;
-import java.util.List;
-import io.netty.util.AsciiString;
-import io.netty.util.NetUtil;
-
-import java.util.Collection;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.function.Function;
-import java.nio.channels.ClosedChannelException;
-import javax.net.ssl.SSLException;
-import io.netty.handler.codec.DecoderException;
-import org.jose4j.jwt.consumer.InvalidJwtException;
-import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
-import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -58,6 +31,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.DecoderException;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
@@ -66,9 +40,6 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.timeout.IdleState;
-import io.netty.handler.timeout.IdleStateEvent;
-import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.QueryStringDecoder;
@@ -76,14 +47,32 @@ import io.netty.handler.ssl.OptionalSslHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslHandler;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.AsciiString;
+import io.netty.util.NetUtil;
 import io.netty.util.concurrent.FutureListener;
 import io.netty.util.concurrent.Promise;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
+import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
+import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
+import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
+import org.cloudburstmc.netty.util.nethernet.SdpUtil;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import org.jose4j.jwt.JwtClaims;
+import org.jose4j.jwt.consumer.InvalidJwtException;
+import org.jspecify.annotations.Nullable;
 
 import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -91,15 +80,25 @@ import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
-import java.util.Map;
 import java.security.SecureRandom;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
 
 /**
  * This class implements a signaling server using HTTP(S) for the NetherNet protocol.
@@ -107,22 +106,18 @@ import java.util.concurrent.TimeoutException;
  * Follows <a href="https://github.com/Mojang/bedrock-protocol-docs/blob/7330880ab78ef001cad0b9cdfedb3aa3eaa6d4af/NetherNetOnboardingGuide.md">...</a>
  */
 public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
+    private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
+    /** How long a kept connection may sit unused before it is closed. */
+    private static final int IDLE_SECONDS = 30;
+
     private final InternalLogger log = InternalLoggerFactory.getInstance(getClass());
 
-    private final Random random = new SecureRandom();
-    private final Map<String, Promise<String>> pendingAnswers = new ConcurrentHashMap<>();
-    private final Map<InetAddress, Integer> connectionsPerAddress = new ConcurrentHashMap<>();
-
-    private final PlayerFilter playerFilter;
-    private volatile MotdProvider motdProvider;
-
-    private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
-
-    /** The joins whose child has not answered yet, by the connection id the channel was handed. */
-    private final Map<String, Promise<String>> pendingByConnection = new ConcurrentHashMap<>();
-
-
+    private final OperatorIdentity serverIdentity;
+    private SslContext sslContext;
     private final IpRangeSet trustedProxies;
+    private final int maxConnectionsPerAddress;
+    private final int maxPendingJoins;
+    private final int answerTimeoutSeconds;
     private final boolean iceOnLocalPort;
     private final List<InetSocketAddress> advertisedAddresses;
     private final List<IceServerInfo> iceServers;
@@ -130,12 +125,15 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final boolean serveHttp;
     private final boolean proxyProtocol;
     private final boolean requiresTls;
-    private final int maxConnectionsPerAddress;
-    private final int maxPendingJoins;
-    private final int answerTimeoutSeconds;
+    private final PlayerFilter playerFilter;
+    private volatile MotdProvider motdProvider;
 
-    private SslContext sslContext;
-    private OperatorIdentity serverIdentity;
+    private final Random random = new SecureRandom();
+    private final Map<String, Promise<String>> pendingAnswers = new ConcurrentHashMap<>();
+    /** The joins whose child has not answered yet, by the connection id the channel was handed. */
+    private final Map<String, Promise<String>> pendingByConnection = new ConcurrentHashMap<>();
+    private final Map<InetAddress, Integer> connectionsPerAddress = new ConcurrentHashMap<>();
+
     private NewConnectionHandler newConnectionHandler;
     private volatile NetherServerMetrics metrics;
 
@@ -146,16 +144,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     /** Identity validation runs here rather than on the loop, since a trust anchor may fetch keys. */
     private volatile ExecutorService validation;
 
-    @Override
-    public void setMetrics(@Nullable NetherServerMetrics metrics) {
-        this.metrics = metrics;
-    }
-
     private NetherNetHTTPServerSignaling(Builder builder) {
-        this.playerFilter = builder.playerFilter;
-        this.motdProvider = builder.motdProvider;
-        this.sslContext = builder.sslContext;
         this.serverIdentity = builder.identity;
+        this.sslContext = builder.sslContext;
         this.trustedProxies = builder.trustedProxies;
         this.maxConnectionsPerAddress = builder.maxConnectionsPerAddress;
         this.maxPendingJoins = builder.maxPendingJoins;
@@ -167,6 +158,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         this.serveHttp = builder.serveHttp;
         this.proxyProtocol = builder.proxyProtocol;
         this.requiresTls = builder.requiresTls;
+        this.playerFilter = builder.playerFilter;
+        this.motdProvider = builder.motdProvider;
     }
 
     @Override
@@ -260,8 +253,321 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         });
     }
 
-    /** How long a kept connection may sit unused before it is closed. */
-    private static final int IDLE_SECONDS = 30;
+    @Override
+    public void close() {
+        if (serverChannel != null) {
+            serverChannel.close();
+        }
+        EventLoopGroup acceptor = this.acceptor;
+        if (acceptor != null) {
+            acceptor.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+        }
+        ExecutorService validation = this.validation;
+        if (validation != null) {
+            validation.shutdownNow();
+        }
+    }
+
+    @Override
+    public boolean isActive() {
+        Channel ch = this.serverChannel;
+        return ch != null && ch.isActive();
+    }
+
+    @Override
+    public void setNewConnectionHandler(NewConnectionHandler handler) {
+        this.newConnectionHandler = handler;
+    }
+
+    /**
+     * Serves this as the status document from here on, in place of whatever the builder set.
+     */
+    @Override
+    public void setAdvertisementData(PongData pongData) {
+        this.motdProvider = (host, remoteAddress, client) -> pongData;
+    }
+
+    @Override
+    public void setMetrics(@Nullable NetherServerMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    @Override
+    public OperatorIdentity serverIdentity() {
+        return this.serverIdentity;
+    }
+
+    /**
+     * The STUN and TURN servers ICE may use, which this signaling takes from its configuration
+     * rather than from a handshake, since it speaks to nothing that would hand them out.
+     */
+    @Override
+    public List<IceServerInfo> getIceServers() {
+        return this.iceServers;
+    }
+
+    /**
+     * Whether ICE may gather on the port signaling is bound to. Set it false when another
+     * transport already holds the UDP side of that port, so ICE uses its own.
+     */
+    @Override
+    public boolean allowsIceOnLocalPort() {
+        return this.iceOnLocalPort;
+    }
+
+    @Override
+    public boolean usesTrickleIce() {
+        return false;
+    }
+
+    @Override
+    public String getLocalNetworkId() {
+        return "";
+    }
+
+    /**
+     * How many joins are waiting for an answer, which is what {@code setMaxPendingJoins} caps.
+     *
+     * @return The joins in flight
+     */
+    public int pendingJoins() {
+        return this.pendingAnswers.size();
+    }
+
+    /**
+     * Answers an SDP offer, whether it arrived over this server's HTTP endpoint or was handed in
+     * from outside it.
+     * <p>
+     * The returned description already carries the ICE candidates and the server identity
+     * assertion, so it can be written back to the peer verbatim.
+     * <p>
+     * Callable from any thread. The identity is validated on the signaling's own thread and the
+     * rest happens on the event loop, which is also where the future completes.
+     *
+     * @param networkId     The peer's network ID
+     * @param sdpOffer      The raw SDP offer
+     * @param clientAddress The address the offer came from, used for the peer's identity and to
+     *                      seed the child channel, or null if it is not known
+     * @param host          The host the peer asked for, passed to the player filter
+     * @param client        What the peer said about itself alongside the offer, or null if it said
+     *                      nothing usable
+     * @return The signed SDP answer, or a failure carrying an {@link OfferRejected}
+     */
+    public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
+                                                 @Nullable InetSocketAddress clientAddress,
+                                                 @Nullable String host, @Nullable ClientInfo client) {
+        // Validation needs the thread that bind starts. Whether a channel is listening is checked
+        // once the offer has earned it, so a bad offer is refused for what it is
+        EventLoop loop = this.eventLoop;
+        ExecutorService validation = this.validation;
+        if (loop == null || validation == null) {
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(JoinRefusal.ERROR, "signaling is not bound", null));
+        }
+
+        // Ahead of the signature check, so a flood cannot make us verify its way to the limit
+        if (pendingAnswers.size() >= maxPendingJoins) {
+            log.warn("Refusing joins, {} are already waiting for an answer", pendingAnswers.size());
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(JoinRefusal.FULL, "too many joins in flight", null));
+        }
+
+        CompletableFuture<JwtClaims> validated = new CompletableFuture<>();
+        try {
+            validation.execute(() -> {
+                try {
+                    validated.complete(IdentityUtils.validateSdp(sdpOffer, tokenTrust));
+                } catch (Throwable e) {
+                    validated.completeExceptionally(e);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            log.warn("Refusing joins, too many offers are waiting for validation");
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(JoinRefusal.FULL, "too many offers waiting for validation", null));
+        }
+
+        return validated.handleAsync((claims, failure) -> {
+            if (failure != null) {
+                String reason = refusalReason(failure);
+                log.debug("Refused the offer from {}: {} ({})", clientAddress, reason, failure.toString());
+                throw new CompletionException(new OfferRejected(JoinRefusal.INVALID_IDENTITY, reason, failure));
+            }
+            return admit(networkId, sdpOffer, clientAddress, host, client, claims);
+        }, loop).thenCompose(Function.identity());
+    }
+
+    @Override
+    public void sendDescription(String targetNetworkId, String sdp) {
+        log.debug("Sending sdp to " + targetNetworkId);
+
+        Promise<String> answer = pendingAnswers.get(targetNetworkId);
+        if (answer != null) {
+            answer.trySuccess(SdpUtil.withAdvertisedCandidates(sdp, this.advertisedAddresses));
+        } else {
+            log.debug("No pending join waiting for " + targetNetworkId);
+        }
+    }
+
+    @Override
+    public void setSignalHandler(String connectionId, SignalHandler handler) {
+        // Nothing to do for HTTP signaling
+    }
+
+    @Override
+    public void removeSignalHandler(String connectionId) {
+        // The channel calls this as its child closes, which before an answer means the join failed
+        Promise<String> answer = pendingByConnection.remove(connectionId);
+        if (answer != null) {
+            answer.tryFailure(new ClosedChannelException());
+        }
+    }
+
+    /**
+     * The second half of a join, on the loop, once the identity is known to be good.
+     */
+    private CompletableFuture<String> admit(String networkId, String sdpOffer,
+                                            @Nullable InetSocketAddress clientAddress, @Nullable String host,
+                                            @Nullable ClientInfo client, JwtClaims claims) {
+        PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
+                claims.getClaimValueAsString("xname"), networkId, clientAddress, client, claims);
+        log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
+
+        // Let the user reject the player before we start a connection for them
+        JoinRefusal refusal;
+        try {
+            refusal = playerFilter.refuse(host, player);
+        } catch (Exception e) {
+            log.error("Player filter failed for " + player.xuid(), e);
+            refusal = JoinRefusal.REJECTED;
+        }
+
+        if (refusal != null) {
+            log.debug("Rejected join from " + player.displayName() + " (" + player.xuid() + "): " + refusal);
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(refusal, "turned away by the player filter", null));
+        }
+
+        EventLoop loop = this.eventLoop;
+        NewConnectionHandler handler = this.newConnectionHandler;
+        if (loop == null || handler == null) {
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(JoinRefusal.ERROR, "signaling is not bound", null));
+        }
+
+        // Validation took a hop, so the cap is checked again where the count is authoritative
+        if (pendingAnswers.size() >= maxPendingJoins) {
+            return CompletableFuture.failedFuture(
+                    new OfferRejected(JoinRefusal.FULL, "too many joins in flight", null));
+        }
+
+        CompletableFuture<String> result = new CompletableFuture<>();
+
+        // Register the pending answer before firing the callback so a fast answer isn't missed
+        Promise<String> answer = loop.newPromise();
+        // Never replace the answer owned by another offer for this network ID.
+        if (pendingAnswers.putIfAbsent(networkId, answer) != null) {
+            return CompletableFuture.failedFuture(new OfferRejected(JoinRefusal.DUPLICATE,
+                    "network ID already pending", null));
+        }
+
+        // The network id is the peer's own; the connection id is ours to choose, a uint64 as text
+        String connectionId = Long.toUnsignedString(random.nextLong());
+        // Mapped before the channel sees the id, so a child that fails at once still finds its join
+        pendingByConnection.put(connectionId, answer);
+
+        ScheduledFuture<?> timeout = loop.schedule(
+                () -> answer.tryFailure(new TimeoutException("Timed out waiting for SDP answer")),
+                answerTimeoutSeconds, TimeUnit.SECONDS);
+
+        answer.addListener((FutureListener<String>) future -> {
+            pendingAnswers.remove(networkId, answer);
+            pendingByConnection.remove(connectionId);
+            timeout.cancel(false);
+
+            if (future.isSuccess()) {
+                result.complete(future.getNow());
+                return;
+            }
+            boolean timedOut = future.cause() instanceof TimeoutException;
+            log.warn("No SDP answer for {} from {}: {}", networkId, clientAddress, future.cause().toString());
+            result.completeExceptionally(new OfferRejected(timedOut ? JoinRefusal.TIMEOUT : JoinRefusal.ERROR,
+                    timedOut ? "no answer was produced in time" : "the connection failed before an answer was produced",
+                    future.cause()));
+        });
+
+        handler.onConnect(connectionId, networkId, sdpOffer, clientAddress, player);
+        return result;
+    }
+
+    /**
+     * What a refused peer is told, coarse on purpose: the endpoint faces the internet, and the
+     * exception text describes the trust anchor rather than the offer.
+     */
+    private static String refusalReason(Throwable failure) {
+        String message = failure.getMessage() == null ? "" : failure.getMessage();
+        if (failure instanceof InvalidJwtException || message.startsWith("Token is not trusted")) {
+            return "the identity token is not trusted here";
+        }
+        if (message.contains("missing identity")) {
+            return "the offer carries no identity assertion";
+        }
+        if (message.contains("no fingerprints")) {
+            return "the offer carries no fingerprint";
+        }
+        if (message.startsWith("Fingerprint")) {
+            return "the identity assertion does not match the offer";
+        }
+        return "the identity assertion could not be validated";
+    }
+
+    /** The query's parameters, or none when it does not decode. */
+    private static Map<String, List<String>> parameters(QueryStringDecoder uri) {
+        try {
+            return uri.parameters();
+        } catch (IllegalArgumentException e) {
+            return Map.of(); // A bad escape costs the client its info and nothing more
+        }
+    }
+
+    /** A refusal carries no body: the client shows none, and the status says what it needs to know. */
+    private void respondEmptyWithStatus(ChannelHandlerContext ctx, HttpResponseStatus status, boolean keepAlive) {
+        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.EMPTY_BUFFER);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
+        respond(ctx, response, keepAlive);
+    }
+
+    /**
+     * A 426 has to name what to upgrade to, and TLS on this same port is what it means.
+     */
+    private void respondUpgradeRequired(ChannelHandlerContext ctx, boolean keepAlive) {
+        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
+                HttpResponseStatus.UPGRADE_REQUIRED, Unpooled.EMPTY_BUFFER);
+        response.headers().set(HttpHeaderNames.UPGRADE, "TLS/1.2, HTTP/1.1");
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
+        respond(ctx, response, keepAlive);
+    }
+
+    private void respondWithString(ChannelHandlerContext ctx, String body, String contentType, boolean keepAlive) {
+        ByteBuf bodyBuf = Unpooled.wrappedBuffer(body.getBytes(StandardCharsets.UTF_8));
+        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, bodyBuf);
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, contentType);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bodyBuf.readableBytes());
+        respond(ctx, response, keepAlive);
+    }
+
+    /**
+     * Closing a connection the client still believes is open leaves its next request unanswered:
+     * TCP accepts the bytes into a half-closed socket, so the client waits for a reply that can
+     * never come. Either the connection is kept, or the response says it is not.
+     */
+    private void respond(ChannelHandlerContext ctx, FullHttpResponse response, boolean keepAlive) {
+        HttpUtil.setKeepAlive(response, keepAlive);
+        ChannelFuture written = ctx.writeAndFlush(response);
+        if (!keepAlive) {
+            written.addListener(ChannelFutureListener.CLOSE);
+        }
+    }
 
     private class SignalingHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
         @Override
@@ -415,317 +721,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 log.error("Signaling handler error", cause);
             }
             ctx.close();
-        }
-    }
-
-    /** The query's parameters, or none when it does not decode. */
-    private static Map<String, List<String>> parameters(QueryStringDecoder uri) {
-        try {
-            return uri.parameters();
-        } catch (IllegalArgumentException e) {
-            return Map.of(); // A bad escape costs the client its info and nothing more
-        }
-    }
-
-    /** A refusal carries no body: the client shows none, and the status says what it needs to know. */
-    private void respondEmptyWithStatus(ChannelHandlerContext ctx, HttpResponseStatus status, boolean keepAlive) {
-        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.EMPTY_BUFFER);
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
-        respond(ctx, response, keepAlive);
-    }
-
-    /**
-     * A 426 has to name what to upgrade to, and TLS on this same port is what it means.
-     */
-    private void respondUpgradeRequired(ChannelHandlerContext ctx, boolean keepAlive) {
-        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
-                HttpResponseStatus.UPGRADE_REQUIRED, Unpooled.EMPTY_BUFFER);
-        response.headers().set(HttpHeaderNames.UPGRADE, "TLS/1.2, HTTP/1.1");
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
-        respond(ctx, response, keepAlive);
-    }
-
-    private void respondWithString(ChannelHandlerContext ctx, String body, String contentType, boolean keepAlive) {
-        ByteBuf bodyBuf = Unpooled.wrappedBuffer(body.getBytes(StandardCharsets.UTF_8));
-        FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, bodyBuf);
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, contentType);
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bodyBuf.readableBytes());
-        respond(ctx, response, keepAlive);
-    }
-
-    /**
-     * Closing a connection the client still believes is open leaves its next request unanswered:
-     * TCP accepts the bytes into a half-closed socket, so the client waits for a reply that can
-     * never come. Either the connection is kept, or the response says it is not.
-     */
-    private void respond(ChannelHandlerContext ctx, FullHttpResponse response, boolean keepAlive) {
-        HttpUtil.setKeepAlive(response, keepAlive);
-        ChannelFuture written = ctx.writeAndFlush(response);
-        if (!keepAlive) {
-            written.addListener(ChannelFutureListener.CLOSE);
-        }
-    }
-
-    @Override
-    public void setNewConnectionHandler(NewConnectionHandler handler) {
-        this.newConnectionHandler = handler;
-    }
-
-    /**
-     * Serves this as the status document from here on, in place of whatever the builder set.
-     */
-    @Override
-    public void setAdvertisementData(PongData pongData) {
-        this.motdProvider = (host, remoteAddress, client) -> pongData;
-    }
-
-    @Override
-    public OperatorIdentity serverIdentity() {
-        return this.serverIdentity;
-    }
-
-    @Override
-    public boolean usesTrickleIce() {
-        return false;
-    }
-
-    /**
-     * Whether ICE may gather on the port signaling is bound to. Set it false when another
-     * transport already holds the UDP side of that port, so ICE uses its own.
-     */
-    @Override
-    public boolean allowsIceOnLocalPort() {
-        return this.iceOnLocalPort;
-    }
-
-    /**
-     * The STUN and TURN servers ICE may use, which this signaling takes from its configuration
-     * rather than from a handshake, since it speaks to nothing that would hand them out.
-     */
-    @Override
-    public List<IceServerInfo> getIceServers() {
-        return this.iceServers;
-    }
-
-    /**
-     * How many joins are waiting for an answer, which is what {@code setMaxPendingJoins} caps.
-     *
-     * @return The joins in flight
-     */
-    public int pendingJoins() {
-        return this.pendingAnswers.size();
-    }
-
-    /**
-     * Answers an SDP offer, whether it arrived over this server's HTTP endpoint or was handed in
-     * from outside it.
-     * <p>
-     * The returned description already carries the ICE candidates and the server identity
-     * assertion, so it can be written back to the peer verbatim.
-     * <p>
-     * Callable from any thread. The identity is validated on the signaling's own thread and the
-     * rest happens on the event loop, which is also where the future completes.
-     *
-     * @param networkId     The peer's network ID
-     * @param sdpOffer      The raw SDP offer
-     * @param clientAddress The address the offer came from, used for the peer's identity and to
-     *                      seed the child channel, or null if it is not known
-     * @param host          The host the peer asked for, passed to the player filter
-     * @param client        What the peer said about itself alongside the offer, or null if it said
-     *                      nothing usable
-     * @return The signed SDP answer, or a failure carrying an {@link OfferRejected}
-     */
-    public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
-                                                 @Nullable InetSocketAddress clientAddress,
-                                                 @Nullable String host, @Nullable ClientInfo client) {
-        // Validation needs the thread that bind starts. Whether a channel is listening is checked
-        // once the offer has earned it, so a bad offer is refused for what it is
-        EventLoop loop = this.eventLoop;
-        ExecutorService validation = this.validation;
-        if (loop == null || validation == null) {
-            return CompletableFuture.failedFuture(
-                    new OfferRejected(JoinRefusal.ERROR, "signaling is not bound", null));
-        }
-
-        // Ahead of the signature check, so a flood cannot make us verify its way to the limit
-        if (pendingAnswers.size() >= maxPendingJoins) {
-            log.warn("Refusing joins, {} are already waiting for an answer", pendingAnswers.size());
-            return CompletableFuture.failedFuture(
-                    new OfferRejected(JoinRefusal.FULL, "too many joins in flight", null));
-        }
-
-        CompletableFuture<JwtClaims> validated = new CompletableFuture<>();
-        try {
-            validation.execute(() -> {
-                try {
-                    validated.complete(IdentityUtils.validateSdp(sdpOffer, tokenTrust));
-                } catch (Throwable e) {
-                    validated.completeExceptionally(e);
-                }
-            });
-        } catch (RejectedExecutionException e) {
-            log.warn("Refusing joins, too many offers are waiting for validation");
-            return CompletableFuture.failedFuture(
-                    new OfferRejected(JoinRefusal.FULL, "too many offers waiting for validation", null));
-        }
-
-        return validated.handleAsync((claims, failure) -> {
-            if (failure != null) {
-                String reason = refusalReason(failure);
-                log.debug("Refused the offer from {}: {} ({})", clientAddress, reason, failure.toString());
-                throw new CompletionException(new OfferRejected(JoinRefusal.INVALID_IDENTITY, reason, failure));
-            }
-            return admit(networkId, sdpOffer, clientAddress, host, client, claims);
-        }, loop).thenCompose(Function.identity());
-    }
-
-    /**
-     * What a refused peer is told, coarse on purpose: the endpoint faces the internet, and the
-     * exception text describes the trust anchor rather than the offer.
-     */
-    private static String refusalReason(Throwable failure) {
-        String message = failure.getMessage() == null ? "" : failure.getMessage();
-        if (failure instanceof InvalidJwtException || message.startsWith("Token is not trusted")) {
-            return "the identity token is not trusted here";
-        }
-        if (message.contains("missing identity")) {
-            return "the offer carries no identity assertion";
-        }
-        if (message.contains("no fingerprints")) {
-            return "the offer carries no fingerprint";
-        }
-        if (message.startsWith("Fingerprint")) {
-            return "the identity assertion does not match the offer";
-        }
-        return "the identity assertion could not be validated";
-    }
-
-    /**
-     * The second half of a join, on the loop, once the identity is known to be good.
-     */
-    private CompletableFuture<String> admit(String networkId, String sdpOffer,
-                                            @Nullable InetSocketAddress clientAddress, @Nullable String host,
-                                            @Nullable ClientInfo client, JwtClaims claims) {
-        PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
-                claims.getClaimValueAsString("xname"), networkId, clientAddress, client, claims);
-        log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
-
-        // Let the user reject the player before we start a connection for them
-        JoinRefusal refusal;
-        try {
-            refusal = playerFilter.refuse(host, player);
-        } catch (Exception e) {
-            log.error("Player filter failed for " + player.xuid(), e);
-            refusal = JoinRefusal.REJECTED;
-        }
-
-        if (refusal != null) {
-            log.debug("Rejected join from " + player.displayName() + " (" + player.xuid() + "): " + refusal);
-            return CompletableFuture.failedFuture(
-                    new OfferRejected(refusal, "turned away by the player filter", null));
-        }
-
-        EventLoop loop = this.eventLoop;
-        NewConnectionHandler handler = this.newConnectionHandler;
-        if (loop == null || handler == null) {
-            return CompletableFuture.failedFuture(
-                    new OfferRejected(JoinRefusal.ERROR, "signaling is not bound", null));
-        }
-
-        // Validation took a hop, so the cap is checked again where the count is authoritative
-        if (pendingAnswers.size() >= maxPendingJoins) {
-            return CompletableFuture.failedFuture(
-                    new OfferRejected(JoinRefusal.FULL, "too many joins in flight", null));
-        }
-
-        CompletableFuture<String> result = new CompletableFuture<>();
-
-        // Register the pending answer before firing the callback so a fast answer isn't missed
-        Promise<String> answer = loop.newPromise();
-        // Never replace the answer owned by another offer for this network ID.
-        if (pendingAnswers.putIfAbsent(networkId, answer) != null) {
-            return CompletableFuture.failedFuture(new OfferRejected(JoinRefusal.DUPLICATE,
-                    "network ID already pending", null));
-        }
-
-        // The network id is the peer's own; the connection id is ours to choose, a uint64 as text
-        String connectionId = Long.toUnsignedString(random.nextLong());
-        // Mapped before the channel sees the id, so a child that fails at once still finds its join
-        pendingByConnection.put(connectionId, answer);
-
-        ScheduledFuture<?> timeout = loop.schedule(
-                () -> answer.tryFailure(new TimeoutException("Timed out waiting for SDP answer")),
-                answerTimeoutSeconds, TimeUnit.SECONDS);
-
-        answer.addListener((FutureListener<String>) future -> {
-            pendingAnswers.remove(networkId, answer);
-            pendingByConnection.remove(connectionId);
-            timeout.cancel(false);
-
-            if (future.isSuccess()) {
-                result.complete(future.getNow());
-                return;
-            }
-            boolean timedOut = future.cause() instanceof TimeoutException;
-            log.warn("No SDP answer for {} from {}: {}", networkId, clientAddress, future.cause().toString());
-            result.completeExceptionally(new OfferRejected(timedOut ? JoinRefusal.TIMEOUT : JoinRefusal.ERROR,
-                    timedOut ? "no answer was produced in time" : "the connection failed before an answer was produced",
-                    future.cause()));
-        });
-
-        handler.onConnect(connectionId, networkId, sdpOffer, clientAddress, player);
-        return result;
-    }
-
-    @Override
-    public void sendDescription(String targetNetworkId, String sdp) {
-        log.debug("Sending sdp to " + targetNetworkId);
-
-        Promise<String> answer = pendingAnswers.get(targetNetworkId);
-        if (answer != null) {
-            answer.trySuccess(SdpUtil.withAdvertisedCandidates(sdp, this.advertisedAddresses));
-        } else {
-            log.debug("No pending join waiting for " + targetNetworkId);
-        }
-    }
-
-    @Override
-    public void setSignalHandler(String connectionId, SignalHandler handler) {
-        // Nothing to do for HTTP signaling
-    }
-
-    @Override
-    public void removeSignalHandler(String connectionId) {
-        // The channel calls this as its child closes, which before an answer means the join failed
-        Promise<String> answer = pendingByConnection.remove(connectionId);
-        if (answer != null) {
-            answer.tryFailure(new ClosedChannelException());
-        }
-    }
-
-    @Override
-    public boolean isActive() {
-        Channel ch = this.serverChannel;
-        return ch != null && ch.isActive();
-    }
-
-    @Override
-    public String getLocalNetworkId() {
-        return "";
-    }
-
-    @Override
-    public void close() {
-        if (serverChannel != null) {
-            serverChannel.close();
-        }
-        EventLoopGroup acceptor = this.acceptor;
-        if (acceptor != null) {
-            acceptor.shutdownGracefully(0, 1, TimeUnit.SECONDS);
-        }
-        ExecutorService validation = this.validation;
-        if (validation != null) {
-            validation.shutdownNow();
         }
     }
 
