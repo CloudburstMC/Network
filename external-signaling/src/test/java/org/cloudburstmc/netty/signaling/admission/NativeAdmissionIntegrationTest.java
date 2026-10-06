@@ -10,6 +10,8 @@ import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
@@ -385,6 +387,49 @@ class NativeAdmissionIntegrationTest {
         return NativeHostIdentity.load(cert, key);
     }
 
+    /** Totals of what the transport reports, readable from the test thread. */
+    static final class CountingMetrics implements NetherChannelMetrics {
+        final AtomicInteger messagesIn = new AtomicInteger(), bytesIn = new AtomicInteger();
+        final AtomicInteger fragmentsIn = new AtomicInteger(), decodeFail = new AtomicInteger();
+        final AtomicInteger messagesOut = new AtomicInteger(), bytesOut = new AtomicInteger();
+        final AtomicInteger fragmentsOut = new AtomicInteger();
+
+        @Override
+        public void messagesIn(int count) {
+            messagesIn.addAndGet(count);
+        }
+
+        @Override
+        public void bytesIn(int count) {
+            bytesIn.addAndGet(count);
+        }
+
+        @Override
+        public void fragmentsIn(int count) {
+            fragmentsIn.addAndGet(count);
+        }
+
+        @Override
+        public void decodeFail(int count) {
+            decodeFail.addAndGet(count);
+        }
+
+        @Override
+        public void messagesOut(int count) {
+            messagesOut.addAndGet(count);
+        }
+
+        @Override
+        public void bytesOut(int count) {
+            bytesOut.addAndGet(count);
+        }
+
+        @Override
+        public void fragmentsOut(int count) {
+            fragmentsOut.addAndGet(count);
+        }
+    }
+
     static void await(BooleanSupplier check) throws Exception {
         long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(12);
         while (!check.getAsBoolean() && System.nanoTime() < end) {
@@ -621,11 +666,13 @@ class NativeAdmissionIntegrationTest {
         AtomicInteger inboundMask = new AtomicInteger();
         AtomicReference<AdmittedNetherNetChildChannel> child = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountingMetrics metrics = new CountingMetrics();
         ServerBootstrap bootstrap = new ServerBootstrap().group(group).channelFactory(() -> endpoint)
                 .childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
                     @Override
                     protected void initChannel(AdmittedNetherNetChildChannel ch) {
                         child.set(ch);
+                        ch.config().setOption(NetherChannelOption.NETHER_METRICS, metrics);
                         ch.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
                             boolean reliable = true;
 
@@ -758,6 +805,13 @@ class NativeAdmissionIntegrationTest {
                 assertTrue(echoed.await(12, TimeUnit.SECONDS), "both channels echo through Netty");
                 assertNull(failure.get());
                 assertEquals(3, inboundMask.get());
+                // The reliable message took three frames each way, the unreliable one a single frame
+                await(() -> metrics.messagesOut.get() == 2 && metrics.messagesIn.get() == 2);
+                assertEquals(20020, metrics.bytesIn.get());
+                assertEquals(2, metrics.fragmentsIn.get());
+                assertEquals(20020, metrics.bytesOut.get());
+                assertEquals(2, metrics.fragmentsOut.get());
+                assertEquals(0, metrics.decodeFail.get());
                 assertEquals(1, endpoint.creationAttempts());
                 NativeDiagnostics.assertCreations(beforeJoin, 1);
                 rakPing(49191);

@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -120,6 +121,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             }
             int size = bytes.remaining();
             if (size < 2 || size > NetherNetFrameDecoder.MESSAGE_LIMIT) {
+                decodeFailed();
                 failed.set(true);
                 return;
             }
@@ -172,11 +174,25 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                     }
                     incomingBytes.addAndGet(-frame.bytes().readableBytes());
 
-                    ByteBuf message = decoder.decode(frame.bytes(), frame.reliable());
-                    if (message != null) {
+                    ByteBuf message;
+                    try {
+                        message = decoder.decode(frame.bytes(), frame.reliable());
+                    } catch (RuntimeException e) {
+                        decodeFailed();
+                        throw e;
+                    }
+                    if (message == null) {
+                        NetherChannelMetrics metrics = config.getMetrics();
+                        if (metrics != null) {
+                            metrics.fragmentsIn(1);
+                        }
+                    } else {
+                        // Counted once the pipeline owns it, so a failing metric cannot leak it
+                        int size = message.readableBytes();
                         pipeline().fireUserEventTriggered(new NetherNetPacket.Delivery(frame.reliable()));
                         pipeline().fireChannelRead(message);
                         read = true;
+                        countReceived(size);
                     }
                 }
 
@@ -250,13 +266,20 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
             }
 
             try {
-                segment(payload, alloc(), SEGMENT_PAYLOAD, dc::sendMessage);
+                countSent(length, segment(payload, alloc(), SEGMENT_PAYLOAD, dc::sendMessage));
                 out.remove();
             } catch (Exception failure) {
                 out.remove(failure);
                 close();
                 return;
             }
+        }
+    }
+
+    private void decodeFailed() {
+        NetherChannelMetrics metrics = config.getMetrics();
+        if (metrics != null) {
+            metrics.decodeFail(1);
         }
     }
 
