@@ -20,6 +20,8 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import tel.schich.libdatachannel.PeerConnection;
@@ -27,6 +29,7 @@ import tel.schich.libdatachannel.PeerConnection;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -134,6 +137,42 @@ class NetherNetChannelSegmentTest {
             ChannelFuture write = child.writeAndFlush(message).awaitUninterruptibly();
             assertInstanceOf(IllegalArgumentException.class, write.cause());
             assertEquals(0, message.refCnt());
+        }
+    }
+
+    @Test
+    @Timeout(15)
+    void aSplitWriteCountsAsOneMessage() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            NetherNetChildChannel child = server.connect(client);
+            AtomicInteger messages = new AtomicInteger(), fragments = new AtomicInteger(), bytes = new AtomicInteger();
+            child.config().setOption(NetherChannelOption.NETHER_METRICS, new NetherChannelMetrics() {
+                @Override
+                public void messagesOut(int count) {
+                    messages.addAndGet(count);
+                }
+
+                @Override
+                public void fragmentsOut(int count) {
+                    fragments.addAndGet(count);
+                }
+
+                @Override
+                public void bytesOut(int count) {
+                    bytes.addAndGet(count);
+                }
+            });
+            int length = 2 * (NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1) + 1;
+
+            child.writeAndFlush(Unpooled.buffer(length).writerIndex(length)).sync();
+
+            assertEquals(1, messages.get());
+            assertEquals(2, fragments.get(), "the segments ahead of the last");
+            assertEquals(length, bytes.get());
         }
     }
 

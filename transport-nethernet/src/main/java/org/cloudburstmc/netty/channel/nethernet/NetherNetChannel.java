@@ -260,10 +260,7 @@ public abstract class NetherNetChannel extends AbstractChannel {
         }
 
         try {
-            if (metrics != null) {
-                metrics.messagesIn(1);
-                metrics.bytesIn(packet.readableBytes());
-            }
+            countReceived(packet.readableBytes());
             eventLoop().execute(() -> {
                 if (!isOpen() || (assembler != reliableAssembler && assembler != unreliableAssembler)) {
                     packet.release();
@@ -346,17 +343,33 @@ public abstract class NetherNetChannel extends AbstractChannel {
                 log.debug("Nothing sent for an empty outbound message");
             } else {
                 log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
-
-                NetherChannelMetrics metrics = config.getMetrics();
-                if (metrics != null) {
-                    metrics.messagesOut(segments);
-                    metrics.bytesOut(totalLength);
-                }
+                countSent(totalLength, segments);
             }
         } catch (Exception e) {
             pipeline().fireExceptionCaught(e);
         } finally {
             framed.release();
+        }
+    }
+
+    /** Counts a message delivered whole. */
+    protected final void countReceived(int bytes) {
+        NetherChannelMetrics metrics = config.getMetrics();
+        if (metrics != null) {
+            metrics.messagesIn(1);
+            metrics.bytesIn(bytes);
+        }
+    }
+
+    /** Counts a message handed to a data channel in {@code segments} segments. */
+    protected final void countSent(int bytes, int segments) {
+        NetherChannelMetrics metrics = config.getMetrics();
+        if (metrics != null) {
+            metrics.messagesOut(1);
+            metrics.bytesOut(bytes);
+            if (segments > 1) {
+                metrics.fragmentsOut(segments - 1);
+            }
         }
     }
 

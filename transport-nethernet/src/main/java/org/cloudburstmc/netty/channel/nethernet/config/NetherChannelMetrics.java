@@ -33,14 +33,20 @@ public interface NetherChannelMetrics {
     default void bytesOut(int count) {
     }
 
+    /** Whole messages, however many frames each took. */
     default void messagesIn(int count) {
     }
 
+    /** Whole messages, however many frames each took. */
     default void messagesOut(int count) {
     }
 
     /** Frames carrying part of a split message other than the last, which counts in {@link #messagesIn}. */
     default void fragmentsIn(int count) {
+    }
+
+    /** Frames carrying part of a split message other than the last, which counts in {@link #messagesOut}. */
+    default void fragmentsOut(int count) {
     }
 
     /**
