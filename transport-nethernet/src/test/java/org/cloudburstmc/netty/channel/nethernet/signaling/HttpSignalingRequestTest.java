@@ -53,7 +53,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -214,7 +213,7 @@ class HttpSignalingRequestTest {
 
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
-            assertEquals(200, readStatus(in));
+            assertEquals(200, TestHttp.readStatus(in));
         }
         assertEquals(Optional.empty(), told.get(10, TimeUnit.SECONDS));
     }
@@ -366,8 +365,8 @@ class HttpSignalingRequestTest {
             out.write(("GET /v1/join HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n\r\n")
                     .getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            assertEquals(200, readStatus(in), "the status check");
-            String body = readBody(in);
+            assertEquals(200, TestHttp.readStatus(in), "the status check");
+            String body = TestHttp.readBody(in);
 
             byte[] offer = TestOffers.selfSigned().getBytes(StandardCharsets.US_ASCII);
             out.write(("POST /v1/join/42 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n"
@@ -376,7 +375,7 @@ class HttpSignalingRequestTest {
             out.write(offer);
             out.flush();
 
-            assertEquals(200, readStatus(in), "the join, on the same connection");
+            assertEquals(200, TestHttp.readStatus(in), "the join, on the same connection");
             assertFalse(body.isEmpty(), "the status check still carried its body");
         }
     }
@@ -396,47 +395,10 @@ class HttpSignalingRequestTest {
 
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
-            assertEquals(200, readStatus(in));
-            assertTrue(this.headers(in).contains("connection: close"),
+            assertEquals(200, TestHttp.readStatus(in));
+            assertTrue(TestHttp.headers(in).contains("connection: close"),
                     "a client that will not reuse the socket is told the server agrees");
         }
-    }
-
-    private static int readStatus(BufferedReader in) throws IOException {
-        String status = in.readLine();
-        if (status == null) {
-            throw new IOException("the listener closed without answering");
-        }
-        return Integer.parseInt(status.split(" ")[1]);
-    }
-
-    /** Reads the header block, lower cased so a comparison does not depend on how it was spelled. */
-    private List<String> headers(BufferedReader in) throws IOException {
-        List<String> headers = new ArrayList<>();
-        for (String line = in.readLine(); line != null && !line.isEmpty(); line = in.readLine()) {
-            headers.add(line.toLowerCase(Locale.ROOT));
-        }
-        return headers;
-    }
-
-    /** Reads the headers, then exactly the body they declare. */
-    private String readBody(BufferedReader in) throws IOException {
-        int length = 0;
-        for (String header : this.headers(in)) {
-            if (header.startsWith("content-length:")) {
-                length = Integer.parseInt(header.substring("content-length:".length()).trim());
-            }
-        }
-        char[] body = new char[length];
-        int read = 0;
-        while (read < length) {
-            int n = in.read(body, read, length - read);
-            if (n < 0) {
-                throw new IOException("the body ended early");
-            }
-            read += n;
-        }
-        return new String(body);
     }
 
     @Test
@@ -580,8 +542,8 @@ class HttpSignalingRequestTest {
         socket.getOutputStream().flush();
         BufferedReader in = new BufferedReader(
                 new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
-        assertEquals(200, readStatus(in));
-        this.readBody(in);
+        assertEquals(200, TestHttp.readStatus(in));
+        TestHttp.readBody(in);
         return socket;
     }
 
@@ -611,12 +573,8 @@ class HttpSignalingRequestTest {
                             .getBytes(StandardCharsets.US_ASCII));
             socket.getOutputStream().flush();
 
-            String status = new BufferedReader(
-                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII)).readLine();
-            if (status == null) {
-                throw new IOException("the listener closed without answering");
-            }
-            return Integer.parseInt(status.split(" ")[1]);
+            return TestHttp.readStatus(new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII)));
         }
     }
 

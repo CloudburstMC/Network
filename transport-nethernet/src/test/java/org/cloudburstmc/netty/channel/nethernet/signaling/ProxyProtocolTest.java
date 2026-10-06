@@ -68,27 +68,6 @@ class ProxyProtocolTest {
         return port;
     }
 
-    /** A PROXY v2 header declaring an IPv4 source. */
-    private static byte[] v2Header(String source, int sourcePort) {
-        byte[] sig = {0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A};
-        byte[] out = new byte[sig.length + 4 + 12];
-        System.arraycopy(sig, 0, out, 0, sig.length);
-        out[12] = 0x21;                     // version 2, PROXY
-        out[13] = 0x11;                     // TCP over IPv4
-        out[14] = 0;
-        out[15] = 12;                       // address block length
-        String[] octets = source.split("\\.");
-        for (int i = 0; i < 4; i++) {
-            out[16 + i] = (byte) Integer.parseInt(octets[i]);
-        }
-        out[20] = 127; out[21] = 0; out[22] = 0; out[23] = 1;   // destination
-        out[24] = (byte) (sourcePort >> 8);
-        out[25] = (byte) sourcePort;
-        out[26] = (byte) (19190 >> 8);
-        out[27] = (byte) 19190;
-        return out;
-    }
-
     private void request(int port, byte[] prefix) throws Exception {
         try (Socket socket = new Socket("127.0.0.1", port)) {
             OutputStream out = socket.getOutputStream();
@@ -111,7 +90,7 @@ class ProxyProtocolTest {
     @Test
     void readsAProxyHeaderFromATrustedProxy() throws Exception {
         int port = start(List.of("127.0.0.0/8"), true);
-        request(port, v2Header("203.0.113.7", 5555));
+        request(port, TestHttp.proxyV2Header("203.0.113.7", 5555));
 
         assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
     }
@@ -120,7 +99,7 @@ class ProxyProtocolTest {
     void neverBelievesAProxyHeaderFromAnUntrustedSource() throws Exception {
         // Trusting a range this connection is not in, so the header must not be believed
         int port = start(List.of("10.0.0.0/8"), true);
-        request(port, v2Header("203.0.113.7", 5555));
+        request(port, TestHttp.proxyV2Header("203.0.113.7", 5555));
 
         // The header is left in the stream, so the request does not parse as HTTP and is never
         // served. What matters is that the address it claimed is never taken for the client's.
