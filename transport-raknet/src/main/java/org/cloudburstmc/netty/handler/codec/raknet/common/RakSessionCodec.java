@@ -71,6 +71,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private RoundRobinArray<SplitPacketHelper> splitPackets;
     private BitQueue reliableDatagramQueue;
+    // Sent reliable messages from reliableWindowStart on, true until acknowledged
+    private BitQueue reliableWindow;
+    private int reliableWindowStart;
+    // Unacknowledged part counts of reliable split messages in flight, by split ID
+    private IntObjectMap<int[]> splitsInFlight;
 
     private FastBinaryMinHeap<EncapsulatedPacket> outgoingPackets;
     private long[] outgoingPacketNextWeights;
@@ -124,6 +129,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.outgoingNaks = new ArrayDeque<>();
 
         this.reliableDatagramQueue = new BitQueue(512);
+        this.reliableWindow = new BitQueue(RELIABLE_WINDOW_SIZE * 2);
+        this.splitsInFlight = new IntObjectHashMap<>();
         this.splitPackets = new RoundRobinArray<>(256);
 
         // After session is fully initialized, start ticking.
@@ -607,8 +614,28 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private void onIncomingAck(RakDatagramPacket datagram, long curTime) {
         try {
             this.slidingWindow.onAck(curTime, datagram, this.datagramReadIndex);
+            this.acknowledgeReliable(datagram);
         } finally {
             datagram.release();
+        }
+    }
+
+    private void acknowledgeReliable(RakDatagramPacket datagram) {
+        for (EncapsulatedPacket packet : datagram.getPackets()) {
+            if (!packet.getReliability().isReliable()) {
+                continue;
+            }
+            this.reliableWindow.set(packet.getReliabilityIndex() - this.reliableWindowStart, false);
+            if (packet.isSplit()) {
+                int[] unacknowledged = this.splitsInFlight.get(packet.getPartId());
+                if (unacknowledged != null && --unacknowledged[0] == 0) {
+                    this.splitsInFlight.remove(packet.getPartId());
+                }
+            }
+        }
+        while (!this.reliableWindow.isEmpty() && !this.reliableWindow.peek()) {
+            this.reliableWindow.poll();
+            this.reliableWindowStart++;
         }
     }
 
@@ -678,6 +705,16 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             if (transmissionBandwidth < size) {
                 break;
             }
+            if (packet.getReliability().isReliable() && this.reliableWindow.size() >= RELIABLE_WINDOW_SIZE) {
+                // The peer would drop it, so wait for acknowledgements
+                break;
+            }
+            if (packet.isSplit() && packet.getReliability().isReliable()
+                    && this.splitsInFlight.size() >= MAXIMUM_SPLITS_IN_FLIGHT
+                    && !this.splitsInFlight.containsKey(packet.getPartId())) {
+                // Likewise for a new split message, so wait for one in flight to complete
+                break;
+            }
 
             transmissionBandwidth -= size;
             this.outgoingPackets.remove();
@@ -693,6 +730,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                     throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + mtuSize + ")");
                 }
             }
+            this.trackSent(packet);
         }
 
         if (!datagram.getPackets().isEmpty()) {
@@ -708,9 +746,23 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             if (!datagram.tryAddPacket(packet, this.getMtu())) {
                 throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + this.getMtu() + ")");
             }
+            // Bypasses the reliable window and split limit, as it bypasses congestion control
+            this.trackSent(packet);
             this.sendDatagram(ctx, datagram, curTime, this.sentDatagrams);
         }
         ctx.flush();
+    }
+
+    // Indices are assigned on send rather than on write, so they go out in order whatever the priority
+    private void trackSent(EncapsulatedPacket packet) {
+        if (!packet.getReliability().isReliable()) {
+            return;
+        }
+        packet.setReliabilityIndex(this.reliabilityWriteIndex++);
+        this.reliableWindow.add(true);
+        if (packet.isSplit() && !this.splitsInFlight.containsKey(packet.getPartId())) {
+            this.splitsInFlight.put(packet.getPartId(), new int[]{packet.getPartCount()});
+        }
     }
 
     private void sendDatagram(ChannelHandlerContext ctx, RakDatagramPacket datagram, long time, IntObjectMap<RakDatagramPacket> sent) {
@@ -802,9 +854,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             packet.setOrderingIndex(orderingIndex);
             // packet.setSequenceIndex(sequencingIndex);
             packet.setReliability(reliability);
-            if (reliability.isReliable()) {
-                packet.setReliabilityIndex(this.reliabilityWriteIndex++);
-            }
 
             if (parts > 1) {
                 packet.setSplit(true);
