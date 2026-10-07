@@ -28,6 +28,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -148,6 +149,71 @@ class NetherNetServerOwnershipTest {
         assertEquals(expected, seen);
     }
 
+    /** Opens only the reliable channel, which the server holds until the unreliable one arrives. */
+    private static DataChannel connectWithReliableOnly(NetherNetTestServer server, PeerConnection client,
+                                                       NetherNetTestServer.Accepted[] accepted) throws Exception {
+        DataChannel reliable = client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+        var open = new CompletableFuture<Void>();
+        reliable.onOpen.register(channel -> open.complete(null));
+        accepted[0] = server.accept(NetherNetTestServer.offer(client));
+        client.setRemoteDescription(server.signaling.answer.get(5, TimeUnit.SECONDS), SessionDescriptionType.ANSWER);
+        open.get(5, TimeUnit.SECONDS);
+        return reliable;
+    }
+
+    private static ByteBuffer message(int value) {
+        return ByteBuffer.allocateDirect(5).put((byte) 0).putInt(value).flip();
+    }
+
+    @Test
+    void messagesBeforeTheSecondChannelArriveAfterChannelActive() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            var accepted = new NetherNetTestServer.Accepted[1];
+            DataChannel reliable = connectWithReliableOnly(server, client, accepted);
+            var reads = new LinkedBlockingQueue<Integer>();
+            accepted[0].child().pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
+                @Override
+                protected void channelRead0(ChannelHandlerContext ctx, ByteBuf message) {
+                    reads.add(ctx.channel().isActive() ? message.readInt() : -1);
+                }
+            });
+
+            for (int i = 0; i < 3; i++) {
+                reliable.sendMessage(message(i));
+            }
+            Thread.sleep(500);
+            assertTrue(reads.isEmpty(), "delivered before channelActive");
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+
+            server.active();
+            for (int i = 0; i < 3; i++) {
+                assertEquals(i, reads.poll(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void overfillingALoneChannelClosesTheChildAndDeletesItsPeer() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            var accepted = new NetherNetTestServer.Accepted[1];
+            DataChannel reliable = connectWithReliableOnly(server, client, accepted);
+
+            // More than libdatachannel queues for a channel nobody reads
+            for (int i = 0; i < 1100; i++) {
+                try {
+                    reliable.sendMessage(message(i));
+                } catch (LibDataChannelException closedByServer) {
+                    break;
+                }
+            }
+            assertPeerClosed(server, accepted[0]);
+        }
+    }
+
     private static void assertCarriesMessages(NetherNetChildChannel child, DataChannel reliable) throws Exception {
         var received = new CompletableFuture<Integer>();
         child.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
@@ -187,6 +253,16 @@ class NetherNetServerOwnershipTest {
         assertTrue(accepted.child().closeFuture().await(5, TimeUnit.SECONDS));
         server.signaling.removed.get(5, TimeUnit.SECONDS);
         assertNull(accepted.child().peerConnection);
-        assertThrows(LibDataChannelException.class, () -> accepted.peer().createDataChannel("must-be-deleted"));
+        // The peer is deleted off the event loop once its transport is torn down
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (true) {
+            try {
+                accepted.peer().createDataChannel("must-be-deleted");
+            } catch (LibDataChannelException deleted) {
+                return;
+            }
+            assertTrue(System.nanoTime() < deadline, "peer was not deleted");
+            Thread.sleep(10);
+        }
     }
 }

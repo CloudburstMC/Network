@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
+import org.cloudburstmc.netty.channel.PendingMessages;
 import org.cloudburstmc.netty.channel.TransportChannel;
 import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
@@ -70,6 +71,12 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     private record DataChannels(DataChannel reliable, DataChannel unreliable) {
     }
 
+    private record Reader(DataChannel channel, NetherNetMessageAssembler assembler) {
+    }
+
+    /** How many messages may arrive before the data channels are bound, far more than a join sends. */
+    static final int MAX_EARLY_MESSAGES = 64;
+
     protected DefaultNetherChannelConfig config;
     protected volatile PeerConnection peerConnection;
     protected volatile SocketAddress remoteAddress;
@@ -80,8 +87,12 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
     protected final Queue<Object> pendingWrites = new ConcurrentLinkedQueue<>();
 
-    private volatile NetherNetMessageAssembler reliableAssembler;
-    private volatile NetherNetMessageAssembler unreliableAssembler;
+    private volatile Reader reliableReader;
+    private volatile Reader unreliableReader;
+
+    /** Messages read before the data channels were bound, delivered after channelActive. Event loop only. */
+    private final PendingMessages<ByteBuf> earlyMessages =
+            new PendingMessages<>(MAX_EARLY_MESSAGES, MAX_MESSAGE_SIZE, ByteBuf::readableBytes);
 
     protected volatile boolean open = true;
 
@@ -241,18 +252,28 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
         setDataChannels(channels.reliable(), channels.unreliable());
         pipeline().fireChannelActive();
+
+        ByteBuf early;
+        boolean read = false;
+        while ((early = earlyMessages.poll()) != null) {
+            pipeline().fireChannelRead(early);
+            read = true;
+        }
+        if (read) {
+            pipeline().fireChannelReadComplete();
+        }
     }
 
+    /**
+     * Binds the data channels this channel carries, reading any that {@link #readDataChannel} does not
+     * already.
+     */
     public void setDataChannels(DataChannel reliable, DataChannel unreliable) {
-        NetherNetMessageAssembler reliableMessages = new NetherNetMessageAssembler("reliable");
-        NetherNetMessageAssembler unreliableMessages = new NetherNetMessageAssembler("unreliable");
-        synchronized (this) {
-            if (!open) {
-                throw new IllegalStateException("Channel closed");
-            }
-            closeMessageAssemblers();
-            reliableAssembler = reliableMessages;
-            unreliableAssembler = unreliableMessages;
+        if (!isReading(reliableReader, reliable)) {
+            readDataChannel(reliable, true);
+        }
+        if (unreliable != null && !isReading(unreliableReader, unreliable)) {
+            readDataChannel(unreliable, false);
         }
         this.reliableChannel = reliable;
         this.unreliableChannel = unreliable;
@@ -260,23 +281,48 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         this.reliableChannel.onOpen.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
         this.reliableChannel.onClosed.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
 
-        this.reliableChannel.onMessage.register(
-                DataChannelCallback.Message.handleBinary((channel, data) -> onMessage(reliableMessages, data)));
-        if (this.unreliableChannel != null) {
-            this.unreliableChannel.onMessage.register(
-                    DataChannelCallback.Message.handleBinary((channel, data) -> onMessage(unreliableMessages, data)));
-        }
-
         if (reliableChannel.isOpen()) {
             eventLoop().execute(this::onDataChannelStateChange);
         }
     }
 
-    private void onMessage(NetherNetMessageAssembler assembler, ByteBuffer data) {
+    private static boolean isReading(Reader reader, DataChannel channel) {
+        return reader != null && reader.channel() == channel;
+    }
+
+    /**
+     * Reads a data channel from the moment the peer opens it, since libdatachannel queues what
+     * nobody reads and blocks a native worker once 1024 messages wait. Messages read before
+     * {@link #setDataChannels} binds it are delivered after channelActive, and past
+     * {@link #MAX_EARLY_MESSAGES} the channel closes. Safe to call from a libdatachannel callback.
+     *
+     * @param channel  The data channel to read
+     * @param reliable Whether it is the reliable one
+     */
+    protected void readDataChannel(DataChannel channel, boolean reliable) {
+        Reader reader = new Reader(channel, new NetherNetMessageAssembler(reliable ? "reliable" : "unreliable"));
+        synchronized (this) {
+            if (!open) {
+                throw new IllegalStateException("Channel closed");
+            }
+            Reader previous = reliable ? reliableReader : unreliableReader;
+            if (previous != null) {
+                previous.assembler().close();
+            }
+            if (reliable) {
+                reliableReader = reader;
+            } else {
+                unreliableReader = reader;
+            }
+        }
+        channel.onMessage.register(DataChannelCallback.Message.handleBinary((dc, data) -> onMessage(reader, data)));
+    }
+
+    private void onMessage(Reader reader, ByteBuffer data) {
         NetherChannelMetrics metrics = config.getMetrics();
 
         // The native ByteBuffer expires when this callback returns.
-        ByteBuf packet = assembler.decode(data, alloc(), metrics);
+        ByteBuf packet = reader.assembler().decode(data, alloc(), metrics);
         if (packet == null) {
             return;
         }
@@ -284,12 +330,17 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         try {
             countReceived(packet.readableBytes());
             eventLoop().execute(() -> {
-                if (!isOpen() || (assembler != reliableAssembler && assembler != unreliableAssembler)) {
+                if (!isOpen() || (reader != reliableReader && reader != unreliableReader)) {
                     packet.release();
-                    return;
+                } else if (reliableChannel == null) {
+                    if (!earlyMessages.offer(packet)) {
+                        log.debug("Closing {}, too much arrived before its data channels were bound", this);
+                        close();
+                    }
+                } else {
+                    pipeline().fireChannelRead(packet);
+                    pipeline().fireChannelReadComplete();
                 }
-                pipeline().fireChannelRead(packet);
-                pipeline().fireChannelReadComplete();
             });
         } catch (RuntimeException | Error e) {
             packet.release();
@@ -459,36 +510,38 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     }
 
     /**
-     * Closes the data channels and peer connection, dropping their listeners first.
+     * Closes the data channels and peer connection, dropping their listeners first. The peer is
+     * torn down in the background, as deleting it waits for native workers.
      */
     protected void closeWebRTC() {
-        closeMessageAssemblers();
+        Reader reliable;
+        Reader unreliable;
+        synchronized (this) {
+            reliable = reliableReader;
+            unreliable = unreliableReader;
+            reliableReader = null;
+            unreliableReader = null;
+        }
+        closeReader(reliable);
+        closeReader(unreliable);
+        reliableChannel = null;
+        unreliableChannel = null;
         this.pending = null;
-        if (reliableChannel != null) {
-            deregisterAll(reliableChannel);
-            reliableChannel.close();
-            reliableChannel = null;
-        }
-        if (unreliableChannel != null) {
-            deregisterAll(unreliableChannel);
-            unreliableChannel.close();
-            unreliableChannel = null;
-        }
+
+        earlyMessages.clear();
+
         if (peerConnection != null) {
             deregisterAll(peerConnection);
-            peerConnection.close();
+            peerConnection.closeAsync();
             peerConnection = null;
         }
     }
 
-    private synchronized void closeMessageAssemblers() {
-        if (reliableAssembler != null) {
-            reliableAssembler.close();
-            reliableAssembler = null;
-        }
-        if (unreliableAssembler != null) {
-            unreliableAssembler.close();
-            unreliableAssembler = null;
+    private static void closeReader(Reader reader) {
+        if (reader != null) {
+            reader.assembler().close();
+            deregisterAll(reader.channel());
+            reader.channel().close();
         }
     }
 

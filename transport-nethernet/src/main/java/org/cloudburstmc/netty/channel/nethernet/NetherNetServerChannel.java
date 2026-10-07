@@ -408,11 +408,19 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             String label = dataChannel.label();
             log.debug("Received Data Channel: {}", label);
 
-            if (NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label) && reliable == null) {
+            boolean isReliable = NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label);
+            if (isReliable && reliable == null) {
                 reliable = dataChannel;
             } else if (NetherNetConstants.UNRELIABLE_CHANNEL_LABEL.equals(label) && unreliable == null) {
                 unreliable = dataChannel;
             } else {
+                dataChannel.close();
+                return;
+            }
+
+            try {
+                child.readDataChannel(dataChannel, isReliable);
+            } catch (IllegalStateException closed) {
                 dataChannel.close();
                 return;
             }
