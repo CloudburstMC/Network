@@ -44,4 +44,20 @@ public class BitQueueTests {
         }
         Assertions.assertTrue(queue.isEmpty() && bits.isEmpty(), "Queue is not empty");
     }
+
+    @Test
+    public void testSet() {
+        BitQueue queue = new BitQueue();
+        for (int i = 0; i < 256; i++) {
+            queue.add(i % 2 == 0);
+        }
+
+        // Covers every bit position within a word, not just the low byte
+        for (int i = 0; i < 256; i++) {
+            queue.set(i, i % 2 != 0);
+        }
+        for (int i = 0; i < 256; i++) {
+            Assertions.assertEquals(i % 2 != 0, queue.get(i), "Bit " + i + " was not set");
+        }
+    }
 }
