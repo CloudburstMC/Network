@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 CloudburstMC
+ * Copyright 2026 CloudburstMC
  *
  * CloudburstMC licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -14,11 +14,12 @@
  * under the License.
  */
 
-rootProject.name = "network"
+description = "API shared by the Netty transports"
 
-plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+dependencies {
+    api(libs.netty.transport)
 }
 
-include("transport-common")
-include("transport-raknet")
+tasks.jar {
+    manifest.attributes["Automatic-Module-Name"] = "org.cloudburstmc.netty.transport.common"
+}

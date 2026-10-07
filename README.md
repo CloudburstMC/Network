@@ -6,6 +6,7 @@ Network components used within Cloudburst projects.
 
 ### Components
 
+- `netty-transport-common` - API shared by the transports, such as the largest message a channel can write
 - [`netty-transport-raknet`](transport-raknet/README.md) - A RakNet implementation based on Netty patterns
 
 ### Maven
