@@ -25,6 +25,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SdpUtilTest {
@@ -434,6 +435,38 @@ class SdpUtilTest {
         assertTrue(withEndpoint.contains("203.0.113.7 19135 typ srflx"));
         assertTrue(withEndpoint.contains("198.51.100.9 40000 typ relay"));
         assertTrue(withEndpoint.contains("203.0.113.99 56789 typ srflx raddr 192.168.1.5 rport 19135"));
+    }
+
+    @Test
+    void acceptsOnlyIpLiteralsAsCandidateAddresses() {
+        assertTrue(SdpUtil.hasIpAddress("candidate:1 1 udp 2130706431 203.0.113.10 5000 typ host"));
+        assertTrue(SdpUtil.hasIpAddress("candidate:1 1 udp 2130706431 2001:db8::1 5000 typ host"));
+        assertFalse(SdpUtil.hasIpAddress("candidate:1 1 udp 2130706431 a1b2c3d4.local 5000 typ host"));
+        assertFalse(SdpUtil.hasIpAddress("candidate:1 1 udp 2130706431 lookup.example 5000 typ host"));
+        assertFalse(SdpUtil.hasIpAddress("candidate:1 1 udp"));
+    }
+
+    @Test
+    void keepsOnlyIpCandidatesUpToTheCap() {
+        String sdp = "v=0\r\n"
+                + "a=candidate:1 1 udp 2130706431 a1b2c3d4.local 5000 typ host\r\n"
+                + "a=candidate:2 1 udp 2130706431 203.0.113.10 5000 typ host\r\n"
+                + "a=candidate:3 1 udp 2130706431 2001:db8::1 5000 typ host\r\n"
+                + "a=candidate:4 1 udp 1694498815 198.51.100.7 5000 typ srflx raddr 0.0.0.0 rport 0\r\n"
+                + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+
+        String filtered = SdpUtil.withIpCandidates(sdp, 2);
+
+        assertFalse(filtered.contains("a1b2c3d4.local"));
+        assertTrue(filtered.contains("203.0.113.10"));
+        assertTrue(filtered.contains("2001:db8::1"));
+        assertFalse(filtered.contains("198.51.100.7"));
+        assertTrue(filtered.contains("m=application"));
+    }
+
+    @Test
+    void leavesADescriptionWithOnlyIpCandidatesAsItWas() {
+        assertSame(SDP, SdpUtil.withIpCandidates(SDP, 32));
     }
 
     private static List<InetSocketAddress> endpoints(String... values) {

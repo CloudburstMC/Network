@@ -18,34 +18,62 @@ package org.cloudburstmc.netty.channel.nethernet;
 
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.SessionDescriptionType;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Applies the remote side's candidates to one peer connection.
  */
 final class RemoteCandidates {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RemoteCandidates.class);
+    /** Taken from the description, and again from trickling, far more than a peer gathers. */
+    static final int MAX_CANDIDATES = 32;
 
     private final PeerConnection peer;
     private final String connectionId;
+    private final boolean ipOnly;
+    private final AtomicInteger trickled = new AtomicInteger();
 
-    RemoteCandidates(PeerConnection peer, String connectionId) {
+    private RemoteCandidates(PeerConnection peer, String connectionId, boolean ipOnly) {
         this.peer = peer;
         this.connectionId = connectionId;
+        this.ipOnly = ipOnly;
     }
 
     /**
-     * Applies the remote description.
+     * For a server, which takes only IP literals, at most {@link #MAX_CANDIDATES} of them from the offer and again
+     * from trickling.
+     */
+    static RemoteCandidates server(PeerConnection peer, String connectionId) {
+        return new RemoteCandidates(peer, connectionId, true);
+    }
+
+    /**
+     * For a client, which takes what the server sends as it is. A server may name a host inside its own network, such
+     * as a cluster DNS name, for libdatachannel to resolve.
+     */
+    static RemoteCandidates client(PeerConnection peer, String connectionId) {
+        return new RemoteCandidates(peer, connectionId, false);
+    }
+
+    /**
+     * Applies the remote description, keeping the candidates {@link #trickle} would take.
      */
     void setDescription(String sdp, SessionDescriptionType type) {
-        this.peer.setRemoteDescription(sdp, type);
+        this.peer.setRemoteDescription(this.ipOnly ? SdpUtil.withIpCandidates(sdp, MAX_CANDIDATES) : sdp, type);
     }
 
     /**
      * Applies a candidate the remote side trickled.
      */
     void trickle(String candidate) {
+        if (this.ipOnly && (!SdpUtil.hasIpAddress(candidate) || this.trickled.incrementAndGet() > MAX_CANDIDATES)) {
+            log.debug("Ignoring remote candidate for {}: {}", this.connectionId, candidate);
+            return;
+        }
         this.add(candidate);
     }
 

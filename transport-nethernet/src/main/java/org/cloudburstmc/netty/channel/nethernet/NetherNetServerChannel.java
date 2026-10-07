@@ -230,7 +230,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
         child.closeFuture().addListener(future -> timeout.cancel(false));
 
-        RemoteCandidates candidates = new RemoteCandidates(pc, connectionId);
+        RemoteCandidates candidates = RemoteCandidates.server(pc, connectionId);
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId,
                 offerSdp, clientAddress, child, pc, candidates, timeout);
         observer.register(pc);

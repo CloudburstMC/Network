@@ -256,7 +256,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 .withIceServers(withIceServers(configured, iceServers));
 
         peerConnection = PeerConnection.createPeer(rtcConfig);
-        remoteCandidates = new RemoteCandidates(peerConnection, connectionId);
+        remoteCandidates = RemoteCandidates.client(peerConnection, connectionId);
         registerMetrics(peerConnection);
 
         // Registering is what arms the native callback, so it must happen before anything can fire it

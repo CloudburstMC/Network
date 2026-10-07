@@ -63,6 +63,47 @@ public final class SdpUtil {
     }
 
     /**
+     * Whether a candidate points at an IP literal rather than a name.
+     *
+     * @param candidate The candidate line
+     * @return Whether its address is an IP literal
+     */
+    public static boolean hasIpAddress(String candidate) {
+        String address = candidateAddress(candidate);
+        return address != null && NetUtil.createByteArrayFromIpAddressString(address) != null;
+    }
+
+    /**
+     * A description holding only the candidates {@link #hasIpAddress} accepts, the first
+     * {@code max} of them. One that needs no change comes back as it was.
+     *
+     * @param sdp The description to filter
+     * @param max How many candidates to keep
+     * @return The filtered description
+     */
+    public static String withIpCandidates(String sdp, int max) {
+        String[] lines = sdp.split("\r\n|\n");
+        StringBuilder out = new StringBuilder(sdp.length());
+        boolean changed = false;
+        int kept = 0;
+        for (String line : lines) {
+            // A trailing empty line makes libwebrtc reject the whole description
+            if (line.isEmpty()) {
+                continue;
+            }
+            if (line.startsWith(CANDIDATE_PREFIX)) {
+                if (kept >= max || !hasIpAddress(line)) {
+                    changed = true;
+                    continue;
+                }
+                kept++;
+            }
+            out.append(line).append("\r\n");
+        }
+        return changed ? out.toString() : sdp;
+    }
+
+    /**
      * The canonical form of an IP literal, so that the same address written two ways compares equal.
      * Anything that is not an IP literal, such as an mDNS {@code .local} candidate, is left alone
      * rather than resolved, since a lookup here would block and can only answer for this host.
