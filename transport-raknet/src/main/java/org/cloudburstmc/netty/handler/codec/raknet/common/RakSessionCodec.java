@@ -613,7 +613,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private void onIncomingAck(RakDatagramPacket datagram, long curTime) {
         try {
-            this.slidingWindow.onAck(curTime, datagram, this.datagramReadIndex);
+            this.slidingWindow.onAck(curTime, datagram, this.datagramWriteIndex);
             this.acknowledgeReliable(datagram);
         } finally {
             datagram.release();
