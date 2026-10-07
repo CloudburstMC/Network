@@ -74,6 +74,15 @@ final class NetherNetMessageAssembler implements AutoCloseable {
             }
         }
 
+        int assembled = assembly == null ? 0 : assembly.readableBytes();
+        if (!dropping && assembled + data.remaining() > NetherNetChannel.MAX_MESSAGE_SIZE) {
+            // Held to the size this side writes, as nothing larger fits a retail client's segments
+            log.debug("Dropping a message over {} bytes on the {} channel", NetherNetChannel.MAX_MESSAGE_SIZE, label);
+            failed(metrics);
+            clear();
+            dropping = true;
+        }
+
         if (dropping) {
             expected = remaining == 0 ? -1 : remaining - 1;
             dropping = remaining != 0;

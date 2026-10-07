@@ -244,4 +244,28 @@ class NetherNetMessageAssemblerTest {
         allocator.assertReleased();
         assertCounted(1, 1);
     }
+
+    @Test
+    void anOversizedMessageIsDroppedWithoutTakingTheNextWithIt() {
+        int payload = NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE - 1;
+        ByteBuffer segment = ByteBuffer.allocateDirect(1 + payload);
+        try (var assembler = new NetherNetMessageAssembler("reliable")) {
+            // 256 segments of the advertised size come to 64 MiB
+            for (int remaining = 255; remaining >= 0; remaining--) {
+                segment.clear().put(0, (byte) remaining);
+                assertNull(assembler.decode(segment, allocator, metrics));
+            }
+            ByteBuf message = assembler.decode(frame(0, 9), allocator, metrics);
+
+            assertNotNull(message, "the assembler should be clean again");
+            try {
+                assertArrayEquals(new byte[]{9}, ByteBufUtil.getBytes(message));
+            } finally {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+        // Fragments are kept until the next would pass the cap
+        assertCounted(NetherNetChannel.MAX_MESSAGE_SIZE / payload, 1);
+    }
 }
