@@ -22,6 +22,7 @@ import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.IllegalReferenceCountException;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
+import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
 import java.util.Objects;
@@ -36,8 +37,9 @@ public class SplitPacketHelper extends AbstractReferenceCounted {
         if (expectedLength < 2) {
             throw new IllegalArgumentException("expectedLength must be greater than 1");
         }
-        if (expectedLength > 8192) {
-            throw new IllegalArgumentException("Too many split parts, expectedLength must be less than 8192");
+        if (expectedLength > RakConstants.MAXIMUM_RECEIVED_SPLIT_COUNT) {
+            throw new IllegalArgumentException("Too many split parts, expectedLength must be at most "
+                    + RakConstants.MAXIMUM_RECEIVED_SPLIT_COUNT);
         }
         this.partId = partId;
         this.packets = new EncapsulatedPacket[(int) expectedLength];

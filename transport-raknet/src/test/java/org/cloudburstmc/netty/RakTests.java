@@ -557,6 +557,47 @@ public class RakTests {
         return channel;
     }
 
+    @Test
+    public void testOversizedMessageFailsWithoutStallingTheSession() throws Exception {
+        BlockingQueue<RakChildChannel> children = new LinkedBlockingQueue<>();
+        InetSocketAddress address = setupServer(children);
+        BlockingQueue<Integer> received = new LinkedBlockingQueue<>();
+
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                .handler(new SimpleChannelInboundHandler<RakMessage>() {
+                    @Override
+                    protected void channelRead0(ChannelHandlerContext ctx, RakMessage message) {
+                        received.add(message.content().readableBytes());
+                    }
+                })
+                .connect(address)
+                .awaitUninterruptibly()
+                .channel();
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+
+        RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+        // Part payload over IPv4: the MTU less the UDP, IPv4, encapsulated and datagram headers
+        int partSize = RakConstants.MAXIMUM_MTU_SIZE - RakConstants.UDP_HEADER_SIZE - 20
+                - RakConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE - RakConstants.RAKNET_DATAGRAM_HEADER_SIZE;
+        int largest = partSize * RakConstants.MAXIMUM_SPLIT_COUNT;
+
+        ChannelFuture oversized = child.rakPipeline().writeAndFlush(new RakMessage(userMessage(largest + 1)));
+        Assertions.assertTrue(oversized.await(5, TimeUnit.SECONDS), "Oversized write should complete");
+        Assertions.assertTrue(oversized.cause() instanceof IllegalArgumentException,
+                "Oversized write should fail: " + oversized.cause());
+
+        // Ordered after the refused write, so it only arrives if that write left no gap in the ordering channel
+        child.rakPipeline().writeAndFlush(new RakMessage(userMessage(largest)));
+        Assertions.assertEquals(largest, received.poll(10, TimeUnit.SECONDS), "The largest message should arrive");
+        channel.close().awaitUninterruptibly();
+    }
+
+    // Starts with a user packet ID, as a leading zero would be taken for a connected ping
+    private static ByteBuf userMessage(int size) {
+        return Unpooled.buffer(size).writeByte(BURST_PACKET_ID).writeZero(size - 1);
+    }
+
     // Queues messages in one task on the session's thread, so a single flush sees all of them
     private static void sendFromSession(RakChildChannel child, int count, Supplier<ByteBuf> message) throws Exception {
         child.parent().eventLoop().submit(() -> {

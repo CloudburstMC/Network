@@ -276,11 +276,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             throw new IllegalArgumentException();
         }
 
+        EncapsulatedPacket[] packets = this.createEncapsulated(message);
         RakChannelMetrics metrics = this.getMetrics();
         if (metrics != null) {
             metrics.encapsulatedOut(1);
         }
-        EncapsulatedPacket[] packets = this.createEncapsulated(message);
         if (message.priority() == RakPriority.IMMEDIATE) {
             this.sendImmediate(ctx, packets);
             return;
@@ -820,6 +820,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             }
 
             int split = ((buffer.readableBytes() - 1) / maxLength) + 1;
+            if (split > MAXIMUM_SPLIT_COUNT) {
+                // Refused before taking a split ID or ordering index, so the session carries on
+                throw new IllegalArgumentException("Message of " + buffer.readableBytes() + " bytes needs " + split
+                        + " parts, more than the " + MAXIMUM_SPLIT_COUNT + " allowed");
+            }
             buffer.retain(split);
 
             buffers = new ByteBuf[split];
