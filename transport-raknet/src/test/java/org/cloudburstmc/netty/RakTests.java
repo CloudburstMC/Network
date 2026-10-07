@@ -577,10 +577,12 @@ public class RakTests {
 
         RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
         Assertions.assertNotNull(child, "Server should create a child channel");
-        // Part payload over IPv4: the MTU less the UDP, IPv4, encapsulated and datagram headers
-        int partSize = RakConstants.MAXIMUM_MTU_SIZE - RakConstants.UDP_HEADER_SIZE - 20
-                - RakConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE - RakConstants.RAKNET_DATAGRAM_HEADER_SIZE;
-        int largest = partSize * RakConstants.MAXIMUM_SPLIT_COUNT;
+        int largest = child.maxMessageSize();
+        // Every part full: the MTU less the UDP, IPv4, encapsulated and datagram headers
+        Assertions.assertEquals(RakConstants.MAXIMUM_SPLIT_COUNT * (RakConstants.MAXIMUM_MTU_SIZE
+                - RakConstants.UDP_HEADER_SIZE - 20 - RakConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE
+                - RakConstants.RAKNET_DATAGRAM_HEADER_SIZE), largest);
+        Assertions.assertEquals(largest, ((RakChannel) channel).maxMessageSize(), "Client sees the same limit");
 
         ChannelFuture oversized = child.rakPipeline().writeAndFlush(new RakMessage(userMessage(largest + 1)));
         Assertions.assertTrue(oversized.await(5, TimeUnit.SECONDS), "Oversized write should complete");
@@ -591,6 +593,24 @@ public class RakTests {
         child.rakPipeline().writeAndFlush(new RakMessage(userMessage(largest)));
         Assertions.assertEquals(largest, received.poll(10, TimeUnit.SECONDS), "The largest message should arrive");
         channel.close().awaitUninterruptibly();
+    }
+
+    @Test
+    public void testMaxMessageSizeWithoutASession() {
+        // Never connected, so no handshake added a session
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                .handler(new ChannelInboundHandlerAdapter())
+                .register()
+                .syncUninterruptibly()
+                .channel();
+        try {
+            // Every part full at the smallest MTU, over IPv6
+            Assertions.assertEquals(RakConstants.MAXIMUM_SPLIT_COUNT * (RakConstants.MINIMUM_MTU_SIZE
+                    - RakConstants.UDP_HEADER_SIZE - 40 - RakConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE
+                    - RakConstants.RAKNET_DATAGRAM_HEADER_SIZE), ((RakChannel) channel).maxMessageSize());
+        } finally {
+            channel.close().awaitUninterruptibly();
+        }
     }
 
     // Starts with a user packet ID, as a leading zero would be taken for a connected ping
