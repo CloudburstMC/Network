@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
+import org.cloudburstmc.netty.channel.TransportChannel;
 import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
 import io.netty.buffer.ByteBuf;
@@ -51,10 +52,12 @@ import java.util.function.Consumer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-public abstract class NetherNetChannel extends AbstractChannel {
+public abstract class NetherNetChannel extends AbstractChannel implements TransportChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
     protected static final ChannelMetadata METADATA = new ChannelMetadata(false);
     private static final int MAX_SEGMENT_PAYLOAD = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
+    /** As many segments as the countdown numbers, each the size a retail client sends. */
+    static final int MAX_MESSAGE_SIZE = NetherNetConstants.MAX_SEGMENTS * MAX_SEGMENT_PAYLOAD;
 
     /**
      * One side of the selected pair carries the address the socket uses and the candidate type it
@@ -208,6 +211,11 @@ public abstract class NetherNetChannel extends AbstractChannel {
         } catch (Exception notConnected) {
             return 0;
         }
+    }
+
+    @Override
+    public int maxMessageSize() {
+        return MAX_MESSAGE_SIZE;
     }
 
     /**

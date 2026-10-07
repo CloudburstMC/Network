@@ -17,6 +17,7 @@
 description = "NetherNet transport for Netty"
 
 dependencies {
+    api(project(":transport-common"))
     api(libs.bundles.netty)
     api(libs.netty.codec.http)
     api(libs.netty.codec.haproxy)

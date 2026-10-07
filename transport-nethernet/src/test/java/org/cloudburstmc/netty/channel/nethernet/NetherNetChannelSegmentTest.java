@@ -131,7 +131,7 @@ class NetherNetChannelSegmentTest {
             client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
             client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
             NetherNetChildChannel child = server.connect(client);
-            int length = NetherNetConstants.MAX_SEGMENTS * (NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1) + 1;
+            int length = child.maxMessageSize() + 1;
             ByteBuf message = Unpooled.buffer(length).writerIndex(length);
 
             ChannelFuture write = child.writeAndFlush(message).awaitUninterruptibly();
