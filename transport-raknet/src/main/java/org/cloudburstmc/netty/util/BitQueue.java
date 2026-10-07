@@ -112,7 +112,7 @@ public class BitQueue {
         int idx = (this.tail + n) & ((this.queue.length << 6) - 1);
         int arrIdx = idx >> 6;
         long mask = 1L << (idx & 63);
-        this.queue[arrIdx] ^= ((bit ? 0xFF : 0x00) ^ this.queue[arrIdx]) & mask;
+        this.queue[arrIdx] ^= ((bit ? 0xFFFFFFFFFFFFFFFFL : 0) ^ this.queue[arrIdx]) & mask;
     }
 
     public boolean get(int n) {
