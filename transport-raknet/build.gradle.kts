@@ -19,6 +19,7 @@ import org.gradle.api.tasks.testing.logging.TestLogEvent
 description = "RakNet transport for Netty"
 
 dependencies {
+    api(project(":transport-common"))
     api(libs.bundles.netty)
     api(libs.netty.codec.haproxy)
     api(libs.expiringmap)

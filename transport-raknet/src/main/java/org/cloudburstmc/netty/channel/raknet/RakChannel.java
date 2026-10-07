@@ -16,14 +16,23 @@
 
 package org.cloudburstmc.netty.channel.raknet;
 
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelPipeline;
+import org.cloudburstmc.netty.channel.TransportChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
 
-public interface RakChannel extends Channel {
+public interface RakChannel extends TransportChannel {
 
     ChannelPipeline rakPipeline();
 
     @Override
     RakChannelConfig config();
+
+    @Override
+    default int maxMessageSize() {
+        RakSessionCodec session = this.rakPipeline().get(RakSessionCodec.class);
+        // No session before the handshake or after close, so assume the smallest MTU, over IPv6
+        return session != null ? session.getMaxMessageSize()
+                : RakSessionCodec.maxMessageSize(RakConstants.MINIMUM_MTU_SIZE - RakConstants.UDP_HEADER_SIZE - 40);
+    }
 }

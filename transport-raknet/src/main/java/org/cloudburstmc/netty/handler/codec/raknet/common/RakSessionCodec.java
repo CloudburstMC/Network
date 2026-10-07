@@ -796,7 +796,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private EncapsulatedPacket[] createEncapsulated(RakMessage rakMessage) {
-        int maxLength = this.getMtu() - MAXIMUM_ENCAPSULATED_HEADER_SIZE - RAKNET_DATAGRAM_HEADER_SIZE;
+        int maxLength = partSize(this.getMtu());
 
         ByteBuf[] buffers;
         int splitId = 0;
@@ -1016,6 +1016,25 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     public int getMtu() {
         return this.channel.config().getMtu() - UDP_HEADER_SIZE - (this.getRemoteAddress().getAddress() instanceof Inet6Address ? 40 : 20);
+    }
+
+    // Message bytes one split part carries, at an MTU as getMtu reports it
+    private static int partSize(int mtu) {
+        return mtu - MAXIMUM_ENCAPSULATED_HEADER_SIZE - RAKNET_DATAGRAM_HEADER_SIZE;
+    }
+
+    /**
+     * Largest message the session can write, what {@link RakConstants#MAXIMUM_SPLIT_COUNT} parts carry at its MTU.
+     */
+    public int getMaxMessageSize() {
+        return maxMessageSize(this.getMtu());
+    }
+
+    /**
+     * Largest message a session can write at an MTU less the UDP and IP headers, as {@link #getMtu()} reports it.
+     */
+    public static int maxMessageSize(int mtu) {
+        return MAXIMUM_SPLIT_COUNT * partSize(mtu);
     }
 
     public RakChannelMetrics getMetrics() {
