@@ -230,8 +230,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
         child.closeFuture().addListener(future -> timeout.cancel(false));
 
+        RemoteCandidates candidates = new RemoteCandidates(pc, connectionId);
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId,
-                offerSdp, clientAddress, child, pc, timeout);
+                offerSdp, clientAddress, child, pc, candidates, timeout);
         observer.register(pc);
         SignalHandler handler = signal -> {
             NetherNetConstants.Signal parsed = NetherNetConstants.parseSignal(signal);
@@ -241,15 +242,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             String data = parsed.payload();
 
             switch (parsed.type()) {
-                case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
-                    log.trace("Applying Remote Candidate for {}: {}", connectionId, data);
-                    try {
-                        pc.addRemoteCandidate(data);
-                    } catch (Exception e) {
-                        log.debug("Failed to apply ICE candidate for {} (Connection likely closed): {}",
-                                connectionId, e.toString());
-                    }
-                }
+                case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> candidates.trickle(data);
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
                     log.debug("Received CONNECT_ERROR for {}", connectionId);
                     if (!child.isActive()) {
@@ -260,7 +253,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
         };
 
-        pc.setRemoteDescription(offerSdp, SessionDescriptionType.OFFER);
+        candidates.setDescription(offerSdp, SessionDescriptionType.OFFER);
         log.trace("Remote description set for {}", connectionId);
         // Candidates only apply once the offer is in, so this is the earliest they can go
         remoteSignals.deliverTo(handler);
@@ -320,6 +313,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private final ScheduledFuture<?> handshakeTimeout;
 
         private final PeerConnection peerConnection;
+        private final RemoteCandidates remoteCandidates;
         private volatile boolean fullSdpSent = false;
         private final PendingSignals localCandidates = new PendingSignals();
 
@@ -329,9 +323,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         public ServerPeerConnectionObserver(String connectionId, String remoteNetworkId, String offerSdp,
                                             @Nullable InetSocketAddress clientAddress,
                                             NetherNetChildChannel child, PeerConnection peerConnection,
-                                            ScheduledFuture<?> handshakeTimeout) {
+                                            RemoteCandidates remoteCandidates, ScheduledFuture<?> handshakeTimeout) {
             this.child = child;
             this.peerConnection = peerConnection;
+            this.remoteCandidates = remoteCandidates;
             this.handshakeTimeout = handshakeTimeout;
             this.connectionId = connectionId;
             this.remoteNetworkId = remoteNetworkId;
@@ -352,12 +347,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
             for (String candidate : SdpUtil.inferredPeerCandidates(this.offerSdp, this.clientAddress)) {
                 log.debug("Inferred candidate for {}: {}", connectionId, candidate);
-                try {
-                    peerConnection.addRemoteCandidate(candidate);
-                } catch (Exception e) {
-                    log.debug("Failed to add inferred candidate for {}: {}",
-                            connectionId, e.toString());
-                }
+                remoteCandidates.add(candidate);
             }
         }
 

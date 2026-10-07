@@ -68,6 +68,8 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private int retryCount = 0;
     /** Whether this attempt's complete offer went out, for signaling that takes it in one piece. */
     private boolean descriptionSent;
+    /** This attempt's peer, as the server's answer and candidates apply to it. Event loop only. */
+    private RemoteCandidates remoteCandidates;
 
     /**
      * Creates a NetherNetClientChannel.
@@ -254,6 +256,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 .withIceServers(withIceServers(configured, iceServers));
 
         peerConnection = PeerConnection.createPeer(rtcConfig);
+        remoteCandidates = new RemoteCandidates(peerConnection, connectionId);
         registerMetrics(peerConnection);
 
         // Registering is what arms the native callback, so it must happen before anything can fire it
@@ -404,20 +407,13 @@ public class NetherNetClientChannel extends NetherNetChannel {
                         }
                     }
                     try {
-                        peerConnection.setRemoteDescription(data, SessionDescriptionType.ANSWER);
+                        remoteCandidates.setDescription(data, SessionDescriptionType.ANSWER);
                     } catch (Exception e) {
                         log.debug("Failed to apply answer for {}: {}", connectionId,
                                 e.toString());
                     }
                 }
-                case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> {
-                    try {
-                        peerConnection.addRemoteCandidate(data);
-                    } catch (Exception e) {
-                        log.debug("Failed to apply ICE candidate for {}: {}", connectionId,
-                                e.toString());
-                    }
-                }
+                case NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD -> remoteCandidates.trickle(data);
                 case NetherNetConstants.RTC_NEGOTIATION_CONNECT_ERROR -> {
                     log.error("Received SIGNAL_CONNECT_ERROR for {}.", this.connectionId);
                     failConnect(new ConnectException("Remote peer sent connect error."));
