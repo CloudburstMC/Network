@@ -27,4 +27,9 @@ public interface TransportChannel extends Channel {
      * Largest message a write may carry. Larger writes fail, as the peer would drop them.
      */
     int maxMessageSize();
+
+    /**
+     * Round trip time to the peer in milliseconds, or {@code 0} while it is unknown.
+     */
+    long getPing();
 }

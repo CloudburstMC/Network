@@ -145,12 +145,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         });
     }
 
-    /**
-     * The round trip time of the underlying transport in milliseconds, or {@code 0} while it is unknown, which
-     * matches how the raknet transport reports a session without a completed ping.
-     *
-     * @return the round trip time in milliseconds
-     */
+    @Override
     public long getPing() {
         PeerConnection peer = this.peerConnection;
         if (peer == null) {

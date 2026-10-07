@@ -613,6 +613,20 @@ public class RakTests {
         }
     }
 
+    @Test
+    public void testPingWithoutASession() {
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                .handler(new ChannelInboundHandlerAdapter())
+                .register()
+                .syncUninterruptibly()
+                .channel();
+        try {
+            Assertions.assertEquals(0, ((RakChannel) channel).getPing());
+        } finally {
+            channel.close().awaitUninterruptibly();
+        }
+    }
+
     // Starts with a user packet ID, as a leading zero would be taken for a connected ping
     private static ByteBuf userMessage(int size) {
         return Unpooled.buffer(size).writeByte(BURST_PACKET_ID).writeZero(size - 1);
