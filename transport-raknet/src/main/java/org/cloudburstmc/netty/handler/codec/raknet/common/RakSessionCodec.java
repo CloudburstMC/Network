@@ -37,8 +37,12 @@ import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Queue;
+import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -83,7 +87,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private long currentPingTime = -1;
     private long lastPingTime = -1;
     private long lastPongTime = -1;
-    private IntObjectMap<RakDatagramPacket> sentDatagrams;
+    private NavigableMap<Integer, RakDatagramPacket> sentDatagrams;
     private Queue<IntRange> incomingAcks;
     private Queue<IntRange> incomingNaks;
     private Queue<IntRange> outgoingAcks;
@@ -121,7 +125,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
         this.outgoingPackets = new FastBinaryMinHeap<>(8);
-        this.sentDatagrams = new IntObjectHashMap<>();
+        this.sentDatagrams = new TreeMap<>();
 
         this.incomingAcks = new ArrayDeque<>();
         this.incomingNaks = new ArrayDeque<>();
@@ -598,16 +602,26 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 continue;
             }
 
-            for (int i = range.start; i <= range.end; i++) {
-                RakDatagramPacket datagram = this.sentDatagrams.remove(i);
-                if (datagram != null) {
-                    if (nack) {
-                        this.onIncomingNack(ctx, datagram, curTime);
-                    } else {
-                        this.onIncomingAck(datagram, curTime);
-                    }
+            removeAcknowledged(this.sentDatagrams, range.start, range.end, datagram -> {
+                if (nack) {
+                    this.onIncomingNack(ctx, datagram, curTime);
+                } else {
+                    this.onIncomingAck(datagram, curTime);
                 }
-            }
+            });
+        }
+    }
+
+    /**
+     * Removes the in-flight datagrams in {@code [start, end]} and passes each to {@code action} in sequence order.
+     */
+    static void removeAcknowledged(NavigableMap<Integer, RakDatagramPacket> sentDatagrams, int start, int end,
+                                   Consumer<RakDatagramPacket> action) {
+        // Polled rather than iterated, as a NACK resends through action, which adds the datagram back under a new index
+        NavigableMap<Integer, RakDatagramPacket> range = sentDatagrams.subMap(start, true, end, true);
+        Map.Entry<Integer, RakDatagramPacket> entry;
+        while ((entry = range.pollFirstEntry()) != null) {
+            action.accept(entry.getValue());
         }
     }
 
@@ -657,7 +671,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         int resendCount = 0;
         int transmissionBandwidth = this.slidingWindow.getRetransmissionBandwidth();
 
-        IntObjectMap<RakDatagramPacket> sent = new IntObjectHashMap<>();
+        Map<Integer, RakDatagramPacket> sent = new HashMap<>();
         Iterator<RakDatagramPacket> iterator = this.sentDatagrams.values().iterator();
         while (iterator.hasNext()) {
             RakDatagramPacket datagram = iterator.next();
@@ -679,9 +693,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 this.sendDatagram(ctx, datagram, curTime, sent);
             }
         }
-        for (IntObjectMap.PrimitiveEntry<RakDatagramPacket> entry : sent.entries()) {
-            this.sentDatagrams.put(entry.key(), entry.value());
-        }
+        this.sentDatagrams.putAll(sent);
 
         if (hasResent) {
             this.slidingWindow.onResend(this.datagramWriteIndex);
@@ -762,7 +774,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
     }
 
-    private void sendDatagram(ChannelHandlerContext ctx, RakDatagramPacket datagram, long time, IntObjectMap<RakDatagramPacket> sent) {
+    private void sendDatagram(ChannelHandlerContext ctx, RakDatagramPacket datagram, long time, Map<Integer, RakDatagramPacket> sent) {
         if (datagram.getPackets().isEmpty()) {
             throw new IllegalArgumentException("RakNetDatagram with no packets");
         }
