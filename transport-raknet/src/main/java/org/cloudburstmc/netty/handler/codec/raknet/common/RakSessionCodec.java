@@ -697,7 +697,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         int transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth();
         RakDatagramPacket datagram = RakDatagramPacket.newInstance();
-        datagram.setSendTime(curTime);
         EncapsulatedPacket packet;
 
         while ((packet = this.outgoingPackets.peek()) != null) {
@@ -725,7 +724,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 this.sendDatagram(ctx, datagram, curTime, this.sentDatagrams);
 
                 datagram = RakDatagramPacket.newInstance();
-                datagram.setSendTime(curTime);
                 if (!datagram.tryAddPacket(packet, mtuSize)) {
                     throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + mtuSize + ")");
                 }
@@ -742,7 +740,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         long curTime = System.currentTimeMillis();
         for (EncapsulatedPacket packet : packets) {
             RakDatagramPacket datagram = RakDatagramPacket.newInstance();
-            datagram.setSendTime(curTime);
             if (!datagram.tryAddPacket(packet, this.getMtu())) {
                 throw new IllegalArgumentException("Packet too large to fit in MTU (size: " + packet.getSize() + ", MTU: " + this.getMtu() + ")");
             }
@@ -777,6 +774,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         int oldIndex = datagram.getSequenceIndex();
         datagram.setSequenceIndex(this.datagramWriteIndex++);
+        // Restamped on resends, as an ACK for the new sequence index can only answer this transmission
+        datagram.setSendTime(time);
 
         for (EncapsulatedPacket packet : datagram.getPackets()) {
             // Check if packet is reliable so it can be resent later if a NAK is received.
