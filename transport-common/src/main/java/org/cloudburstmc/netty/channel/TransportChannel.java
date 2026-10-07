@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 CloudburstMC
+ * Copyright 2026 CloudburstMC
  *
  * CloudburstMC licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -14,11 +14,17 @@
  * under the License.
  */
 
-rootProject.name = "network"
+package org.cloudburstmc.netty.channel;
 
-plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+import io.netty.channel.Channel;
+
+/**
+ * A channel of one of the transports, carrying each message written to it whole.
+ */
+public interface TransportChannel extends Channel {
+
+    /**
+     * Largest message a write may carry. Larger writes fail, as the peer would drop them.
+     */
+    int maxMessageSize();
 }
-
-include("transport-common")
-include("transport-raknet")
