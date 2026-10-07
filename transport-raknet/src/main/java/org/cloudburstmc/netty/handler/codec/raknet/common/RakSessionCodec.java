@@ -54,6 +54,10 @@ import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 public class RakSessionCodec extends ChannelDuplexHandler {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakSessionCodec.class);
     public static final String NAME = "rak-session-codec";
+    // How far reliable and ordering indices may run ahead of the read index: the Bedrock client's reliable limit.
+    private static final int MAX_RECEIVE_GAP = 32768;
+    // Charged per queued ordered message on top of its payload.
+    private static final int ORDERING_ENTRY_OVERHEAD = 2048;
 
     private final RakChannel channel;
     private ScheduledFuture<?> tickFuture;
@@ -326,7 +330,10 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         for (final EncapsulatedPacket encapsulated : packet.getPackets()) {
             if (encapsulated.getReliability().isReliable()) {
                 int missed = encapsulated.getReliabilityIndex() - this.reliabilityReadIndex;
-                if (missed > 0) {
+                if (missed >= MAX_RECEIVE_GAP) {
+                    this.disconnect(RakDisconnectReason.BAD_PACKET);
+                    return;
+                } else if (missed > 0) {
                     if (missed < this.reliableDatagramQueue.size()) {
                         if (this.reliableDatagramQueue.get(missed)) {
                             this.reliableDatagramQueue.set(missed, false);
@@ -391,12 +398,16 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private void onOrderedReceived(ChannelHandlerContext ctx, EncapsulatedPacket packet) {
         FastBinaryMinHeap<EncapsulatedPacket> binaryHeap = this.orderingHeaps[packet.getOrderingChannel()];
-        if (this.orderReadIndex[packet.getOrderingChannel()] < packet.getOrderingIndex()) {
+        int distance = packet.getOrderingIndex() - this.orderReadIndex[packet.getOrderingChannel()];
+        if (distance >= MAX_RECEIVE_GAP) {
+            this.disconnect(RakDisconnectReason.BAD_PACKET);
+            return;
+        } else if (distance > 0) {
             // Not next in line so add to queue.
             binaryHeap.insert(packet.getOrderingIndex(), packet.retain());
-            this.orderingQueuedBytes += packet.getBuffer().readableBytes();
+            this.orderingQueuedBytes += packet.getBuffer().readableBytes() + ORDERING_ENTRY_OVERHEAD;
             return;
-        } else if (this.orderReadIndex[packet.getOrderingChannel()] > packet.getOrderingIndex()) {
+        } else if (distance < 0) {
             // We already have this
             return;
         }
@@ -411,7 +422,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 try {
                     // We got the expected packet
                     binaryHeap.remove();
-                    this.orderingQueuedBytes -= queuedPacket.getBuffer().readableBytes();
+                    this.orderingQueuedBytes -= queuedPacket.getBuffer().readableBytes() + ORDERING_ENTRY_OVERHEAD;
                     this.orderReadIndex[packet.getOrderingChannel()]++;
                     ctx.fireChannelRead(queuedPacket.retain());
                 } finally {
