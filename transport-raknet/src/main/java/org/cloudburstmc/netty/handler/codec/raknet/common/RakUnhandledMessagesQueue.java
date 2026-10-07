@@ -18,15 +18,13 @@ package org.cloudburstmc.netty.handler.codec.raknet.common;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
-import io.netty.util.internal.PlatformDependent;
+import org.cloudburstmc.netty.channel.PendingMessages;
 import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
-import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 
 public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<EncapsulatedPacket> {
@@ -36,9 +34,8 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
     static final int MAX_QUEUED_BYTES = 256 * 1024;
 
     private final RakChannel channel;
-    private final Queue<EncapsulatedPacket> messages = PlatformDependent.newMpscQueue();
-    private int queuedMessages;
-    private int queuedBytes;
+    private final PendingMessages<EncapsulatedPacket> messages = new PendingMessages<>(MAX_QUEUED_MESSAGES,
+            MAX_QUEUED_BYTES, message -> message.getBuffer().readableBytes());
     private long addedTime;
     private boolean closing;
     private ScheduledFuture<?> future;
@@ -57,7 +54,7 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
         this.cancelFuture();
-        this.releaseMessages();
+        this.messages.clear();
     }
 
     private void trySendMessages(ChannelHandlerContext ctx) {
@@ -81,15 +78,9 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, EncapsulatedPacket msg) throws Exception {
         if (!this.channel.isActive()) {
-            if (this.closing) {
-                return;
-            }
-            this.queuedBytes += msg.getBuffer().readableBytes();
-            if (++this.queuedMessages > MAX_QUEUED_MESSAGES || this.queuedBytes > MAX_QUEUED_BYTES) {
+            if (!this.closing && !this.messages.offer(msg.retain())) {
                 this.close(RakDisconnectReason.QUEUE_TOO_LONG);
-                return;
             }
-            this.messages.offer(msg.retain());
             return;
         }
 
@@ -100,7 +91,7 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
     private void close(RakDisconnectReason reason) {
         this.closing = true;
         this.cancelFuture();
-        this.releaseMessages();
+        this.messages.clear();
         this.channel.pipeline().fireUserEventTriggered(reason).close();
     }
 
@@ -108,13 +99,6 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
         if (this.future != null) {
             this.future.cancel(false);
             this.future = null;
-        }
-    }
-
-    private void releaseMessages() {
-        EncapsulatedPacket message;
-        while ((message = this.messages.poll()) != null) {
-            ReferenceCountUtil.release(message);
         }
     }
 }
