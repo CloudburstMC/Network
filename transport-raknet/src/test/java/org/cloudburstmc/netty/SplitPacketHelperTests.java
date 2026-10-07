@@ -18,6 +18,7 @@ package org.cloudburstmc.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
+import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.util.SplitPacketHelper;
@@ -80,5 +81,12 @@ public class SplitPacketHelperTests {
         SplitPacketHelper helper = new SplitPacketHelper(0, 2);
         Assertions.assertFalse(helper.expired());
         helper.release();
+    }
+
+    @Test
+    public void testAcceptsMorePartsThanItSends() {
+        new SplitPacketHelper(0, RakConstants.MAXIMUM_RECEIVED_SPLIT_COUNT).release();
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new SplitPacketHelper(0, RakConstants.MAXIMUM_RECEIVED_SPLIT_COUNT + 1));
     }
 }
