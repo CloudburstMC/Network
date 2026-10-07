@@ -29,7 +29,10 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.util.ReferenceCountUtil;
 import org.cloudburstmc.netty.channel.raknet.*;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
+import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
+import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
+import org.cloudburstmc.netty.handler.codec.raknet.common.RakDatagramCodec;
 import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -43,14 +46,17 @@ import java.net.InetSocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 public class RakTests {
@@ -71,6 +77,8 @@ public class RakTests {
             .toString().getBytes(StandardCharsets.UTF_8);
 
     private static final int RESEND_PACKET_ID = 0xFF;
+    private static final int WARMUP_PACKET_ID = 0xFE;
+    private static final int BURST_PACKET_ID = 0xFD;
 
     // Shared across tests to skip the shutdown quiet period per test. Closing the server closes its children.
     private static EventLoopGroup group;
@@ -454,6 +462,145 @@ public class RakTests {
 
         Assertions.assertTrue(received.await(5, TimeUnit.SECONDS), "Client should receive the resent message");
         channel.close().awaitUninterruptibly();
+    }
+
+    @Test
+    public void testReliableMessagesStayWithinWindow() throws Exception {
+        BlockingQueue<RakChildChannel> children = new LinkedBlockingQueue<>();
+        InetSocketAddress address = setupServer(children);
+        int warmup = 100;
+        int burst = RakConstants.RELIABLE_WINDOW_SIZE * 2;
+        CountDownLatch warmupReceived = new CountDownLatch(warmup);
+        CountDownLatch burstReceived = new CountDownLatch(burst);
+
+        Channel channel = connectCounting(address, RakConstants.MAXIMUM_MTU_SIZE, warmupReceived, burstReceived);
+        RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+        AckBlocker blocker = new AckBlocker();
+        child.rakPipeline().addAfter(RakDatagramCodec.NAME, "ack-blocker", blocker);
+
+        // Acknowledged full datagrams grow the congestion window well past the reliable window, so bytes alone
+        // would not hold the burst back
+        sendFromSession(child, warmup, () -> {
+            ByteBuf buf = Unpooled.buffer(1200);
+            buf.writeByte(WARMUP_PACKET_ID);
+            return buf.writeZero(1199);
+        });
+        Assertions.assertTrue(warmupReceived.await(5, TimeUnit.SECONDS), "Client should receive the warmup");
+        int windowEnd = blocker.highestReliabilityIndex + 1 + RakConstants.RELIABLE_WINDOW_SIZE;
+
+        blocker.blocking = true;
+        sendFromSession(child, burst, () -> Unpooled.buffer(1).writeByte(BURST_PACKET_ID));
+        Thread.sleep(200);
+        Assertions.assertTrue(blocker.highestReliabilityIndex < windowEnd,
+                "Sent reliable index " + blocker.highestReliabilityIndex + " past the window ending at " + windowEnd);
+        Assertions.assertTrue(burstReceived.getCount() > 0, "Burst should wait for acknowledgements");
+
+        blocker.blocking = false;
+        Assertions.assertTrue(burstReceived.await(10, TimeUnit.SECONDS),
+                "Client should receive the burst once acknowledgements resume");
+        channel.close().awaitUninterruptibly();
+    }
+
+    @Test
+    public void testSplitMessagesInFlightStayWithinLimit() throws Exception {
+        BlockingQueue<RakChildChannel> children = new LinkedBlockingQueue<>();
+        InetSocketAddress address = setupServer(children);
+        int warmup = 1000;
+        int burst = RakConstants.MAXIMUM_SPLITS_IN_FLIGHT * 2;
+        CountDownLatch warmupReceived = new CountDownLatch(warmup);
+        CountDownLatch burstReceived = new CountDownLatch(burst);
+
+        Channel channel = connectCounting(address, RakConstants.MAXIMUM_MTU_SIZE, warmupReceived, burstReceived);
+        RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
+        Assertions.assertNotNull(child, "Server should create a child channel");
+        AckBlocker blocker = new AckBlocker();
+        child.rakPipeline().addAfter(RakDatagramCodec.NAME, "ack-blocker", blocker);
+
+        // A full datagram per warmup message grows the congestion window past the burst, so bytes alone would let
+        // it all out. Blocking the last acknowledgements would leave the warmup to be resent, shrinking the window.
+        sendFromSession(child, warmup, () -> Unpooled.buffer(1200).writeByte(WARMUP_PACKET_ID).writeZero(1199));
+        Assertions.assertTrue(warmupReceived.await(5, TimeUnit.SECONDS), "Client should receive the warmup");
+        Thread.sleep(200);
+
+        blocker.blocking = true;
+        int partSize = RakConstants.MAXIMUM_MTU_SIZE - RakConstants.UDP_HEADER_SIZE - 20
+                - RakConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE - RakConstants.RAKNET_DATAGRAM_HEADER_SIZE;
+        sendFromSession(child, burst,
+                () -> Unpooled.buffer(partSize + 1).writeByte(BURST_PACKET_ID).writeZero(partSize));
+        Thread.sleep(200);
+        Assertions.assertTrue(blocker.splitIds.size() <= RakConstants.MAXIMUM_SPLITS_IN_FLIGHT,
+                "Sent " + blocker.splitIds.size() + " split messages without acknowledgements");
+        Assertions.assertTrue(burstReceived.getCount() > 0, "Burst should wait for acknowledgements");
+
+        blocker.blocking = false;
+        Assertions.assertTrue(burstReceived.await(10, TimeUnit.SECONDS),
+                "Client should receive the burst once acknowledgements resume");
+        channel.close().awaitUninterruptibly();
+    }
+
+    // Counts what the client receives by the first byte of each message
+    private static Channel connectCounting(InetSocketAddress address, int mtu, CountDownLatch warmupReceived,
+                                           CountDownLatch burstReceived) {
+        Channel channel = clientBootstrap(mtu)
+                .handler(new SimpleChannelInboundHandler<RakMessage>() {
+                    @Override
+                    protected void channelRead0(ChannelHandlerContext ctx, RakMessage message) {
+                        int id = message.content().getUnsignedByte(message.content().readerIndex());
+                        (id == WARMUP_PACKET_ID ? warmupReceived : burstReceived).countDown();
+                    }
+                })
+                .connect(address)
+                .awaitUninterruptibly()
+                .channel();
+        Assertions.assertTrue(channel.isActive(), "Client should connect");
+        return channel;
+    }
+
+    // Queues messages in one task on the session's thread, so a single flush sees all of them
+    private static void sendFromSession(RakChildChannel child, int count, Supplier<ByteBuf> message) throws Exception {
+        child.parent().eventLoop().submit(() -> {
+            for (int i = 0; i < count; i++) {
+                child.rakPipeline().write(new RakMessage(message.get()));
+            }
+            child.rakPipeline().flush();
+        }).sync();
+    }
+
+    // Drops acknowledgements while blocking, and records the highest reliable index and the split IDs sent
+    private static final class AckBlocker extends ChannelDuplexHandler {
+        private final Set<Integer> splitIds = ConcurrentHashMap.newKeySet();
+        private volatile boolean blocking;
+        private volatile int highestReliabilityIndex = -1;
+
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            // Data datagrams are decoded by now, so a buffer is an ACK or NACK
+            if (this.blocking && msg instanceof ByteBuf) {
+                ByteBuf buffer = (ByteBuf) msg;
+                if ((buffer.getByte(buffer.readerIndex()) & RakConstants.FLAG_ACK) != 0) {
+                    buffer.release();
+                    return;
+                }
+            }
+            ctx.fireChannelRead(msg);
+        }
+
+        @Override
+        public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+            if (msg instanceof RakDatagramPacket) {
+                for (EncapsulatedPacket packet : ((RakDatagramPacket) msg).getPackets()) {
+                    if (packet.getReliability().isReliable()) {
+                        this.highestReliabilityIndex = Math.max(this.highestReliabilityIndex,
+                                packet.getReliabilityIndex());
+                    }
+                    if (packet.isSplit()) {
+                        this.splitIds.add(packet.getPartId());
+                    }
+                }
+            }
+            ctx.write(msg, promise);
+        }
     }
 
     private static final class NotificationFailingAllocator extends AbstractByteBufAllocator {
