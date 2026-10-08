@@ -33,6 +33,7 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.io.InputStreamReader;
 import java.io.BufferedReader;
@@ -41,6 +42,7 @@ import java.security.cert.X509Certificate;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -377,6 +379,71 @@ class HttpSignalingRequestTest {
 
             assertEquals(200, TestHttp.readStatus(in), "the join, on the same connection");
             assertFalse(body.isEmpty(), "the status check still carried its body");
+        }
+    }
+
+    @Test
+    void dropsAClientThatDoesNotReadItsAnswers() throws Exception {
+        // Answering every pipelined request of a client that never reads queues the answers on the
+        // server, about 14 times the bytes of the requests, for as long as the client keeps sending
+        this.start(this.builder());
+        this.assertDroppedWhenNotReading("GET / HTTP/1.1\r\n\r\n");
+    }
+
+    @Test
+    void dropsAClientThatDoesNotReadAnswersTheAggregatorWrites() throws Exception {
+        // HttpObjectAggregator answers an unsupported Expect itself, before the request reaches the handler
+        this.start(this.builder());
+        this.assertDroppedWhenNotReading("GET / HTTP/1.1\r\nExpect: x\r\n\r\n");
+    }
+
+    /** Pipelines the request without reading, then checks the server closed before answering them all. */
+    private void assertDroppedWhenNotReading(String pipelined) throws Exception {
+        int requests = 500_000;
+        byte[] request = pipelined.getBytes(StandardCharsets.US_ASCII);
+        byte[] chunk = new byte[request.length * 1000];
+        for (int i = 0; i < 1000; i++) {
+            System.arraycopy(request, 0, chunk, i * request.length, request.length);
+        }
+
+        try (Socket socket = new Socket()) {
+            socket.setReceiveBufferSize(4096);
+            socket.connect(new InetSocketAddress("127.0.0.1", this.port));
+            socket.setSoTimeout(5_000);
+            CompletableFuture<Void> writing = CompletableFuture.runAsync(() -> {
+                try {
+                    for (int i = 0; i < requests / 1000; i++) {
+                        socket.getOutputStream().write(chunk);
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+            try {
+                writing.get(30, TimeUnit.SECONDS);
+            } catch (ExecutionException closedWhileWriting) {
+                // Expected once the server has had enough
+            }
+
+            // The close can cut the last answer short, so count status lines rather than whole answers
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+            int answered = 0;
+            boolean closed;
+            try {
+                for (String line = in.readLine(); line != null; line = in.readLine()) {
+                    if (line.startsWith("HTTP/1.1 ")) {
+                        answered++;
+                    }
+                }
+                closed = true;
+            } catch (SocketTimeoutException stillOpen) {
+                closed = false;
+            } catch (IOException reset) {
+                closed = true;
+            }
+            assertTrue(closed, "the connection is closed, not left open after " + answered + " answers");
+            assertTrue(answered < requests, "not every request is answered");
         }
     }
 

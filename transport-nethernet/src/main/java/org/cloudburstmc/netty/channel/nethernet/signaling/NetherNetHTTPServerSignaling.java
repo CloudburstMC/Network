@@ -24,6 +24,7 @@ import io.netty.channel.ChannelFactory;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoop;
@@ -54,6 +55,7 @@ import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.AsciiString;
 import io.netty.util.NetUtil;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.FutureListener;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.concurrent.Promise;
@@ -602,11 +604,33 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             }
 
             p.addLast(new HttpServerCodec());
+            p.addLast(new UnreadAnswersGuard());
             p.addLast(new HttpObjectAggregator(8 * 1024));
             p.addLast(new HttpLoggingHandler(log));
             // A kept connection that goes quiet is one nobody will come back to
             p.addLast(new IdleStateHandler(IDLE_SECONDS, 0, 0));
             p.addLast(new SignalingHandler());
+        }
+    }
+
+    /**
+     * Answers pile up past the write buffer only when the client stops reading them, and one that keeps
+     * asking meanwhile would grow the queue without end, so it is dropped instead. Ahead of the aggregator,
+     * which answers some requests itself.
+     */
+    private class UnreadAnswersGuard extends ChannelInboundHandlerAdapter {
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            if (ctx.channel().isWritable()) {
+                ctx.fireChannelRead(msg);
+                return;
+            }
+            ReferenceCountUtil.release(msg);
+            if (ctx.channel().isOpen()) {
+                log.debug("Closing the signaling connection from {}: it does not read its answers",
+                        ctx.channel().remoteAddress());
+                ctx.close();
+            }
         }
     }
 
