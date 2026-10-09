@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import tel.schich.libdatachannel.*;
@@ -98,6 +99,54 @@ class NetherNetServerOwnershipTest {
             server.offer("1", "unused", new InetSocketAddress("127.0.0.1", 1));
             server.signaling.removed.get(5, TimeUnit.SECONDS);
             assertFalse(server.anyAccepted());
+        }
+    }
+
+    @Test
+    void refusedJoinCreatesNoPeerAndAnAcceptedOneIsReleasedOnClose() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            var address = new InetSocketAddress("192.0.2.1", 19132);
+            var released = new CompletableFuture<InetSocketAddress>();
+            boolean[] allow = {false};
+            server.server.config().setOption(NetherChannelOption.NETHER_SERVER_THROTTLE, new NetherServerThrottle() {
+                @Override
+                public boolean accept(InetSocketAddress joining) {
+                    return allow[0];
+                }
+
+                @Override
+                public void closed(InetSocketAddress joined) {
+                    released.complete(joined);
+                }
+            });
+            server.bind();
+
+            server.offer("1", "unused", address);
+            server.signaling.removed.get(5, TimeUnit.SECONDS);
+            assertFalse(server.anyAccepted(), "a refused join must not create a peer");
+
+            // Negotiation fails, and the child it closes releases the address
+            allow[0] = true;
+            server.offer("2", "not an SDP offer", address);
+            assertEquals(address, released.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void joinFromAnUnknownAddressIsNotThrottled() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            server.server.config().setOption(NetherChannelOption.NETHER_SERVER_THROTTLE, new NetherServerThrottle() {
+                @Override
+                public boolean accept(InetSocketAddress joining) {
+                    return false;
+                }
+
+                @Override
+                public void closed(InetSocketAddress joined) {
+                }
+            });
+            server.bind();
+            assertPeerClosed(server, server.accept("not an SDP offer"));
         }
     }
 

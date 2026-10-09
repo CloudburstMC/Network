@@ -12,6 +12,7 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
@@ -624,6 +625,117 @@ class NativeAdmissionIntegrationTest {
             AdmissionPrimitiveProbe.run(id, passwordLength, false);
         }
         AdmissionPrimitiveProbe.run(id, 24, true);
+    }
+
+    /** Counts what the endpoint asks of it, and lets joins through only while {@code allow} is set. */
+    static final class RecordingThrottle implements NetherServerThrottle {
+        final LinkedBlockingQueue<InetSocketAddress> accepted = new LinkedBlockingQueue<>();
+        final LinkedBlockingQueue<InetSocketAddress> closed = new LinkedBlockingQueue<>();
+        final AtomicInteger refused = new AtomicInteger();
+        final boolean allow;
+
+        RecordingThrottle(boolean allow) {
+            this.allow = allow;
+        }
+
+        @Override
+        public boolean accept(InetSocketAddress address) {
+            if (!allow) {
+                refused.incrementAndGet();
+                return false;
+            }
+            accepted.add(address);
+            return true;
+        }
+
+        @Override
+        public void closed(InetSocketAddress address) {
+            closed.add(address);
+        }
+    }
+
+    @Test
+    @Timeout(20)
+    void throttledJoinCreatesNoPeerOrReservation() throws Exception {
+        var id = identity();
+        var loopback = InetAddress.getByName("127.0.0.1");
+        int port = 49202;
+        var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
+        validator.installKeys(
+                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+        var group = new DefaultEventLoopGroup(1);
+        var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
+        var throttle = new RecordingThrottle(false);
+        endpoint.config().setOption(NetherChannelOption.NETHER_SERVER_THROTTLE, throttle);
+        try (var socket = new DatagramSocket(new InetSocketAddress(loopback, 0));
+             var client = PeerConnection.createPeer(
+                     PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true).withBindAddress(loopback),
+                     Runnable::run)) {
+            new ServerBootstrap().group(group).channelFactory(() -> endpoint)
+                    .childHandler(new ChannelInboundHandlerAdapter()).bind(loopback, port).sync();
+            client.createDataChannel("ReliableDataChannel");
+            client.setLocalDescription("offer", "throttledClient", "p".repeat(32));
+            var answer = TestSignalingProvider.answer(client.localDescription(), id.fingerprint(), port,
+                    System.currentTimeMillis() + 30_000, TestSignalingProvider.AUDIENCE, false);
+            byte[] request = nominatedBinding(answer.token() + ":throttledClient", answer.password());
+            socket.send(new DatagramPacket(request, request.length, loopback, port));
+            await(() -> throttle.refused.get() > 0);
+            assertEquals(0, endpoint.creationAttempts());
+            assertEquals(0, endpoint.admissionStats().claims());
+            assertEquals(0, endpoint.admissionStats().sessions());
+        } finally {
+            endpoint.close().awaitUninterruptibly();
+            endpoint.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
+    @Test
+    @Timeout(40)
+    void acceptedJoinIsReleasedOnceItsPeerIsGone() throws Exception {
+        var id = identity();
+        int port = 49203;
+        var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
+        validator.installKeys(
+                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+        var group = new DefaultEventLoopGroup(1);
+        var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
+        var throttle = new RecordingThrottle(true);
+        endpoint.config().setOption(NetherChannelOption.NETHER_SERVER_THROTTLE, throttle);
+        var children = new LinkedBlockingQueue<AdmittedNetherNetChildChannel>();
+        InetSocketAddress accepted;
+        try {
+            new ServerBootstrap().group(group).channelFactory(() -> endpoint)
+                    .childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
+                        protected void initChannel(AdmittedNetherNetChildChannel child) {
+                            children.add(child);
+                        }
+                    }).bind("127.0.0.1", port).sync();
+            try (var client = PeerConnection.createPeer(PeerConnectionConfiguration.DEFAULT
+                    .withDisableAutoNegotiation(true).withBindAddress(InetAddress.getLoopbackAddress()),
+                    Runnable::run)) {
+                client.createDataChannel("ReliableDataChannel");
+                client.createDataChannel("UnreliableDataChannel", DataChannelInitSettings.DEFAULT.withReliability(
+                        new DataChannelReliability(true, true, 0, 0)));
+                client.setLocalDescription("offer", "acceptedThrottleClient", "p".repeat(32));
+                var answer = TestSignalingProvider.answer(client.localDescription(), id.fingerprint(), port,
+                        System.currentTimeMillis() + 30_000, TestSignalingProvider.AUDIENCE, false);
+                client.setRemoteDescription(answer.sdp(), SessionDescriptionType.ANSWER);
+                assertNotNull(children.poll(12, TimeUnit.SECONDS), "the join never became a child");
+                assertTrue(client.closeAndAwait(Duration.ofSeconds(5)));
+            }
+            accepted = throttle.accepted.poll(1, TimeUnit.SECONDS);
+            assertNotNull(accepted);
+        } finally {
+            endpoint.close().awaitUninterruptibly();
+            endpoint.termination().toCompletableFuture().get(6, TimeUnit.SECONDS);
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+        // Released once its native peer is torn down, at the latest when the endpoint closes
+        await(() -> !throttle.closed.isEmpty());
+        assertEquals(accepted, throttle.closed.poll());
+        assertTrue(throttle.closed.isEmpty());
+        assertTrue(throttle.accepted.isEmpty());
     }
 
     private static byte[] nominatedBinding(String username, String password) throws Exception {

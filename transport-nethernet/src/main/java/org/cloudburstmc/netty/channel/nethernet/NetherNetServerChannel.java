@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 import java.io.IOException;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import org.jspecify.annotations.Nullable;
@@ -173,6 +174,13 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             refuse(connectionId);
             return;
         }
+        NetherServerThrottle throttle = this.config.getOption(NetherChannelOption.NETHER_SERVER_THROTTLE);
+        InetSocketAddress throttled = throttle == null ? null : knownAddress(clientAddress);
+        if (throttled != null && !throttle.accept(throttled)) {
+            log.debug("Refused join {} from {}: throttled", connectionId, throttled);
+            refuse(connectionId);
+            return;
+        }
 
         PeerConnectionConfiguration configured =
                 this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG);
@@ -192,6 +200,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         this.children.add(child);
         child.closeFuture().addListener(future -> {
             this.children.remove(child);
+            if (throttled != null) {
+                throttle.closed(throttled);
+            }
             signaling.removeSignalHandler(connectionId);
         });
 
@@ -221,6 +232,14 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             // Closed while this join was set up, after doClose went through the children
             child.close();
         }
+    }
+
+    /** The address to throttle on, or null when the signaling does not know it. */
+    private static @Nullable InetSocketAddress knownAddress(@Nullable InetSocketAddress address) {
+        if (address == null || address.getAddress() == null || address.getAddress().isAnyLocalAddress()) {
+            return null;
+        }
+        return address;
     }
 
     /** Tells the signaling a join failed without creating anything for it. */

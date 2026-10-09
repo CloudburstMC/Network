@@ -28,6 +28,7 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
     private volatile boolean inferPeerCandidates = true;
     private volatile NetherServerMetrics serverMetrics;
     private volatile InetSocketAddress iceAddress;
+    private volatile NetherServerThrottle throttle;
 
     public DefaultNetherServerChannelConfig(Channel channel) {
         super(channel);
@@ -38,7 +39,7 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
         return this.getOptions(
                 super.getOptions(), NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS,
                 NetherChannelOption.NETHER_INFER_PEER_CANDIDATES, NetherChannelOption.NETHER_SERVER_METRICS,
-                NetherChannelOption.NETHER_SERVER_ICE_ADDRESS
+                NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, NetherChannelOption.NETHER_SERVER_THROTTLE
         );
     }
 
@@ -53,6 +54,8 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
             return (T) this.getServerMetrics();
         } else if (option == NetherChannelOption.NETHER_SERVER_ICE_ADDRESS) {
             return (T) this.iceAddress;
+        } else if (option == NetherChannelOption.NETHER_SERVER_THROTTLE) {
+            return (T) this.throttle;
         }
 
         return super.getOption(option);
@@ -63,6 +66,11 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
         // Null clears the metrics, which is the only way back to reporting nothing
         if (option == NetherChannelOption.NETHER_SERVER_METRICS) {
             this.setServerMetrics((NetherServerMetrics) value);
+            return true;
+        }
+        // Null turns throttling off again
+        if (option == NetherChannelOption.NETHER_SERVER_THROTTLE) {
+            this.throttle = (NetherServerThrottle) value;
             return true;
         }
         this.validate(option, value);

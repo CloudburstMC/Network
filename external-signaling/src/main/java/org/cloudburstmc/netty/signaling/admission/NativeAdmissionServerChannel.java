@@ -17,6 +17,8 @@
 package org.cloudburstmc.netty.signaling.admission;
 
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
 import org.cloudburstmc.netty.signaling.control.AssistedJoin;
@@ -88,6 +90,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private final Set<CompletableFuture<Void>> nativeClosures = ConcurrentHashMap.newKeySet();
     private final Set<CompletableFuture<Void>> admissions = ConcurrentHashMap.newKeySet();
     private final Map<AdmissionGate.Reservation, Session> sessions = new HashMap<>();
+    /** The throttle each reservation was accepted by, released with the reservation. */
+    private final Map<AdmissionGate.Reservation, NetherServerThrottle> throttled = new ConcurrentHashMap<>();
 
     private record AssistedPeer(
             PeerConnection peer,
@@ -209,19 +213,14 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             }
             return CompletableFuture.completedFuture(diagnostic.admit(request, verified));
         }
-        AdmissionGate.Reservation reservation =
-                gate.reserveAuthenticated(
-                        verified,
-                        metadata.address(),
-                        System.currentTimeMillis(),
-                        System.nanoTime());
+        AdmissionGate.Reservation reservation = reserve(verified, metadata.address());
         if (reservation == null) {
             return CompletableFuture.completedFuture(null);
         }
 
         AdmissionContext a = gate.admission(reservation);
         if (a == null) {
-            gate.finish(reservation);
+            release(reservation);
             return CompletableFuture.completedFuture(null);
         }
         CompletableFuture<Void> settled = new CompletableFuture<>();
@@ -233,7 +232,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                         gate.invalidNativeRequest();
                         Session session = sessions.get(reservation);
                         if (session == null) {
-                            gate.finish(reservation);
+                            release(reservation);
                         } else {
                             finish(reservation, "native_acceptance_failed");
                         }
@@ -426,12 +425,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                                                 return verifier;
                                             }
                                         };
-                                reservation =
-                                        gate.reserveAuthenticated(
-                                                admission,
-                                                offer.candidates().get(0),
-                                                System.currentTimeMillis(),
-                                                System.nanoTime());
+                                reservation = reserve(admission, offer.candidates().get(0));
                                 if (reservation == null) {
                                     throw new IllegalStateException(
                                             "Assisted capacity or duplicate join");
@@ -499,7 +493,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                                                 && !peer.closeAndAwait(Duration.ofSeconds(5))) {
                                             nativeCloseFailure.compareAndSet(null, failure);
                                         }
-                                        gate.finish(reservation);
+                                        release(reservation);
                                     }
                                 }
                                 result.completeExceptionally(failure);
@@ -700,7 +694,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 gate.drain();
             } else {
                 liveNativePeers.decrementAndGet();
-                gate.finish(reservation);
+                release(reservation);
             }
             nativeClosures.remove(session.closed);
         });
@@ -818,6 +812,38 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         } catch (Exception failure) {
             pipeline().fireExceptionCaught(failure);
             close();
+        }
+    }
+
+    /**
+     * Reserves a player join once {@link NetherChannelOption#NETHER_SERVER_THROTTLE} lets it through, before
+     * any peer exists for it. Null when either refuses it, with its identity verifier closed.
+     */
+    private AdmissionGate.Reservation reserve(AdmissionContext admission, InetSocketAddress address) {
+        NetherServerThrottle throttle = config.getOption(NetherChannelOption.NETHER_SERVER_THROTTLE);
+        if (throttle != null && !throttle.accept(address)) {
+            admission.identityVerifier().close();
+            return null;
+        }
+        AdmissionGate.Reservation reservation =
+                gate.reserveAuthenticated(admission, address, System.currentTimeMillis(), System.nanoTime());
+        if (throttle != null) {
+            if (reservation == null) {
+                throttle.closed(address);
+            } else {
+                throttled.put(reservation, throttle);
+            }
+        }
+        return reservation;
+    }
+
+    /** Ends a reservation, see {@link AdmissionGate#finish}, and releases its address in the throttle. */
+    private void release(AdmissionGate.Reservation reservation) {
+        if (gate.finish(reservation)) {
+            NetherServerThrottle throttle = throttled.remove(reservation);
+            if (throttle != null) {
+                throttle.closed(reservation.tuple());
+            }
         }
     }
 

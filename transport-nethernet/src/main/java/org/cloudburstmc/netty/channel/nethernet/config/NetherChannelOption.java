@@ -109,6 +109,14 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
     public static final ChannelOption<NetherServerMetrics> NETHER_SERVER_METRICS =
             valueOf(NetherChannelOption.class, "NETHER_SERVER_METRICS");
 
+    /**
+     * The {@link NetherServerThrottle} that decides whether a join may go ahead, set on the server channel and
+     * consulted before the join's native peer is created. Unset by default, like RakNet's {@code RAK_THROTTLE},
+     * in which case every join goes ahead; {@link DefaultNetherServerThrottle} limits joins per address.
+     */
+    public static final ChannelOption<NetherServerThrottle> NETHER_SERVER_THROTTLE =
+            valueOf(NetherChannelOption.class, "NETHER_SERVER_THROTTLE");
+
     @SuppressWarnings("deprecation")
     protected NetherChannelOption(String name) {
         super(name);
