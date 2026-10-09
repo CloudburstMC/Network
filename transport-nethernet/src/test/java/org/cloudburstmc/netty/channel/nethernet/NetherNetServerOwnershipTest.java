@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Timeout;
 import tel.schich.libdatachannel.*;
 import tel.schich.libdatachannel.exception.LibDataChannelException;
 
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -72,6 +73,31 @@ class NetherNetServerOwnershipTest {
             var accepted = server.accept(NetherNetTestServer.offer(client));
             assertTrue(accepted.child().isRegistered());
             assertPeerClosed(server, accepted);
+        }
+    }
+
+    @Test
+    void closingTheServerClosesItsChildrenAndTheirPeers() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            var accepted = server.accept(NetherNetTestServer.offer(client));
+            assertTrue(accepted.child().isRegistered());
+
+            server.server.close().sync();
+            assertPeerClosed(server, accepted);
+        }
+    }
+
+    @Test
+    void joinAfterCloseCreatesNoPeer() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            server.bind();
+            server.server.close().sync();
+            server.offer("1", "unused", new InetSocketAddress("127.0.0.1", 1));
+            server.signaling.removed.get(5, TimeUnit.SECONDS);
+            assertFalse(server.anyAccepted());
         }
     }
 

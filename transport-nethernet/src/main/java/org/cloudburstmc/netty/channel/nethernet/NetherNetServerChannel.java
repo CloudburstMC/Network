@@ -44,6 +44,8 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 public class NetherNetServerChannel extends AbstractServerChannel {
@@ -55,6 +57,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     private InetSocketAddress localAddress;
     private volatile boolean open = true;
+    /**
+     * Open connections, each holding a native peer, closed with this channel.
+     */
+    private final Set<NetherNetChildChannel> children = ConcurrentHashMap.newKeySet();
 
     private OperatorIdentity serverIdentity;
 
@@ -163,6 +169,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      */
     void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
                           @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
+        if (!this.open) {
+            refuse(connectionId);
+            return;
+        }
+
         PeerConnectionConfiguration configured =
                 this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG);
         PeerConnectionConfiguration rtcConfig = bindIce(configured)
@@ -178,7 +189,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);
             TransportIdentityBinding.install(child, identityVerifier);
         }
-        child.closeFuture().addListener(future -> signaling.removeSignalHandler(connectionId));
+        this.children.add(child);
+        child.closeFuture().addListener(future -> {
+            this.children.remove(child);
+            signaling.removeSignalHandler(connectionId);
+        });
 
         // Listen now rather than once the child is registered: the client trickles its candidates
         // straight after the offer, and any that arrive before a handler exists are dropped
@@ -202,6 +217,19 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             serverMetrics.connectionAccepted(remoteNetworkId, player != null);
         }
         pipeline().fireChannelRead(child);
+        if (!this.open) {
+            // Closed while this join was set up, after doClose went through the children
+            child.close();
+        }
+    }
+
+    /** Tells the signaling a join failed without creating anything for it. */
+    private void refuse(String connectionId) {
+        try {
+            signaling.removeSignalHandler(connectionId);
+        } catch (RuntimeException e) {
+            log.debug("Failed to clean up the signaling of refused join {}", connectionId, e);
+        }
     }
 
     /** Registers the join's handler, handing back any failure for the child to close on. */
@@ -466,6 +494,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     protected void doClose() throws Exception {
         this.open = false;
         signaling.close();
+        for (NetherNetChildChannel child : this.children) {
+            child.close();
+        }
     }
 
     @Override

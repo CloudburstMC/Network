@@ -22,6 +22,7 @@ import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignali
 import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import tel.schich.libdatachannel.*;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -65,6 +66,16 @@ final class NetherNetTestServer implements AutoCloseable {
     Accepted accept(String offer) throws Exception {
         server.eventLoop().submit(() -> server.acceptConnection("1", offer, "client")).sync();
         return accepted.get(5, TimeUnit.SECONDS);
+    }
+
+    /** Hands a join signaled from {@code address} to the server, without waiting for a child. */
+    void offer(String connectionId, String offer, InetSocketAddress address) throws Exception {
+        server.eventLoop().submit(() -> server.acceptConnection(connectionId, offer, "client", address, null)).sync();
+    }
+
+    /** Whether the server created a child for any join so far. */
+    boolean anyAccepted() {
+        return accepted.isDone();
     }
 
     /**
