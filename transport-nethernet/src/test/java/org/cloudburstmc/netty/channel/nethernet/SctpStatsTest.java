@@ -43,6 +43,7 @@ class SctpStatsTest {
             assertTrue(stats.congestionWindow() > 0, stats.toString());
             assertTrue(stats.peerReceiveWindow() > 0, stats.toString());
             assertEquals(0, stats.dataTimeouts(), "nothing is lost on loopback");
+            assertTrue(stats.rto().toMillis() >= 400, "the minimum RTO outlasts the client's 200 ms SACK delay, " + stats);
         }
     }
 }

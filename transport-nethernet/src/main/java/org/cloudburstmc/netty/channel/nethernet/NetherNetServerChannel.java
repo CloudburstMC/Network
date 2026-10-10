@@ -95,7 +95,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         // Loaded here rather than under the first join, so a missing native fails the bind with
         // its own cause instead of leaving every join to time out
         try {
-            LibDataChannel.initialize();
+            NetherNetNative.initialize();
         } catch (LinkageError e) {
             throw new IOException("The libdatachannel native library is not available", e);
         }

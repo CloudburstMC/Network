@@ -35,7 +35,6 @@ import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelInitSettings;
 import tel.schich.libdatachannel.DataChannelReliability;
 import tel.schich.libdatachannel.GatheringState;
-import tel.schich.libdatachannel.LibDataChannel;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 import tel.schich.libdatachannel.PeerState;
@@ -164,7 +163,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         // Loaded here rather than under the first peer, so a missing native fails the connect
         // with its own cause instead of a handshake that never starts
         try {
-            LibDataChannel.initialize();
+            NetherNetNative.initialize();
         } catch (LinkageError e) {
             failConnect(connectException("The libdatachannel native library is not available", e));
             return;
