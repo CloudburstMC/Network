@@ -24,37 +24,21 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ProviderRuntimeConfigurationTest {
 
     @Test
-    void assistedOptInUsesExistingAdapterAndRequiresAuto(@TempDir Path directory) throws Exception {
+    void onlyAssistedJoinsUseTheWebSocket(@TempDir Path directory) throws Exception {
         var settings =
                 ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net")
-                        .controlTransport(ProviderClient.ControlTransport.AUTO)
-                        .maintainedCandidates(true)
+                        .stunDiscovery(true)
                         .assistedJoins(true)
                         .build();
-        assertTrue(
-                ProviderRuntimeConfiguration.resolve(
-                                settings, directory, "0.0.0.0", 19132, 10)
-                        .clientConfiguration()
-                        .assistedJoins());
+        var assisted = ProviderRuntimeConfiguration.resolve(settings, directory, "0.0.0.0", 19132, 10)
+                .clientConfiguration();
+        assertTrue(assisted.assistedJoins());
+        assertEquals(ProviderClient.ControlTransport.AUTO, assisted.controlTransport());
         var disabled = ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net").build();
-        assertFalse(
-                ProviderRuntimeConfiguration.resolve(
-                                disabled, directory, "0.0.0.0", 19132, 10)
-                        .clientConfiguration()
-                        .assistedJoins());
-        var http =
-                ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net")
-                        .maintainedCandidates(true)
-                        .assistedJoins(true)
-                        .build();
-        assertTrue(
-                assertThrows(
-                                IOException.class,
-                                () ->
-                                        ProviderRuntimeConfiguration.resolve(
-                                                http, directory, "0.0.0.0", 19132, 10))
-                        .getMessage()
-                        .contains("control-transport=auto"));
+        var plain = ProviderRuntimeConfiguration.resolve(disabled, directory, "0.0.0.0", 19132, 10)
+                .clientConfiguration();
+        assertFalse(plain.assistedJoins());
+        assertEquals(ProviderClient.ControlTransport.HTTP, plain.controlTransport());
     }
 
     private static final String PROVIDER = "https://signal.example.net";
@@ -89,25 +73,16 @@ class ProviderRuntimeConfigurationTest {
         assertEquals("Host", result.label());
         assertEquals(dir.resolve("provider-state"), result.stateDirectory());
         assertNull(result.clientConfiguration().authorizationToken());
-        assertEquals(
-                ProviderClient.ControlTransport.HTTP, result.clientConfiguration().controlTransport());
-        var automatic =
-                runtime(
-                        dir,
-                        ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
-                                .controlTransport(ProviderClient.ControlTransport.AUTO)
-                                .build());
-        assertEquals(ProviderClient.ControlTransport.AUTO, automatic.clientConfiguration().controlTransport());
     }
 
     @Test
-    void diagnosticOptInAndMethodComeFromOrdinaryLocalSettings(@TempDir Path dir) throws Exception {
+    void connectionChecksAndMethodComeFromOrdinaryLocalSettings(@TempDir Path dir) throws Exception {
         assertEquals(false, runtime(dir).clientConfiguration().diagnosticAdmission());
         for (var endpoints : List.of(List.<String>of(), List.of("1.1.1.1:19132"))) {
             var settings =
                     ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
                             .advertiseAddresses(endpoints)
-                            .diagnosticAdmission(true)
+                            .connectionChecks(true)
                             .build();
             var configured = runtime(dir, settings).clientConfiguration();
             assertEquals(true, configured.diagnosticAdmission());
@@ -203,9 +178,8 @@ class ProviderRuntimeConfigurationTest {
         for (boolean assisted : List.of(false, true)) {
             var settings =
                     ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
-                            .controlTransport(ProviderClient.ControlTransport.AUTO)
-                            .diagnosticAdmission(true)
-                            .maintainedCandidates(true)
+                            .connectionChecks(true)
+                            .stunDiscovery(true)
                             .assistedJoins(assisted)
                             .build();
             var selected = runtime(dir, settings);
@@ -217,14 +191,14 @@ class ProviderRuntimeConfigurationTest {
     }
 
     @Test
-    void maintainedSettingsLeaveStunConfigurationToProviderDiscovery(@TempDir Path dir)
+    void stunDiscoveryLeavesStunServersToProviderDiscovery(@TempDir Path dir)
             throws Exception {
         for (var endpoints : List.of(List.<String>of(), List.of("8.8.8.8:19133"))) {
             var settings =
                     ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
                             .advertiseAddresses(endpoints)
-                            .diagnosticAdmission(true)
-                            .maintainedCandidates(true)
+                            .connectionChecks(true)
+                            .stunDiscovery(true)
                             .build();
             var options = NativeProviderHostFactory.options(runtime(dir, settings));
             assertEquals("maintained-v1", options.get("candidatePublication"));
@@ -244,7 +218,6 @@ class ProviderRuntimeConfigurationTest {
     @Test
     void assistanceWithoutWarmingKeepsMaintainedPublication(@TempDir Path dir) throws Exception {
         var settings = ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
-                .controlTransport(ProviderClient.ControlTransport.AUTO)
                 .assistedJoins(true)
                 .build();
         var options = NativeProviderHostFactory.options(runtime(dir, settings));

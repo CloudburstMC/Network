@@ -25,6 +25,9 @@ var settings = ProviderRuntimeConfiguration.Settings.builder(endpoint)
         .token(token)                       // or a file: path; omit to register anonymously
         .advertiseAddresses(addresses)      // empty to derive them from the listener
         .label(label)                       // omit for the host name
+        .connectionChecks(true)             // let the provider check reachability from its regions
+        .stunDiscovery(true)                // find public addresses through the provider's STUN servers
+        .assistedJoins(false)               // let the provider help players connect, over its WebSocket
         .deregisterOnShutdown(ephemeral)    // for state directories that do not persist
         .gameOutcomes(true)                 // if the game reports joins and rejections
         .location(Location.of(location))    // country, city, latitude, longitude; null to let the provider estimate
@@ -82,14 +85,13 @@ until their completed regional results are reported by the host integration.
 known namespaces and invoke only their advertised same-origin operations. The core never
 performs product account/claim actions. Assisted joins require explicit host opt-in.
 
-Geyser exposes only signaling mode, advertised endpoints, token, provider origin
-and instance label; see its
-[provider configuration](https://github.com/onebeastchris/Geyser/blob/feature/nethernet-wip/PROVIDER.md).
+Geyser and WaterdogPE name their NXS options after these settings.
 
 ### Control transport and retries
 
-`ProviderClient` defaults to `ControlTransport.HTTP`. With the settings builder's
-`controlTransport(ControlTransport.AUTO)`, it uses the [WebSocket transport](../docs/external-signaling/control-v1.md) when
+`ProviderClient` defaults to `ControlTransport.HTTP`. With `ControlTransport.AUTO`,
+which the settings builder selects for assisted joins, it uses the
+[WebSocket transport](../docs/external-signaling/control-v1.md) when
 discovery advertises `dev.opencollab.nxs.websocket` and falls back to HTTPS for
 ordinary operations; registration and recovery always use HTTPS. The same
 lifecycle signs and handles ordinary operations over either carrier, and
@@ -168,7 +170,8 @@ warming; connectivity feedback never changes the configured choice. The
 [WebSocket reference](../docs/external-signaling/control-v1.md) defines the exchange.
 The WebSocket adapter bounds in-flight assisted requests to 32.
 
-Diagnostics are independently opt-in through `diagnosticAdmission`. After a
+Diagnostics are independently opt-in through `diagnosticAdmission`, which the
+settings builder calls `connectionChecks`. After a
 successful heartbeat, `ProviderClient` configures `DiagnosticHostPolicy` through
 `NativeProviderTransport.configureDiagnostics`; `disableDiagnostics` revokes it.
 The policy bounds trusted context, up to eight keys, 32 concrete endpoint/revision

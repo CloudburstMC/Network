@@ -66,10 +66,6 @@ public final class ProviderRuntimeConfiguration {
      */
     public static ProviderRuntimeConfiguration resolve(Settings settings, Path directory, String bindAddress,
                                                        int udpPort, int maxPlayers) throws IOException {
-        if (settings.assistedJoins()
-                && settings.controlTransport() != ProviderClient.ControlTransport.AUTO) {
-            throw new IOException("nxs.assisted-joins requires nxs.control-transport=auto");
-        }
         URI origin;
         try {
             origin = URI.create(ProviderOrigin.canonicalize(URI.create(settings.endpoint())));
@@ -93,7 +89,7 @@ public final class ProviderRuntimeConfiguration {
         }
 
         if (endpoints.size() > 32) {
-            throw new IOException("nxs.advertise-addresses allows at most 32 endpoints");
+            throw new IOException("NXS allows at most 32 advertised addresses");
         }
 
         int capacity = Math.max(1, maxPlayers);
@@ -129,9 +125,8 @@ public final class ProviderRuntimeConfiguration {
         private final String token;
         private final List<String> advertiseAddresses;
         private final String label;
-        private final ProviderClient.ControlTransport controlTransport;
-        private final boolean diagnosticAdmission;
-        private final boolean maintainedCandidates;
+        private final boolean connectionChecks;
+        private final boolean stunDiscovery;
         private final boolean assistedJoins;
         private final boolean deregisterOnShutdown;
         private final boolean gameOutcomes;
@@ -142,9 +137,8 @@ public final class ProviderRuntimeConfiguration {
             token = builder.token;
             advertiseAddresses = builder.advertiseAddresses;
             label = builder.label;
-            controlTransport = builder.controlTransport;
-            diagnosticAdmission = builder.diagnosticAdmission;
-            maintainedCandidates = builder.maintainedCandidates;
+            connectionChecks = builder.connectionChecks;
+            stunDiscovery = builder.stunDiscovery;
             assistedJoins = builder.assistedJoins;
             deregisterOnShutdown = builder.deregisterOnShutdown;
             gameOutcomes = builder.gameOutcomes;
@@ -174,16 +168,12 @@ public final class ProviderRuntimeConfiguration {
             return label;
         }
 
-        public ProviderClient.ControlTransport controlTransport() {
-            return controlTransport;
+        public boolean connectionChecks() {
+            return connectionChecks;
         }
 
-        public boolean diagnosticAdmission() {
-            return diagnosticAdmission;
-        }
-
-        public boolean maintainedCandidates() {
-            return maintainedCandidates;
+        public boolean stunDiscovery() {
+            return stunDiscovery;
         }
 
         public boolean assistedJoins() {
@@ -207,9 +197,8 @@ public final class ProviderRuntimeConfiguration {
             private String token;
             private List<String> advertiseAddresses = List.of();
             private String label;
-            private ProviderClient.ControlTransport controlTransport = ProviderClient.ControlTransport.HTTP;
-            private boolean diagnosticAdmission;
-            private boolean maintainedCandidates;
+            private boolean connectionChecks;
+            private boolean stunDiscovery;
             private boolean assistedJoins;
             private boolean deregisterOnShutdown;
             private boolean gameOutcomes;
@@ -243,21 +232,28 @@ public final class ProviderRuntimeConfiguration {
                 return this;
             }
 
-            public Builder controlTransport(ProviderClient.ControlTransport controlTransport) {
-                this.controlTransport = Objects.requireNonNull(controlTransport);
+            /**
+             * @param connectionChecks Whether the provider may check reachability from its regions, through
+             *                         diagnostic admission
+             */
+            public Builder connectionChecks(boolean connectionChecks) {
+                this.connectionChecks = connectionChecks;
                 return this;
             }
 
-            public Builder diagnosticAdmission(boolean diagnosticAdmission) {
-                this.diagnosticAdmission = diagnosticAdmission;
+            /**
+             * @param stunDiscovery Whether to find and maintain public addresses through the provider's STUN
+             *                      servers when none are advertised
+             */
+            public Builder stunDiscovery(boolean stunDiscovery) {
+                this.stunDiscovery = stunDiscovery;
                 return this;
             }
 
-            public Builder maintainedCandidates(boolean maintainedCandidates) {
-                this.maintainedCandidates = maintainedCandidates;
-                return this;
-            }
-
+            /**
+             * @param assistedJoins Whether the provider may help players connect over its WebSocket, which
+             *                      this then uses for every operation
+             */
             public Builder assistedJoins(boolean assistedJoins) {
                 this.assistedJoins = assistedJoins;
                 return this;
@@ -326,8 +322,8 @@ public final class ProviderRuntimeConfiguration {
         return advertisedEndpoints;
     }
 
-    boolean maintainedCandidates() {
-        return settings.maintainedCandidates();
+    boolean stunDiscovery() {
+        return settings.stunDiscovery();
     }
 
     boolean assistedJoins() {
@@ -338,8 +334,9 @@ public final class ProviderRuntimeConfiguration {
         return ProviderClient.Configuration.builder(origin)
                 .label(label)
                 .authorizationToken(authorizationToken)
-                .controlTransport(settings.controlTransport())
-                .diagnosticAdmission(settings.diagnosticAdmission())
+                // Only assistance needs the provider's WebSocket
+                .controlTransport(settings.assistedJoins() ? ProviderClient.ControlTransport.AUTO : ProviderClient.ControlTransport.HTTP)
+                .diagnosticAdmission(settings.connectionChecks())
                 .connectivityMethod(advertisedEndpoints.isEmpty() ? "discovered" : "defined")
                 .assistedJoins(settings.assistedJoins())
                 .deregisterOnShutdown(settings.deregisterOnShutdown())
@@ -359,14 +356,14 @@ public final class ProviderRuntimeConfiguration {
             // Falls through to the one message
         }
         throw new IOException(
-                "nxs.advertise-addresses entries must be numeric IPv4:port or [IPv6]:port with ports 1-65535");
+                "NXS advertised addresses must be numeric IPv4:port or [IPv6]:port with ports 1-65535");
     }
 
     private static String label(String configured) throws IOException {
         if (configured != null && !configured.isBlank()) {
             configured = configured.strip();
             if (configured.codePointCount(0, configured.length()) > 128) {
-                throw new IOException("nxs.label allows at most 128 characters");
+                throw new IOException("The NXS label allows at most 128 characters");
             }
             return configured;
         }
