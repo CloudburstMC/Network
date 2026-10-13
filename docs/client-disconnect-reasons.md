@@ -8,6 +8,14 @@ Reasons and numbers are `json/DisconnectFailReason.json` in Mojang's
 [bedrock-protocol-docs](https://github.com/Mojang/bedrock-protocol-docs). Codewords and titles are
 `definitions/disconnection_errors/disconnection_error_messaging.json` in the client's assets.
 
+When HTTP signaling refuses an offer, the client picks the reason from the status:
+
+| Status | Client reason |
+|---|---|
+| 401 | NotAuthenticated (46) |
+| 403 | NotAllowed (45) |
+| 503 | ServerFull (25) |
+
 Last updated for 1.26.50.
 
 | # | client reason | Protocol constant | codeword | theme | title key |
