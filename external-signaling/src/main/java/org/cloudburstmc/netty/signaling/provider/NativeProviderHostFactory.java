@@ -76,11 +76,11 @@ public final class NativeProviderHostFactory {
         var options = new HashMap<String, String>();
         options.put("stateDirectory", runtime.stateDirectory().toString());
         options.put("advertisedEndpoints", endpoints.toString());
-        if (runtime.maintainedCandidates() || runtime.assistedJoins()) {
+        if (runtime.stunDiscovery() || runtime.assistedJoins()) {
             options.put("endpointPolicy", EXPLICIT_OR_PUBLIC_LOCAL);
             options.put("candidatePublication", MAINTAINED_V1);
             options.put("assistedJoins", Boolean.toString(runtime.assistedJoins()));
-            options.put("stunWarming", Boolean.toString(runtime.maintainedCandidates()));
+            options.put("stunWarming", Boolean.toString(runtime.stunDiscovery()));
         } else {
             options.put("localDevelopment",
                     Boolean.toString(Set.of("127.0.0.1", "localhost", "[::1]").contains(runtime.origin().getHost())));
