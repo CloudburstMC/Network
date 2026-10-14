@@ -26,6 +26,8 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile JsonObject lastHeartbeat, lastHostProfile;
     volatile int failHeartbeats;
     volatile boolean failOutcomes;
+    /** Outcome batches still to reject permanently. */
+    volatile int rejectOutcomes;
     volatile int outcomeAttempts;
     volatile boolean loseCompletionResponse;
     volatile long checkInMillis;
@@ -325,6 +327,10 @@ public final class IndependentProviderStub implements AutoCloseable {
                 outcomeAttempts++;
                 if (failOutcomes) {
                     throw new Failure(503, "fixture_outcome_unavailable");
+                }
+                if (rejectOutcomes > 0) {
+                    rejectOutcomes--;
+                    throw new Failure(400, "invalid_outcomes");
                 }
                 for (JsonElement event : body.getAsJsonArray("events")) {
                     events.add(event.getAsJsonObject());

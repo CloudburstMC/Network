@@ -1631,7 +1631,15 @@ public final class ProviderClient implements AutoCloseable {
         }
         JsonObject body = new JsonObject();
         body.add("events", batch);
-        signed("outcomes", "POST", body);
+        try {
+            signed("outcomes", "POST", body);
+        } catch (ProviderException rejected) {
+            // Any other 4xx had no effect and never will, so it must not block later reports
+            if (rejected.status() / 100 != 4 || rejected.status() == 429) {
+                throw rejected;
+            }
+            diagnostics.detail(ProviderLog.Operation.EVENTS, "Dropped " + sent + " rejected reports: " + rejected.code());
+        }
         // Dropped by position, and only once the exchange is done, so no view spans the request
         pending.asList().subList(0, sent).clear();
         save();

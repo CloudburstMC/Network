@@ -755,6 +755,33 @@ class ProviderClientTest {
     }
 
     @Test
+    void dropsAPermanentlyRejectedOutcomeBatch(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            stub.rejectOutcomes = 1;
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path), host, () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                host.events.add(outcome("rejected"));
+                eventually(() -> stub.outcomeAttempts == 1);
+                host.events.add(outcome("accepted"));
+                eventually(() -> stub.events.size() == 1);
+                assertEquals("accepted", stub.events.get(0).get("ticketId").getAsString());
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static JsonObject outcome(String ticketId) {
+        return JsonParser.parseString("{\"ticketId\":\"" + ticketId
+                + "\",\"stage\":\"ticket.data_channels_open\",\"occurredAt\":1788739200000}").getAsJsonObject();
+    }
+
+    @Test
     void reportsGameOutcomesOnlyWhenDeclared(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var builder = ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example");
