@@ -76,7 +76,7 @@ class NativeProviderHostFactoryNativeTest {
                                     List.of(
                                             new AdmissionKey(
                                                     "A001",
-                                                    "public-test-only-player-admission-secret")))
+                                                    "t4n6ronjms9GGDin8sDeoT7Tu_ryCl4szKsIxTu92ps")))
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     var snapshot =
@@ -105,7 +105,7 @@ class NativeProviderHostFactoryNativeTest {
                                     List.of(
                                             new DiagnosticAdmissionCodec.Key(
                                                     "D001",
-                                                    "public-test-only-diagnostic-epoch-secret",
+                                                    "9Ru76adVgt68bjqdYbPKjIp0SpvxKq_4IhKqoietbXk",
                                                     now,
                                                     now + 60000)),
                                     java.util.Set.of(

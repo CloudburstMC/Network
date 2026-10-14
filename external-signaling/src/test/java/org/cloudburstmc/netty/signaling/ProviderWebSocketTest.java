@@ -88,7 +88,7 @@ class ProviderWebSocketTest {
                             new ProviderStateStore(path),
                             new ProviderClientTest.FakeTransport(),
                             () -> null,
-                            () -> new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, null),
+                            () -> new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)),
                             logs::add);
             try {
                 client.start().get(20, TimeUnit.SECONDS);
@@ -290,7 +290,7 @@ class ProviderWebSocketTest {
                                     if (!duringCapture && healthCalls.getAndIncrement() == 0) {
                                         transport.revision++;
                                     }
-                                    return new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, null);
+                                    return new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0));
                                 });
                 try {
                     client.start().get(20, TimeUnit.SECONDS);
@@ -533,13 +533,33 @@ class ProviderWebSocketTest {
                             ProviderClient.ControlTransport.AUTO,
                             new ProviderClientTest.FakeTransport());
             provider.brokenReply =
-                    "{\"id\":\"AAAAAAAAAAAAAAAA\" ,\"id\":\"BBBBBBBBBBBBBBBB\",\"status\":200,\"headers\":{},\"body\":\"{}\"}";
+                    "{\"kind\":\"response\",\"id\":\"AAAAAAAAAAAAAAAA\" ,\"id\":\"BBBBBBBBBBBBBBBB\",\"status\":200,\"headers\":{},\"body\":\"{}\"}";
             try {
                 client.start().get(20, TimeUnit.SECONDS);
                 assertTrue(provider.fallbacks.get() > 0);
                 assertFalse(
                         Files.readString(directory.resolve("provider-state.json"))
                                 .contains("pendingWebSocketOperation"));
+            } finally {
+                client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void ignoresProviderFramesOfUnknownKind(@TempDir Path directory) throws Exception {
+        try (Provider provider = new Provider()) {
+            ProviderClient client =
+                    client(
+                            provider,
+                            directory,
+                            ProviderClient.ControlTransport.AUTO,
+                            new ProviderClientTest.FakeTransport());
+            provider.pushBeforeReply = "{\"kind\":\"later-push\",\"data\":{}}";
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertEquals("websocket", client.lastControlCarrier());
+                assertEquals(0, provider.fallbacks.get());
             } finally {
                 client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS);
             }
@@ -615,7 +635,7 @@ class ProviderWebSocketTest {
                             ProviderClient.ControlTransport.AUTO,
                             new ProviderClientTest.FakeTransport(),
                             () -> new ProviderClient.Health(true, 20,
-                                    new ProviderClient.Software("fixture", version.get()), null));
+                                    new ProviderClient.Software("fixture", version.get()), ProviderClientTest.connected(0)));
             try {
                 client.start().get(20, TimeUnit.SECONDS);
                 version.set("rejected");
@@ -750,7 +770,7 @@ class ProviderWebSocketTest {
                                             directory.resolve(enabled + "-" + candidateFree)),
                                     transport,
                                     () -> null,
-                                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, null),
+                                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)),
                                     message -> {});
                     try {
                         client.start().get(20, TimeUnit.SECONDS);
@@ -865,7 +885,7 @@ class ProviderWebSocketTest {
                             new ProviderStateStore(directory),
                             transport,
                             () -> null,
-                            () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, null),
+                            () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)),
                             logs::add);
             try {
                 client.start().get(20, TimeUnit.SECONDS);
@@ -1012,7 +1032,7 @@ class ProviderWebSocketTest {
                 path,
                 mode,
                 transport,
-                () -> new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, null));
+                () -> new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)));
     }
 
     private static ProviderClient client(
@@ -1055,7 +1075,7 @@ class ProviderWebSocketTest {
         final AtomicInteger upgrades = new AtomicInteger(),
                 pings = new AtomicInteger(),
                 fallbacks = new AtomicInteger();
-        volatile String dropAfterCommit, brokenReply;
+        volatile String dropAfterCommit, brokenReply, pushBeforeReply;
         final JsonObject responseHeaders = new JsonObject();
         volatile Result rejectNext, rejectAfterDrop;
         volatile boolean refuseAfterDrop, rejectUpgrade;
@@ -1351,11 +1371,13 @@ class ProviderWebSocketTest {
                                                                             }
                                                                             assertEquals(
                                                                                     Set.of(
+                                                                                            "kind",
                                                                                             "operation",
                                                                                             "headers",
                                                                                             "body"),
                                                                                     envelope
                                                                                             .keySet());
+                                                                                    assertEquals("operation", envelope.get("kind").getAsString());
                                                                             String
                                                                                     op =
                                                                                             envelope.get(
@@ -1413,6 +1435,7 @@ class ProviderWebSocketTest {
                                                                                             JsonObject
                                                                                                     reply =
                                                                                                             new JsonObject();
+                                                                                                    reply.addProperty("kind", "response");
                                                                                             reply
                                                                                                     .addProperty(
                                                                                                             "id",
@@ -1445,6 +1468,9 @@ class ProviderWebSocketTest {
                                                                                                 brokenReply =
                                                                                                         null;
                                                                                             } else {
+                                                                                                if (pushBeforeReply != null) {
+                                                                                                    ctx.writeAndFlush(new TextWebSocketFrame(pushBeforeReply));
+                                                                                                }
                                                                                                 String
                                                                                                         wire =
                                                                                                                 reply

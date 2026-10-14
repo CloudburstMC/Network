@@ -6,17 +6,21 @@ connectivity; it does not establish player authentication or gameplay.
 
 Diagnostics reuse [NXS stateless admission](wire-reference.md#stateless-admission-carrier):
 the same host key, incarnation audience, AES-GCM envelope, ICE password
-derivation, STUN integrity check and pinned DTLS connection. Authenticated
-network ID `0` is reserved for diagnostics. Player issuers reject it, and the
-host routes it to the diagnostic handler before creating a player reservation
-or channel.
+derivation, STUN integrity check and pinned DTLS connection. They use the
+reserved network ID `0`, which the host routes to the diagnostic handler before
+creating a player reservation or channel.
 
 ## Authorization and signaling
 
-The caller authorizes a fixed attempt ID, host incarnation/generation, host
-DTLS fingerprint, target/revision, address family and expiry. The provider must
-authenticate the workload and match the request to that original authorization
-before issuing admission. A retry never extends its deadline.
+The prober is the provider's own client that runs a check, for example from one
+region. How it reaches the provider is up to the provider; this section states
+what each side checks.
+
+The provider first authorizes the attempt (the parent authorization): a fixed
+attempt ID, host incarnation and generation, host DTLS fingerprint, target and
+candidate revision, address family and expiry. It must authenticate the prober
+and match each request to that authorization before issuing the diagnostic
+admission token, the permit. A retry never extends its deadline.
 
 The prober sends its exact gathered SDP offer through an authenticated provider
 HTTPS connection. The provider validates the offer and returns the answer as
@@ -33,12 +37,11 @@ again before PING and before reporting success.
 
 ## Shared admission format
 
-The token is `NXS1` + four-character key ID + unpadded standard Base64 of
-`nonce12 || ciphertext || GCM-tag16`. Its audience is
-`nxs-stateless-host-v1/<incarnation>`. The host-specific admission key and random
-incarnation bind the recipient. The provider validates host ID, origin and
-generation against its current authorization; the host captures its current
-policy and invalidates attempts when that policy is withdrawn or replaced.
+The permit is an ordinary [`NXS1` token](wire-reference.md#carry-the-token-in-the-ice-username)
+for the host's current admission key and incarnation. The provider validates
+instance, origin and generation against its current authorization; the host
+captures its current policy and invalidates attempts when that policy is
+withdrawn or replaced.
 
 The plaintext keeps the ordinary 67-byte prefix and client password, with these
 differences:
@@ -95,10 +98,11 @@ required attributes, extra candidates and answer remote-candidates are rejected.
 
 ## PING/PONG and cleanup
 
-Both NetherNet data channels must open with their standard labels and
-reliability settings. Only the reliable channel carries the diagnostic frame.
-Each endpoint accepts one 56-byte binary frame; extra, text, oversized or
-unreliable-channel messages fail the attempt.
+Both NetherNet data channels must open: `ReliableDataChannel` (ordered and
+reliable) and `UnreliableDataChannel` (unordered, no retransmissions). Only the
+reliable channel carries the diagnostic frame. Each endpoint accepts one 56-byte
+binary frame, which is the whole data channel message without NetherNet segment
+framing; extra, text, oversized or unreliable-channel messages fail the attempt.
 
 | Offset | Bytes | Value |
 | --- | --- | --- |
@@ -117,7 +121,9 @@ Diagnostics never enter the game pipeline or produce player admission events.
 The host bounds active attempts, retained attempt IDs and queued results while
 respecting shared listener capacity.
 
-[Schema](diagnostic-v1.schema.json), [admission and SDP vectors](fixtures/diagnostic-v1.fixtures.json)
-and [PING/PONG vectors](fixtures/diagnostic-exchange-v1.fixtures.json) define interoperability.
+[Admission and SDP vectors](fixtures/diagnostic-v1.fixtures.json) and
+[PING/PONG vectors](fixtures/diagnostic-exchange-v1.fixtures.json) define
+interoperability. The [schema](diagnostic-v1.schema.json) describes the decoded
+claims and fixture inputs, not JSON wire messages.
 Run `node docs/external-signaling/tests/diagnostic-v1.fixtures.mjs` for independent
 Node verification of the shared NXS envelope.

@@ -2,6 +2,7 @@
 package org.cloudburstmc.netty.signaling.diagnostic;
 
 import org.cloudburstmc.netty.signaling.ProviderOrigin;
+import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import org.cloudburstmc.netty.signaling.admission.StatelessAdmissionCodec;
 import org.cloudburstmc.netty.signaling.admission.VerifiedAdmission;
 import java.nio.ByteBuffer;
@@ -42,11 +43,7 @@ public final class DiagnosticAdmissionCodec {
 
     public record Key(String keyId, String secret, long notBefore, long retireAfter) {
         public Key {
-            if (!keyId.matches("[A-Z0-9]{4}")
-                    || secret.length() > 256
-                    || utf8(secret).length < 32
-                    || utf8(secret).length > 256
-                    || !StandardCharsets.UTF_8.newEncoder().canEncode(secret)) {
+            if (!keyId.matches("[A-Z0-9]{4}") || !AdmissionKey.validSecret(secret)) {
                 throw invalid();
             }
             integer(notBefore, 0, SAFE);

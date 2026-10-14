@@ -24,6 +24,14 @@ public record AdmissionKey(String keyId, String secret, long retireAfter) {
         this(keyId, secret, Long.MAX_VALUE);
     }
 
+    /**
+     * A secret is 43 base64url characters encoding 32 random bytes. Derivations use the characters'
+     * bytes, never the decoded value.
+     */
+    public static boolean validSecret(String secret) {
+        return secret != null && secret.matches("[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]");
+    }
+
     @Override
     public String toString() {
         return "AdmissionKey[keyId=" + keyId + "]";

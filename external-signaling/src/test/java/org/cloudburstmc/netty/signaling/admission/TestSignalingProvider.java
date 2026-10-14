@@ -14,7 +14,7 @@ final class TestSignalingProvider {
     static final String IDENTITY_CPK = AdmissionFixture.fixture("stateless-admission-v1.fixtures.json")
             .getAsJsonObject("identity").get("canonicalCpk").getAsString();
     static final String AUDIENCE = "sig_fixture/gs_one/test_boot_001", SECRET =
-            "stateless-fixture-secret-32-bytes-minimum";
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
     record Answer(String sdp, String token, String password) {
         @Override

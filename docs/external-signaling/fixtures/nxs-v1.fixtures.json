@@ -31,12 +31,12 @@
     "thumbprint": "FV0R5dHP--qigTPgspmBk6zImSz6BhG0368xJW7Gxlo",
     "context": {
       "mode": "attach-instance",
-      "label": "EU caf\u00e9 \ud83e\udd8a\n<proxy>",
+      "label": "EU caf\u00e9 \ud83e\udd8a \"<proxy>\"",
       "authorizationId": "auth_fixture",
       "serviceId": "service_neutral",
       "registrationId": ""
     },
-    "contextDigest": "Yao2h7i0DvW5yNo7ZbCpWJaUOvQN691RKSOTNhHSb58",
+    "contextDigest": "Hu89N906fM9fi_xz3fvGwdVmEVAw46VOpa7SY2Ur9TU",
     "expiresAt": 1788484800000,
     "serverTime": 1788484200000,
     "pow": {
@@ -50,8 +50,8 @@
   "proofNonce": "0",
   "idempotencyKey": "intent_fixture_0001",
   "proof": {
-    "payload": "[\"nethernet-external-signaling-v1\",\"complete\",\"https://provider.example\",\"challenge_fixture\",\"8WH8OdS12DO6ju0_\",\"FV0R5dHP--qigTPgspmBk6zImSz6BhG0368xJW7Gxlo\",\"Yao2h7i0DvW5yNo7ZbCpWJaUOvQN691RKSOTNhHSb58\",1788484800000,\"0\",\"intent_fixture_0001\"]",
-    "signature": "ge-4ZMGOQ30ic094tLXWFgcXiZZ96J8gOO9HmCVKg7RfJ8fSrKJzEPN81J-vsJdCjl7MNPXlKN_nN9Kz14mVaCUaGBMDFOVQYkSgURrEMMChNUogOrYKqf8B-wS9u6Kj"
+    "payload": "[\"nethernet-external-signaling-v1\",\"complete\",\"https://provider.example\",\"challenge_fixture\",\"8WH8OdS12DO6ju0_\",\"FV0R5dHP--qigTPgspmBk6zImSz6BhG0368xJW7Gxlo\",\"Hu89N906fM9fi_xz3fvGwdVmEVAw46VOpa7SY2Ur9TU\",1788484800000,\"0\",\"intent_fixture_0001\"]",
+    "signature": "2tJGHhFSTyyZ0TZH6lu9legkqoSfjX6N5Zu2UyHdwDFPw06GotOQYxdnu3O3QCiknlpthANRMBJ8hFjMNj5D7FPjK6S7bIbkDSNKwpM1SJOSJ6d5khm4cbndFg89QsiA"
   },
   "request": {
     "input": {
@@ -64,10 +64,36 @@
       "idempotencyKey": "intent_fixture_0001",
       "generation": 2,
       "sequence": 17,
-      "body": "{\"name\":\"caf\u00e9 \ud83e\udd8a\",\"players\":0}\n"
+      "body": "{\"example\":\"caf\u00e9 \ud83e\udd8a\"}\n"
     },
-    "payload": "[\"nethernet-external-signaling-v1\",\"nxs-es384-v1\",\"https://provider.example\",\"POST\",\"/v1/nxs/heartbeat\",1788484200123,\"machine_neutral\",\"key_fixture\",\"intent_fixture_0001\",2,17,\"hW1_XbRZsu7XCnVbFpxNepqnGsOafEGkN_VFWwKb4jQ\"]",
-    "signature": "gsneLAFGr6dBmM7ye6X6BU_smj9gtypbcDjsHv0lSjaEX1Na8l_jH2eiwV9zoYPdOQk68Pnii30pJVrZsMCD6QTkhCsQ46oq4Z-RCLpbSkiYt45W5PO-C7I6UFHS2FiT"
+    "payload": "[\"nethernet-external-signaling-v1\",\"nxs-es384-v1\",\"https://provider.example\",\"POST\",\"/v1/nxs/heartbeat\",1788484200123,\"machine_neutral\",\"key_fixture\",\"intent_fixture_0001\",2,17,\"gbTKXii0H2PwM5KsmHfDXepWMxlOLqblOPv6sqGyh50\"]",
+    "signature": "pDdUgYr7KaB1d5f2ySIXt0EXWhVMplz-WcPmSPrFhNk8wZ0a5YaDm1A01DU0RSkCcmSUuwEeZ3DBFm-xTIMmWr5ITMaXJjIFgkgooo7u6r2EI0wfkTDaxvNS6dtnP5ha",
+    "note": "Signing vector only; the body is not a valid heartbeat."
+  },
+  "rotation": {
+    "note": "The replacement key signs the rotation proof.",
+    "replacementPublicKeyJwk": {
+      "crv": "P-384",
+      "kty": "EC",
+      "x": "IncO1h8BaNhWHP6t5WmCJ5sA2BH39n2ei2HqyeiTAKynnGevEElk-F9ENhqdmEi_",
+      "y": "v4tNzvrJ6Mr3qT1xRq_vO_ODQmtrmiPxTot62yp2VuHTtYOY_l3gan12hSs4Vgi3"
+    },
+    "replacementPrivateKeyJwk": {
+      "crv": "P-384",
+      "d": "GMUjdLGZLyhNDx6C9e2SMEvQHceduqQwnBnU6-fvoRndsKtMeHPevmpVHMlla4Ft",
+      "kty": "EC",
+      "x": "IncO1h8BaNhWHP6t5WmCJ5sA2BH39n2ei2HqyeiTAKynnGevEElk-F9ENhqdmEi_",
+      "y": "v4tNzvrJ6Mr3qT1xRq_vO_ODQmtrmiPxTot62yp2VuHTtYOY_l3gan12hSs4Vgi3"
+    },
+    "input": {
+      "audience": "https://provider.example",
+      "instanceId": "machine_neutral",
+      "oldKeyId": "key_fixture",
+      "generation": 2,
+      "idempotencyKey": "intent_fixture_rotate_0001"
+    },
+    "payload": "[\"nethernet-external-signaling-v1\",\"rotate\",\"https://provider.example\",\"machine_neutral\",\"key_fixture\",\"otJRr4O9TzZQzfla0J8p8LNaTDkZEvS2xlcRZPcMDUE\",2,\"intent_fixture_rotate_0001\"]",
+    "signature": "tTaHM1PEtN0zE5aHHcBUoHYP4L-xyuS--2_oOKY4BCP8pjlxGHDIGTEcrQxLt6y7eOWBm-MzXuj5Ta9Bfi67LO58SDi7nDtLWARvSslkPrnbB4lMaYtUNIzGhVqsYKH6"
   },
   "fleetExamples": {
     "registration": {
@@ -80,18 +106,16 @@
     },
     "heartbeat": {
       "capacity": 20,
-      "clockUnixMillis": 1788799970100,
-      "gameOutcomes": "unavailable",
-      "playerCount": {
-        "connectedPlayers": 3,
+      "connectedPlayers": {
+        "count": 3,
         "sampledAt": 1788799970000
       },
+      "gameOutcomes": "unavailable",
       "serverStatus": {
         "name": "Network listing",
-        "players": 25000,
-        "maxPlayers": 30000,
-        "gameType": 0,
-        "level": "world"
+        "level": "world",
+        "maxPlayerCount": 30000,
+        "gameType": 0
       },
       "software": {
         "name": "ExampleProxy",

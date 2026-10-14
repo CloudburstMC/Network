@@ -18,8 +18,8 @@ class ProviderJourneysTest {
                                          ProviderClient.Configuration configuration,
                                          ProviderClientTest.FakeTransport transport) throws Exception {
         return new ProviderClient(configuration, new ProviderStateStore(directory), transport,
-                () -> new ServerStatus("Independent host", "world", 1, 20, 0),
-                () -> new ProviderClient.Health(true, 100, ProviderClientTest.SOFTWARE, null), message -> {
+                () -> new ServerStatus("Independent host", "world", 20, 0),
+                () -> new ProviderClient.Health(true, 100, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)), message -> {
         });
     }
 
@@ -245,7 +245,7 @@ class ProviderJourneysTest {
             var diagnostics = new CopyOnWriteArrayList<ProviderDiagnostic>();
             ProviderClient resumed = new ProviderClient(configuration, new ProviderStateStore(directory),
                     new ProviderClientTest.FakeTransport(), () -> null,
-                    () -> new ProviderClient.Health(true, 100, ProviderClientTest.SOFTWARE, null), diagnostics::add);
+                    () -> new ProviderClient.Health(true, 100, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)), diagnostics::add);
             try {
                 assertNotEquals(before, resumed.start().get(20, TimeUnit.SECONDS).registrationId());
                 assertEquals(2, stub.registrations);
@@ -291,7 +291,7 @@ class ProviderJourneysTest {
             var transport = new ProviderClientTest.FakeTransport();
             var diagnostics = new CopyOnWriteArrayList<ProviderDiagnostic>();
             ProviderClient client = new ProviderClient(configuration, new ProviderStateStore(directory), transport,
-                    () -> null, () -> new ProviderClient.Health(true, 100, ProviderClientTest.SOFTWARE, null),
+                    () -> null, () -> new ProviderClient.Health(true, 100, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)),
                     diagnostics::add);
             try {
                 client.start().get(20, TimeUnit.SECONDS);

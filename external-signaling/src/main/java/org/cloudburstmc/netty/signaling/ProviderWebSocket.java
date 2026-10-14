@@ -122,6 +122,7 @@ final class ProviderWebSocket implements AutoCloseable {
         for (String name : AUTH_HEADERS) {
             headers.addProperty(name, request.headers().firstValue(name).orElseThrow());
         }
+        frame.addProperty("kind", "operation");
         frame.addProperty("operation", operation);
         frame.add("headers", headers);
         frame.addProperty("body", body);
@@ -213,7 +214,12 @@ final class ProviderWebSocket implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         try {
-            if (isAssistedJoin(text)) {
+            String kind = kind(text);
+            if (!kind.equals("assisted-join") && !kind.equals("response")) {
+                // Frames of later kinds are for receivers that understand them
+                return CompletableFuture.completedFuture(null);
+            }
+            if (kind.equals("assisted-join")) {
                 if (assisted == null || assistedInFlight >= 32) {
                     throw new IOException("Assisted joins unavailable");
                 }
@@ -302,17 +308,17 @@ final class ProviderWebSocket implements AutoCloseable {
     private record Parsed(String id, Reply reply) {}
 
     /** Select the decoder without making JSON whitespace or member order part of the protocol. */
-    private static boolean isAssistedJoin(String wire) throws IOException {
+    private static String kind(String wire) throws IOException {
         try (JsonReader reader = new JsonReader(new StringReader(wire))) {
             reader.setStrictness(Strictness.STRICT);
             reader.beginObject();
             while (reader.hasNext()) {
                 if (reader.nextName().equals("kind")) {
-                    return string(reader).equals("assisted-join");
+                    return string(reader);
                 }
                 reader.skipValue();
             }
-            return false;
+            throw new IOException("Provider frame without kind");
         }
     }
 
@@ -331,6 +337,11 @@ final class ProviderWebSocket implements AutoCloseable {
                     throw new IOException("Duplicate response field");
                 }
                 switch (name) {
+                    case "kind" -> {
+                        if (!string(reader).equals("response")) {
+                            throw new IOException("Invalid response kind");
+                        }
+                    }
                     case "id" -> {
                         id = string(reader);
                         if (!id.matches("[A-Za-z0-9_-]{16,128}")) {
@@ -375,13 +386,11 @@ final class ProviderWebSocket implements AutoCloseable {
                         }
                         reader.endObject();
                     }
-                    default -> {
-                        throw new IOException("Unknown response field");
-                    }
+                    default -> reader.skipValue();
                 }
             }
             reader.endObject();
-            if (!fields.equals(Set.of("id", "status", "headers", "body"))
+            if (!fields.containsAll(Set.of("kind", "id", "status", "headers", "body"))
                     || reader.peek() != JsonToken.END_DOCUMENT) {
                 throw new IOException("Incomplete response envelope");
             }

@@ -84,8 +84,8 @@ public final class ProviderBench {
                         config,
                         new ProviderStateStore(state),
                         transport,
-                        () -> new ServerStatus("Java bench", "Fixture", 2, 50, 0),
-                        () -> new ProviderClient.Health(true, 100, new ProviderClient.Software("Java conformance bench", "1.0"), null),
+                        () -> new ServerStatus("Java bench", "Fixture", 50, 0),
+                        () -> new ProviderClient.Health(true, 100, new ProviderClient.Software("Java conformance bench", "1.0"), new ProviderClient.ConnectedPlayers(0, System.currentTimeMillis())),
                         diagnostic ->
                                 System.err.println(
                                         diagnostic.level() + ": " + diagnostic.message()));

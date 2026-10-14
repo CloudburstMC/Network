@@ -23,7 +23,7 @@ class DiagnosticHostPolicyTest {
         }
         var keys = new ArrayList<Key>();
         for (int i = 0; i < 8; i++) {
-            keys.add(new Key("D00" + i, "s".repeat(32), 0, 10000));
+            keys.add(new Key("D00" + i, "s".repeat(42) + "A", 0, 10000));
         }
         var policy = new DiagnosticHostPolicy(context, keys, endpoints, 4000, deadlines);
         endpoints.clear();
@@ -39,7 +39,7 @@ class DiagnosticHostPolicyTest {
                 IllegalArgumentException.class,
                 () -> new DiagnosticHostPolicy(context, policy.keys(), tooMany, 4000));
         var extra = new ArrayList<>(policy.keys());
-        extra.add(new Key("D008", "s".repeat(32), 0, 10000));
+        extra.add(new Key("D008", "s".repeat(42) + "A", 0, 10000));
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new DiagnosticHostPolicy(context, extra, policy.endpoints(), 4000));
@@ -65,7 +65,7 @@ class DiagnosticHostPolicyTest {
     @Test
     void rejectsAmbiguousEndpointsDuplicateKeysAndInvalidDeadlines() {
         var target = endpoint(19132);
-        var key = new Key("D001", "secret-value-which-must-not-be-logged", 0, 5000);
+        var key = new Key("D001", "secret-value-which-must-not-be-logged-xxxxA", 0, 5000);
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new DiagnosticHostPolicy(context, List.of(key, key), Set.of(target), 4000));

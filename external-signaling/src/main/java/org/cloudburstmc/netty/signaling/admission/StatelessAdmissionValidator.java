@@ -156,7 +156,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         Set<String> ids = new HashSet<>();
         for (AdmissionKey key : snapshot) {
             if (key.keyId() == null || !key.keyId().matches("[A-Z0-9]{4}") || key.secret() == null
-                    || key.secret().length() < 32 || key.secret().length() > 256 || !ids.add(key.keyId())
+                    || !AdmissionKey.validSecret(key.secret()) || !ids.add(key.keyId())
                     || key.retireAfter() <= 0) {
                 throw new IllegalArgumentException("Invalid admission key snapshot");
             }

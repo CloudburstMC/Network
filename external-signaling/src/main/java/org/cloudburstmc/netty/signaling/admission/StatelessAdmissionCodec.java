@@ -93,8 +93,7 @@ public final class StatelessAdmissionCodec {
             Claims claims,
             byte[] nonce) {
         if (!keyId.matches("[A-Z0-9]{4}")
-                || utf8(secret).length < 32
-                || utf8(secret).length > 256
+                || !AdmissionKey.validSecret(secret)
                 || nonce.length != 12) {
             throw invalid();
         }
