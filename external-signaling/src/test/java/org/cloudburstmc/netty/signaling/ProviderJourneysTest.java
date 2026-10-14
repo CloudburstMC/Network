@@ -172,35 +172,21 @@ class ProviderJourneysTest {
                 stub.loseCompletionResponse = true;
                 ProviderClient first = client(stub, statePath, configuration, new ProviderClientTest.FakeTransport());
                 try {
-                    assertThrows(ExecutionException.class,
-                            () -> first.start().get(20, TimeUnit.SECONDS));
-                } finally {
-                    first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
-                }
-                JsonObject before;
-                try (ProviderStateStore state = new ProviderStateStore(statePath)) {
-                    before = state.read();
-                    assertTrue(before.has("challenge"));
-                    assertFalse(before.has("registration"));
-                }
-                assertEquals(1, stub.registrations, "The provider committed despite the lost HTTP response");
-                ProviderClient resumed = client(stub, statePath, configuration, new ProviderClientTest.FakeTransport());
-                try {
-                    String registrationId = resumed.start().get(20, TimeUnit.SECONDS).registrationId();
+                    // The retried completion finds the challenge consumed and recovers inline
+                    String registrationId = first.start().get(20, TimeUnit.SECONDS).registrationId();
                     assertEquals(stub.registration.get("registrationId").getAsString(), registrationId);
-                    assertNotEquals(before.getAsJsonObject("challenge").get("challengeId").getAsString(),
-                            registrationId, "The recovered registration keeps its own ID");
-                    assertEquals(1, stub.registrations);
+                    assertNotEquals(stub.initialChallengeId, registrationId, "The recovered registration keeps its own ID");
+                    assertEquals(1, stub.registrations, "The provider committed despite the lost HTTP response");
                     assertEquals(2, stub.generation);
-                    assertTrue(resumed.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
+                    assertTrue(first.readiness().get(10, TimeUnit.SECONDS).get("routable").getAsBoolean());
                     assertTrue(stub.keyAcknowledgements > 0, "Lost one-time key material is freshly provisioned");
                 } finally {
-                    resumed.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+                    first.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
                 }
                 try (ProviderStateStore state = new ProviderStateStore(statePath)) {
                     JsonObject after = state.read();
                     assertFalse(after.has("challenge"));
-                    assertEquals(before.get("privateKey"), after.get("privateKey"));
+                    assertTrue(after.has("registration"));
                 }
             }
         }

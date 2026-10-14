@@ -40,6 +40,7 @@ public final class ProviderClient implements AutoCloseable {
     private static final String ATTACH_INSTANCE = "attach-instance";
     private static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work";
     private static final String BEARER_TOKEN = "bearer-token";
+    private static final String RECOVERY_REQUIRED = "recovery_required";
 
     public enum ControlTransport {
         HTTP,
@@ -630,13 +631,30 @@ public final class ProviderClient implements AutoCloseable {
 
     /** False when the provider has nothing to recover, so the saved registration is gone for good. */
     private boolean recoverExisting() throws Exception {
-        String registrationId = registration("registrationId");
-        JsonObject challenge = recoveryChallenge(registrationId);
-        if (challenge == null) {
-            return false;
+        return recover(registration("registrationId"), true);
+    }
+
+    /**
+     * Recovers by registration ID, or by challenge ID after a lost completion. A recovery whose own
+     * completion reply was lost is retried once with a fresh challenge.
+     *
+     * @return false when the provider has nothing to recover
+     */
+    private boolean recover(String id, boolean registrationId) throws Exception {
+        for (int attempt = 0; ; attempt++) {
+            JsonObject challenge = recoveryChallenge(id);
+            if (challenge == null) {
+                return false;
+            }
+            try {
+                completeRecovery(challenge, registrationId ? id : null);
+                return true;
+            } catch (ProviderException e) {
+                if (!RECOVERY_REQUIRED.equals(e.code()) || attempt > 0) {
+                    throw e;
+                }
+            }
         }
-        completeRecovery(challenge, registrationId);
-        return true;
     }
 
     private JsonObject recoveryChallenge(String registrationId) throws Exception {
@@ -727,9 +745,7 @@ public final class ProviderClient implements AutoCloseable {
         JsonObject challenge = null;
         if (state.has("challenge")) {
             JsonObject saved = state.getAsJsonObject("challenge");
-            JsonObject recoveredChallenge = recoveryChallenge(saved.get("challengeId").getAsString());
-            if (recoveredChallenge != null) {
-                completeRecovery(recoveredChallenge, null);
+            if (recover(saved.get("challengeId").getAsString(), false)) {
                 return;
             }
             // Nothing was created, so an expired challenge is simply replaced
@@ -785,7 +801,21 @@ public final class ProviderClient implements AutoCloseable {
         if (nonce == null) {
             throw new IOException("Challenge expired before proof completed");
         }
-        JsonObject registration = unsigned("complete", completion(challenge, nonce, intent, privateKey));
+        JsonObject registration;
+        try {
+            registration = unsigned("complete", completion(challenge, nonce, intent, privateKey));
+        } catch (ProviderException e) {
+            // The completion committed but its reply was lost
+            if (RECOVERY_REQUIRED.equals(e.code())) {
+                if (recover(challenge.get("challengeId").getAsString(), false)) {
+                    return;
+                }
+                // Consumed but unrecoverable, so the next start registers afresh
+                state.remove("challenge");
+                save();
+            }
+            throw e;
+        }
         validateRegistration(registration);
         JsonElement action = registration.remove("operatorAction");
         operatorAction = action == null ? null : operatorAction(action);
