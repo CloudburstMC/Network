@@ -34,13 +34,13 @@ import java.util.function.Supplier;
  * <p>
  * Anyone on the internet can reach this endpoint, and a kept connection costs a socket until
  * it goes idle, so without a cap a single peer can hold as many as the host has descriptors.
- * A trusted reverse proxy is exempt, since every client behind it shares its address and
- * counting them together would throttle all of them at once.
+ * Exempt addresses, usually trusted proxies, are not counted, since every client behind a proxy
+ * shares its address and counting them together would throttle all of them at once.
  */
 final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(ConnectionLimiter.class);
 
-    private final IpRangeSet trustedProxies;
+    private final IpRangeSet exempt;
     private final int maxConnectionsPerAddress;
     private final Map<InetAddress, Integer> connectionsPerAddress;
     private final Supplier<NetherServerMetrics> metrics;
@@ -51,9 +51,9 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
      * @param connectionsPerAddress The counts, shared by every connection of one endpoint
      * @param metrics               Where a refusal is reported, read at the time of one
      */
-    ConnectionLimiter(IpRangeSet trustedProxies, int maxConnectionsPerAddress,
+    ConnectionLimiter(IpRangeSet exempt, int maxConnectionsPerAddress,
                       Map<InetAddress, Integer> connectionsPerAddress, Supplier<NetherServerMetrics> metrics) {
-        this.trustedProxies = trustedProxies;
+        this.exempt = exempt;
         this.maxConnectionsPerAddress = maxConnectionsPerAddress;
         this.connectionsPerAddress = connectionsPerAddress;
         this.metrics = metrics;
@@ -86,7 +86,7 @@ final class ConnectionLimiter extends ChannelInboundHandlerAdapter {
     private boolean admit(ChannelHandlerContext ctx) {
         InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
         InetAddress peer = remote.getAddress();
-        if (trustedProxies.contains(peer)) {
+        if (exempt.contains(peer)) {
             return true;
         }
 

@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -50,31 +51,37 @@ class ProxyProtocolTest {
     }
 
     private int start(List<String> trusted, boolean proxyProtocol) throws Exception {
+        return start(builder -> builder.setTrustedProxies(trusted).setProxyProtocol(proxyProtocol));
+    }
+
+    private int start(UnaryOperator<NetherNetHTTPServerSignaling.Builder> configure) throws Exception {
         int port;
         try (ServerSocket probe = new ServerSocket(0)) {
             port = probe.getLocalPort();
         }
 
-        signaling = new NetherNetHTTPServerSignaling.Builder()
+        signaling = configure.apply(new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
-                .setTrustedProxies(trusted)
-                .setProxyProtocol(proxyProtocol)
                 .setMotdProvider((host, remoteAddress, client) -> {
                     seen.offer(remoteAddress);
                     return PongData.DEFAULT;
-                })
+                }))
                 .build();
         signaling.bind(new InetSocketAddress("127.0.0.1", port), group.next());
         return port;
     }
 
     private void request(int port, byte[] prefix) throws Exception {
+        request(port, prefix, "");
+    }
+
+    private void request(int port, byte[] prefix, String headers) throws Exception {
         try (Socket socket = new Socket("127.0.0.1", port)) {
             OutputStream out = socket.getOutputStream();
             if (prefix != null) {
                 out.write(prefix);
             }
-            out.write(("GET /v1/join HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            out.write(("GET /v1/join HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" + headers + "\r\n")
                     .getBytes(StandardCharsets.UTF_8));
             out.flush();
             socket.getInputStream().read();
@@ -98,7 +105,33 @@ class ProxyProtocolTest {
     @Test
     void neverBelievesAProxyHeaderFromAnUntrustedSource() throws Exception {
         // Trusting a range this connection is not in, so the header must not be believed
-        int port = start(List.of("10.0.0.0/8"), true);
+        assertProxyHeaderIgnored(start(List.of("10.0.0.0/8"), true));
+    }
+
+    @Test
+    void readsAProxyHeaderFromItsOwnList() throws Exception {
+        int port = start(builder -> builder.setTrustedProxies(List.of("10.0.0.0/8"))
+                .setProxyProtocolProxies(List.of("127.0.0.0/8")).setProxyProtocol(true));
+        request(port, TestHttp.proxyV2Header("203.0.113.7", 5555));
+
+        assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void neverBelievesAProxyHeaderFromAForwardedForOnlyProxy() throws Exception {
+        assertProxyHeaderIgnored(start(builder -> builder.setForwardedForProxies(List.of("127.0.0.0/8"))
+                .setProxyProtocol(true)));
+    }
+
+    @Test
+    void ignoresForwardedForFromAProxyHeaderOnlyProxy() throws Exception {
+        int port = start(builder -> builder.setProxyProtocolProxies(List.of("127.0.0.0/8")).setProxyProtocol(true));
+        request(port, null, "X-Forwarded-For: 203.0.113.7\r\n");
+
+        assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
+    }
+
+    private void assertProxyHeaderIgnored(int port) throws Exception {
         request(port, TestHttp.proxyV2Header("203.0.113.7", 5555));
 
         // The header is left in the stream, so the request does not parse as HTTP and is never

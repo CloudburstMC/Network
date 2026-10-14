@@ -91,6 +91,22 @@ public final class IpRangeSet {
         return this.rules.isEmpty();
     }
 
+    /**
+     * @param other The set to add
+     * @return A set matching any address either set matches
+     */
+    public IpRangeSet union(IpRangeSet other) {
+        if (other.isEmpty()) {
+            return this;
+        }
+        if (this.isEmpty()) {
+            return other;
+        }
+        List<IpSubnetFilterRule> rules = new ArrayList<>(this.rules);
+        rules.addAll(other.rules);
+        return new IpRangeSet(rules);
+    }
+
     public boolean contains(InetSocketAddress address) {
         if (address == null || address.getAddress() == null) {
             return false;

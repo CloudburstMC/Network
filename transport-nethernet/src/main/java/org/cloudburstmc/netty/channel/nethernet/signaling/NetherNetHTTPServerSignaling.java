@@ -119,7 +119,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
     private final OperatorIdentity serverIdentity;
     private final SslContext sslContext;
-    private final IpRangeSet trustedProxies;
+    private final IpRangeSet forwardedForProxies;
+    /** Empty unless PROXY headers are read. */
+    private final IpRangeSet proxyProtocolProxies;
+    private final IpRangeSet connectionLimitExempt;
     private final int maxConnectionsPerAddress;
     private final int maxPendingJoins;
     private final int answerTimeoutSeconds;
@@ -128,7 +131,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final List<IceServerInfo> iceServers;
     private final TokenTrust tokenTrust;
     private final boolean serveHttp;
-    private final boolean proxyProtocol;
     private final boolean requiresTls;
     private final PlayerFilter playerFilter;
     private volatile MotdProvider motdProvider;
@@ -157,7 +159,13 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private NetherNetHTTPServerSignaling(Builder builder) {
         this.serverIdentity = builder.identity;
         this.sslContext = builder.sslContext;
-        this.trustedProxies = builder.trustedProxies;
+        // Each list not given falls back to the trusted proxies
+        this.forwardedForProxies = builder.forwardedForProxies != null
+                ? builder.forwardedForProxies : builder.trustedProxies;
+        this.proxyProtocolProxies = !builder.proxyProtocol ? IpRangeSet.empty()
+                : builder.proxyProtocolProxies != null ? builder.proxyProtocolProxies : builder.trustedProxies;
+        this.connectionLimitExempt = builder.connectionLimitExempt != null
+                ? builder.connectionLimitExempt : forwardedForProxies.union(proxyProtocolProxies);
         this.maxConnectionsPerAddress = builder.maxConnectionsPerAddress;
         this.maxPendingJoins = builder.maxPendingJoins;
         this.answerTimeoutSeconds = builder.answerTimeoutSeconds;
@@ -166,7 +174,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         this.iceServers = builder.iceServers;
         this.tokenTrust = builder.tokenTrust;
         this.serveHttp = builder.serveHttp;
-        this.proxyProtocol = builder.proxyProtocol;
         this.requiresTls = builder.requiresTls;
         this.playerFilter = builder.playerFilter;
         this.motdProvider = builder.motdProvider;
@@ -587,12 +594,12 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             ChannelPipeline p = ch.pipeline();
             // Counted before any of what it sent is passed on, so a peer holding sockets open is
             // capped whatever it goes on to send
-            p.addLast(new ConnectionLimiter(trustedProxies, maxConnectionsPerAddress,
+            p.addLast(new ConnectionLimiter(connectionLimitExempt, maxConnectionsPerAddress,
                     connectionsPerAddress, () -> metrics));
 
             // A PROXY header precedes the TLS handshake, so it is read before any of this
-            if (proxyProtocol) {
-                p.addLast(new OptionalProxyProtocol(trustedProxies));
+            if (!proxyProtocolProxies.isEmpty()) {
+                p.addLast(new OptionalProxyProtocol(proxyProtocolProxies));
             }
 
             // Both schemes reach one port: the first bytes say which this is, and a
@@ -735,18 +742,18 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * The peer address, or the address a trusted reverse proxy forwarded on its behalf.
+         * The peer address, or the address a trusted proxy declared or forwarded on its behalf.
          */
         private InetSocketAddress clientAddress(ChannelHandlerContext ctx, FullHttpRequest req) {
-            InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
-            if (!trustedProxies.contains(remote)) {
-                return remote;
-            }
-
-            // A PROXY header is the more trustworthy of the two, so it wins
+            // Only ever set for a PROXY header proxy, and the more trustworthy of the two, so it wins
             InetSocketAddress proxied = ctx.channel().attr(OptionalProxyProtocol.PROXIED_SOURCE).get();
             if (proxied != null) {
                 return proxied;
+            }
+
+            InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+            if (!forwardedForProxies.contains(remote)) {
+                return remote;
             }
 
             String forwarded = req.headers().get(FORWARDED_FOR);
@@ -801,6 +808,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         private OperatorIdentity identity;
         private SslContext sslContext;
         private IpRangeSet trustedProxies = IpRangeSet.empty();
+        // Null falls back to trustedProxies, or to both header lists for the exemption
+        private IpRangeSet forwardedForProxies;
+        private IpRangeSet proxyProtocolProxies;
+        private IpRangeSet connectionLimitExempt;
         private int maxConnectionsPerAddress = 8;
         private int maxPendingJoins = 64;
         private int answerTimeoutSeconds = 30;
@@ -924,7 +935,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * Caps the connections one address may hold at once. Defaults to 8, which is one player's
          * worth with room for a status check: players behind one NAT share an address, so a host
          * expecting a household or a LAN party behind one raises it. Trusted proxies are exempt,
-         * since every client behind one shares its address.
+         * since every client behind one shares its address; see {@link #setConnectionLimitExempt}.
          *
          * @param maxConnectionsPerAddress Connections per address, must be positive
          * @return This builder
@@ -968,8 +979,13 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the reverse proxies whose {@code X-Forwarded-For} header is honoured, as single
-         * addresses or CIDR ranges. Requests from anywhere else keep their peer address.
+         * Sets the proxies trusted to speak for a client, as single addresses or CIDR ranges. Their
+         * {@code X-Forwarded-For} header is honoured, their PROXY header is read when
+         * {@link #setProxyProtocol} is on, and they are exempt from
+         * {@link #setMaxConnectionsPerAddress}. Requests from anywhere else keep their peer address.
+         * <p>
+         * {@link #setForwardedForProxies}, {@link #setProxyProtocolProxies} and
+         * {@link #setConnectionLimitExempt} each replace this list for one of those.
          *
          * @param trustedProxies Addresses or CIDR ranges, such as {@code 10.0.0.0/8}
          * @return This builder
@@ -979,14 +995,82 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the reverse proxies whose {@code X-Forwarded-For} header is honoured, from a set that
-         * is already parsed, for callers that match the same addresses elsewhere.
+         * Sets the proxies trusted to speak for a client, from a set that is already parsed, for
+         * callers that match the same addresses elsewhere.
          *
          * @param trustedProxies The addresses to trust
          * @return This builder
          */
         public Builder setTrustedProxies(IpRangeSet trustedProxies) {
             this.trustedProxies = trustedProxies == null ? IpRangeSet.empty() : trustedProxies;
+            return this;
+        }
+
+        /**
+         * Sets the reverse proxies whose {@code X-Forwarded-For} header is honoured, in place of
+         * {@link #setTrustedProxies}.
+         *
+         * @param proxies Addresses or CIDR ranges, such as {@code 10.0.0.0/8}
+         * @return This builder
+         */
+        public Builder setForwardedForProxies(Collection<String> proxies) {
+            return setForwardedForProxies(IpRangeSet.parse(proxies));
+        }
+
+        /**
+         * Sets the reverse proxies whose {@code X-Forwarded-For} header is honoured, from a set
+         * that is already parsed.
+         *
+         * @param proxies The proxies to trust
+         * @return This builder
+         */
+        public Builder setForwardedForProxies(IpRangeSet proxies) {
+            this.forwardedForProxies = proxies == null ? IpRangeSet.empty() : proxies;
+            return this;
+        }
+
+        /**
+         * Sets the proxies whose PROXY header is read when {@link #setProxyProtocol} is on, in place
+         * of {@link #setTrustedProxies}.
+         *
+         * @param proxies Addresses or CIDR ranges, such as {@code 10.0.0.0/8}
+         * @return This builder
+         */
+        public Builder setProxyProtocolProxies(Collection<String> proxies) {
+            return setProxyProtocolProxies(IpRangeSet.parse(proxies));
+        }
+
+        /**
+         * Sets the proxies whose PROXY header is read, from a set that is already parsed.
+         *
+         * @param proxies The proxies to trust
+         * @return This builder
+         */
+        public Builder setProxyProtocolProxies(IpRangeSet proxies) {
+            this.proxyProtocolProxies = proxies == null ? IpRangeSet.empty() : proxies;
+            return this;
+        }
+
+        /**
+         * Sets the addresses exempt from {@link #setMaxConnectionsPerAddress}. Defaults to the
+         * proxies of both headers, since every client behind one shares its address.
+         *
+         * @param addresses Addresses or CIDR ranges, such as {@code 10.0.0.0/8}
+         * @return This builder
+         */
+        public Builder setConnectionLimitExempt(Collection<String> addresses) {
+            return setConnectionLimitExempt(IpRangeSet.parse(addresses));
+        }
+
+        /**
+         * Sets the addresses exempt from {@link #setMaxConnectionsPerAddress}, from a set that is
+         * already parsed.
+         *
+         * @param addresses The addresses to exempt
+         * @return This builder
+         */
+        public Builder setConnectionLimitExempt(IpRangeSet addresses) {
+            this.connectionLimitExempt = addresses == null ? IpRangeSet.empty() : addresses;
             return this;
         }
 
@@ -1058,9 +1142,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * Sets whether to read a HAProxy PROXY header, v1 or v2, from connections that arrive from
          * a trusted proxy. Defaults to false.
          * <p>
-         * Only connections from {@link #setTrustedProxies} are looked at, and a connection that
-         * carries no header is served normally, so a listener can take both. The header is read
-         * before TLS, which is where a proxy puts it.
+         * Only connections from {@link #setProxyProtocolProxies}, or {@link #setTrustedProxies} by
+         * default, are looked at, and a connection that carries no header is served normally, so a
+         * listener can take both. The header is read before TLS, which is where a proxy puts it.
          *
          * @param proxyProtocol Whether to accept PROXY headers
          * @return This builder

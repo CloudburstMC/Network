@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,18 +53,21 @@ class ForwardedForTest {
     }
 
     private int start(List<String> trustedProxies) throws Exception {
+        return start(builder -> builder.setTrustedProxies(trustedProxies));
+    }
+
+    private int start(UnaryOperator<NetherNetHTTPServerSignaling.Builder> configure) throws Exception {
         int port;
         try (ServerSocket probe = new ServerSocket(0)) {
             port = probe.getLocalPort();
         }
 
-        signaling = new NetherNetHTTPServerSignaling.Builder()
+        signaling = configure.apply(new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
-                .setTrustedProxies(trustedProxies)
                 .setMotdProvider((host, remoteAddress, client) -> {
                     seen.offer(remoteAddress);
                     return PongData.DEFAULT;
-                })
+                }))
                 .build();
 
         signaling.bind(new InetSocketAddress("127.0.0.1", port), group.next());
@@ -90,6 +94,24 @@ class ForwardedForTest {
         get(port, "203.0.113.7");
 
         assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void honoursForwardedForFromItsOwnList() throws Exception {
+        int port = start(builder -> builder.setTrustedProxies(List.of("10.0.0.0/8"))
+                .setForwardedForProxies(List.of("127.0.0.0/8")));
+        get(port, "203.0.113.7");
+
+        assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void itsOwnListReplacesTheTrustedProxies() throws Exception {
+        int port = start(builder -> builder.setTrustedProxies(List.of("127.0.0.0/8"))
+                .setForwardedForProxies(List.of("10.0.0.0/8")));
+        get(port, "203.0.113.7");
+
+        assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
     }
 
     @Test

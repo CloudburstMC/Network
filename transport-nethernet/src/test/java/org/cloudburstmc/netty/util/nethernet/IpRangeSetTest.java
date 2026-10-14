@@ -33,6 +33,15 @@ class IpRangeSetTest {
     }
 
     @Test
+    void aUnionMatchesEitherSet() throws Exception {
+        IpRangeSet set = IpRangeSet.parse(List.of("10.0.0.0/8")).union(IpRangeSet.parse(List.of("192.168.1.5")));
+
+        assertTrue(contains(set, "10.0.0.1"));
+        assertTrue(contains(set, "192.168.1.5"));
+        assertFalse(contains(set, "192.168.1.6"));
+    }
+
+    @Test
     void matchesInsideAnIpv4Range() throws Exception {
         IpRangeSet set = IpRangeSet.parse(List.of("10.0.0.0/8"));
 

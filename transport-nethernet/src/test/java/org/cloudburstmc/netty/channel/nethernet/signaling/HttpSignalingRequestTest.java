@@ -508,6 +508,29 @@ class HttpSignalingRequestTest {
     }
 
     @Test
+    void countsNoConnectionAgainstAProxyHeaderProxy() throws Exception {
+        this.start(this.builder().setMaxConnectionsPerAddress(1)
+                .setProxyProtocolProxies(List.of("127.0.0.1")).setProxyProtocol(true));
+
+        try (Socket first = this.keptConnection(); Socket second = this.keptConnection()) {
+            assertNotNull(first);
+            assertNotNull(second);
+        }
+    }
+
+    @Test
+    void countsATrustedProxyLeftOffTheExemptList() throws Exception {
+        this.start(this.builder().setMaxConnectionsPerAddress(1).setTrustedProxies(List.of("127.0.0.1"))
+                .setConnectionLimitExempt(List.of()));
+
+        try (Socket held = this.keptConnection(); Socket refused = new Socket("127.0.0.1", this.port)) {
+            assertNotNull(held);
+            refused.setSoTimeout(10_000);
+            assertEquals(-1, refused.getInputStream().read(), "the second is closed unanswered");
+        }
+    }
+
+    @Test
     void refusesAJoinWhenTooManyAreAlreadyWaiting() throws Exception {
         // The handler accepts the offer and never answers, so the join stays pending
         this.start(this.builder().setMaxPendingJoins(1));
