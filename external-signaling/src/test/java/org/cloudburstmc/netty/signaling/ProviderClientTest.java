@@ -805,6 +805,33 @@ class ProviderClientTest {
     }
 
     @Test
+    void stopsWithoutDeregisteringWhenAnotherProcessTakesOver(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            List<String> messages = new CopyOnWriteArrayList<>();
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin))
+                            .label("Example")
+                            .deregisterOnShutdown(true)
+                            .build(),
+                    new ProviderStateStore(path), host, () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)),
+                    message -> messages.add(message.message()));
+            client.start().get(20, TimeUnit.SECONDS);
+            synchronized (stub) {
+                stub.generation++; // Another process recovered this registration
+            }
+            eventually(() -> host.closed.isDone());
+            client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            assertFalse(stub.operationsSeen.contains("/example/deregister"));
+            assertTrue(messages.stream().anyMatch(message -> message.startsWith("Another process took over")));
+            try (ProviderStateStore state = new ProviderStateStore(path)) {
+                assertTrue(state.read().has("registration"));
+            }
+        }
+    }
+
+    @Test
     void reportsGameOutcomesOnlyWhenDeclared(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var builder = ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example");

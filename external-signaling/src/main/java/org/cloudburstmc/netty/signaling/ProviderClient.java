@@ -41,6 +41,7 @@ public final class ProviderClient implements AutoCloseable {
     private static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work";
     private static final String BEARER_TOKEN = "bearer-token";
     private static final String RECOVERY_REQUIRED = "recovery_required";
+    private static final String GENERATION_FENCED = "generation_fenced";
 
     public enum ControlTransport {
         HTTP,
@@ -403,6 +404,7 @@ public final class ProviderClient implements AutoCloseable {
     private boolean started;
     private boolean closed;
     private boolean scheduledCheckIns;
+    private boolean fenced;
     private Boolean lastReportedGameOutcomes;
     private boolean locationReported;
     private OperatorAction operatorAction;
@@ -1640,7 +1642,7 @@ public final class ProviderClient implements AutoCloseable {
             signed("outcomes", "POST", body);
         } catch (ProviderException rejected) {
             // Any other 4xx had no effect and never will, so it must not block later reports
-            if (rejected.status() / 100 != 4 || rejected.status() == 429) {
+            if (fenced || rejected.status() / 100 != 4 || rejected.status() == 429) {
                 throw rejected;
             }
             diagnostics.detail(ProviderLog.Operation.EVENTS, "Dropped " + sent + " rejected reports: " + rejected.code());
@@ -2103,6 +2105,9 @@ public final class ProviderClient implements AutoCloseable {
                 continue;
             }
             if (status / 100 != 2) {
+                if (signed && GENERATION_FENCED.equals(code)) {
+                    fenced();
+                }
                 throw new ProviderException(status, code);
             }
             JsonObject result = JsonParser.parseString(text).getAsJsonObject();
@@ -2303,6 +2308,16 @@ public final class ProviderClient implements AutoCloseable {
             }
         });
         return f;
+    }
+
+    /** Another process now owns this registration, so stop without draining or deregistering it. */
+    private void fenced() {
+        if (!fenced) {
+            fenced = true;
+            started = false;
+            diagnostics.replaced();
+            stop();
+        }
     }
 
     public CompletionStage<Void> stop() {

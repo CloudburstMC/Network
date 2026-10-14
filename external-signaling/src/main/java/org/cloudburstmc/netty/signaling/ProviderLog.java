@@ -95,6 +95,11 @@ final class ProviderLog {
                 + "server " + instanceId + ". Registering it again as a new server."));
     }
 
+    void replaced() {
+        sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, "Another process took over this server's "
+                + "signaling registration. Signaling is stopping."));
+    }
+
     void detail(Operation operation, String detail) {
         sink.accept(
                 new ProviderDiagnostic(ProviderDiagnostic.Level.DEBUG, operation + ": " + detail));

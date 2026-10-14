@@ -380,6 +380,9 @@ public final class IndependentProviderStub implements AutoCloseable {
             String key = h.getFirst("nxs-key-id"), instance = h.getFirst("nxs-instance-id");
             long timestamp = Long.parseLong(h.getFirst("nxs-timestamp")), gen =
                     Long.parseLong(h.getFirst("nxs-generation")), seq = Long.parseLong(h.getFirst("nxs-sequence"));
+            if (gen < generation) {
+                throw new Failure(409, "generation_fenced");
+            }
             if (!ProviderCrypto.SIGNATURE.equals(h.getFirst("nxs-signature-version")) || !"example-machine-1".equals(
                     instance) || Math.abs(System.currentTimeMillis() - timestamp) > 60000 || gen != generation
                     || seq <= sequence) {
