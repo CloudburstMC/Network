@@ -29,7 +29,7 @@ public final class ProviderIdentity {
     }
 
     public static JsonObject initialize(ProviderStateStore store, URI provider) throws Exception {
-        String origin = ProviderCrypto.origin(provider);
+        String origin = ProviderOrigin.canonicalize(provider);
         JsonObject state = store.read();
         if (state.has("provider") && !origin.equals(state.get("provider").getAsString())) {
             throw new IllegalArgumentException("Provider state mismatch");

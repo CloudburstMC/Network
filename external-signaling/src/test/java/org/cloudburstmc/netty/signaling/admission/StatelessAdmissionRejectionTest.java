@@ -67,19 +67,9 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
     }
 
     @Test
-    void refusesAKeyThatIsNotYetInUse() {
-        var validator = new StatelessAdmissionValidator(this.audience(), 60_000);
-        validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", this.secret(),
-                this.now + 1, this.now + 20_000)));
-
-        assertNull(validator.validate(this.request(), this.now));
-    }
-
-    @Test
     void refusesAKeyThatHasBeenRetired() {
         var validator = new StatelessAdmissionValidator(this.audience(), 60_000);
-        validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", this.secret(),
-                this.now - 20_000, this.now)));
+        validator.installKeys(List.of(new AdmissionKey("K001", this.secret(), this.now)));
 
         assertNull(validator.validate(this.request(), this.now));
     }
@@ -148,7 +138,7 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
     @Test
     void refusesATicketValidForLongerThanTheHostAllows() {
         var strict = new StatelessAdmissionValidator(this.audience(), 1);
-        strict.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", this.secret())));
+        strict.installKeys(List.of(new AdmissionKey("K001", this.secret())));
 
         assertNull(strict.validate(this.request(), this.now));
     }
@@ -156,9 +146,9 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
     @Test
     void refusesMoreKeyEpochsThanItWillHold() {
         var validator = new StatelessAdmissionValidator(this.audience(), 60_000);
-        var keys = new java.util.ArrayList<StatelessAdmissionValidator.TicketKey>();
+        var keys = new java.util.ArrayList<AdmissionKey>();
         for (int i = 0; i < 9; i++) {
-            keys.add(new StatelessAdmissionValidator.TicketKey(String.format("K%03d", i), this.secret()));
+            keys.add(new AdmissionKey(String.format("K%03d", i), this.secret()));
         }
 
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(keys));
@@ -170,16 +160,16 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
         var secret = this.secret();
 
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("k001", secret))), "key id must be upper case");
+                List.of(new AdmissionKey("k001", secret))), "key id must be upper case");
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K1", secret))), "key id must be four characters");
+                List.of(new AdmissionKey("K1", secret))), "key id must be four characters");
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", "too-short"))), "secret is under 32 bytes");
+                List.of(new AdmissionKey("K001", "too-short"))), "secret is under 32 bytes");
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", secret),
-                        new StatelessAdmissionValidator.TicketKey("K001", secret))), "duplicate epoch");
+                List.of(new AdmissionKey("K001", secret),
+                        new AdmissionKey("K001", secret))), "duplicate epoch");
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", secret, 10, 10))), "empty validity window");
+                List.of(new AdmissionKey("K001", secret, 0))), "retired before any token");
     }
 
     @Test
@@ -187,7 +177,7 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
         var validator = new StatelessAdmissionValidator(this.audience(), 60_000);
         assertFalse(validator.ready());
 
-        validator.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", this.secret())));
+        validator.installKeys(List.of(new AdmissionKey("K001", this.secret())));
         assertTrue(validator.ready());
         assertEquals(java.util.Set.of("K001"), validator.keyIds());
 

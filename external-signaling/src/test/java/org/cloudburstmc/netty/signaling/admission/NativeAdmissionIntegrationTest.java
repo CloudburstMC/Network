@@ -45,7 +45,7 @@ class NativeAdmissionIntegrationTest {
         var group = new DefaultEventLoopGroup(1);
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(List.of(
-                new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
         var results = new LinkedBlockingQueue<Boolean>();
         try {
@@ -107,9 +107,9 @@ class NativeAdmissionIntegrationTest {
         String newSecret = "replacement-fixture-secret-32-bytes-minimum";
         validator.installKeys(
                 List.of(
-                        new StatelessAdmissionValidator.TicketKey(
-                                "K001", TestSignalingProvider.SECRET, 0, cutoff),
-                        new StatelessAdmissionValidator.TicketKey("K002", newSecret)));
+                        new AdmissionKey(
+                                "K001", TestSignalingProvider.SECRET, cutoff),
+                        new AdmissionKey("K002", newSecret)));
         // Only the validator's existing wall-clock argument is controlled. UDP, integrity checks,
         // native peer allocation and cleanup use the real gameplay listener.
         var endpoint =
@@ -229,7 +229,7 @@ class NativeAdmissionIntegrationTest {
             host = NativeProviderTransport.open(bootstrap, new InetSocketAddress("::", port), advertised::get,
                             id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
-            host.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001",
+            host.installAdmissionKeys(List.of(new AdmissionKey("K001",
                     TestSignalingProvider.SECRET))).toCompletableFuture().get();
             var profile = host.hostProfile().toCompletableFuture().get();
             assertEquals(2, profile.getAsJsonArray("candidates").size());
@@ -302,7 +302,7 @@ class NativeAdmissionIntegrationTest {
                             () -> List.of(new InetSocketAddress("::1", port), new InetSocketAddress("127.0.0.1", port)),
                             id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
-            host.installTicketKeys(List.of(new ProviderTransport.TicketKey("K001",
+            host.installAdmissionKeys(List.of(new AdmissionKey("K001",
                     TestSignalingProvider.SECRET))).toCompletableFuture().get();
             String incarnation = host.hostProfile().toCompletableFuture().get().getAsJsonObject("statelessAdmission")
                     .get("incarnation").getAsString();
@@ -329,7 +329,7 @@ class NativeAdmissionIntegrationTest {
                     var ownedHost = host;
                     await(
                             () -> {
-                                events.addAll(ownedHost.pollEvents());
+                                events.addAll(ownedHost.pollEvents(256));
                                 return events.stream()
                                         .anyMatch(
                                                 e ->
@@ -469,8 +469,8 @@ class NativeAdmissionIntegrationTest {
                     id.certificate(), id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture().get());
             host = NativeProviderTransport.open(bootstrap, bind, advertised, id.certificate(), id.privateKey(),
                     AdmissionGate.Limits.defaults()).toCompletableFuture().get(10, TimeUnit.SECONDS);
-            host.installTicketKeys(List.of(new ProviderTransport.TicketKey(
-                    "K001", TestSignalingProvider.SECRET, 0, Long.MAX_VALUE))).toCompletableFuture().get();
+            host.installAdmissionKeys(List.of(new AdmissionKey(
+                    "K001", TestSignalingProvider.SECRET))).toCompletableFuture().get();
             var profile = host.hostProfile().toCompletableFuture().get();
             var candidate = profile.getAsJsonArray("candidates").get(0).getAsJsonObject();
             assertEquals("127.0.0.1", candidate.get("address").getAsString());
@@ -504,7 +504,7 @@ class NativeAdmissionIntegrationTest {
         int port = 49199;
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var group = new DefaultEventLoopGroup(1);
         AtomicInteger validations = new AtomicInteger();
         AdmissionValidator delayed = (metadata, now) -> {
@@ -573,7 +573,7 @@ class NativeAdmissionIntegrationTest {
         int port = 49200;
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         AdmissionValidator delayed = (metadata, now) -> {
             var admission = validator.validate(metadata, now);
             try {
@@ -662,7 +662,7 @@ class NativeAdmissionIntegrationTest {
         int port = 49202;
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var group = new DefaultEventLoopGroup(1);
         var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
         var throttle = new RecordingThrottle(false);
@@ -697,7 +697,7 @@ class NativeAdmissionIntegrationTest {
         int port = 49203;
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var group = new DefaultEventLoopGroup(1);
         var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
         var throttle = new RecordingThrottle(true);
@@ -767,7 +767,7 @@ class NativeAdmissionIntegrationTest {
         int port = 49190;
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var group = new DefaultEventLoopGroup(2);
         var rakGroup = new NioEventLoopGroup(1);
         Channel rak =
@@ -976,8 +976,8 @@ class NativeAdmissionIntegrationTest {
                             .get(5, TimeUnit.SECONDS);
             assertTrue(transport.hostProfile().toCompletableFuture().isCompletedExceptionally());
             assertTrue(transport.channel().isServing());
-            transport.installTicketKeys(
-                    List.of(new ProviderTransport.TicketKey("K001",
+            transport.installAdmissionKeys(
+                    List.of(new AdmissionKey("K001",
                             TestSignalingProvider.SECRET))).toCompletableFuture().get();
             var first = transport.hostProfile().toCompletableFuture().get();
             assertEquals(id.fingerprint(), first.get("dtlsFingerprint").getAsString());
@@ -987,13 +987,13 @@ class NativeAdmissionIntegrationTest {
             assertEquals(0, transport.channel().admissionStats().claims());
             assertEquals(0, transport.channel().nativeStats()[2]);
             NativeDiagnostics.assertCreations(creations, 0);
-            transport.installTicketKeys(
-                    List.of(new ProviderTransport.TicketKey("K001",
-                                    TestSignalingProvider.SECRET, 0, System.currentTimeMillis() + 60_000),
-                            new ProviderTransport.TicketKey("K002",
+            transport.installAdmissionKeys(
+                    List.of(new AdmissionKey("K001",
+                                    TestSignalingProvider.SECRET, System.currentTimeMillis() + 60_000),
+                            new AdmissionKey("K002",
                                     "next-background-key-of-at-least-32-bytes"))).toCompletableFuture().get();
             assertEquals("K002",
-                    transport.hostProfile().toCompletableFuture().get().get("credentialKeyId").getAsString());
+                    transport.hostProfile().toCompletableFuture().get().get("admissionKeyId").getAsString());
             transport.drain().toCompletableFuture().get();
             assertTrue(transport.hostProfile().toCompletableFuture().isCompletedExceptionally());
             assertFalse(transport.channel().isServing());
@@ -1003,8 +1003,8 @@ class NativeAdmissionIntegrationTest {
                     NativeProviderTransport.open(bootstrap, new InetSocketAddress("127.0.0.1", 49196), id.certificate(),
                                     id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
-            transport.installTicketKeys(
-                    List.of(new ProviderTransport.TicketKey("K001",
+            transport.installAdmissionKeys(
+                    List.of(new AdmissionKey("K001",
                             TestSignalingProvider.SECRET))).toCompletableFuture().get();
             String restarted = transport.hostProfile().toCompletableFuture().get().getAsJsonObject("statelessAdmission")
                     .get("incarnation").getAsString();
@@ -1032,7 +1032,7 @@ class NativeAdmissionIntegrationTest {
         var children = new CopyOnWriteArrayList<AdmittedNetherNetChildChannel>();
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var endpoint = new NativeAdmissionServerChannel(id, validator, new AdmissionGate.Limits(2, 4, 2, 10000));
         try {
             new ServerBootstrap().group(group).channelFactory(() -> endpoint)

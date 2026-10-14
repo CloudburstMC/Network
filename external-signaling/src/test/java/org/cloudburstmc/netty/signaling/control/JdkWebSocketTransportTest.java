@@ -25,7 +25,6 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.cloudburstmc.netty.signaling.ProviderCrypto;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;

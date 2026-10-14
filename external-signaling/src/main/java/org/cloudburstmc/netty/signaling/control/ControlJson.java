@@ -98,9 +98,12 @@ final class ControlJson {
         };
     }
 
-    static void fields(JsonObject object, String... expected) {
-        if (!object.keySet().equals(Set.of(expected))) {
-            throw invalid("fields");
+    /** Unknown members are ignored, so a provider can add fields. */
+    static void required(JsonObject object, String... expected) {
+        for (String field : expected) {
+            if (!object.has(field)) {
+                throw invalid(field);
+            }
         }
     }
 

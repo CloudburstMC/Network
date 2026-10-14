@@ -41,6 +41,7 @@ final class ProviderLog {
                 "Cannot save signaling settings. Signaling is stopping.",
                 "Signaling settings can be saved again."),
         DRAIN("Could not tell the signaling service that the server is stopping.", ""),
+        DEREGISTER("Could not remove this server from the signaling service. It expires there instead.", ""),
         TRANSPORT_CLOSE("Could not close the player connection listener.", ""),
         STATE_CLOSE("Could not close the signaling settings file.", "");
         final String failure, recovery;
@@ -83,6 +84,15 @@ final class ProviderLog {
                         join.diagnostic()
                                 ? "An assisted connection check could not complete."
                                 : "A player could not connect using an assisted join."));
+    }
+
+    void playerConnectionFailed() {
+        sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, "A player could not connect to the server."));
+    }
+
+    void registrationLost(String instanceId) {
+        sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, "The signaling service no longer knows "
+                + "server " + instanceId + ". Registering it again as a new server."));
     }
 
     void detail(Operation operation, String detail) {

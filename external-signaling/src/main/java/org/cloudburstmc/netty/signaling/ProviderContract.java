@@ -55,22 +55,11 @@ final class ProviderContract {
         }
     }
 
-    static List<String> operations() {
-        return SCHEMA.getAsJsonArray("x-operations").asList().stream().map(JsonElement::getAsString).toList();
-    }
-
     static Object[] contextValues(JsonObject context) {
         List<String> values = new ArrayList<>();
         for (JsonElement key : SCHEMA.getAsJsonArray("x-context-order")) {
-            values.add(context.get(key.getAsString()).getAsString());
-        }
-
-        if (SCHEMA.has("x-optional-context-order")) {
-            for (JsonElement key : SCHEMA.getAsJsonArray("x-optional-context-order")) {
-                if (context.has(key.getAsString())) {
-                    values.add(context.get(key.getAsString()).getAsString());
-                }
-            }
+            JsonElement value = context.get(key.getAsString());
+            values.add(value == null || value.isJsonNull() ? "" : value.getAsString());
         }
 
         return values.toArray();

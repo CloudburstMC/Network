@@ -117,7 +117,7 @@ class NativeDiagnosticProbeAttemptTest {
                             NativeProviderTransport.audience(context.incarnation()), 60000);
             validator.installKeys(
                     List.of(
-                            new StatelessAdmissionValidator.TicketKey(
+                            new AdmissionKey(
                                     permit.keyId(), permit.secret())));
             host =
                     new NativeAdmissionServerChannel(
@@ -166,7 +166,7 @@ class NativeDiagnosticProbeAttemptTest {
                             claims,
                             request.ufrag(),
                             request.offer(),
-                            permit.retireAt(),
+                            permit.retireAfter(),
                             Clock.system());
             String answer =
                     "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:active\r\na=ice-ufrag:"
@@ -272,7 +272,7 @@ class NativeDiagnosticProbeAttemptTest {
                 assertTrue(result.cleanupComplete(), mode);
                 assertFalse(result.pingVerified(), mode);
                 assertNull(result.attemptedRemote(), mode);
-                assertEquals(0, fixture.host.nativeStats()[0], mode);
+                assertEquals(0, fixture.host.stats().mux().received(), mode);
                 assertEquals(0, fixture.gate.stats().active(), mode);
                 assertEquals(0, fixture.players.get(), mode);
             }
@@ -380,7 +380,7 @@ class NativeDiagnosticProbeAttemptTest {
                     assertFalse(result.pingVerified());
                     assertFalse(result.pingVerified());
                     assertTrue(result.cleanupComplete());
-                    assertTrue(fixture.host.nativeStats()[0] > 0);
+                    assertTrue(fixture.host.stats().mux().received() > 0);
                     assertEquals(0, fixture.players.get());
                 }
             }
@@ -443,7 +443,7 @@ class NativeDiagnosticProbeAttemptTest {
                             change);
                     assertEquals(0, fixture.players.get(), change);
                     if (!change.equals("withdraw after checks")) {
-                        assertEquals(0, fixture.host.nativeStats()[0], change);
+                        assertEquals(0, fixture.host.stats().mux().received(), change);
                     }
                 }
             }
@@ -482,7 +482,7 @@ class NativeDiagnosticProbeAttemptTest {
                         result
                                 .isDone()); // The violating callback is still live; native
                                             // destruction already completed.
-                assertEquals(0, fixture.host.nativeStats()[0]);
+                assertEquals(0, fixture.host.stats().mux().received());
                 release.countDown();
                 var stopped = result.get(2, TimeUnit.SECONDS);
                 assertFalse(stopped.success());
@@ -525,7 +525,7 @@ class NativeDiagnosticProbeAttemptTest {
                 assertFalse(result.success());
                 assertEquals(NativeDiagnosticProbeAttempt.Reason.EXPIRED, result.reason());
                 assertTrue(result.cleanupComplete());
-                assertEquals(0, fixture.host.nativeStats()[0]);
+                assertEquals(0, fixture.host.stats().mux().received());
             }
         }
     }
@@ -552,7 +552,7 @@ class NativeDiagnosticProbeAttemptTest {
                 assertFalse(result.success());
                 assertEquals(NativeDiagnosticProbeAttempt.Reason.CANCELLED, result.reason());
                 assertTrue(result.cleanupComplete());
-                assertEquals(0, fixture.host.nativeStats()[0]);
+                assertEquals(0, fixture.host.stats().mux().received());
             } finally {
                 Thread.interrupted();
             }

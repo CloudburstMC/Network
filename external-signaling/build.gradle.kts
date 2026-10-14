@@ -64,8 +64,8 @@ tasks.register<JavaExec>("providerBench") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("org.cloudburstmc.netty.signaling.ProviderBench")
     listOf(
-        "providerOrigin", "providerState", "providerMode", "providerToken", "providerRegistrationMode",
-        "providerRegion", "providerPool", "providerTags", "providerHoldSeconds", "providerStopFile",
+        "providerOrigin", "providerState", "providerMode", "providerToken",
+        "providerHoldSeconds", "providerStopFile",
         "providerExtensionsFile", "providerControlTransport"
     ).forEach { name ->
         providers.gradleProperty(name).orNull?.let {
@@ -88,9 +88,7 @@ tasks.processResources {
 }
 
 tasks.processTestResources {
-    from(rootProject.file("docs/external-signaling/nxs-v1.fixtures.json"))
-    from(rootProject.file("docs/external-signaling")) {
-        include("diagnostic-exchange-v1.fixtures.json", "diagnostic-v1.fixtures.json", "stateless-admission-v1.fixtures.json", "cloudburst-protocol-vectors.v1.json", "provenance.json")
+    from(rootProject.file("docs/external-signaling/fixtures")) {
         into("nxs")
     }
 }

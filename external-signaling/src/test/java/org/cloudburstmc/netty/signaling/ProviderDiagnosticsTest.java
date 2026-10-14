@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.signaling;
 
 import com.google.gson.*;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
@@ -38,7 +39,7 @@ class ProviderDiagnosticsTest {
                 new CopyOnWriteArrayList<>();
         volatile int disabled;
         volatile boolean srflx;
-        List<ProviderTransport.TicketKey> keys;
+        List<AdmissionKey> keys;
 
         public boolean supportsDiagnosticAdmission() {
             return true;
@@ -107,9 +108,9 @@ class ProviderDiagnosticsTest {
         }
 
         @Override
-        public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+        public CompletionStage<Void> installAdmissionKeys(List<AdmissionKey> keys) {
             this.keys = List.copyOf(keys);
-            return super.installTicketKeys(keys);
+            return super.installAdmissionKeys(keys);
         }
 
         public CompletionStage<Void> configureDiagnostics(
@@ -158,25 +159,18 @@ class ProviderDiagnosticsTest {
         ProviderClient client(Path directory, Transport transport, boolean enabled, String method)
                 throws Exception {
             var config =
-                    new ProviderClient.Configuration(
-                            URI.create(provider.origin),
-                            "nxs-admission-v1",
-                            "Diagnostics",
-                            ProviderClient.NEW_SERVICE,
-                            ProviderClient.BEARER_TOKEN,
-                            "independent-provider-token",
-                            null,
-                            null,
-                            Map.of(),
-                            ProviderClient.ControlTransport.HTTP,
-                            enabled,
-                            method);
+                    ProviderClient.Configuration.builder(URI.create(provider.origin))
+                            .label("Diagnostics")
+                            .authorizationToken("independent-provider-token")
+                            .diagnosticAdmission(enabled)
+                            .connectivityMethod(method)
+                            .build();
             return new ProviderClient(
                     config,
                     new ProviderStateStore(directory),
                     transport,
                     () -> null,
-                    () -> new ProviderClient.Health(true, 10, "fixture", null),
+                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, null),
                     ignored -> {});
         }
 
@@ -220,16 +214,16 @@ class ProviderDiagnosticsTest {
                 assertTrue(observed.contains(true));
                 var policy = transport.policies.get(transport.policies.size() - 1);
                 assertEquals(
-                        registration.get("instanceId").getAsString(), policy.context().hostId());
+                        registration.instanceId(), policy.context().hostId());
                 assertEquals(
-                        registration.get("leaseGeneration").getAsLong(),
+                        registration.leaseGeneration(),
                         policy.context().generation());
                 assertEquals(f.provider.origin, policy.context().providerOrigin());
                 assertTrue(
                         policy.expiresAt() >= before
                                 && policy.expiresAt() <= System.currentTimeMillis() + 300000);
                 assertEquals(transport.keys.get(0).secret(), policy.keys().get(0).secret());
-                assertEquals(9007199254740991L, policy.keys().get(0).retireAt());
+                assertEquals(9007199254740991L, policy.keys().get(0).retireAfter());
                 var extension =
                         f.provider
                                 .lastHeartbeat
@@ -238,7 +232,7 @@ class ProviderDiagnosticsTest {
                 assertEquals(Set.of("version", "critical", "data"), extension.keySet());
                 var data = extension.getAsJsonObject("data");
                 assertEquals(
-                        Set.of("diagnostics", "candidateRevision", "method", "assistedFamilies"),
+                        Set.of("diagnostics", "candidateRevision", "method"),
                         data.keySet());
                 assertEquals("defined", data.get("method").getAsString());
                 assertEquals(1, data.get("candidateRevision").getAsLong());
@@ -294,7 +288,7 @@ class ProviderDiagnosticsTest {
                                 .getAsJsonObject("data");
                 assertTrue(data.get("diagnostics").getAsBoolean());
                 assertFalse(data.has("probeCandidates"));
-                assertTrue(data.getAsJsonArray("assistedFamilies").isEmpty());
+                assertFalse(data.has("assistedFamilies"));
                 assertEquals(
                         Set.of(transport.expiry),
                         new HashSet<>(
@@ -447,7 +441,7 @@ class ProviderDiagnosticsTest {
                                 .getAsJsonObject(NAMESPACE)
                                 .getAsJsonObject("data");
                 assertFalse(data.get("diagnostics").getAsBoolean());
-                assertTrue(data.getAsJsonArray("assistedFamilies").isEmpty());
+                assertFalse(data.has("assistedFamilies"));
             } finally {
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }
@@ -508,6 +502,8 @@ class ProviderDiagnosticsTest {
                                 .getAsJsonObject()
                                 .get("port")
                                 .getAsInt());
+                // Let the client finish that exchange before the next replacement races its reply
+                client.readiness().get(10, TimeUnit.SECONDS);
                 int replaced = f.provider.heartbeats;
                 transport.empty = true;
                 transport.revision++;

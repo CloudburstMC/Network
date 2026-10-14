@@ -225,7 +225,7 @@ class AdmissionGateTest extends AdmissionFixture {
         assertEquals(1024, AdmissionGate.Limits.defaults().pending());
         var trusted = validator().validate(request(), now);
         var v = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
-        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+        v.installKeys(List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var gate = new AdmissionGate(new AdmissionGate.Limits(2, 4, 1, 1000), v);
         var first = TestSignalingProvider.answer(trusted.remoteDescription(), trusted.remoteFingerprint(), 49199,
                 now + 30_000, TestSignalingProvider.AUDIENCE, false);

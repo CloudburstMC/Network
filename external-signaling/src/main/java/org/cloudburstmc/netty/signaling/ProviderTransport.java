@@ -20,6 +20,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonArray;
 import java.net.InetSocketAddress;
 import java.util.Set;
+import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 
 import java.util.List;
@@ -30,11 +31,6 @@ import java.util.concurrent.CompletionStage;
  * Transport boundary. Provider code performs no native allocation or game packet handling.
  */
 public interface ProviderTransport {
-    /**
-     * Existing PublishHostProfileRequest, exported from actual bound native metadata.
-     */
-    CompletionStage<JsonObject> hostProfile();
-
     default boolean supportsAssistedJoins() {
         return false;
     }
@@ -66,26 +62,7 @@ public interface ProviderTransport {
         private final Runnable current;
 
         public HostProfileSnapshot(JsonObject profile, Runnable requireCurrent) {
-            this(profile, 0, requireCurrent);
-        }
-
-        public HostProfileSnapshot(
-                JsonObject profile, long candidateRevision, Runnable requireCurrent) {
-            this(profile, candidateRevision, 0, requireCurrent);
-        }
-
-        public HostProfileSnapshot(
-                JsonObject profile,
-                long candidateRevision,
-                long publicationVersion,
-                Runnable requireCurrent) {
-            this(
-                    profile,
-                    candidateRevision,
-                    publicationVersion,
-                    profile.getAsJsonArray("candidates"),
-                    Set.of(),
-                    requireCurrent);
+            this(profile, 0, 0, profile.getAsJsonArray("candidates"), Set.of(), requireCurrent);
         }
 
         public HostProfileSnapshot(
@@ -159,21 +136,6 @@ public interface ProviderTransport {
             ConnectivityOutcome outcome,
             long checkedAt,
             long expiresAt) {
-        public ConnectivityCheck(
-                int family,
-                String method,
-                InetSocketAddress target,
-                ConnectivityOutcome outcome,
-                long checkedAt,
-                long expiresAt) {
-            this("unspecified", family, method, target, outcome, checkedAt, expiresAt);
-        }
-
-        public ConnectivityCheck(
-                int family, ConnectivityOutcome outcome, long checkedAt, long expiresAt) {
-            this(family, "defined", null, outcome, checkedAt, expiresAt);
-        }
-
         public ConnectivityCheck {
             Objects.requireNonNull(outcome);
             if (region == null || !region.matches("[A-Za-z0-9_-]{1,32}")) {
@@ -228,10 +190,6 @@ public interface ProviderTransport {
         return false;
     }
 
-    default CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy) {
-        throw new UnsupportedOperationException("Diagnostic admission unavailable");
-    }
-
     /** Original successful-heartbeat monotonic deadline; asynchronous installation must not renew it. */
     default CompletionStage<Void> configureDiagnostics(
             DiagnosticHostPolicy policy, long deadlineNanos) {
@@ -243,61 +201,22 @@ public interface ProviderTransport {
     }
 
     /**
-     * Capture endpoint ownership across asynchronous publication, persistence and application.
-     * Legacy adapters retain their unversioned behavior; versioned profiles require an owned override.
+     * The host profile exported from actual bound native metadata, with endpoint ownership held across
+     * asynchronous publication, persistence and application.
      */
-    default CompletionStage<HostProfileSnapshot> captureHostProfile() {
-        return hostProfile()
-                .thenApply(
-                        profile -> {
-                            if (profile == null || profile.has("version")) {
-                                throw new IllegalStateException(
-                                        "Versioned host profiles require snapshot ownership");
-                            }
-                            return new HostProfileSnapshot(profile, () -> {});
-                        });
-    }
+    CompletionStage<HostProfileSnapshot> captureHostProfile();
 
     /**
      * Atomic native snapshot installation. Durable application storage remains the caller's responsibility.
      */
-    CompletionStage<Void> installTicketKeys(List<TicketKey> keys);
+    CompletionStage<Void> installAdmissionKeys(List<AdmissionKey> keys);
 
     /**
-     * Whether this integration can observe the application join/rejection boundary.
+     * Drains at most {@code maximum} ticket-correlated transport observations.
      */
-    default boolean supportsGameOutcomes() {
-        return false;
-    }
-
-    /**
-     * Bounded ticket-correlated transport and application observations.
-     */
-    List<JsonObject> pollEvents();
-
-    /** Drain at most the caller's available retained capacity; unsupported transports must not drain anything. */
-    default List<JsonObject> pollEvents(int maximum) {
-        if (maximum < 0 || maximum > 256) {
-            throw new IllegalArgumentException("Invalid outcome poll bound");
-        }
-        if (maximum == 0) {
-            return List.of();
-        }
-        throw new UnsupportedOperationException("Bounded outcome polling unavailable");
-    }
+    List<JsonObject> pollEvents(int maximum);
 
     CompletionStage<Void> drain();
 
     CompletionStage<Void> close();
-
-    record TicketKey(String keyId, String secret, long notBefore, long retireAfter) {
-        public TicketKey(String keyId, String secret) {
-            this(keyId, secret, 0, Long.MAX_VALUE);
-        }
-
-        @Override
-        public String toString() {
-            return "TicketKey[keyId=" + keyId + "]";
-        }
-    }
 }

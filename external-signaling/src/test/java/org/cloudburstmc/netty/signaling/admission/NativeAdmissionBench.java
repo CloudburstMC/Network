@@ -88,7 +88,7 @@ public final class NativeAdmissionBench {
             host = NativeProviderTransport.open(bootstrap,
                     new InetSocketAddress("127.0.0.1", Integer.parseInt(args[1])), Path.of(args[2]), Path.of(args[3]),
                     new AdmissionGate.Limits(4, 8, 2, 10_000)).toCompletableFuture().get(5, TimeUnit.SECONDS);
-            host.installTicketKeys(List.of(new ProviderTransport.TicketKey(key.get("keyId").getAsString(),
+            host.installAdmissionKeys(List.of(new AdmissionKey(key.get("keyId").getAsString(),
                     key.get("secret").getAsString()))).toCompletableFuture().get();
             key = null;
             emit("profile", host.hostProfile().toCompletableFuture().get());

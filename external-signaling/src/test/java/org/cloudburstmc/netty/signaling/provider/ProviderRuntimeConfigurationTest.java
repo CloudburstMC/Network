@@ -10,12 +10,11 @@ import org.cloudburstmc.netty.signaling.ProviderClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -27,44 +26,33 @@ class ProviderRuntimeConfigurationTest {
     @Test
     void assistedOptInUsesExistingAdapterAndRequiresAuto(@TempDir Path directory) throws Exception {
         var settings =
-                new ProviderRuntimeConfiguration.Settings(
-                        "https://signal.example.net",
-                        "",
-                        List.of(),
-                        Map.of(),
-                        ProviderClient.ControlTransport.AUTO,
-                        false,
-                        true,
-                        true);
+                ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net")
+                        .controlTransport(ProviderClient.ControlTransport.AUTO)
+                        .maintainedCandidates(true)
+                        .assistedJoins(true)
+                        .build();
         assertTrue(
                 ProviderRuntimeConfiguration.resolve(
-                                settings, directory, "0.0.0.0", 19132, 10, "test")
+                                settings, directory, "0.0.0.0", 19132, 10)
                         .clientConfiguration()
                         .assistedJoins());
-        var disabled =
-                new ProviderRuntimeConfiguration.Settings(
-                        "https://signal.example.net", "", List.of(), Map.of());
+        var disabled = ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net").build();
         assertFalse(
                 ProviderRuntimeConfiguration.resolve(
-                                disabled, directory, "0.0.0.0", 19132, 10, "test")
+                                disabled, directory, "0.0.0.0", 19132, 10)
                         .clientConfiguration()
                         .assistedJoins());
         var http =
-                new ProviderRuntimeConfiguration.Settings(
-                        "https://signal.example.net",
-                        "",
-                        List.of(),
-                        Map.of(),
-                        ProviderClient.ControlTransport.HTTP,
-                        false,
-                        true,
-                        true);
+                ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net")
+                        .maintainedCandidates(true)
+                        .assistedJoins(true)
+                        .build();
         assertTrue(
                 assertThrows(
                                 IOException.class,
                                 () ->
                                         ProviderRuntimeConfiguration.resolve(
-                                                http, directory, "0.0.0.0", 19132, 10, "test"))
+                                                http, directory, "0.0.0.0", 19132, 10))
                         .getMessage()
                         .contains("control-transport=auto"));
     }
@@ -73,17 +61,21 @@ class ProviderRuntimeConfigurationTest {
 
     private static ProviderRuntimeConfiguration.Settings settings(String endpoint, String token,
                                                                   List<String> advertise,
-                                                                  Map<String, String> data) {
-        return new ProviderRuntimeConfiguration.Settings(endpoint, token, advertise, data);
+                                                                  String label) {
+        return ProviderRuntimeConfiguration.Settings.builder(endpoint)
+                .token(token)
+                .advertiseAddresses(advertise)
+                .label(label)
+                .build();
     }
 
     private static ProviderRuntimeConfiguration runtime(Path dir, ProviderRuntimeConfiguration.Settings settings)
             throws IOException {
-        return ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40, "Host");
+        return ProviderRuntimeConfiguration.resolve(settings, dir, "::", 20000, 40);
     }
 
     private static ProviderRuntimeConfiguration runtime(Path dir) throws IOException {
-        return runtime(dir, settings(PROVIDER, "", List.of(), Map.of()));
+        return runtime(dir, settings(PROVIDER, "", List.of(), "Host"));
     }
 
     @Test
@@ -96,24 +88,16 @@ class ProviderRuntimeConfigurationTest {
         assertEquals(40, result.capacity());
         assertEquals("Host", result.label());
         assertEquals(dir.resolve("provider-state"), result.stateDirectory());
-        assertEquals("automatic", result.clientConfiguration().registrationMode());
-        assertEquals("anonymous-proof-of-work", result.clientConfiguration().authorizationScheme());
+        assertNull(result.clientConfiguration().authorizationToken());
         assertEquals(
-                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP,
-                result.clientConfiguration().controlTransport());
+                ProviderClient.ControlTransport.HTTP, result.clientConfiguration().controlTransport());
         var automatic =
                 runtime(
                         dir,
-                        new ProviderRuntimeConfiguration.Settings(
-                                PROVIDER,
-                                "",
-                                List.of(),
-                                Map.of(),
-                                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport
-                                        .AUTO));
-        assertEquals(
-                org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.AUTO,
-                automatic.clientConfiguration().controlTransport());
+                        ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
+                                .controlTransport(ProviderClient.ControlTransport.AUTO)
+                                .build());
+        assertEquals(ProviderClient.ControlTransport.AUTO, automatic.clientConfiguration().controlTransport());
     }
 
     @Test
@@ -121,13 +105,10 @@ class ProviderRuntimeConfigurationTest {
         assertEquals(false, runtime(dir).clientConfiguration().diagnosticAdmission());
         for (var endpoints : List.of(List.<String>of(), List.of("1.1.1.1:19132"))) {
             var settings =
-                    new ProviderRuntimeConfiguration.Settings(
-                            PROVIDER,
-                            "",
-                            endpoints,
-                            Map.of(),
-                            org.cloudburstmc.netty.signaling.ProviderClient.ControlTransport.HTTP,
-                            true);
+                    ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
+                            .advertiseAddresses(endpoints)
+                            .diagnosticAdmission(true)
+                            .build();
             var configured = runtime(dir, settings).clientConfiguration();
             assertEquals(true, configured.diagnosticAdmission());
             assertEquals(
@@ -139,14 +120,11 @@ class ProviderRuntimeConfigurationTest {
     @Test
     void readsTheSettingsWithoutLeakingTheToken(@TempDir Path dir) throws Exception {
         ProviderRuntimeConfiguration result = runtime(dir, settings(PROVIDER, "configured-secret",
-                List.of("1.1.1.1:29133", "[2606:4700:4700::1111]:39133", "1.1.1.1:29133"),
-                Map.of("region", "EU", "pool", "proxy", "location", "london")));
+                List.of("1.1.1.1:29133", "[2606:4700:4700::1111]:39133", "1.1.1.1:29133"), "lobby-0"));
 
         assertEquals("configured-secret", result.authorizationToken());
-        assertEquals("bearer-token", result.clientConfiguration().authorizationScheme());
-        assertEquals("EU", result.region());
-        assertEquals("proxy", result.pool());
-        assertEquals(Map.of("location", "london"), result.tags());
+        assertEquals("configured-secret", result.clientConfiguration().authorizationToken());
+        assertEquals("lobby-0", result.clientConfiguration().label());
         // The duplicate endpoint collapses
         assertEquals(2, result.advertisedEndpoints().size());
         assertFalse(result.toString().contains("configured-secret"));
@@ -154,14 +132,18 @@ class ProviderRuntimeConfigurationTest {
     }
 
     @Test
-    void fillsInThePlacementWhenOnlyPartOfItIsConfigured(@TempDir Path dir) throws Exception {
-        ProviderRuntimeConfiguration result = runtime(dir,
-                settings(PROVIDER, "", List.of(), Map.of("region", "EU", "role", "proxy")));
+    void namesTheInstanceAfterTheHostUnlessALabelIsConfigured(@TempDir Path dir) throws Exception {
+        assertEquals("lobby-0", runtime(dir, settings(PROVIDER, "", List.of(), " lobby-0 ")).label());
 
-        assertEquals("EU", result.region());
-        assertEquals("default", result.pool());
-        assertEquals(Map.of("role", "proxy"), result.tags());
-        assertNull(result.authorizationToken());
+        for (String unset : new String[]{null, " "}) {
+            String fallback = runtime(dir, settings(PROVIDER, "", List.of(), unset)).label();
+            if (fallback != null) {
+                assertFalse(fallback.isBlank());
+                assertTrue(fallback.length() <= 128);
+            }
+        }
+
+        assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "", List.of(), "x".repeat(129))));
     }
 
     @Test
@@ -170,30 +152,31 @@ class ProviderRuntimeConfigurationTest {
 
         for (String source : List.of("file:token", "./token", dir.resolve("token").toString())) {
             assertEquals("file-secret",
-                    runtime(dir, settings(PROVIDER, source, List.of(), Map.of())).authorizationToken());
+                    runtime(dir, settings(PROVIDER, source, List.of(), null)).authorizationToken());
         }
         for (String value : List.of("file:missing", "file:", "bad secret")) {
             IOException failure = assertThrows(IOException.class,
-                    () -> runtime(dir, settings(PROVIDER, value, List.of(), Map.of())));
+                    () -> runtime(dir, settings(PROVIDER, value, List.of(), null)));
             assertFalse(failure.toString().contains("bad secret"));
         }
 
         // A file holding only a line terminator carries no token
         Files.writeString(dir.resolve("token"), "\n");
-        assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "file:token", List.of(), Map.of())));
+        assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "file:token", List.of(), null)));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"http://signal.example.net", "signal.example.net",
-            "https://signal.example.net/path", "https://user@signal.example.net"})
+            "https://signal.example.net/path", "https://user@signal.example.net",
+            "https://xn--bcher-kva.example", "https://[2001:DB8:0:0::1]", "https://010.0.0.1"})
     void refusesAnInsecureOrMalformedProvider(String endpoint, @TempDir Path dir) {
-        assertThrows(IOException.class, () -> runtime(dir, settings(endpoint, "", List.of(), Map.of())));
+        assertThrows(IOException.class, () -> runtime(dir, settings(endpoint, "", List.of(), null)));
     }
 
     @Test
     void allowsPlainHttpOnLoopbackForLocalDevelopment(@TempDir Path dir) throws Exception {
         assertEquals("http://127.0.0.1:8080",
-                runtime(dir, settings("http://127.0.0.1:8080", "", List.of(), Map.of())).origin().toString());
+                runtime(dir, settings("http://127.0.0.1:8080", "", List.of(), null)).origin().toString());
     }
 
     @ParameterizedTest
@@ -201,37 +184,35 @@ class ProviderRuntimeConfigurationTest {
             "224.0.0.1:19133", "1.1.1.1:1.5", "[fe80::1]:19133", "203.0.113.1:19133", "[2001:db8::1]:19133",
             "255.255.255.255:19133", "198.18.0.1:19133"})
     void refusesAnAdvertisedEndpointAPeerCouldNotUse(String endpoint, @TempDir Path dir) {
-        assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "", List.of(endpoint), Map.of())));
+        assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "", List.of(endpoint), null)));
     }
 
     @Test
     void needsAFixedUdpPort(@TempDir Path dir) throws Exception {
-        ProviderRuntimeConfiguration.Settings settings = settings(PROVIDER, "", List.of(), Map.of());
+        ProviderRuntimeConfiguration.Settings settings = settings(PROVIDER, "", List.of(), null);
 
         // 0 would be ephemeral, and the provider hands the port out
         assertThrows(IOException.class,
-                () -> ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 0, 20, "Host"));
+                () -> ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 0, 20));
         assertEquals(65535,
-                ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 65535, 20, "Host").udpPort());
+                ProviderRuntimeConfiguration.resolve(settings, dir, "0.0.0.0", 65535, 20).udpPort());
     }
 
     @Test
     void explicitAssistanceReachesClientAndNativeHost(@TempDir Path dir) throws Exception {
         for (boolean assisted : List.of(false, true)) {
             var settings =
-                    new ProviderRuntimeConfiguration.Settings(
-                            PROVIDER,
-                            "",
-                            List.of(),
-                            Map.of(),
-                            ProviderClient.ControlTransport.AUTO,
-                            true,
-                            true,
-                            assisted);
+                    ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
+                            .controlTransport(ProviderClient.ControlTransport.AUTO)
+                            .diagnosticAdmission(true)
+                            .maintainedCandidates(true)
+                            .assistedJoins(assisted)
+                            .build();
             var selected = runtime(dir, settings);
             assertEquals(assisted, selected.clientConfiguration().assistedJoins());
             assertEquals(
-                    Boolean.toString(assisted), selected.nativeHostOptions().get("assistedJoins"));
+                    Boolean.toString(assisted),
+                    NativeProviderHostFactory.options(selected).get("assistedJoins"));
         }
     }
 
@@ -240,34 +221,40 @@ class ProviderRuntimeConfigurationTest {
             throws Exception {
         for (var endpoints : List.of(List.<String>of(), List.of("8.8.8.8:19133"))) {
             var settings =
-                    new ProviderRuntimeConfiguration.Settings(
-                            PROVIDER,
-                            "",
-                            endpoints,
-                            Map.of(),
-                            ProviderClient.ControlTransport.HTTP,
-                            true,
-                            true);
-            var selected = runtime(dir, settings);
-            assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
-            assertFalse(selected.nativeHostOptions().containsKey("stunServers"));
+                    ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
+                            .advertiseAddresses(endpoints)
+                            .diagnosticAdmission(true)
+                            .maintainedCandidates(true)
+                            .build();
+            var options = NativeProviderHostFactory.options(runtime(dir, settings));
+            assertEquals("maintained-v1", options.get("candidatePublication"));
+            assertFalse(options.containsKey("stunServers"));
         }
     }
 
     @Test
-    void disabledWarmingKeepsPublicationAndRecoveryPolicy(@TempDir Path dir) throws Exception {
-        var settings =
-                new ProviderRuntimeConfiguration.Settings(
-                        PROVIDER,
-                        "",
-                        List.of(),
-                        Map.of(),
-                        ProviderClient.ControlTransport.HTTP,
-                        true,
-                        false,
-                        false);
-        var selected = runtime(dir, settings);
-        assertEquals("maintained-v1", selected.nativeHostOptions().get("candidatePublication"));
-        assertEquals("false", selected.nativeHostOptions().get("stunWarming"));
+    void defaultHostsAdvertiseTheirGameplayListener(@TempDir Path dir) throws Exception {
+        var options = NativeProviderHostFactory.options(runtime(dir));
+        assertFalse(options.containsKey("candidatePublication"));
+        assertEquals("false", options.get("localDevelopment"));
+        assertEquals("true", NativeProviderHostFactory.options(
+                runtime(dir, settings("http://127.0.0.1:8080", "", List.of(), null))).get("localDevelopment"));
+    }
+
+    @Test
+    void assistanceWithoutWarmingKeepsMaintainedPublication(@TempDir Path dir) throws Exception {
+        var settings = ProviderRuntimeConfiguration.Settings.builder(PROVIDER)
+                .controlTransport(ProviderClient.ControlTransport.AUTO)
+                .assistedJoins(true)
+                .build();
+        var options = NativeProviderHostFactory.options(runtime(dir, settings));
+        assertEquals("maintained-v1", options.get("candidatePublication"));
+        assertEquals("false", options.get("stunWarming"));
+    }
+
+    @Test
+    void refusesMoreThan32AdvertisedEndpoints(@TempDir Path dir) {
+        var endpoints = java.util.stream.IntStream.rangeClosed(1, 33).mapToObj(i -> "8.8.8.8:" + (20000 + i)).toList();
+        assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "", endpoints, null)));
     }
 }

@@ -36,7 +36,7 @@ class AdmissionFixture {
 
     StatelessAdmissionValidator validator(String audience) {
         var v = new StatelessAdmissionValidator(audience, f.get("maxTtlMs").getAsLong());
-        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001",
+        v.installKeys(List.of(new AdmissionKey("K001",
                 f.getAsJsonObject("context").get("secret").getAsString())));
         return v;
     }
@@ -101,7 +101,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         assertNull(v.validate(request(altered, remote), now));
         assertNull(v.validate(request(token, "clientOtherUfrag"), now));
         assertThrows(IllegalArgumentException.class, () -> request(token + "=", remote));
-        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001",
+        v.installKeys(List.of(new AdmissionKey("K001",
                 "a-different-secret-that-has-32-characters")));
         assertNull(v.validate(request(), now));
         v.clear();
@@ -120,7 +120,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
     void keyUpdatesAreBoundedAtomicAndRedacted() {
         var v = validator();
         var duplicate =
-                new StatelessAdmissionValidator.TicketKey("K002", "a-valid-background-key-of-at-least-32-bytes");
+                new AdmissionKey("K002", "a-valid-background-key-of-at-least-32-bytes");
         assertThrows(IllegalArgumentException.class, () -> v.installKeys(List.of(duplicate, duplicate)));
         assertEquals(Set.of("K001"), v.keyIds());
         assertFalse(duplicate.toString().contains(duplicate.secret()));
@@ -160,9 +160,8 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
     void backgroundKeyValidityBoundsDoNotExtendTokens() {
         var v = validator();
         String secret = f.getAsJsonObject("context").get("secret").getAsString();
-        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", secret, now + 1, now + 20_000)));
-        assertNull(v.validate(request(), now));
-        assertNotNull(v.validate(request(), now + 1));
+        v.installKeys(List.of(new AdmissionKey("K001", secret, now + 20_000)));
+        assertNotNull(v.validate(request(), now));
         assertNull(v.validate(request(), now + 20_000));
     }
 

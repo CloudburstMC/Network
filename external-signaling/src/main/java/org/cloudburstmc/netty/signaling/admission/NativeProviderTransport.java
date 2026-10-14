@@ -28,7 +28,6 @@ import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.security.SecureRandom;
-import java.time.Instant;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -39,9 +38,9 @@ import java.util.function.Supplier;
  * Profile adapter: background key/profile lifecycle only; no per-join metadata input is used.
  */
 public final class NativeProviderTransport implements ProviderTransport {
-    public static final String CAPABILITY = "nethernet.stateless-admission.v1";
+    private static final String CAPABILITY = "nethernet.stateless-admission.v1";
 
-    private record Epoch(String id, long notBefore, long retireAfter) {
+    private record Epoch(String id, long retireAfter) {
     }
 
     private final NativeAdmissionServerChannel channel;
@@ -101,7 +100,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     /**
      * The caller provisions the host PEM identity before opening/registration. No client state is accepted.
      */
-    public static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
+    static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
                                                                 Path certificate, Path privateKey,
                                                                 AdmissionGate.Limits limits) {
         return open(bootstrap, bind, bind, certificate, privateKey, limits);
@@ -110,7 +109,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     /**
      * Explicit advertised candidate supports wildcard/local binds and operator-provisioned NAT mappings.
      */
-    public static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
+    static CompletionStage<NativeProviderTransport> open(ServerBootstrap bootstrap, InetSocketAddress bind,
                                                                 InetSocketAddress advertised, Path certificate,
                                                                 Path privateKey, AdmissionGate.Limits limits) {
         return open(bootstrap, bind, () -> List.of(advertised), certificate, privateKey, limits);
@@ -127,7 +126,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     /** Explicit maintained publication, on the already bound gameplay mux. No STUN server discovery occurs here. */
-    public static CompletionStage<NativeProviderTransport> openMaintained(
+    static CompletionStage<NativeProviderTransport> openMaintained(
             ServerBootstrap bootstrap,
             EndpointSelection selection,
             Map<EndpointSelection.Family, InetSocketAddress> numericStunServers,
@@ -139,7 +138,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     /** Explicit assistance uses bounded per-join discovery instead of background STUN warming. */
-    public static CompletionStage<NativeProviderTransport> openMaintained(
+    static CompletionStage<NativeProviderTransport> openMaintained(
             ServerBootstrap bootstrap,
             EndpointSelection selection,
             Map<EndpointSelection.Family, InetSocketAddress> numericStunServers,
@@ -243,7 +242,7 @@ public final class NativeProviderTransport implements ProviderTransport {
             byte[] nonce = new byte[16];
             new SecureRandom().nextBytes(nonce);
             String incarnation = HexFormat.of().formatHex(nonce);
-            var validator = new StatelessAdmissionValidator(audience(incarnation), 60_000);
+            var validator = new StatelessAdmissionValidator(audience(incarnation), 120_000);
             var endpoint = new NativeAdmissionServerChannel(identity, validator, limits, true);
             bootstrap
                     .clone()
@@ -501,8 +500,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     /** Trusted local configuration, serialized on this listener; no installation acknowledgement or control owner. */
-    @Override
-    public CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy) {
+    CompletionStage<Void> configureDiagnostics(DiagnosticHostPolicy policy) {
         long started = System.nanoTime();
         long remaining = Math.min(300000, policy.expiresAt() - System.currentTimeMillis());
         if (remaining <= 0) {
@@ -682,8 +680,7 @@ public final class NativeProviderTransport implements ProviderTransport {
                 : java.util.OptionalLong.of(diagnosticGate.stats().droppedResults());
     }
 
-    @Override
-    public CompletionStage<JsonObject> hostProfile() {
+    CompletionStage<JsonObject> hostProfile() {
         return captureHostProfile().thenApply(HostProfileSnapshot::profile);
     }
 
@@ -707,8 +704,6 @@ public final class NativeProviderTransport implements ProviderTransport {
                                     .noneMatch(
                                             e ->
                                                     e.id().equals(join.keyId())
-                                                            && e.notBefore()
-                                                                    <= System.currentTimeMillis()
                                                             && e.retireAfter()
                                                                     > System.currentTimeMillis()
                                                             && e.retireAfter()
@@ -755,7 +750,7 @@ public final class NativeProviderTransport implements ProviderTransport {
 
         // The provider supplies keys oldest-to-newest and acknowledges its last epoch before publication.
         for (Epoch epoch : epochs) {
-            if (epoch.notBefore() <= now && epoch.retireAfter() > now && installed.contains(epoch.id())) {
+            if (epoch.retireAfter() > now && installed.contains(epoch.id())) {
                 keyId = epoch.id();
             }
         }
@@ -785,7 +780,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         JsonObject profile = new JsonObject();
         profile.add("candidates", candidates);
         profile.add("statelessAdmission", capability);
-        profile.addProperty("credentialKeyId", keyId);
+        profile.addProperty("admissionKeyId", keyId);
         profile.addProperty("dtlsFingerprint", channel.identity().fingerprint());
         profile.addProperty("maxMessageSize", NetherNetFrameDecoder.MESSAGE_LIMIT);
         profile.addProperty("sctpPort", 5000);
@@ -841,11 +836,9 @@ public final class NativeProviderTransport implements ProviderTransport {
             JsonObject candidate = new JsonObject();
             candidate.addProperty("address", endpoint.getAddress().getHostAddress());
             candidate.addProperty("port", endpoint.getPort());
-            candidate.addProperty("component", 1);
             index++;
             candidate.addProperty("foundation", Integer.toString(index));
             candidate.addProperty("priority", 2130706431 - (index - 1) * 256);
-            candidate.addProperty("protocol", "udp");
             candidate.addProperty("type", selected.type().wire());
             candidates.add(candidate);
         }
@@ -870,7 +863,7 @@ public final class NativeProviderTransport implements ProviderTransport {
     }
 
     @Override
-    public synchronized CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+    public synchronized CompletionStage<Void> installAdmissionKeys(List<AdmissionKey> keys) {
         if (closed) {
             return CompletableFuture.failedFuture(new IllegalStateException("Native endpoint closed"));
         }
@@ -881,21 +874,14 @@ public final class NativeProviderTransport implements ProviderTransport {
             }
             keys = List.copyOf(keys);
 
-            validator.installKeys(keys.stream()
-                    .map(k -> new StatelessAdmissionValidator.TicketKey(k.keyId(), k.secret(), k.notBefore(),
-                            k.retireAfter())).toList());
-            epochs = keys.stream().map(k -> new Epoch(k.keyId(), k.notBefore(), k.retireAfter())).toList();
+            validator.installKeys(keys);
+            epochs = keys.stream().map(k -> new Epoch(k.keyId(), k.retireAfter())).toList();
             validator.retireKeys(System.currentTimeMillis());
 
             return CompletableFuture.completedFuture(null);
         } catch (Exception invalid) {
             return CompletableFuture.failedFuture(invalid);
         }
-    }
-
-    @Override
-    public List<JsonObject> pollEvents() {
-        return pollEvents(256);
     }
 
     @Override
@@ -907,9 +893,7 @@ public final class NativeProviderTransport implements ProviderTransport {
                             result.addProperty("ticketId", event.ticketId());
                             result.addProperty("stage", event.stage());
                             result.addProperty("reason", event.reason());
-                            result.addProperty(
-                                    "occurredAt",
-                                    Instant.ofEpochMilli(event.occurredAt()).toString());
+                            result.addProperty("occurredAt", event.occurredAt());
                             if (event.remoteEndpoint() != null) {
                                 result.addProperty(
                                         "remoteAddress",

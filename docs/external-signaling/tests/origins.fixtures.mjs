@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 const file = fileURLToPath(
-  new URL("control-v1.origins.fixtures.json", import.meta.url),
+  new URL("../fixtures/origins.fixtures.json", import.meta.url),
 );
 let fixture;
 if (process.argv.includes("--write")) {
@@ -205,22 +205,6 @@ for (const vector of fixture.vectors) {
     assert.equal(new URL(vector.origin).origin, vector.origin, vector.origin);
   }
 }
-const javaOutput = process.argv.find((value) =>
-  value.startsWith("--java-output="),
-);
-if (javaOutput) {
-  const output = JSON.parse(
-    readFileSync(javaOutput.slice("--java-output=".length), "utf8"),
-  );
-  assert.equal(output.length, fixture.vectors.length);
-  output.forEach((accepted, index) =>
-    assert.equal(
-      accepted,
-      fixture.vectors[index].accepted,
-      fixture.vectors[index].origin,
-    ),
-  );
-}
 console.log(
-  `Verified ${fixture.vectors.length} explicit control-origin cases; accepted origins retain exact WHATWG bytes${javaOutput ? "; Java agrees" : ""}.`,
+  `Verified ${fixture.vectors.length} explicit control-origin cases; accepted origins retain exact WHATWG bytes.`,
 );

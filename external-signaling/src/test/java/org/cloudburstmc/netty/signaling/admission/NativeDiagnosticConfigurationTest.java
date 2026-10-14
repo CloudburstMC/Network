@@ -80,9 +80,9 @@ class NativeDiagnosticConfigurationTest {
                 transport.channel().drainAdmissions();
             }
             transport
-                    .installTicketKeys(
+                    .installAdmissionKeys(
                             List.of(
-                                    new ProviderTransport.TicketKey(
+                                    new AdmissionKey(
                                             "K001", TestSignalingProvider.SECRET)))
                     .toCompletableFuture()
                     .get();
@@ -527,9 +527,9 @@ class NativeDiagnosticConfigurationTest {
                                         .withBindAddress(InetAddress.getLoopbackAddress())
                                         .withDisableAutoNegotiation(true))) {
             host.transport
-                    .installTicketKeys(
+                    .installAdmissionKeys(
                             List.of(
-                                    new ProviderTransport.TicketKey(
+                                    new AdmissionKey(
                                             "K001", TestSignalingProvider.SECRET)))
                     .toCompletableFuture()
                     .get();

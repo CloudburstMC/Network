@@ -930,30 +930,57 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         return result;
     }
 
-    public AdmissionGate.Stats admissionStats() {
+    /**
+     * Point-in-time counters for operator diagnostics. {@code mux} is null before the endpoint binds or after it closes.
+     */
+    public record Stats(AdmissionGate.Stats admission, int liveNativePeers, long creationAttempts,
+                        long droppedEvents, Mux mux) {
+        /** Native UDP mux counters. */
+        public record Mux(long received, long rejected, long agents, long mappedTuples, long pendingRequests,
+                          long notifications, long duplicates) {
+        }
+    }
+
+    public Stats stats() {
+        IceUdpMuxListener listener = mux;
+        Stats.Mux counters = null;
+        if (listener != null) {
+            try {
+                var n = listener.statistics();
+                counters = new Stats.Mux(n.received(), n.rejected(), n.agents(), n.mappedTuples(),
+                        n.pendingRequests(), n.notifications(), n.duplicates());
+            } catch (IllegalStateException closed) {
+                // Closed after the read above
+            }
+        }
+        return new Stats(admissionStats(), liveNativePeers(), creationAttempts(), droppedEvents(), counters);
+    }
+
+    AdmissionGate.Stats admissionStats() {
         return gate.stats();
     }
 
-    public int liveNativePeers() {
+    int liveNativePeers() {
         NativeDiagnosticHostGate diagnostic = diagnostics;
         return liveNativePeers.get()
                 + (diagnostic == null ? 0 : diagnostic.stats().liveNativePeers());
     }
 
-    public long creationAttempts() {
+    long creationAttempts() {
         return creations.get();
     }
 
-    public long droppedEvents() {
+    long droppedEvents() {
         return droppedEvents.get();
     }
 
-    public long[] nativeStats() {
-        IceUdpMuxListener listener = mux;
-        if (listener == null) {
+    long[] nativeStats() {
+        Stats.Mux counters = stats().mux();
+        if (counters == null) {
             throw new IllegalStateException("Endpoint not bound");
         }
-        return listener.stats();
+        return new long[]{counters.received(), counters.rejected(), counters.agents(), counters.mappedTuples(),
+                counters.pendingRequests(), counters.notifications(), counters.duplicates()};
     }
 
     /**

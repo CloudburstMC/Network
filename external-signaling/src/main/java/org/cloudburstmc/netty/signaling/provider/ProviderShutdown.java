@@ -33,11 +33,6 @@ public final class ProviderShutdown implements AutoCloseable {
     private final AtomicBoolean requested = new AtomicBoolean();
     private final Thread hook;
 
-    public ProviderShutdown(Supplier<? extends CompletionStage<Void>> stop, Consumer<String> diagnostics) {
-        this(stop, () -> {
-        }, diagnostics);
-    }
-
     public ProviderShutdown(Supplier<? extends CompletionStage<Void>> stop, Runnable cleanup, Consumer<String> diagnostics) {
         this.stop = stop;
         this.cleanup = cleanup;

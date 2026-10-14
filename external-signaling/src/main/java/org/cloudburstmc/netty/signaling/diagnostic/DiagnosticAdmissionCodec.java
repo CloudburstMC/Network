@@ -1,7 +1,7 @@
 /* Copyright 2026 CloudburstMC. Licensed under the Apache License, Version 2.0. */
 package org.cloudburstmc.netty.signaling.diagnostic;
 
-import org.cloudburstmc.netty.signaling.control.ControlOrigin;
+import org.cloudburstmc.netty.signaling.ProviderOrigin;
 import org.cloudburstmc.netty.signaling.admission.StatelessAdmissionCodec;
 import org.cloudburstmc.netty.signaling.admission.VerifiedAdmission;
 import java.nio.ByteBuffer;
@@ -31,7 +31,7 @@ public final class DiagnosticAdmissionCodec {
             if (providerOrigin == null
                     || providerOrigin.length() > 256
                     || !providerOrigin.startsWith("https://")
-                    || !ControlOrigin.isCanonical(providerOrigin)
+                    || !ProviderOrigin.isCanonical(providerOrigin)
                     || !hostId.matches("[A-Za-z0-9_-]{1,128}")) {
                 throw invalid();
             }
@@ -40,7 +40,7 @@ public final class DiagnosticAdmissionCodec {
         }
     }
 
-    public record Key(String keyId, String secret, long notBefore, long retireAt) {
+    public record Key(String keyId, String secret, long notBefore, long retireAfter) {
         public Key {
             if (!keyId.matches("[A-Z0-9]{4}")
                     || secret.length() > 256
@@ -50,7 +50,7 @@ public final class DiagnosticAdmissionCodec {
                 throw invalid();
             }
             integer(notBefore, 0, SAFE);
-            integer(retireAt, notBefore + 1, SAFE);
+            integer(retireAfter, notBefore + 1, SAFE);
         }
 
         @Override
@@ -324,7 +324,7 @@ public final class DiagnosticAdmissionCodec {
         if (now < k.notBefore
                 || now >= c.expiresAt
                 || c.expiresAt - now > MAX_ATTEMPT_MILLIS
-                || c.expiresAt > k.retireAt
+                || c.expiresAt > k.retireAfter
                 || c.expiresAt > parent) {
             throw invalid();
         }

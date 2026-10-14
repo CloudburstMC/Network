@@ -5,23 +5,11 @@
   "type": "object",
   "required": [
     "protocol",
-    "mode",
-    "profile",
     "publicKeyJwk"
   ],
   "properties": {
     "protocol": {
       "const": "nethernet-external-signaling-v1"
-    },
-    "mode": {
-      "enum": [
-        "automatic",
-        "new-service",
-        "attach-instance"
-      ]
-    },
-    "profile": {
-      "type": "string"
     },
     "publicKeyJwk": {
       "type": "object",
@@ -56,90 +44,15 @@
     "label": {
       "type": "string",
       "maxLength": 128
-    },
-    "authorization": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "scheme"
-      ],
-      "properties": {
-        "scheme": {
-          "enum": [
-            "anonymous-proof-of-work",
-            "bearer-token"
-          ]
-        }
-      }
-    },
-    "placement": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "region",
-        "pool"
-      ],
-      "properties": {
-        "region": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_-]{1,32}$"
-        },
-        "pool": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_-]{1,64}$"
-        },
-        "tags": {
-          "type": "object",
-          "propertyNames": {
-            "pattern": "^[A-Za-z0-9_.-]{1,32}$"
-          },
-          "additionalProperties": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          },
-          "maxProperties": 16
-        }
-      }
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "mode": {
-            "const": "attach-instance"
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "placement",
-          "authorization"
-        ],
-        "properties": {
-          "authorization": {
-            "properties": {
-              "scheme": {
-                "const": "bearer-token"
-              }
-            }
-          }
-        }
-      }
-    }
-  ],
   "$defs": {
     "discovery": {
       "type": "object",
       "required": [
         "provider",
-        "controlOrigin",
         "protocols",
         "signatures",
-        "modes",
-        "profiles",
-        "operations",
         "authorization",
         "limits"
       ],
@@ -147,39 +60,18 @@
         "authorization": {
           "type": "object",
           "required": [
-            "header",
             "schemes"
           ],
           "properties": {
-            "header": {
-              "const": "Authorization"
-            },
             "schemes": {
               "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
               "items": {
-                "type": "object",
-                "required": [
-                  "scheme",
-                  "modes"
-                ],
-                "properties": {
-                  "scheme": {
-                    "enum": [
-                      "anonymous-proof-of-work",
-                      "bearer-token"
-                    ]
-                  },
-                  "modes": {
-                    "type": "array",
-                    "items": {
-                      "enum": [
-                        "automatic",
-                        "new-service",
-                        "attach-instance"
-                      ]
-                    }
-                  }
-                }
+                "enum": [
+                  "anonymous-proof-of-work",
+                  "bearer-token"
+                ]
               }
             }
           }
@@ -187,48 +79,18 @@
         "extensions": {
           "$ref": "#/$defs/extensions"
         },
-        "operations": {
+        "limits": {
           "type": "object",
           "required": [
-            "register",
-            "complete",
-            "heartbeat",
-            "outcomes",
-            "rotate",
-            "retire",
-            "deregister"
+            "heartbeatIntervalMs"
           ],
           "properties": {
-            "register": {
-              "type": "string",
-              "format": "uri"
-            },
-            "complete": {
-              "type": "string",
-              "format": "uri"
-            },
-            "heartbeat": {
-              "type": "string",
-              "format": "uri"
-            },
-            "outcomes": {
-              "type": "string",
-              "format": "uri"
-            },
-            "rotate": {
-              "type": "string",
-              "format": "uri"
-            },
-            "retire": {
-              "type": "string",
-              "format": "uri"
-            },
-            "deregister": {
-              "type": "string",
-              "format": "uri"
+            "heartbeatIntervalMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 30000
             }
-          },
-          "additionalProperties": false
+          }
         }
       }
     },
@@ -277,6 +139,47 @@
               "type": "string"
             }
           }
+        },
+        "context": {
+          "type": "object",
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "new-service",
+                "attach-instance",
+                "recover"
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "authorizationId": {
+              "type": "string"
+            },
+            "serviceId": {
+              "type": "string"
+            },
+            "registrationId": {
+              "type": "string"
+            }
+          },
+          "description": "Absent strings digest as empty. recover selects recovery of registrationId."
+        },
+        "pow": {
+          "type": "object",
+          "required": [
+            "difficulty"
+          ],
+          "properties": {
+            "difficulty": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 24
+            }
+          }
         }
       }
     },
@@ -303,12 +206,7 @@
         "registrationId",
         "instanceId",
         "keyId",
-        "profile",
-        "placement",
-        "heartbeatIntervalMs",
-        "leaseGeneration",
-        "leaseDeadline",
-        "readiness"
+        "leaseGeneration"
       ],
       "properties": {
         "protocol": {
@@ -324,6 +222,12 @@
         "publicAddress": {
           "type": "string",
           "minLength": 1
+        },
+        "admissionKey": {
+          "$ref": "#/$defs/admissionKey"
+        },
+        "operatorAction": {
+          "$ref": "#/$defs/operatorAction"
         }
       },
       "dependentRequired": {
@@ -334,20 +238,7 @@
           "serviceId"
         ]
       },
-      "description": "An independent runtime identity. Optional serviceId/publicAddress describe a public endpoint at this observation; they are not stable instance identity. Pool attachments may have no public endpoint or serve several endpoints."
-    },
-    "readiness": {
-      "type": "object",
-      "required": [
-        "serverTime",
-        "instanceId",
-        "serviceAvailable",
-        "instanceRoutable",
-        "readiness",
-        "leaseGeneration",
-        "leaseDeadline",
-        "placement"
-      ]
+      "description": "An independent runtime identity. Optional serviceId/publicAddress describe a public endpoint at this observation; they are not stable instance identity. Attached instances may have no public endpoint or serve several endpoints."
     },
     "rotation": {
       "type": "object",
@@ -356,12 +247,41 @@
         "proof"
       ]
     },
-    "ticketKey": {
+    "rotationResponse": {
+      "type": "object",
+      "required": [
+        "keyId"
+      ],
+      "properties": {
+        "keyId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "oldKeyRetiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the provider stops accepting the previous key unless it is retired sooner."
+        }
+      }
+    },
+    "admissionKey": {
       "type": "object",
       "required": [
         "keyId",
         "secret"
-      ]
+      ],
+      "properties": {
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "secret": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 256
+        }
+      }
     },
     "extensions": {
       "type": "object",
@@ -403,8 +323,7 @@
       "type": "object",
       "required": [
         "registrationId",
-        "protocol",
-        "profile"
+        "protocol"
       ],
       "properties": {
         "registrationId": {
@@ -413,9 +332,6 @@
         },
         "protocol": {
           "const": "nethernet-external-signaling-v1"
-        },
-        "profile": {
-          "const": "nxs-admission-v1"
         }
       }
     },
@@ -434,7 +350,7 @@
       "required": [
         "candidates",
         "dtlsFingerprint",
-        "credentialKeyId",
+        "admissionKeyId",
         "sctpPort",
         "maxMessageSize",
         "statelessAdmission"
@@ -448,8 +364,6 @@
             "type": "object",
             "required": [
               "foundation",
-              "component",
-              "protocol",
               "priority",
               "address",
               "port",
@@ -459,12 +373,6 @@
               "foundation": {
                 "type": "string",
                 "pattern": "^[A-Za-z0-9._:-]{1,32}$"
-              },
-              "component": {
-                "const": 1
-              },
-              "protocol": {
-                "const": "udp"
               },
               "priority": {
                 "type": "integer",
@@ -516,15 +424,19 @@
           "type": "string",
           "pattern": "^sha-256 [0-9A-F]{2}(?::[0-9A-F]{2}){31}$"
         },
-        "credentialKeyId": {
+        "admissionKeyId": {
           "type": "string",
           "pattern": "^[A-Z0-9]{4}$"
         },
         "sctpPort": {
-          "const": 5000
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
         },
         "maxMessageSize": {
-          "const": 262144
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 262144
         },
         "statelessAdmission": {
           "type": "object",
@@ -536,16 +448,25 @@
             "capability": {
               "const": "nethernet.stateless-admission.v1"
             },
-            "assisted": {
-              "const": "nethernet.websocket-assisted.v1"
-            },
             "incarnation": {
               "type": "string",
               "pattern": "^[0-9a-f]{32}$"
+            },
+            "assistedFamilies": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  4,
+                  6
+                ]
+              },
+              "description": "Address families on which the host accepts assisted joins over the WebSocket transport."
             }
           }
-        },
-        "version": false
+        }
       }
     },
     "heartbeat": {
@@ -573,9 +494,34 @@
           ],
           "description": "Report with the initial host profile and whenever this capability changes. Omission preserves the current generation value; initially unavailable."
         },
-        "build": {
-          "type": "string",
-          "maxLength": 128
+        "software": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "location": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/location"
+            }
+          ]
         },
         "serverStatus": {
           "$ref": "#/$defs/serverStatus",
@@ -588,7 +534,7 @@
           "type": "string",
           "maxLength": 184
         },
-        "installedKeyIds": {
+        "installedAdmissionKeyIds": {
           "type": "array",
           "maxItems": 8,
           "uniqueItems": true,
@@ -597,7 +543,7 @@
             "pattern": "^[A-Z0-9]{4}$"
           }
         },
-        "keyRequestId": {
+        "admissionKeyRequestId": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{16,128}$"
         },
@@ -643,76 +589,42 @@
     "checkIn": {
       "type": "object",
       "required": [
-        "version",
         "afterMillis",
-        "nextCheckInAt",
-        "leaseExpiresAt",
+        "leaseMillis",
         "minUpdateIntervalMillis"
       ],
       "properties": {
-        "version": {
-          "const": 1
-        },
         "afterMillis": {
           "type": "integer",
           "minimum": 1000,
           "maximum": 86400000
         },
-        "nextCheckInAt": {
+        "leaseMillis": {
           "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "leaseExpiresAt": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
+          "minimum": 1001,
+          "maximum": 86700000
         },
         "minUpdateIntervalMillis": {
           "type": "integer",
           "minimum": 1000,
           "maximum": 86400000
         }
-      }
+      },
+      "description": "Durations from when the host sent the heartbeat. afterMillis < leaseMillis <= afterMillis + 300000; minUpdateIntervalMillis <= afterMillis."
     },
     "heartbeatResponse": {
       "type": "object",
       "required": [
-        "accepted",
-        "receivedAt",
-        "staleAfter",
         "hostProfileRevision",
-        "activeKeyId",
-        "leaseGeneration",
         "readiness",
-        "retirements"
+        "admissionKeyRetirements"
       ],
       "properties": {
-        "accepted": {
-          "const": true
-        },
-        "receivedAt": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "staleAfter": {
-          "type": "string",
-          "format": "date-time"
-        },
         "hostProfileRevision": {
           "type": [
             "string",
             "null"
           ]
-        },
-        "activeKeyId": {
-          "type": "string",
-          "pattern": "^[A-Z0-9]{4}$"
-        },
-        "leaseGeneration": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
         },
         "readiness": {
           "type": "object",
@@ -724,7 +636,7 @@
         "checkIn": {
           "$ref": "#/$defs/checkIn"
         },
-        "keyRequest": {
+        "admissionKeyRequest": {
           "type": "object",
           "required": [
             "id",
@@ -741,10 +653,10 @@
             }
           }
         },
-        "ticketKey": {
-          "$ref": "#/$defs/ticketKey"
+        "admissionKey": {
+          "$ref": "#/$defs/admissionKey"
         },
-        "retirements": {
+        "admissionKeyRetirements": {
           "type": "array",
           "items": {
             "type": "object",
@@ -764,6 +676,9 @@
               }
             }
           }
+        },
+        "operatorActionAvailable": {
+          "type": "boolean"
         }
       }
     },
@@ -793,9 +708,6 @@
               "stage": {
                 "enum": [
                   "ticket.ice_seen",
-                  "ticket.ice_connected",
-                  "ticket.dtls_connected",
-                  "ticket.sctp_connected",
                   "ticket.data_channels_open",
                   "ticket.game_joined",
                   "ticket.game_rejected",
@@ -803,8 +715,9 @@
                 ]
               },
               "occurredAt": {
-                "type": "string",
-                "format": "date-time"
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               },
               "reason": {
                 "type": "string",
@@ -830,7 +743,6 @@
                 "maximum": 65535
               }
             },
-            "additionalProperties": false,
             "dependentRequired": {
               "remoteAddress": [
                 "remotePort"
@@ -841,12 +753,10 @@
             }
           }
         }
-      },
-      "additionalProperties": false
+      }
     },
     "playerCount": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "connectedPlayers",
         "sampledAt"
@@ -867,7 +777,6 @@
     },
     "connectivityObservation": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "version",
         "critical",
@@ -884,7 +793,6 @@
           "oneOf": [
             {
               "type": "object",
-              "additionalProperties": false,
               "required": [
                 "diagnostics",
                 "candidateRevision",
@@ -903,29 +811,16 @@
                   "enum": [
                     "defined",
                     "discovered",
-                    "warm_stun",
-                    "per_join"
+                    "warm_stun"
                   ]
                 },
                 "probeCandidates": {
                   "$ref": "#/$defs/hostProfile/properties/candidates"
-                },
-                "assistedFamilies": {
-                  "type": "array",
-                  "maxItems": 2,
-                  "uniqueItems": true,
-                  "items": {
-                    "enum": [
-                      4,
-                      6
-                    ]
-                  }
                 }
               }
             },
             {
               "type": "object",
-              "additionalProperties": false,
               "required": [
                 "method",
                 "candidateRevision",
@@ -936,8 +831,7 @@
                   "enum": [
                     "defined",
                     "discovered",
-                    "warm_stun",
-                    "per_join"
+                    "warm_stun"
                   ]
                 },
                 "candidateRevision": {
@@ -950,7 +844,6 @@
                   "maxItems": 18,
                   "items": {
                     "type": "object",
-                    "additionalProperties": false,
                     "required": [
                       "region",
                       "family",
@@ -999,7 +892,6 @@
                       },
                       "target": {
                         "type": "object",
-                        "additionalProperties": false,
                         "required": [
                           "address",
                           "port"
@@ -1028,11 +920,15 @@
                     }
                   }
                 }
+              },
+              "not": {
+                "required": [
+                  "diagnostics"
+                ]
               }
             },
             {
               "type": "object",
-              "additionalProperties": false,
               "required": [
                 "stunServers"
               ],
@@ -1042,7 +938,6 @@
                   "maxItems": 2,
                   "items": {
                     "type": "object",
-                    "additionalProperties": false,
                     "required": [
                       "host",
                       "port"
@@ -1062,6 +957,11 @@
                     }
                   }
                 }
+              },
+              "not": {
+                "required": [
+                  "method"
+                ]
               }
             }
           ]
@@ -1110,25 +1010,98 @@
           ]
         }
       }
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "country": {
+          "type": "string",
+          "pattern": "^[A-Z]{2}$"
+        },
+        "city": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        }
+      },
+      "dependentRequired": {
+        "latitude": [
+          "longitude"
+        ],
+        "longitude": [
+          "latitude"
+        ]
+      },
+      "anyOf": [
+        {
+          "required": [
+            "country"
+          ]
+        },
+        {
+          "required": [
+            "latitude"
+          ]
+        }
+      ],
+      "description": "Where the operator says the host runs; null clears an earlier declaration."
+    },
+    "operatorAction": {
+      "type": "object",
+      "required": [
+        "url",
+        "text",
+        "expiresAt"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:https://|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?:[:/]|$))"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "A link for the host's operator. It may carry a one-time credential: show it, never open, forward or save it."
+    },
+    "operatorActionResponse": {
+      "type": "object",
+      "properties": {
+        "operatorAction": {
+          "$ref": "#/$defs/operatorAction"
+        }
+      }
     }
   },
   "x-context-order": [
     "mode",
-    "profile",
     "label",
     "authorizationId",
     "serviceId",
-    "region",
-    "pool",
     "registrationId"
-  ],
-  "x-optional-context-order": [
-    "tagsDigest"
   ],
   "x-signature-format": "ES384 P1363 r||s 96 bytes unpadded base64url",
   "x-canonicalization": "UTF-8 JSON arrays, no whitespace, no Unicode normalization, epoch milliseconds as integers, absent context strings are empty",
-  "description": "Some implementations may still send or accept historic fields not listed in this specification. Those fields will be removed soon and new implementations must not depend on them.",
-  "x-profile": "nxs-admission-v1",
   "x-discovery-path": "/.well-known/nethernet-external-signaling",
   "x-headers": [
     "nxs-instance-id",

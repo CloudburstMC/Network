@@ -16,38 +16,46 @@
 
 package org.cloudburstmc.netty.signaling.provider;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.signaling.ProviderClient;
-import org.cloudburstmc.netty.signaling.ProviderCrypto;
+import org.cloudburstmc.netty.signaling.ProviderOrigin;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.util.nethernet.SecretValue;
 
 import java.io.IOException;
-import java.net.URI;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.*;
 
 /**
  * Validated NXS settings, with the listener and capacity inherited from whatever is hosting.
  */
-public record ProviderRuntimeConfiguration(
-        URI origin,
-        Path stateDirectory,
-        String authorizationToken,
-        String region,
-        String pool,
-        Map<String, String> tags,
-        String label,
-        String bindAddress,
-        int udpPort,
-        List<InetSocketAddress> advertisedEndpoints,
-        int capacity,
-        ProviderClient.ControlTransport controlTransport,
-        boolean diagnosticAdmission,
-        boolean maintainedCandidates,
-        boolean assistedJoins) {
+public final class ProviderRuntimeConfiguration {
+    private final URI origin;
+    private final Path stateDirectory;
+    private final String authorizationToken;
+    private final String label;
+    private final String bindAddress;
+    private final int udpPort;
+    private final List<InetSocketAddress> advertisedEndpoints;
+    private final int capacity;
+    private final Settings settings;
+
+    private ProviderRuntimeConfiguration(URI origin, Path stateDirectory, String authorizationToken, String label,
+                                         String bindAddress, int udpPort, List<InetSocketAddress> advertisedEndpoints,
+                                         int capacity, Settings settings) {
+        this.origin = origin;
+        this.stateDirectory = stateDirectory;
+        this.authorizationToken = authorizationToken;
+        this.label = label;
+        this.bindAddress = bindAddress;
+        this.udpPort = udpPort;
+        this.advertisedEndpoints = advertisedEndpoints;
+        this.capacity = capacity;
+        this.settings = settings;
+    }
+
     /**
      * @param settings   What the host has configured for the provider
      * @param directory  The host's data directory, which the state directory and any token file are
@@ -55,33 +63,22 @@ public record ProviderRuntimeConfiguration(
      * @param bindAddress The address the host listens on
      * @param udpPort    The fixed UDP port the provider hands out, which cannot be ephemeral
      * @param maxPlayers The routing capacity to register with
-     * @param label      The host's name, as the provider should show it
      */
     public static ProviderRuntimeConfiguration resolve(Settings settings, Path directory, String bindAddress,
-                                                       int udpPort, int maxPlayers, String label) throws IOException {
+                                                       int udpPort, int maxPlayers) throws IOException {
         if (settings.assistedJoins()
                 && settings.controlTransport() != ProviderClient.ControlTransport.AUTO) {
             throw new IOException("nxs.assisted-joins requires nxs.control-transport=auto");
         }
         URI origin;
         try {
-            origin = URI.create(settings.endpoint());
-            ProviderCrypto.origin(origin);
+            origin = URI.create(ProviderOrigin.canonicalize(URI.create(settings.endpoint())));
         } catch (RuntimeException invalid) {
             throw new IOException("nxs.endpoint must be an HTTPS origin (HTTP is allowed only on loopback)");
         }
 
         String token = token(settings.token(), directory);
-        Map<String, String> tags = new TreeMap<>(settings.data());
-        String region = tags.remove("region"), pool = tags.remove("pool");
-        if (region != null || pool != null || !tags.isEmpty()) {
-            if (region == null) {
-                region = "global";
-            }
-            if (pool == null) {
-                pool = "default";
-            }
-        }
+        String label = label(settings.label());
 
         Path state = directory.resolve("provider-state");
         String bind = bindAddress;
@@ -109,22 +106,16 @@ public record ProviderRuntimeConfiguration(
                         origin,
                         state,
                         token,
-                        region,
-                        pool,
-                        Map.copyOf(tags),
                         label,
                         bind,
                         port,
                         List.copyOf(endpoints),
                         capacity,
-                        settings.controlTransport(),
-                        settings.diagnosticAdmission(),
-                        settings.maintainedCandidates(),
-                        settings.assistedJoins());
+                        settings);
         try {
             runtime.clientConfiguration();
         } catch (IllegalArgumentException invalid) {
-            throw new IOException("Invalid nxs.data: region/pool and tag names or values exceed the NXS limits");
+            throw new IOException("Invalid nxs settings: " + invalid.getMessage());
         }
 
         return runtime;
@@ -132,102 +123,229 @@ public record ProviderRuntimeConfiguration(
 
     /**
      * What a host's configuration has to supply, so this does not depend on how it stores it.
-     *
-     * @param endpoint           The provider origin
-     * @param token              A bearer token, a {@code file:} path to one, or empty to register
-     *                           anonymously
-     * @param advertiseAddresses Reachable {@code host:port} endpoints, empty to derive them
-     * @param data               Instance metadata; {@code region} and {@code pool} place it and
-     *                           anything else is a registration tag
      */
-    public record Settings(
-            String endpoint,
-            String token,
-            List<String> advertiseAddresses,
-            Map<String, String> data,
-            ProviderClient.ControlTransport controlTransport,
-            boolean diagnosticAdmission,
-            boolean maintainedCandidates,
-            boolean assistedJoins) {
-        public Settings {
-            Objects.requireNonNull(controlTransport);
+    public static final class Settings {
+        private final String endpoint;
+        private final String token;
+        private final List<String> advertiseAddresses;
+        private final String label;
+        private final ProviderClient.ControlTransport controlTransport;
+        private final boolean diagnosticAdmission;
+        private final boolean maintainedCandidates;
+        private final boolean assistedJoins;
+        private final boolean deregisterOnShutdown;
+        private final boolean gameOutcomes;
+        private final ProviderClient.Location location;
+
+        private Settings(Builder builder) {
+            endpoint = builder.endpoint;
+            token = builder.token;
+            advertiseAddresses = builder.advertiseAddresses;
+            label = builder.label;
+            controlTransport = builder.controlTransport;
+            diagnosticAdmission = builder.diagnosticAdmission;
+            maintainedCandidates = builder.maintainedCandidates;
+            assistedJoins = builder.assistedJoins;
+            deregisterOnShutdown = builder.deregisterOnShutdown;
+            gameOutcomes = builder.gameOutcomes;
+            location = builder.location;
         }
 
-        public Settings(
-                String endpoint,
-                String token,
-                List<String> advertiseAddresses,
-                Map<String, String> data,
-                ProviderClient.ControlTransport controlTransport,
-                boolean diagnosticAdmission,
-                boolean maintainedCandidates) {
-            this(
-                    endpoint,
-                    token,
-                    advertiseAddresses,
-                    data,
-                    controlTransport,
-                    diagnosticAdmission,
-                    maintainedCandidates,
-                    false);
+        /**
+         * @param endpoint The provider origin
+         */
+        public static Builder builder(String endpoint) {
+            return new Builder(endpoint);
         }
 
-        public Settings(
-                String endpoint,
-                String token,
-                List<String> advertiseAddresses,
-                Map<String, String> data,
-                ProviderClient.ControlTransport controlTransport,
-                boolean diagnosticAdmission) {
-            this(
-                    endpoint,
-                    token,
-                    advertiseAddresses,
-                    data,
-                    controlTransport,
-                    diagnosticAdmission,
-                    false);
+        public String endpoint() {
+            return endpoint;
         }
 
-        public Settings(
-                String endpoint,
-                String token,
-                List<String> advertiseAddresses,
-                Map<String, String> data,
-                ProviderClient.ControlTransport controlTransport) {
-            this(endpoint, token, advertiseAddresses, data, controlTransport, false);
+        public String token() {
+            return token;
         }
 
-        public Settings(
-                String endpoint,
-                String token,
-                List<String> advertiseAddresses,
-                Map<String, String> data) {
-            this(endpoint, token, advertiseAddresses, data, ProviderClient.ControlTransport.HTTP);
+        public List<String> advertiseAddresses() {
+            return advertiseAddresses;
+        }
+
+        public String label() {
+            return label;
+        }
+
+        public ProviderClient.ControlTransport controlTransport() {
+            return controlTransport;
+        }
+
+        public boolean diagnosticAdmission() {
+            return diagnosticAdmission;
+        }
+
+        public boolean maintainedCandidates() {
+            return maintainedCandidates;
+        }
+
+        public boolean assistedJoins() {
+            return assistedJoins;
+        }
+
+        public boolean deregisterOnShutdown() {
+            return deregisterOnShutdown;
+        }
+
+        public boolean gameOutcomes() {
+            return gameOutcomes;
+        }
+
+        public ProviderClient.Location location() {
+            return location;
+        }
+
+        public static final class Builder {
+            private final String endpoint;
+            private String token;
+            private List<String> advertiseAddresses = List.of();
+            private String label;
+            private ProviderClient.ControlTransport controlTransport = ProviderClient.ControlTransport.HTTP;
+            private boolean diagnosticAdmission;
+            private boolean maintainedCandidates;
+            private boolean assistedJoins;
+            private boolean deregisterOnShutdown;
+            private boolean gameOutcomes;
+            private ProviderClient.Location location;
+
+            private Builder(String endpoint) {
+                this.endpoint = endpoint;
+            }
+
+            /**
+             * @param token A bearer token, a {@code file:} path to one, or empty to register anonymously
+             */
+            public Builder token(String token) {
+                this.token = token;
+                return this;
+            }
+
+            /**
+             * @param advertiseAddresses Reachable {@code host:port} endpoints, empty to derive them
+             */
+            public Builder advertiseAddresses(List<String> advertiseAddresses) {
+                this.advertiseAddresses = List.copyOf(advertiseAddresses);
+                return this;
+            }
+
+            /**
+             * @param label The instance's initial name at the provider, empty for the host name
+             */
+            public Builder label(String label) {
+                this.label = label;
+                return this;
+            }
+
+            public Builder controlTransport(ProviderClient.ControlTransport controlTransport) {
+                this.controlTransport = Objects.requireNonNull(controlTransport);
+                return this;
+            }
+
+            public Builder diagnosticAdmission(boolean diagnosticAdmission) {
+                this.diagnosticAdmission = diagnosticAdmission;
+                return this;
+            }
+
+            public Builder maintainedCandidates(boolean maintainedCandidates) {
+                this.maintainedCandidates = maintainedCandidates;
+                return this;
+            }
+
+            public Builder assistedJoins(boolean assistedJoins) {
+                this.assistedJoins = assistedJoins;
+                return this;
+            }
+
+            /**
+             * @param deregisterOnShutdown Whether to end the registration on shutdown, for hosts whose
+             *                             state directory does not persist
+             */
+            public Builder deregisterOnShutdown(boolean deregisterOnShutdown) {
+                this.deregisterOnShutdown = deregisterOnShutdown;
+                return this;
+            }
+
+            /**
+             * @see ProviderClient.Configuration.Builder#gameOutcomes
+             */
+            public Builder gameOutcomes(boolean gameOutcomes) {
+                this.gameOutcomes = gameOutcomes;
+                return this;
+            }
+
+            /**
+             * @see ProviderClient.Configuration.Builder#location
+             */
+            public Builder location(ProviderClient.Location location) {
+                this.location = location;
+                return this;
+            }
+
+            public Settings build() {
+                return new Settings(this);
+            }
         }
     }
 
-    public String profile() {
-        return "nxs-admission-v1";
+    public URI origin() {
+        return origin;
+    }
+
+    public Path stateDirectory() {
+        return stateDirectory;
+    }
+
+    public String label() {
+        return label;
+    }
+
+    public String bindAddress() {
+        return bindAddress;
+    }
+
+    public int udpPort() {
+        return udpPort;
+    }
+
+    public int capacity() {
+        return capacity;
+    }
+
+    String authorizationToken() {
+        return authorizationToken;
+    }
+
+    List<InetSocketAddress> advertisedEndpoints() {
+        return advertisedEndpoints;
+    }
+
+    boolean maintainedCandidates() {
+        return settings.maintainedCandidates();
+    }
+
+    boolean assistedJoins() {
+        return settings.assistedJoins();
     }
 
     public ProviderClient.Configuration clientConfiguration() {
-        return new ProviderClient.Configuration(
-                origin,
-                profile(),
-                label,
-                ProviderClient.AUTOMATIC,
-                authorizationToken == null
-                        ? ProviderClient.ANONYMOUS_PROOF_OF_WORK
-                        : ProviderClient.BEARER_TOKEN,
-                authorizationToken,
-                region,
-                pool,
-                tags,
-                controlTransport,
-                diagnosticAdmission,
-                advertisedEndpoints.isEmpty() ? "discovered" : "defined",
-                assistedJoins);
+        return ProviderClient.Configuration.builder(origin)
+                .label(label)
+                .authorizationToken(authorizationToken)
+                .controlTransport(settings.controlTransport())
+                .diagnosticAdmission(settings.diagnosticAdmission())
+                .connectivityMethod(advertisedEndpoints.isEmpty() ? "discovered" : "defined")
+                .assistedJoins(settings.assistedJoins())
+                .deregisterOnShutdown(settings.deregisterOnShutdown())
+                .gameOutcomes(settings.gameOutcomes())
+                .location(settings.location())
+                .build();
     }
 
     private static InetSocketAddress endpoint(String value) throws IOException {
@@ -242,6 +360,29 @@ public record ProviderRuntimeConfiguration(
         }
         throw new IOException(
                 "nxs.advertise-addresses entries must be numeric IPv4:port or [IPv6]:port with ports 1-65535");
+    }
+
+    private static String label(String configured) throws IOException {
+        if (configured != null && !configured.isBlank()) {
+            configured = configured.strip();
+            if (configured.codePointCount(0, configured.length()) > 128) {
+                throw new IOException("nxs.label allows at most 128 characters");
+            }
+            return configured;
+        }
+
+        // Container runtimes set HOSTNAME to the pod or container name.
+        String host = System.getenv("HOSTNAME");
+        if (host == null || host.isBlank()) {
+            try {
+                host = InetAddress.getLocalHost().getHostName();
+            } catch (IOException | RuntimeException unavailable) {
+                return null;
+            }
+        }
+
+        host = host.strip();
+        return host.isEmpty() ? null : host.substring(0, Math.min(host.length(), 128));
     }
 
     private static String token(String value, Path directory) throws IOException {
@@ -262,32 +403,8 @@ public record ProviderRuntimeConfiguration(
         return value;
     }
 
-    public String encodedAdvertisedEndpoints() {
-        var values = new JsonArray();
-        for (InetSocketAddress endpoint : advertisedEndpoints) {
-            var value = new JsonObject();
-            value.addProperty("address", endpoint.getAddress().getHostAddress());
-            value.addProperty("port", endpoint.getPort());
-            values.add(value);
-        }
-        return values.toString();
-    }
-
-    /** Ordinary native factory options, with explicit endpoints suppressing discovery/STUN. */
-    public Map<String, String> nativeHostOptions() {
-        var options = new HashMap<String, String>();
-        options.put("stateDirectory", stateDirectory.toString());
-        options.put("advertisedEndpoints", encodedAdvertisedEndpoints());
-        options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
-        options.put("diagnosticAdmission", Boolean.toString(diagnosticAdmission));
-        options.put("assistedJoins", Boolean.toString(assistedJoins));
-        options.put("candidatePublication", NativeProviderHostFactory.MAINTAINED_V1);
-        options.put("stunWarming", Boolean.toString(maintainedCandidates));
-        return Map.copyOf(options);
-    }
-
     @Override
     public String toString() {
-        return "ProviderRuntimeConfiguration[origin=" + origin + ", profile=" + profile() + "]";
+        return "ProviderRuntimeConfiguration[origin=" + origin + "]";
     }
 }

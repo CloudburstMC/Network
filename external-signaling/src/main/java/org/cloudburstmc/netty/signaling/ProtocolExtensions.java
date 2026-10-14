@@ -24,7 +24,7 @@ import java.nio.charset.StandardCharsets;
 /**
  * Bounded, authenticated metadata whose optional contents are interpreted by applications.
  */
-public final class ProtocolExtensions {
+final class ProtocolExtensions {
     public static final int MAX_BYTES = 16_384;
     public static final int MAX_ENTRIES = 16;
 

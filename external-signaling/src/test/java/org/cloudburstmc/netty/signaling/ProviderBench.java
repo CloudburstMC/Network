@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.signaling;
 
+import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import com.google.gson.*;
 
 import java.net.URI;
@@ -28,14 +29,18 @@ public final class ProviderBench {
             String keyId;
             final String incarnation = UUID.randomUUID().toString().replace("-", "");
 
-            public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+            public CompletionStage<Void> installAdmissionKeys(List<AdmissionKey> keys) {
                 keyId = keys.get(keys.size() - 1).keyId();
                 return CompletableFuture.completedFuture(null);
             }
 
-            public CompletionStage<JsonObject> hostProfile() {
+            public CompletionStage<HostProfileSnapshot> captureHostProfile() {
+                return hostProfile().thenApply(profile -> new HostProfileSnapshot(profile, () -> {}));
+            }
+
+            CompletionStage<JsonObject> hostProfile() {
                 JsonObject p = new JsonObject();
-                p.addProperty("credentialKeyId", keyId);
+                p.addProperty("admissionKeyId", keyId);
                 p.addProperty("dtlsFingerprint", "sha-256 " + String.join(":", Collections.nCopies(32, "11")));
                 p.addProperty("sctpPort", 5000);
                 p.addProperty("maxMessageSize", 262144);
@@ -43,9 +48,7 @@ public final class ProviderBench {
                 c.addProperty("address", "127.0.0.1");
                 c.addProperty("port", 19133);
                 c.addProperty("foundation", "fixture");
-                c.addProperty("component", 1);
                 c.addProperty("priority", 100);
-                c.addProperty("protocol", "udp");
                 c.addProperty("type", "host");
                 JsonArray candidates = new JsonArray();
                 candidates.add(c);
@@ -57,7 +60,7 @@ public final class ProviderBench {
                 return CompletableFuture.completedFuture(p);
             }
 
-            public List<JsonObject> pollEvents() {
+            public List<JsonObject> pollEvents(int maximum) {
                 return List.of();
             }
 
@@ -69,53 +72,39 @@ public final class ProviderBench {
                 return CompletableFuture.completedFuture(null);
             }
         };
-        String registrationMode = System.getProperty("providerRegistrationMode",
-                token == null ? ProviderClient.NEW_SERVICE : ProviderClient.ATTACH_INSTANCE);
-        String authorization = token == null ? ProviderClient.ANONYMOUS_PROOF_OF_WORK : ProviderClient.BEARER_TOKEN;
-        Map<String, String> tags = new TreeMap<>();
-        JsonObject configuredTags = JsonParser.parseString(System.getProperty("providerTags", "{}")).getAsJsonObject();
-        for (var entry : configuredTags.entrySet()) {
-            tags.put(entry.getKey(), entry.getValue().getAsString());
-        }
-        String region = System.getProperty("providerRegion",
-                registrationMode.equals(ProviderClient.ATTACH_INSTANCE) ? "EU" : null);
-        String pool = System.getProperty("providerPool",
-                registrationMode.equals(ProviderClient.ATTACH_INSTANCE) ? "proxy" : null);
         var config =
-                new ProviderClient.Configuration(
-                        provider,
-                        "nxs-admission-v1",
-                        "Java conformance backend",
-                        registrationMode,
-                        authorization,
-                        token,
-                        region,
-                        pool,
-                        tags,
-                        ProviderClient.ControlTransport.valueOf(
-                                System.getProperty("providerControlTransport", "HTTP")
-                                        .toUpperCase(Locale.ROOT)));
+                ProviderClient.Configuration.builder(provider)
+                        .label("Java conformance backend")
+                        .authorizationToken(token)
+                        .controlTransport(ProviderClient.ControlTransport.valueOf(
+                                System.getProperty("providerControlTransport", "HTTP").toUpperCase(Locale.ROOT)))
+                        .build();
         var client =
                 new ProviderClient(
                         config,
                         new ProviderStateStore(state),
                         transport,
                         () -> new ServerStatus("Java bench", "Fixture", 2, 50, 0),
-                        () -> new ProviderClient.Health(true, 100, "java-conformance", null),
+                        () -> new ProviderClient.Health(true, 100, new ProviderClient.Software("Java conformance bench", "1.0"), null),
                         diagnostic ->
                                 System.err.println(
                                         diagnostic.level() + ": " + diagnostic.message()));
         try {
-            JsonObject registration = client.start().get(30, TimeUnit.SECONDS);
-            String extensionsFile = System.getProperty("providerExtensionsFile");
-            if (extensionsFile != null) {
-                ExtensionFixtureFile.write(Path.of(extensionsFile), client.extensions().get(10, TimeUnit.SECONDS));
+            var registration = client.start().get(30, TimeUnit.SECONDS);
+            String operatorActionFile = System.getProperty("providerOperatorActionFile");
+            if (operatorActionFile != null) {
+                OperatorActionFile.write(Path.of(operatorActionFile), client.operatorAction().get(10, TimeUnit.SECONDS));
             }
-            System.out.println("instance=" + registration.get("instanceId").getAsString() + " service=" + (
-                    registration.has("serviceId") ? registration.get("serviceId").getAsString() : "unassigned"));
+            System.out.println("instance=" + registration.instanceId() + " service=" + (
+                    registration.serviceId() != null ? registration.serviceId() : "unassigned"));
             JsonObject readiness = client.readiness().get(10, TimeUnit.SECONDS);
             readiness.remove("extensions");
             readiness.addProperty("controlCarrier", client.lastControlCarrier());
+            readiness.addProperty("instanceId", registration.instanceId());
+            readiness.addProperty("leaseGeneration", registration.leaseGeneration());
+            if (registration.serviceId() != null) {
+                readiness.addProperty("serviceId", registration.serviceId());
+            }
             System.out.println(readiness);
             long hold = Long.parseLong(System.getProperty("providerHoldSeconds", "0"));
             String stopFile = System.getProperty("providerStopFile");

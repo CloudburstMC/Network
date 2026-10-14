@@ -17,17 +17,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class NativeProviderHostFactoryTest {
     @Test
-    void invalidDiagnosticOptionsFailBeforeIdentity(@TempDir Path directory) {
+    void invalidOptionsFailBeforeIdentity(@TempDir Path directory) {
         for (Map<String, String> selected :
                 List.of(
-                        Map.of("diagnosticAdmission", "unknown"),
-                        Map.of("diagnosticAdmission", "install-v1"))) {
+                        Map.of("assistedJoins", "unknown"),
+                        Map.of("stunWarming", "install-v1"))) {
             var options = new HashMap<>(selected);
             options.put("stateDirectory", directory.resolve("identity").toString());
             assertThrows(
                     CompletionException.class,
                     () ->
-                            new NativeProviderHostFactory()
+                            NativeProviderHostFactory
                                     .open(
                                             new ServerBootstrap(),
                                             endpoint("127.0.0.1", 19133),
@@ -124,7 +124,7 @@ class NativeProviderHostFactoryTest {
                 assertThrows(
                         CompletionException.class,
                         () ->
-                                new NativeProviderHostFactory()
+                                NativeProviderHostFactory
                                         .open(
                                                 new ServerBootstrap(),
                                                 endpoint("10.0.0.1", 19133),
@@ -147,7 +147,7 @@ class NativeProviderHostFactoryTest {
                     assertThrows(
                             CompletionException.class,
                             () ->
-                                    new NativeProviderHostFactory()
+                                    NativeProviderHostFactory
                                             .open(
                                                     new ServerBootstrap(),
                                                     endpoint("1.1.1.1", 19133),
@@ -179,7 +179,7 @@ class NativeProviderHostFactoryTest {
                     assertThrows(
                             CompletionException.class,
                             () ->
-                                    new NativeProviderHostFactory()
+                                    NativeProviderHostFactory
                                             .open(
                                                     new ServerBootstrap(),
                                                     endpoint("1.1.1.1", 19133),
@@ -212,7 +212,7 @@ class NativeProviderHostFactoryTest {
                     assertThrows(
                             CompletionException.class,
                             () ->
-                                    new NativeProviderHostFactory()
+                                    NativeProviderHostFactory
                                             .open(
                                                     new ServerBootstrap(),
                                                     endpoint("1.1.1.1", 19133),

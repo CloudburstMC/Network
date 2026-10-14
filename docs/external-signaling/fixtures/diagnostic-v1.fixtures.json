@@ -10,7 +10,7 @@
     "keyId": "D001",
     "secret": "PUBLIC-diagnostic-fixture-secret-never-deploy",
     "notBefore": 1788484700000,
-    "retireAt": 1788484900000
+    "retireAfter": 1788484900000
   },
   "now": 1788484800000,
   "parentExpiresAt": 1788484860000,

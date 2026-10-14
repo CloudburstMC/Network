@@ -124,7 +124,7 @@ class MaintainedCandidatePublisherTest {
             String ip,
             int port,
             ConnectivityOutcome outcome) {
-        return new ConnectivityCheck(
+        return new ConnectivityCheck("unspecified", 
                 family, method, endpoint(ip, port), outcome, h.wall, h.wall + 60000);
     }
 
@@ -211,7 +211,7 @@ class MaintainedCandidatePublisherTest {
                                     43001,
                                     ConnectivityOutcome.NOT_ESTABLISHED),
                             check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.UNKNOWN),
-                            new ConnectivityCheck(
+                            new ConnectivityCheck("unspecified", 
                                     4,
                                     "warm_stun",
                                     endpoint("8.8.8.8", 43000),

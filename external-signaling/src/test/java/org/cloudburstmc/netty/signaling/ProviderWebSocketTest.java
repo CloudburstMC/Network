@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.signaling;
 
+import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import com.google.gson.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
@@ -32,7 +33,7 @@ class ProviderWebSocketTest {
     private static final class ChangingProfileTransport extends ProviderClientTest.FakeTransport {
         volatile long revision = 1;
         boolean replaceDuringCapture;
-        volatile List<TicketKey> keys = List.of();
+        volatile List<AdmissionKey> keys = List.of();
 
         @Override
         public CompletionStage<HostProfileSnapshot> captureHostProfile() {
@@ -47,6 +48,8 @@ class ProviderWebSocketTest {
                             profile,
                             captured,
                             captured,
+                            profile.getAsJsonArray("candidates"),
+                            java.util.Set.of(),
                             () -> {
                                 if (closed.isDone()) {
                                     throw new IllegalStateException("Native listener closed");
@@ -63,9 +66,9 @@ class ProviderWebSocketTest {
         }
 
         @Override
-        public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
+        public CompletionStage<Void> installAdmissionKeys(List<AdmissionKey> keys) {
             this.keys = List.copyOf(keys);
-            return super.installTicketKeys(keys);
+            return super.installAdmissionKeys(keys);
         }
     }
 
@@ -77,21 +80,15 @@ class ProviderWebSocketTest {
             provider.rejectUpgrade = true;
             var client =
                     new ProviderClient(
-                            new ProviderClient.Configuration(
-                                    URI.create(provider.stub.origin),
-                                    "nxs-admission-v1",
-                                    "WebSocket host",
-                                    ProviderClient.NEW_SERVICE,
-                                    ProviderClient.BEARER_TOKEN,
-                                    "independent-provider-token",
-                                    null,
-                                    null,
-                                    Map.of(),
-                                    ProviderClient.ControlTransport.AUTO),
+                            ProviderClient.Configuration.builder(URI.create(provider.stub.origin))
+                                    .label("WebSocket host")
+                                    .authorizationToken("independent-provider-token")
+                                    .controlTransport(ProviderClient.ControlTransport.AUTO)
+                                    .build(),
                             new ProviderStateStore(path),
                             new ProviderClientTest.FakeTransport(),
                             () -> null,
-                            () -> new ProviderClient.Health(true, 20, "fixture", null),
+                            () -> new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, null),
                             logs::add);
             try {
                 client.start().get(20, TimeUnit.SECONDS);
@@ -225,8 +222,7 @@ class ProviderWebSocketTest {
                             recovered
                                     .start()
                                     .get(20, TimeUnit.SECONDS)
-                                    .get("leaseGeneration")
-                                    .getAsLong());
+                                    .leaseGeneration());
                     assertEquals(2, committed.get());
                     var between = beforeFreshAcknowledgement.get();
                     assertEquals(
@@ -245,7 +241,7 @@ class ProviderWebSocketTest {
                     assertEquals(
                             List.of("T001", "T002"),
                             transport.keys.stream()
-                                    .map(ProviderTransport.TicketKey::keyId)
+                                    .map(AdmissionKey::keyId)
                                     .toList());
                     assertEquals(
                             19134,
@@ -294,7 +290,7 @@ class ProviderWebSocketTest {
                                     if (!duringCapture && healthCalls.getAndIncrement() == 0) {
                                         transport.revision++;
                                     }
-                                    return new ProviderClient.Health(true, 20, "fixture", null);
+                                    return new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, null);
                                 });
                 try {
                     client.start().get(20, TimeUnit.SECONDS);
@@ -401,7 +397,6 @@ class ProviderWebSocketTest {
                 client.start().get(20, TimeUnit.SECONDS);
                 assertTrue(provider.websocketOps.contains("heartbeat"));
                 assertEquals("websocket", client.lastControlCarrier());
-                assertTrue(provider.stub.lastHeartbeat.has("appliedStateRevision"));
                 assertFalse(provider.httpOps.contains("/v1/nxs/heartbeat"));
                 assertTrue(provider.httpOps.contains("/v1/nxs/register"));
                 assertTrue(provider.httpOps.contains("/v1/nxs/complete"));
@@ -430,8 +425,7 @@ class ProviderWebSocketTest {
                         recovered
                                 .start()
                                 .get(20, TimeUnit.SECONDS)
-                                .get("leaseGeneration")
-                                .getAsLong());
+                                .leaseGeneration());
                 assertEquals(List.of(1L, 2L), provider.generations);
                 recovered.deregister().get(10, TimeUnit.SECONDS);
                 assertTrue(provider.websocketOps.contains("deregister"));
@@ -613,17 +607,18 @@ class ProviderWebSocketTest {
     void correctingAnInvalidHeartbeatDoesNotRequireRegistrationRecovery(@TempDir Path directory)
             throws Exception {
         try (Provider provider = new Provider()) {
-            AtomicReference<String> build = new AtomicReference<>("fixture");
+            AtomicReference<String> version = new AtomicReference<>("1.0");
             ProviderClient client =
                     client(
                             provider,
                             directory,
                             ProviderClient.ControlTransport.AUTO,
                             new ProviderClientTest.FakeTransport(),
-                            () -> new ProviderClient.Health(true, 20, build.get(), null));
+                            () -> new ProviderClient.Health(true, 20,
+                                    new ProviderClient.Software("fixture", version.get()), null));
             try {
                 client.start().get(20, TimeUnit.SECONDS);
-                build.set("x".repeat(129));
+                version.set("rejected");
                 ExecutionException rejected =
                         assertThrows(
                                 ExecutionException.class,
@@ -634,9 +629,10 @@ class ProviderWebSocketTest {
                 assertFalse(
                         Files.readString(directory.resolve("provider-state.json"))
                                 .contains("pendingWebSocketOperation"));
-                build.set("corrected");
+                version.set("corrected");
                 client.drain().get(10, TimeUnit.SECONDS);
-                assertEquals("corrected", provider.stub.lastHeartbeat.get("build").getAsString());
+                assertEquals("corrected",
+                        provider.stub.lastHeartbeat.getAsJsonObject("software").get("version").getAsString());
                 assertEquals("websocket", client.lastControlCarrier());
                 assertEquals(1, provider.stub.generation);
             } finally {
@@ -741,20 +737,12 @@ class ProviderWebSocketTest {
                                 }
                             };
                     var config =
-                            new ProviderClient.Configuration(
-                                    URI.create(provider.stub.origin),
-                                    "nxs-admission-v1",
-                                    "configured assistance",
-                                    ProviderClient.NEW_SERVICE,
-                                    ProviderClient.BEARER_TOKEN,
-                                    "independent-provider-token",
-                                    null,
-                                    null,
-                                    Map.of(),
-                                    ProviderClient.ControlTransport.AUTO,
-                                    false,
-                                    "discovered",
-                                    enabled);
+                            ProviderClient.Configuration.builder(URI.create(provider.stub.origin))
+                                    .label("configured assistance")
+                                    .authorizationToken("independent-provider-token")
+                                    .controlTransport(ProviderClient.ControlTransport.AUTO)
+                                    .assistedJoins(enabled)
+                                    .build();
                     var client =
                             new ProviderClient(
                                     config,
@@ -762,7 +750,7 @@ class ProviderWebSocketTest {
                                             directory.resolve(enabled + "-" + candidateFree)),
                                     transport,
                                     () -> null,
-                                    () -> new ProviderClient.Health(true, 10, "test", null),
+                                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, null),
                                     message -> {});
                     try {
                         client.start().get(20, TimeUnit.SECONDS);
@@ -772,7 +760,7 @@ class ProviderWebSocketTest {
                                         .lastHeartbeat
                                         .getAsJsonObject("hostProfile")
                                         .getAsJsonObject("statelessAdmission")
-                                        .has("assisted"),
+                                        .has("assistedFamilies"),
                                 "Configuration applies before any feedback");
                         for (String outcome :
                                 List.of(
@@ -786,12 +774,8 @@ class ProviderWebSocketTest {
                                             .getAsJsonObject("extensions")
                                             .getAsJsonObject("dev.opencollab.nxs.connectivity")
                                             .getAsJsonObject("data");
-                            assertEquals(
-                                    enabled ? "[4,6]" : "[]",
-                                    data.getAsJsonArray("assistedFamilies").toString());
-                            assertEquals(
-                                    enabled ? "per_join" : "discovered",
-                                    data.get("method").getAsString());
+                            assertEquals(enabled ? "[4,6]" : null, assistedFamilies(provider.stub));
+                            assertEquals("discovered", data.get("method").getAsString());
                             var feedback = connectivityFeedback(System.currentTimeMillis());
                             feedback.getAsJsonObject("data")
                                     .getAsJsonArray("checks")
@@ -802,15 +786,7 @@ class ProviderWebSocketTest {
                                     "dev.opencollab.nxs.connectivity", feedback);
                             client.readiness().get(10, TimeUnit.SECONDS);
                         }
-                        var data =
-                                provider.stub
-                                        .lastHeartbeat
-                                        .getAsJsonObject("extensions")
-                                        .getAsJsonObject("dev.opencollab.nxs.connectivity")
-                                        .getAsJsonObject("data");
-                        assertEquals(
-                                enabled ? "[4,6]" : "[]",
-                                data.getAsJsonArray("assistedFamilies").toString());
+                        assertEquals(enabled ? "[4,6]" : null, assistedFamilies(provider.stub));
                     } finally {
                         client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
                     }
@@ -880,24 +856,16 @@ class ProviderWebSocketTest {
             var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
             ProviderClient client =
                     new ProviderClient(
-                            new ProviderClient.Configuration(
-                                    URI.create(provider.stub.origin),
-                                    "nxs-admission-v1",
-                                    "assisted",
-                                    ProviderClient.NEW_SERVICE,
-                                    ProviderClient.BEARER_TOKEN,
-                                    "independent-provider-token",
-                                    null,
-                                    null,
-                                    Map.of(),
-                                    ProviderClient.ControlTransport.AUTO,
-                                    false,
-                                    "discovered",
-                                    true),
+                            ProviderClient.Configuration.builder(URI.create(provider.stub.origin))
+                                    .label("assisted")
+                                    .authorizationToken("independent-provider-token")
+                                    .controlTransport(ProviderClient.ControlTransport.AUTO)
+                                    .assistedJoins(true)
+                                    .build(),
                             new ProviderStateStore(directory),
                             transport,
                             () -> null,
-                            () -> new ProviderClient.Health(true, 10, "test", null),
+                            () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, null),
                             logs::add);
             try {
                 client.start().get(20, TimeUnit.SECONDS);
@@ -908,11 +876,7 @@ class ProviderWebSocketTest {
                         untilNext > 0 && untilNext <= TimeUnit.MINUTES.toNanos(4),
                         "A 15-minute idle provider schedule must renew the original five-minute assisted authority early");
                 JsonObject profile = provider.stub.lastHeartbeat.getAsJsonObject("hostProfile");
-                assertEquals(
-                        "nethernet.websocket-assisted.v1",
-                        profile.getAsJsonObject("statelessAdmission")
-                                .get("assisted")
-                                .getAsString());
+                assertFalse(profile.getAsJsonObject("statelessAdmission").getAsJsonArray("assistedFamilies").isEmpty());
                 int upgrades = provider.upgrades.get();
                 provider.stub.extensionMetadata.add(
                         "dev.opencollab.nxs.connectivity", connectivityFeedback(null));
@@ -932,7 +896,7 @@ class ProviderWebSocketTest {
                 join.add(
                         "incarnation",
                         profile.getAsJsonObject("statelessAdmission").get("incarnation"));
-                join.add("keyId", profile.get("credentialKeyId"));
+                join.add("keyId", profile.get("admissionKeyId"));
                 join.add("hostFingerprint", profile.get("dtlsFingerprint"));
                 join.addProperty("expiresAt", System.currentTimeMillis() + 14000);
                 join.addProperty("networkId", "1234");
@@ -1048,7 +1012,7 @@ class ProviderWebSocketTest {
                 path,
                 mode,
                 transport,
-                () -> new ProviderClient.Health(true, 20, "fixture", null));
+                () -> new ProviderClient.Health(true, 20, ProviderClientTest.SOFTWARE, null));
     }
 
     private static ProviderClient client(
@@ -1059,17 +1023,11 @@ class ProviderWebSocketTest {
             Supplier<ProviderClient.Health> health)
             throws Exception {
         return new ProviderClient(
-                new ProviderClient.Configuration(
-                        URI.create(provider.stub.origin),
-                        "nxs-admission-v1",
-                        "WebSocket host",
-                        ProviderClient.NEW_SERVICE,
-                        ProviderClient.BEARER_TOKEN,
-                        "independent-provider-token",
-                        null,
-                        null,
-                        Map.of(),
-                        mode),
+                ProviderClient.Configuration.builder(URI.create(provider.stub.origin))
+                        .label("WebSocket host")
+                        .authorizationToken("independent-provider-token")
+                        .controlTransport(mode)
+                        .build(),
                 new ProviderStateStore(path),
                 transport,
                 () -> null,
@@ -1078,6 +1036,11 @@ class ProviderWebSocketTest {
     }
 
     /** Real JDK/Netty socket front door. The independent HTTP provider still verifies the original signature. */
+    private static String assistedFamilies(IndependentProviderStub stub) {
+        var admission = stub.lastHostProfile.getAsJsonObject("statelessAdmission");
+        return admission.has("assistedFamilies") ? admission.getAsJsonArray("assistedFamilies").toString() : null;
+    }
+
     private static final class Provider implements AutoCloseable {
         final IndependentProviderStub stub = new IndependentProviderStub();
         final String backend = stub.origin;
@@ -1543,15 +1506,10 @@ class ProviderWebSocketTest {
                             .channel();
             stub.origin =
                     "http://127.0.0.1:" + ((InetSocketAddress) server.localAddress()).getPort();
-            stub.operationPrefix = "/v1/nxs/";
             stub.checkInMillis = 900000;
             stub.extensionMetadata =
                     JsonParser.parseString(
-                                    "{\"dev.opencollab.nxs.websocket\":{\"version\":1,\"critical\":false,\"data\":{\"url\":\""
-                                            + stub.origin.replace("http:", "ws:")
-                                            + "/v1/nxs/control\",\"subprotocol\":\""
-                                            + ProviderCrypto.PROTOCOL
-                                            + "\"}}}")
+                                    "{\"dev.opencollab.nxs.websocket\":{\"version\":1,\"critical\":false,\"data\":{}}}")
                             .getAsJsonObject();
         }
 
@@ -1571,14 +1529,12 @@ class ProviderWebSocketTest {
                     && Objects.equals(id, droppedHeaders.get("idempotency-key"))) {
                 return rejectAfterDrop;
             }
-            if (path.equals("/v1/nxs/heartbeat")
-                    && JsonParser.parseString(body)
-                                    .getAsJsonObject()
-                                    .get("build")
-                                    .getAsString()
-                                    .length()
-                            > 128) {
-                return new Result(400, "{\"code\":\"invalid_heartbeat\"}");
+            if (path.equals("/v1/nxs/heartbeat")) {
+                JsonObject heartbeat = JsonParser.parseString(body).getAsJsonObject();
+                if (heartbeat.has("software")
+                        && heartbeat.getAsJsonObject("software").get("version").getAsString().equals("rejected")) {
+                    return new Result(400, "{\"code\":\"invalid_heartbeat\"}");
+                }
             }
             if (id != null && rejectNext != null) {
                 Result rejected = rejectNext;

@@ -1,11 +1,43 @@
-package org.cloudburstmc.netty.signaling.control;
+package org.cloudburstmc.netty.signaling;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 /** Strict draft-control origin grammar. Never normalizes input, resolves DNS or changes core origin handling. */
-public final class ControlOrigin {
-    private ControlOrigin() {}
+/**
+ * The canonical origin form that every signed NXS URL uses; see the wire reference.
+ */
+public final class ProviderOrigin {
+    private ProviderOrigin() {}
+
+    /**
+     * Lowercases a configured origin and drops its default port or trailing slash, then requires the
+     * result to be canonical.
+     */
+    public static String canonicalize(URI uri) {
+        if (uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null || uri.getQuery() != null || !(
+                uri.getPath().isEmpty() || uri.getPath().equals("/"))) {
+            throw new IllegalArgumentException("Invalid provider origin");
+        }
+
+        String host = uri.getHost().toLowerCase(Locale.ROOT), scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+        if (!scheme.equals("https") && !(scheme.equals("http") && Set.of("localhost", "127.0.0.1", "[::1]")
+                .contains(host))) {
+            throw new IllegalArgumentException("HTTPS provider required");
+        }
+
+        int port = uri.getPort();
+        String origin = scheme + "://" + host + (
+                port < 0 || (scheme.equals("https") && port == 443) || (scheme.equals("http") && port == 80) ? "" :
+                        ":" + port);
+        if (!isCanonical(origin)) {
+            throw new IllegalArgumentException("Provider origin is not canonical");
+        }
+        return origin;
+    }
 
     public static boolean isCanonical(String value) {
         if (value == null || value.length() > 2048) {

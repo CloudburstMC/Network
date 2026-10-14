@@ -39,7 +39,7 @@ public final class AdmissionPrimitiveProbe {
     static void run(NativeHostIdentity identity, int passwordLength, boolean wrongFingerprint) throws Exception {
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey("K001", TestSignalingProvider.SECRET)));
+                List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var endpoint = new NativeAdmissionServerChannel(identity, validator, new AdmissionGate.Limits(4, 8, 2, 10_000));
         var group = new DefaultEventLoopGroup(1);
         var messages = new CountDownLatch(2);
