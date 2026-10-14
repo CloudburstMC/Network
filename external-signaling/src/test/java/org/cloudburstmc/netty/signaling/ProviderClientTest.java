@@ -782,6 +782,29 @@ class ProviderClientTest {
     }
 
     @Test
+    void republishesTheProfileWhenTheProviderHoldsNone(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path), new FakeTransport(), () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertFalse(stub.lastHeartbeat.has("hostProfile"));
+                int published = stub.profileRevision;
+                stub.forgetProfile = true;
+                eventually(() -> !stub.forgetProfile && stub.profileRevision == published + 1);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals("example-profile-" + (published + 1),
+                        stub.lastHeartbeat.get("hostProfileRevision").getAsString());
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void reportsGameOutcomesOnlyWhenDeclared(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var builder = ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example");

@@ -1167,6 +1167,11 @@ public final class ProviderClient implements AutoCloseable {
                         state.addProperty("profilePublishedAt", System.currentTimeMillis());
                         save();
                     }
+            } else if (profileRevision != null && !new JsonPrimitive(profileRevision).equals(response.get("hostProfileRevision"))) {
+                // The provider no longer holds the published profile, so send it in full
+                profileRevision = null;
+                lastProfile = null;
+                again |= profileSnapshot != null;
             }
             if (response.has("admissionKey")) {
                 JsonObject key = response.remove("admissionKey").getAsJsonObject();

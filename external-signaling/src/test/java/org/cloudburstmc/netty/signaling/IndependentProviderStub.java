@@ -28,6 +28,8 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile boolean failOutcomes;
     /** Outcome batches still to reject permanently. */
     volatile int rejectOutcomes;
+    /** Answer the next heartbeat without a profile as if the provider held none. */
+    volatile boolean forgetProfile;
     volatile int outcomeAttempts;
     volatile boolean loseCompletionResponse;
     volatile long checkInMillis;
@@ -294,6 +296,10 @@ public final class IndependentProviderStub implements AutoCloseable {
                 }
                 draining = !body.get("acceptingPlayers").getAsBoolean();
                 ok.addProperty("hostProfileRevision", "example-profile-" + profileRevision);
+                if (forgetProfile && !body.has("hostProfile")) {
+                    forgetProfile = false;
+                    ok.add("hostProfileRevision", JsonNull.INSTANCE);
+                }
                 ok.addProperty("routable", profileRevision > 0 && keyAcknowledgements > 0 && !draining);
                 JsonObject ready = new JsonObject();
                 ready.addProperty("routable", ok.get("routable").getAsBoolean());
