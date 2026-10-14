@@ -392,6 +392,8 @@ public final class ProviderClient implements AutoCloseable {
     private PrivateKey privateKey;
     private String profileRevision;
     private JsonObject lastProfile;
+    /** The admission key of the last acknowledged profile, which is the provider's active epoch. */
+    private String publishedKeyId;
     private ProviderTransport.HostProfileSnapshot publishedProfileSnapshot;
     private long publishedCandidateRevision, publishedCandidateVersion;
     private long observedCandidateRevision, observedCandidateVersion, nextCandidateRefresh;
@@ -1047,7 +1049,8 @@ public final class ProviderClient implements AutoCloseable {
             } else if (profileRevision != null) {
                 body.addProperty("hostProfileRevision", profileRevision);
             }
-            if (installedKeyId != null) {
+            // The active epoch changes only with a matching profile
+            if (installedKeyId != null && (body.has("hostProfile") || installedKeyId.equals(publishedKeyId))) {
                 JsonArray installed = new JsonArray();
                 for (JsonElement key : state.getAsJsonArray("ticketKeys")) {
                     installed.add(key.getAsJsonObject().get("keyId"));
@@ -1163,6 +1166,7 @@ public final class ProviderClient implements AutoCloseable {
                 if (!response.has("hostProfileRevision") || response.get("hostProfileRevision").isJsonNull()) {
                     throw new IOException("Profile acknowledgement missing");
                 }
+                    publishedKeyId = profile.get("admissionKeyId").getAsString();
                     if (profileSnapshot != null) {
                         profileRevision = response.get("hostProfileRevision").getAsString();
                         lastProfile = profile.deepCopy();

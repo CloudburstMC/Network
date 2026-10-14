@@ -832,6 +832,29 @@ class ProviderClientTest {
     }
 
     @Test
+    void keepsTheActiveEpochWhileDrainingWithoutAProfile(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path), host, () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                client.drain().get(10, TimeUnit.SECONDS);
+                assertEquals("T001", stub.lastHeartbeat.getAsJsonArray("installedAdmissionKeyIds").get(0).getAsString());
+                client.rotateAdmissionKey().get(10, TimeUnit.SECONDS);
+                assertEquals("T002", host.ticketKeyId, "The delivered epoch is installed locally");
+                assertFalse(stub.lastHeartbeat.has("hostProfile"));
+                assertFalse(stub.lastHeartbeat.has("installedAdmissionKeyIds"),
+                        "A new active epoch waits for a matching profile");
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void reportsGameOutcomesOnlyWhenDeclared(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var builder = ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example");
