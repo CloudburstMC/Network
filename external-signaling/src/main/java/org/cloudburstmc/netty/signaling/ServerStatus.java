@@ -1,0 +1,39 @@
+/*
+ * Copyright 2026 CloudburstMC
+ *
+ * CloudburstMC licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
+ *
+ *   https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.cloudburstmc.netty.signaling;
+
+import java.util.List;
+
+/**
+ * Complete atomic listing snapshot. The provider lists the heartbeat's actual player count;
+ * maxPlayerCount is independent of routing capacity.
+ */
+public record ServerStatus(String name, String level, int maxPlayerCount, int gameType) {
+    public ServerStatus {
+        if (name == null || name.isEmpty() || name.codePointCount(0, name.length()) > 128
+                || level == null || level.codePointCount(0, level.length()) > 128
+                || maxPlayerCount < 0 || maxPlayerCount > 1_000_000 || gameType < 0 || gameType > 2) {
+            throw new IllegalArgumentException("Invalid complete server status snapshot");
+        }
+        for (String value : List.of(name, level)) {
+            if (value.codePoints().anyMatch(
+                    c -> Character.getType(c) == Character.CONTROL || Character.getType(c) == Character.SURROGATE)) {
+                throw new IllegalArgumentException("Invalid status text");
+            }
+        }
+    }
+}

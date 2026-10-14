@@ -149,7 +149,7 @@ public class RakTests {
                 .handler(new ChannelInitializer<RakServerChannel>() {
                     @Override
                     protected void initChannel(RakServerChannel ch) throws Exception {
-                        System.out.println("Initialised server channel");
+                        System.out.println("Initialized server channel");
                     }
                 })
                 .childHandler(new ChannelInitializer<RakChildChannel>() {
@@ -608,6 +608,20 @@ public class RakTests {
             Assertions.assertEquals(RakConstants.MAXIMUM_SPLIT_COUNT * (RakConstants.MINIMUM_MTU_SIZE
                     - RakConstants.UDP_HEADER_SIZE - 40 - RakConstants.MAXIMUM_ENCAPSULATED_HEADER_SIZE
                     - RakConstants.RAKNET_DATAGRAM_HEADER_SIZE), ((RakChannel) channel).maxMessageSize());
+        } finally {
+            channel.close().awaitUninterruptibly();
+        }
+    }
+
+    @Test
+    public void testPingWithoutASession() {
+        Channel channel = clientBootstrap(RakConstants.MAXIMUM_MTU_SIZE)
+                .handler(new ChannelInboundHandlerAdapter())
+                .register()
+                .syncUninterruptibly()
+                .channel();
+        try {
+            Assertions.assertEquals(0, ((RakChannel) channel).getPing());
         } finally {
             channel.close().awaitUninterruptibly();
         }

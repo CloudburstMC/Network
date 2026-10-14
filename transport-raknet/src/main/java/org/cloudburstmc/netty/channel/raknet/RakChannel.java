@@ -35,4 +35,10 @@ public interface RakChannel extends TransportChannel {
         return session != null ? session.getMaxMessageSize()
                 : RakSessionCodec.maxMessageSize(RakConstants.MINIMUM_MTU_SIZE - RakConstants.UDP_HEADER_SIZE - 40);
     }
+
+    @Override
+    default long getPing() {
+        RakSessionCodec session = this.rakPipeline().get(RakSessionCodec.class);
+        return session != null ? session.getPing() : 0;
+    }
 }

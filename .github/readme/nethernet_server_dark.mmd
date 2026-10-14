@@ -1,0 +1,46 @@
+---
+config:
+  layout: elk
+  theme: redux-dark
+---
+flowchart LR
+ subgraph TransportLayer["<b>NetherNet Transport</b>"]
+    direction TB
+    Native["<b>WebRTC Native</b><br><i>libdatachannel</i>"]
+    DataChannel["<b>RTCDataChannel</b><br><i>Reliability & Ordering</i>"]
+    ChildChannel["<b>NetherNetChildChannel</b><br><i>Netty Adapter</i>"]
+ end
+ subgraph UserPipeline["<b>User ChannelPipeline</b>"]
+    UserLogic["<b>User Handlers</b><br><i>Application Logic</i>"]
+ end
+    
+    Network(("Network (DTLS/UDP)"))
+
+    %% Inbound
+    Network == Encrypted Frame ==> Native
+    Native == Reassembled Message ==> DataChannel
+    DataChannel == <i>RTCDataChannelBuffer</i> ==> ChildChannel
+    ChildChannel == <i>ByteBuf</i> ==> UserLogic
+
+    %% Outbound
+    UserLogic == <i>ByteBuf</i> ==> ChildChannel
+    ChildChannel == <i>RTCDataChannelBuffer</i> ==> DataChannel
+    DataChannel == Message ==> Native
+    Native == Encrypted Frame ==> Network
+
+    %% Styling
+    Native:::shared
+    DataChannel:::shared
+    ChildChannel:::shared
+    
+    classDef shared fill:#e67e22,stroke:#333,stroke-width:2px
+    
+    linkStyle 0 stroke:#2ecc71,stroke-width:4px,color:#2ecc71
+    linkStyle 1 stroke:#2ecc71,stroke-width:4px,color:#2ecc71
+    linkStyle 2 stroke:#2ecc71,stroke-width:4px,color:#2ecc71
+    linkStyle 3 stroke:#2ecc71,stroke-width:4px,color:#2ecc71
+    
+    linkStyle 4 stroke:#3498db,stroke-width:4px,color:#3498db
+    linkStyle 5 stroke:#3498db,stroke-width:4px,color:#3498db
+    linkStyle 6 stroke:#3498db,stroke-width:4px,color:#3498db
+    linkStyle 7 stroke:#3498db,stroke-width:4px,color:#3498db

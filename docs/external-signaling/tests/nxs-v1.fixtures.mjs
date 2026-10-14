@@ -1,0 +1,122 @@
+// Public fixture keys only. Node's independent crypto implementation verifies JVM conformance.
+import {readFileSync, writeFileSync} from 'node:fs';
+import {createHash, createHmac, createCipheriv, createPrivateKey, createPublicKey, sign, verify} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+
+const protocol = 'nethernet-external-signaling-v1', signature = 'nxs-es384-v1';
+const path = name => fileURLToPath(new URL('../fixtures/' + name, import.meta.url));
+const read = name => JSON.parse(readFileSync(path(name), 'utf8'));
+// Fixtures stay ASCII: non-ASCII text is written as JSON escapes.
+const write = (name, value) => writeFileSync(path(name), JSON.stringify(value, null, 2)
+    .replace(/[\u007f-\uffff]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')) + '\n');
+const digest = value => createHash('sha256').update(value).digest();
+const b64 = value => value.toString('base64url');
+const hmac = (key, data) => createHmac('sha256', key).update(data).digest();
+const update = process.argv.includes('--write');
+const updateAdmission = update || process.argv.includes('--write-admission');
+
+const f = read('nxs-v1.fixtures.json'), c = f.challenge;
+f.protocol = c.protocol = protocol;
+c.signature = signature;
+c.thumbprint = b64(digest(JSON.stringify(Object.fromEntries(['crv', 'kty', 'x', 'y'].map(k => [k, f.publicKeyJwk[k]])))));
+c.contextDigest = b64(digest(JSON.stringify(
+    ['mode', 'label', 'authorizationId', 'serviceId', 'registrationId']
+        .map(k => c.context[k] ?? ''))));
+const proof = JSON.stringify(
+    [protocol, 'complete', c.audience, c.challengeId, c.nonce, c.thumbprint, c.contextDigest, c.expiresAt, f.proofNonce,
+      f.idempotencyKey]);
+const i = f.request.input;
+const request = JSON.stringify(
+    [protocol, signature, i.audience, i.method, i.path, i.timestamp, i.instanceId, i.keyId, i.idempotencyKey,
+      i.generation, i.sequence, b64(digest(i.body))]);
+const thumbprint = jwk => b64(digest(JSON.stringify(Object.fromEntries(['crv', 'kty', 'x', 'y'].map(k => [k, jwk[k]])))));
+const r = f.rotation, ri = r.input;
+const rotation = JSON.stringify([protocol, 'rotate', ri.audience, ri.instanceId, ri.oldKeyId,
+  thumbprint(r.replacementPublicKeyJwk), ri.generation, ri.idempotencyKey]);
+// The replacement key signs its own rotation proof.
+for (const [name, payload, jwk, privateJwk] of [['proof', proof, f.publicKeyJwk, f.privateKeyJwk],
+  ['request', request, f.publicKeyJwk, f.privateKeyJwk],
+  ['rotation', rotation, r.replacementPublicKeyJwk, r.replacementPrivateKeyJwk]]) {
+  if (update) {
+    f[name].payload = payload;
+    f[name].signature = b64(sign('sha384', Buffer.from(payload),
+        {key: createPrivateKey({key: privateJwk, format: 'jwk'}), dsaEncoding: 'ieee-p1363'}));
+  }
+  assert.equal(f[name].payload, payload);
+  assert(verify('sha384', Buffer.from(payload), {key: createPublicKey({key: jwk, format: 'jwk'}), dsaEncoding: 'ieee-p1363'},
+      Buffer.from(f[name].signature, 'base64url')));
+}
+if (update) write('nxs-v1.fixtures.json', f);
+
+const v = read('stateless-admission-v1.fixtures.json'), claims = v.claims, context = v.context;
+const canonicalCpk = createPublicKey({key: v.identity.publicKeyJwk, format: 'jwk'}).export({type: 'spki', format: 'der'}).toString('base64');
+const bindingInput = Buffer.from(`nxs-identity-binding-v1\0${context.audience}\0${canonicalCpk}`, 'utf8');
+const fullBinding = hmac(Buffer.from(context.secret, 'utf8'), bindingInput);
+const identityBindingHex = fullBinding.subarray(0, 16).toString('hex');
+if (updateAdmission) {
+  v.identity.canonicalCpk = canonicalCpk;
+  v.identity.hmacInputHex = bindingInput.toString('hex');
+  v.identity.hmacSha256Hex = fullBinding.toString('hex');
+  claims.identityBindingHex = identityBindingHex;
+}
+assert.equal(v.identity.canonicalCpk, canonicalCpk);
+assert.equal(v.identity.hmacInputHex, bindingInput.toString('hex'));
+assert.equal(v.identity.hmacSha256Hex, fullBinding.toString('hex'));
+assert.equal(claims.identityBindingHex, identityBindingHex);
+const plain = Buffer.alloc(67 + claims.clientIcePwd.length);
+plain.writeUInt32BE(claims.expiresAt / 1000);
+Buffer.from(claims.clientFingerprintHex, 'hex').copy(plain, 4);
+plain.writeUInt16BE(claims.clientSctpPort, 36);
+plain.writeUInt32BE(claims.clientMaxMessageSize, 38);
+Buffer.from(claims.identityBindingHex, 'hex').copy(plain, 42);
+plain.writeBigUInt64BE(BigInt(claims.networkId), 58);
+plain[66] = claims.clientIcePwd.length;
+plain.write(claims.clientIcePwd, 67, 'ascii');
+const nonce = Buffer.from(v.nonceHex, 'hex'), header = 'NXS1' + context.keyId;
+const key = hmac(context.secret, `nxs-stateless-aead-v1\0${context.audience}`);
+const cipher = createCipheriv('aes-256-gcm', key, nonce);
+cipher.setAAD(Buffer.from(`nxs-stateless-admission-v1\0${header}\0${context.audience}\0${v.clientIceUfrag}`));
+const encrypted = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
+plain.fill(0);
+const localUfrag = header + Buffer.concat([nonce, encrypted]).toString('base64').replaceAll('=', '');
+const icePwd = hmac(context.secret, `nxs-stateless-ice-v1\0${context.audience}\0${localUfrag}`).subarray(0, 24)
+    .toString('base64');
+const expected = {localUfrag, icePwd, ufragLength: localUfrag.length};
+if (updateAdmission) {
+  v.expected = expected;
+  write('stateless-admission-v1.fixtures.json', v);
+}
+assert.deepEqual(v.expected, expected);
+const provenance = {
+  specification: 'urn:nethernet:external-signaling:v1',
+  files: Object.fromEntries(['stateless-admission-v1.fixtures.json', 'cloudburst-protocol-vectors.v1.json'].map(
+      name => [name, digest(readFileSync(path(name))).toString('hex')]))
+};
+if (updateAdmission) write('provenance.json', provenance);
+assert.deepEqual(read('provenance.json'), provenance);
+
+// Fleet examples keep public endpoint metadata optional and report one actual count.
+const schema = JSON.parse(readFileSync(new URL('../nxs-v1.schema.json', import.meta.url), 'utf8'));
+for (const [document, value] of Object.entries(f.fleetExamples)) {
+  for (const field of schema.$defs[document].required) assert(field in value, document + ' omitted ' + field);
+}
+assert(!schema.$defs.registration.required.includes('serviceId'));
+assert(!schema.$defs.registration.required.includes('publicAddress'));
+assert(!('serviceId' in f.fleetExamples.registration));
+assert(!('publicAddress' in f.fleetExamples.registration));
+assert.equal(schema.$defs.heartbeat.properties.connectedPlayers.$ref, '#/$defs/connectedPlayers');
+assert.equal(f.fleetExamples.heartbeat.connectedPlayers.count, 3);
+
+assert.deepEqual(Object.keys(f.fleetExamples.heartbeat.serverStatus).sort(),
+    ['name', 'level', 'maxPlayerCount', 'gameType'].sort());
+
+assert(schema.$defs.heartbeat.required.includes('acceptingPlayers'));
+assert.equal(f.fleetExamples.heartbeat.acceptingPlayers, true);
+
+// The standard heartbeat examples contain only specified fields.
+assert.deepEqual(schema.$defs.heartbeat.required, ['acceptingPlayers', 'capacity', 'connectedPlayers']);
+for (const field of Object.keys(f.fleetExamples.heartbeat)) {
+  assert(field in schema.$defs.heartbeat.properties);
+}
+console.log('NXS canonical signing, stateless encryption, fleet examples, and fixture hashes verified.');
