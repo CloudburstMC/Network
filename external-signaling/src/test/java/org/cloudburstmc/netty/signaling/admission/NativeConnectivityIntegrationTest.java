@@ -91,9 +91,9 @@ class NativeConnectivityIntegrationTest {
                                     AdmissionGate.Limits.defaults())
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
-            host.installTicketKeys(
+            host.installAdmissionKeys(
                             List.of(
-                                    new ProviderTransport.TicketKey(
+                                    new AdmissionKey(
                                             "K001", TestSignalingProvider.SECRET)))
                     .toCompletableFuture()
                     .get();

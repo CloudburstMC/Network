@@ -4,7 +4,7 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.DefaultEventLoopGroup;
-import org.cloudburstmc.netty.signaling.ProviderCrypto;
+import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec;
@@ -39,7 +39,6 @@ class NativeProviderHostFactoryNativeTest {
                 options.put(
                         "stateDirectory",
                         directory.resolve(ip.equals("::1") ? "v6" : "v4").toString());
-                options.put("diagnosticAdmission", "true");
                 options.put("endpointPolicy", NativeProviderHostFactory.EXPLICIT_OR_PUBLIC_LOCAL);
                 options.put(
                         "advertisedEndpoints",
@@ -58,7 +57,7 @@ class NativeProviderHostFactoryNativeTest {
                                             }
                                         });
                 var host =
-                        new NativeProviderHostFactory()
+                        NativeProviderHostFactory
                                 .open(
                                         bootstrap,
                                         new InetSocketAddress(InetAddress.getByName(ip), port),
@@ -73,9 +72,9 @@ class NativeProviderHostFactoryNativeTest {
                     assertEquals(0, nativeHost.candidatePublicationVersion());
                     assertTrue(nativeHost.channel().isServing());
                     nativeHost
-                            .installTicketKeys(
+                            .installAdmissionKeys(
                                     List.of(
-                                            new ProviderTransport.TicketKey(
+                                            new AdmissionKey(
                                                     "A001",
                                                     "public-test-only-player-admission-secret")))
                             .toCompletableFuture()
@@ -115,11 +114,11 @@ class NativeProviderHostFactoryNativeTest {
                                                     snapshot.candidateRevision())),
                                     now + 60000);
                     nativeHost
-                            .configureDiagnostics(policy)
+                            .configureDiagnostics(policy, System.nanoTime() + TimeUnit.SECONDS.toNanos(60))
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     assertTrue(nativeHost.channel().isServing());
-                    assertEquals(0, nativeHost.channel().nativeStats()[2]);
+                    assertEquals(0, nativeHost.channel().stats().mux().agents());
                     nativeHost.disableDiagnostics().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 } finally {
                     host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -162,7 +161,7 @@ class NativeProviderHostFactoryNativeTest {
                                             }
                                         });
                 var host =
-                        new NativeProviderHostFactory()
+                        NativeProviderHostFactory
                                 .open(bootstrap, new InetSocketAddress("127.0.0.1", port), options)
                                 .toCompletableFuture()
                                 .get(10, TimeUnit.SECONDS);
@@ -186,7 +185,7 @@ class NativeProviderHostFactoryNativeTest {
                         stun.receive(packet);
                         assertEquals(port, packet.getPort());
                     }
-                    assertEquals(assisted ? 0 : 1, nativeHost.channel().nativeStats()[2]);
+                    assertEquals(assisted ? 0 : 1, nativeHost.channel().stats().mux().agents());
                 } finally {
                     host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 }
@@ -231,7 +230,7 @@ class NativeProviderHostFactoryNativeTest {
                                             }
                                         });
                 var host =
-                        new NativeProviderHostFactory()
+                        NativeProviderHostFactory
                                 .open(
                                         bootstrap,
                                         new InetSocketAddress(InetAddress.getByName(ip), port),
@@ -245,10 +244,10 @@ class NativeProviderHostFactoryNativeTest {
                     assertTrue(nativeHost.candidatePublicationVersion() > 0);
                     assertTrue(nativeHost.channel().isServing());
                     nativeHost
-                            .installTicketKeys(
+                            .installAdmissionKeys(
                                     List.of(
-                                            new ProviderTransport.TicketKey(
-                                                    "A001", ProviderCrypto.base64(new byte[32]))))
+                                            new AdmissionKey(
+                                                    "A001", java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[32]))))
                             .toCompletableFuture()
                             .get();
                     var before = nativeHost.captureHostProfile().toCompletableFuture().get();
@@ -257,13 +256,14 @@ class NativeProviderHostFactoryNativeTest {
                         assertFalse(before.profile().has("version"));
                         assertEquals(
                                 0,
-                                nativeHost.channel().nativeStats()[2],
+                                nativeHost.channel().stats().mux().agents(),
                                 "Configured forwarding suppresses monitor allocation");
                         var candidates =
                                 nativeHost
-                                        .hostProfile()
+                                        .captureHostProfile()
                                         .toCompletableFuture()
                                         .get()
+                                        .profile()
                                         .getAsJsonArray("candidates");
                         assertEquals(1, candidates.size());
                         assertEquals(
@@ -320,7 +320,7 @@ class NativeProviderHostFactoryNativeTest {
                                             }
                                         });
                 var host =
-                        new NativeProviderHostFactory()
+                        NativeProviderHostFactory
                                 .open(
                                         bootstrap,
                                         new InetSocketAddress(
@@ -332,20 +332,19 @@ class NativeProviderHostFactoryNativeTest {
                     assertEquals(
                             port, ((InetSocketAddress) host.channel().localAddress()).getPort());
                     host.transport()
-                            .installTicketKeys(
+                            .installAdmissionKeys(
                                     List.of(
-                                            new ProviderTransport.TicketKey(
+                                            new AdmissionKey(
                                                     "A001",
-                                                    ProviderCrypto.base64(new byte[32]),
-                                                    0,
-                                                    Long.MAX_VALUE)))
+                                                    java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[32]))))
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     var first =
                             host.transport()
-                                    .hostProfile()
+                                    .captureHostProfile()
                                     .toCompletableFuture()
-                                    .get(5, TimeUnit.SECONDS);
+                                    .get(5, TimeUnit.SECONDS)
+                                    .profile();
                     var candidates = first.getAsJsonArray("candidates");
                     assertEquals(1, candidates.size());
                     assertEquals(
@@ -357,9 +356,10 @@ class NativeProviderHostFactoryNativeTest {
                     assertEquals(
                             first,
                             host.transport()
-                                    .hostProfile()
+                                    .captureHostProfile()
                                     .toCompletableFuture()
-                                    .get(5, TimeUnit.SECONDS));
+                                    .get(5, TimeUnit.SECONDS)
+                                    .profile());
                 } finally {
                     host.transport().close().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 }

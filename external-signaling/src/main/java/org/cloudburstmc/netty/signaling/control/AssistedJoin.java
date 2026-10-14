@@ -70,39 +70,10 @@ public record AssistedJoin(
     public static AssistedJoin decode(String wire) {
         JsonObject o = ControlJson.parse(wire, MAX_BYTES);
         boolean diagnostic = "0".equals(ControlJson.string(o, "networkId"));
-        if (diagnostic) {
-            ControlJson.fields(
-                    o,
-                    "kind",
-                    "version",
-                    "id",
-                    "instanceId",
-                    "generation",
-                    "incarnation",
-                    "keyId",
-                    "hostFingerprint",
-                    "expiresAt",
-                    "networkId",
-                    "localUfrag",
-                    "localPassword",
-                    "offer");
-        } else {
-            ControlJson.fields(
-                    o,
-                    "kind",
-                    "version",
-                    "id",
-                    "instanceId",
-                    "generation",
-                    "incarnation",
-                    "keyId",
-                    "hostFingerprint",
-                    "expiresAt",
-                    "networkId",
-                    "cpk",
-                    "localUfrag",
-                    "localPassword",
-                    "offer");
+        ControlJson.required(o, "kind", "version", "id", "instanceId", "generation", "incarnation", "keyId",
+                "hostFingerprint", "expiresAt", "networkId", "localUfrag", "localPassword", "offer");
+        if (diagnostic == o.has("cpk")) {
+            throw new IllegalArgumentException("Invalid assisted join identity");
         }
         if (!ControlJson.string(o, "kind").equals("assisted-join")
                 || ControlJson.number(o, "version") != 1) {

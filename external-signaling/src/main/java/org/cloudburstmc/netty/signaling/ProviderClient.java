@@ -17,15 +17,16 @@
 package org.cloudburstmc.netty.signaling;
 
 import com.google.gson.*;
+import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import org.cloudburstmc.netty.signaling.diagnostic.*;
 
 import java.io.*;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.*;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -35,11 +36,10 @@ import java.util.function.*;
  * One asynchronous, serialized control lifecycle per backend, never one poller per player.
  */
 public final class ProviderClient implements AutoCloseable {
-    public static final String AUTOMATIC = "automatic";
-    public static final String NEW_SERVICE = "new-service";
-    public static final String ATTACH_INSTANCE = "attach-instance";
-    public static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work";
-    public static final String BEARER_TOKEN = "bearer-token";
+    private static final String NEW_SERVICE = "new-service";
+    private static final String ATTACH_INSTANCE = "attach-instance";
+    private static final String ANONYMOUS_PROOF_OF_WORK = "anonymous-proof-of-work";
+    private static final String BEARER_TOKEN = "bearer-token";
 
     public enum ControlTransport {
         HTTP,
@@ -49,22 +49,33 @@ public final class ProviderClient implements AutoCloseable {
     private static final String CONNECTIVITY_EXTENSION = "dev.opencollab.nxs.connectivity";
     private static final long DIAGNOSTIC_VALIDITY_MILLIS = 300000;
 
-    public record Configuration(
-            URI provider,
-            String profile,
-            String label,
-            String registrationMode,
-            String authorizationScheme,
-            String authorizationToken,
-            String region,
-            String pool,
-            Map<String, String> tags,
-            ControlTransport controlTransport,
-            boolean diagnosticAdmission,
-            String connectivityMethod,
-            boolean assistedJoins) {
-        public Configuration {
-            Objects.requireNonNull(controlTransport);
+    /**
+     * What the client registers and runs with. The bearer token alone decides what the provider
+     * registers it as.
+     */
+    public static final class Configuration {
+        private final URI provider;
+        private final String label;
+        private final String authorizationToken;
+        private final ControlTransport controlTransport;
+        private final boolean diagnosticAdmission;
+        private final String connectivityMethod;
+        private final boolean assistedJoins;
+        private final boolean deregisterOnShutdown;
+        private final boolean gameOutcomes;
+        private final Location location;
+
+        private Configuration(Builder builder) {
+            provider = Objects.requireNonNull(builder.provider);
+            label = builder.label;
+            authorizationToken = builder.authorizationToken;
+            controlTransport = builder.controlTransport;
+            diagnosticAdmission = builder.diagnosticAdmission;
+            connectivityMethod = builder.connectivityMethod;
+            assistedJoins = builder.assistedJoins;
+            deregisterOnShutdown = builder.deregisterOnShutdown;
+            gameOutcomes = builder.gameOutcomes;
+            location = builder.location;
             if (assistedJoins && controlTransport != ControlTransport.AUTO) {
                 throw new IllegalArgumentException("Assisted joins require WebSocket control");
             }
@@ -74,142 +85,167 @@ public final class ProviderClient implements AutoCloseable {
             if (diagnosticAdmission && !"https".equals(provider.getScheme())) {
                 throw new IllegalArgumentException("Diagnostics require HTTPS");
             }
-            Objects.requireNonNull(provider);
-            Objects.requireNonNull(profile);
-            Objects.requireNonNull(registrationMode);
-            Objects.requireNonNull(authorizationScheme);
-            if (!"nxs-admission-v1".equals(profile)) {
-                throw new IllegalArgumentException("Unsupported operational profile");
+            ProviderOrigin.canonicalize(provider);
+            if (label != null && label.codePointCount(0, label.length()) > 128) {
+                throw new IllegalArgumentException("Provider label exceeds 128 characters");
             }
-
-            ProviderCrypto.origin(provider);
-            if (region != null && (!region.matches("[A-Za-z0-9_-]{1,32}") || pool == null || !pool.matches(
-                    "[A-Za-z0-9_-]{1,64}"))) {
-                throw new IllegalArgumentException("Invalid placement");
-            }
-
-            tags = tags == null ? Map.of() : Collections.unmodifiableMap(new TreeMap<>(tags));
-            if (!Set.of(AUTOMATIC, NEW_SERVICE, ATTACH_INSTANCE).contains(registrationMode)) {
-                throw new IllegalArgumentException("Invalid provider registration mode");
-            }
-
-            if (!Set.of(ANONYMOUS_PROOF_OF_WORK, BEARER_TOKEN).contains(authorizationScheme)) {
-                throw new IllegalArgumentException("Invalid provider authorization scheme");
-            }
-
-            if ((BEARER_TOKEN.equals(authorizationScheme)) != (authorizationToken != null
-                    && !authorizationToken.isBlank())) {
-                throw new IllegalArgumentException("Bearer authorization requires exactly one token");
-            }
-
-            if (ANONYMOUS_PROOF_OF_WORK.equals(authorizationScheme) && !Set.of(AUTOMATIC, NEW_SERVICE)
-                    .contains(registrationMode)) {
-                throw new IllegalArgumentException("Anonymous proof of work can only create a service");
-            }
-
-            if (ATTACH_INSTANCE.equals(registrationMode) && (region == null || region.isBlank() || pool == null
-                    || pool.isBlank())) {
-                throw new IllegalArgumentException("Attached instances require region and pool");
-            }
-
-            if ((region == null) != (pool == null) || (!tags.isEmpty() && region == null)) {
-                throw new IllegalArgumentException("Provider placement requires region and pool together");
-            }
-
-            if (tags.size() > 16 || tags.entrySet().stream().anyMatch(
-                    e -> !e.getKey().matches("[A-Za-z0-9_.-]{1,32}") || e.getValue() == null || !e.getValue()
-                            .equals(e.getValue().trim()) || e.getValue().isEmpty() || e.getValue().length() > 64
-                            || e.getValue().codePoints().anyMatch(c -> c < 32 || c == 127))) {
-                throw new IllegalArgumentException("Invalid provider placement tags");
+            if (authorizationToken != null && authorizationToken.isBlank()) {
+                throw new IllegalArgumentException("Blank bearer token");
             }
         }
 
-        public Configuration(
-                URI provider,
-                String profile,
-                String label,
-                String registrationMode,
-                String authorizationScheme,
-                String authorizationToken,
-                String region,
-                String pool,
-                Map<String, String> tags,
-                ControlTransport controlTransport,
-                boolean diagnosticAdmission,
-                String connectivityMethod) {
-            this(
-                    provider,
-                    profile,
-                    label,
-                    registrationMode,
-                    authorizationScheme,
-                    authorizationToken,
-                    region,
-                    pool,
-                    tags,
-                    controlTransport,
-                    diagnosticAdmission,
-                    connectivityMethod,
-                    false);
+        public static Builder builder(URI provider) {
+            return new Builder(provider);
         }
 
-        public Configuration(
-                URI provider,
-                String profile,
-                String label,
-                String registrationMode,
-                String authorizationScheme,
-                String authorizationToken,
-                String region,
-                String pool,
-                Map<String, String> tags,
-                ControlTransport controlTransport) {
-            this(
-                    provider,
-                    profile,
-                    label,
-                    registrationMode,
-                    authorizationScheme,
-                    authorizationToken,
-                    region,
-                    pool,
-                    tags,
-                    controlTransport,
-                    false,
-                    "discovered");
+        public URI provider() {
+            return provider;
         }
 
-        public Configuration(
-                URI provider,
-                String profile,
-                String label,
-                String registrationMode,
-                String authorizationScheme,
-                String authorizationToken,
-                String region,
-                String pool,
-                Map<String, String> tags) {
-            this(
-                    provider,
-                    profile,
-                    label,
-                    registrationMode,
-                    authorizationScheme,
-                    authorizationToken,
-                    region,
-                    pool,
-                    tags,
-                    ControlTransport.HTTP);
+        public String label() {
+            return label;
         }
 
-        public Configuration(URI provider, String profile, String label) {
-            this(provider, profile, label, NEW_SERVICE, ANONYMOUS_PROOF_OF_WORK, null, null, null, Map.of());
+        public String authorizationToken() {
+            return authorizationToken;
+        }
+
+        public ControlTransport controlTransport() {
+            return controlTransport;
+        }
+
+        public boolean diagnosticAdmission() {
+            return diagnosticAdmission;
+        }
+
+        public String connectivityMethod() {
+            return connectivityMethod;
+        }
+
+        public boolean assistedJoins() {
+            return assistedJoins;
+        }
+
+        public boolean deregisterOnShutdown() {
+            return deregisterOnShutdown;
+        }
+
+        public boolean gameOutcomes() {
+            return gameOutcomes;
+        }
+
+        public Location location() {
+            return location;
+        }
+
+        String authorizationScheme() {
+            return authorizationToken == null ? ANONYMOUS_PROOF_OF_WORK : BEARER_TOKEN;
         }
 
         @Override
         public String toString() {
-            return "Configuration[provider=" + provider + ", profile=" + profile + ", registrationMode="
-                    + registrationMode + ", authorizationScheme=" + authorizationScheme + "]";
+            return "Configuration[provider=" + provider + ", authorizationScheme=" + authorizationScheme() + "]";
+        }
+
+        public static final class Builder {
+            private final URI provider;
+            private String label;
+            private String authorizationToken;
+            private ControlTransport controlTransport = ControlTransport.HTTP;
+            private boolean diagnosticAdmission;
+            private String connectivityMethod = "discovered";
+            private boolean assistedJoins;
+            private boolean deregisterOnShutdown;
+            private boolean gameOutcomes;
+            private Location location;
+
+            private Builder(URI provider) {
+                this.provider = provider;
+            }
+
+            /**
+             * @param label The instance's initial name at the provider
+             */
+            public Builder label(String label) {
+                this.label = label;
+                return this;
+            }
+
+            /**
+             * @param authorizationToken A bearer token, or null to register anonymously with proof of work
+             */
+            public Builder authorizationToken(String authorizationToken) {
+                this.authorizationToken = authorizationToken;
+                return this;
+            }
+
+            public Builder controlTransport(ControlTransport controlTransport) {
+                this.controlTransport = Objects.requireNonNull(controlTransport);
+                return this;
+            }
+
+            public Builder diagnosticAdmission(boolean diagnosticAdmission) {
+                this.diagnosticAdmission = diagnosticAdmission;
+                return this;
+            }
+
+            /**
+             * @param connectivityMethod {@code defined} for configured endpoints, {@code discovered} otherwise
+             */
+            public Builder connectivityMethod(String connectivityMethod) {
+                this.connectivityMethod = connectivityMethod;
+                return this;
+            }
+
+            public Builder assistedJoins(boolean assistedJoins) {
+                this.assistedJoins = assistedJoins;
+                return this;
+            }
+
+            public Builder deregisterOnShutdown(boolean deregisterOnShutdown) {
+                this.deregisterOnShutdown = deregisterOnShutdown;
+                return this;
+            }
+
+            /**
+             * Declares that the application reports every admitted player's join or rejection through
+             * {@link ProviderClient#reportGameOutcome}.
+             */
+            public Builder gameOutcomes(boolean gameOutcomes) {
+                this.gameOutcomes = gameOutcomes;
+                return this;
+            }
+
+            /**
+             * @param location Where the operator says the host runs, or null to let the provider estimate it
+             */
+            public Builder location(Location location) {
+                this.location = location;
+                return this;
+            }
+
+            public Configuration build() {
+                return new Configuration(this);
+            }
+        }
+    }
+
+    /**
+     * The assigned runtime identity. {@code serviceId} and {@code publicAddress} are both present or both null.
+     */
+    public record Registration(String registrationId, String instanceId, String keyId, long leaseGeneration,
+                               String serviceId, String publicAddress) {
+    }
+
+    /** The game's verdict on an admitted player. */
+    public enum GameOutcome {
+        JOINED("ticket.game_joined"),
+        REJECTED("ticket.game_rejected");
+
+        private final String stage;
+
+        GameOutcome(String stage) {
+            this.stage = stage;
         }
     }
 
@@ -225,39 +261,105 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     /**
+     * The host software and its version, as the provider should show them.
+     */
+    public record Software(String name, String version) {
+        public Software {
+            if (name == null || name.isBlank() || name.codePointCount(0, name.length()) > 64 || version == null
+                    || version.isBlank() || version.codePointCount(0, version.length()) > 128) {
+                throw new IllegalArgumentException("Invalid host software");
+            }
+        }
+    }
+
+    /**
+     * Where the operator says the host runs: a country, coordinates or both. Coordinates come together.
+     */
+    public record Location(String country, String city, Double latitude, Double longitude) {
+        public Location {
+            if (country != null && !country.matches("[A-Z]{2}") || city != null && (city.isEmpty()
+                    || city.codePointCount(0, city.length()) > 120 || city.chars().anyMatch(c -> c < 0x20 || c == 0x7f))
+                    || (latitude == null) != (longitude == null)
+                    || latitude != null && !(Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180)
+                    || country == null && latitude == null) {
+                throw new IllegalArgumentException("Invalid location");
+            }
+        }
+
+        /**
+         * Reads the host configuration keys {@code country}, {@code city}, {@code latitude} and {@code longitude}.
+         *
+         * @return null when nothing is declared
+         */
+        public static Location of(Map<String, String> settings) {
+            if (settings.isEmpty()) {
+                return null;
+            }
+            if (!Set.of("country", "city", "latitude", "longitude").containsAll(settings.keySet())) {
+                throw new IllegalArgumentException("Unknown location key");
+            }
+            String country = settings.get("country"), city = settings.get("city"),
+                    latitude = settings.get("latitude"), longitude = settings.get("longitude");
+            return new Location(country == null ? null : country.trim().toUpperCase(Locale.ROOT),
+                    city == null ? null : city.trim(), latitude == null ? null : Double.valueOf(latitude.trim()),
+                    longitude == null ? null : Double.valueOf(longitude.trim()));
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            if (country != null) {
+                json.addProperty("country", country);
+            }
+            if (city != null) {
+                json.addProperty("city", city);
+            }
+            if (latitude != null) {
+                json.addProperty("latitude", latitude);
+                json.addProperty("longitude", longitude);
+            }
+            return json;
+        }
+    }
+
+    /**
+     * A link the provider offers the host's operator. It may carry a one-time credential: show it, never open or
+     * save it.
+     */
+    public record OperatorAction(URI url, String text, long expiresAt) {
+        @Override
+        public String toString() {
+            return "OperatorAction[expiresAt=" + expiresAt + "]";
+        }
+    }
+
+    /**
      * Capacity and playerCount describe the same observation. Public server status is independent.
      */
-    public record Health(boolean acceptingPlayers, int capacity, String build, PlayerCount playerCount) {
+    public record Health(boolean acceptingPlayers, int capacity, Software software, PlayerCount playerCount) {
         public Health {
             if (capacity < 0 || capacity > 1000000) {
                 throw new IllegalArgumentException("Invalid health");
             }
         }
-
-        /** Temporary source adapter; obsolete load and protocol arguments are ignored. */
-        @Deprecated(forRemoval = true)
-        public Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion,
-                      String build, PlayerCount playerCount) {
-            this(healthy && acceptingPlayers, capacity, build, playerCount);
-        }
-
-        /** Temporary source adapter for hosts without actual player telemetry. */
-        @Deprecated(forRemoval = true)
-        public Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion, String build) {
-            this(healthy && acceptingPlayers, capacity, build, null);
-        }
     }
 
     public static final class ProviderException extends IOException {
         private final int status;
+        private final String code;
 
         ProviderException(int status, String code) {
             super("Provider request failed: " + status + " " + code);
             this.status = status;
+            this.code = code;
         }
 
         public int status() {
             return status;
+        }
+
+        /** The provider's machine code; see the wire reference for the codes clients act on. */
+        public String code() {
+            return code;
         }
     }
 
@@ -269,6 +371,7 @@ public final class ProviderClient implements AutoCloseable {
     private final Supplier<ServerStatus> statusSupplier;
     private final Supplier<Health> healthSupplier;
     private final ProviderLog diagnostics;
+    private final ConnectivityLog connectivity;
     private final String origin;
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "nethernet-provider");
@@ -278,8 +381,8 @@ public final class ProviderClient implements AutoCloseable {
     private final HttpClient http =
             HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofSeconds(10))
                     .build();
-    private final AtomicReference<ServerStatus> explicitStatus = new AtomicReference<>();
     private final AtomicBoolean refreshQueued = new AtomicBoolean();
+    private final ArrayBlockingQueue<JsonObject> gameOutcomeQueue = new ArrayBlockingQueue<>(256);
     private JsonObject state;
     private JsonObject discovery;
     private JsonObject registrationExtensions = new JsonObject();
@@ -292,7 +395,7 @@ public final class ProviderClient implements AutoCloseable {
     private long observedCandidateRevision, observedCandidateVersion, nextCandidateRefresh;
 
     /** A delivered epoch, kept out of the persisted state until the transport has accepted it. */
-    private JsonObject pendingTicketKey;
+    private JsonObject pendingAdmissionKey;
     private long intervalMs = 10000;
     private long nextHeartbeat;
     private long snapshotClock;
@@ -300,6 +403,9 @@ public final class ProviderClient implements AutoCloseable {
     private boolean closed;
     private boolean scheduledCheckIns;
     private Boolean lastReportedGameOutcomes;
+    private boolean locationReported;
+    private OperatorAction operatorAction;
+    private boolean operatorActionAvailable;
     private long nextOutcomes;
     private long nextStatusUpdate;
     private long minUpdateIntervalMs = 1000;
@@ -316,10 +422,9 @@ public final class ProviderClient implements AutoCloseable {
 
     private volatile AssistedAuthority assistedAuthority;
     private volatile boolean assistedMode;
-    private long appliedStateRevision;
     private String hostState = "serving";
     private String installedKeyId;
-    private List<ProviderTransport.TicketKey> installedTicketKeys = List.of();
+    private List<AdmissionKey> installedAdmissionKeys = List.of();
     private ProviderTransport.HostProfileSnapshot diagnosticInstalledSnapshot;
     private long diagnosticInstalledDeadline, diagnosticInstalledExpiresAt;
     private JsonObject lastHeartbeat = new JsonObject();
@@ -342,7 +447,8 @@ public final class ProviderClient implements AutoCloseable {
         this.statusSupplier = statusSupplier;
         this.healthSupplier = healthSupplier;
         this.diagnostics = new ProviderLog(diagnostics);
-        this.origin = ProviderCrypto.origin(config.provider());
+        this.connectivity = new ConnectivityLog(diagnostics, config.assistedJoins(), config.diagnosticAdmission());
+        this.origin = ProviderOrigin.canonicalize(config.provider());
     }
 
     /** Carrier of the last successful signed operation, independent of advertised configuration. */
@@ -350,16 +456,9 @@ public final class ProviderClient implements AutoCloseable {
         return lastControlCarrier;
     }
 
-    public CompletableFuture<JsonObject> start() {
+    public CompletableFuture<Registration> start() {
         return submit(
                 () -> {
-                    if (store.read().has("controlMode")
-                            || java.nio.file.Files.exists(
-                                    store.directory()
-                                            .resolve("control-session/provider-state.json"))) {
-                        throw new IOException(
-                                "Experimental control state requires explicit conversion before startup");
-                    }
                     if (started) {
                         throw new IllegalStateException("Already started");
                     }
@@ -384,27 +483,21 @@ public final class ProviderClient implements AutoCloseable {
                         throw new IOException(
                                 "State belongs to another provider; use a separate directory");
                     }
-                    if (!state.has("privateKey")) {
-                        KeyPair pair = ProviderCrypto.generate();
-                        state.addProperty("provider", origin);
-                        state.addProperty(
-                                "privateKey",
-                                ProviderCrypto.base64(pair.getPrivate().getEncoded()));
-                        state.add("publicKeyJwk", ProviderCrypto.publicJwk(pair.getPublic()));
-                        save();
+                    loadMachineKey();
+                    if (state.has("registration") && !recoverExisting()) {
+                        diagnostics.registrationLost(registration("instanceId"));
+                        state = new JsonObject();
+                        gameOutcomeQueue.clear();
+                        loadMachineKey();
                     }
-                    privateKey = ProviderCrypto.privateKey(state.get("privateKey").getAsString());
                     if (!state.has("registration")) {
                         enroll();
-                    } else {
-                        recoverExisting();
                     }
                     JsonObject registration = state.getAsJsonObject("registration");
                     if (!registration.get("provider").getAsString().equals(origin)) {
                         throw new IOException("Registration audience changed");
                     }
                     state.addProperty("protocol", ProviderCrypto.PROTOCOL);
-                    state.addProperty("profile", config.profile());
                     state.addProperty(
                             "generation", registration.get("leaseGeneration").getAsLong());
                     state.addProperty("sequence", 0);
@@ -415,6 +508,9 @@ public final class ProviderClient implements AutoCloseable {
                     installKeys();
                     started = true;
                     heartbeat();
+                    if (timer != null) {
+                        timer.cancel(false);
+                    }
                     timer =
                             executor.scheduleWithFixedDelay(
                                     () -> {
@@ -437,7 +533,7 @@ public final class ProviderClient implements AutoCloseable {
                                             diagnostics.detail(
                                                     ProviderLog.Operation.STATUS, safeFailure(e));
                                         }
-                                        if (System.nanoTime() >= nextOutcomes) {
+                                        if (started && System.nanoTime() >= nextOutcomes) {
                                             try {
                                                 flushEvents();
                                             } catch (Exception e) {
@@ -454,7 +550,7 @@ public final class ProviderClient implements AutoCloseable {
                                     1000,
                                     1000,
                                     TimeUnit.MILLISECONDS);
-                    return redactedRegistration();
+                    return registrationView();
                 });
     }
 
@@ -480,9 +576,6 @@ public final class ProviderClient implements AutoCloseable {
             var result = new ArrayList<ProviderTransport.StunServer>();
             for (var value : values) {
                 var server = value.getAsJsonObject();
-                if (!server.keySet().equals(Set.of("host", "port"))) {
-                    throw new IllegalArgumentException("STUN discovery fields");
-                }
                 result.add(
                         new ProviderTransport.StunServer(
                                 server.get("host").getAsString(),
@@ -497,45 +590,22 @@ public final class ProviderClient implements AutoCloseable {
     private void validateDiscovery() throws IOException {
         ProviderContract.require("discovery", discovery);
         ProtocolExtensions.validate(discovery);
-        if (!origin.equals(discovery.get("controlOrigin").getAsString()) || !origin.equals(
-                discovery.get("provider").getAsString())) {
+        if (!origin.equals(discovery.get("provider").getAsString())) {
             throw new IOException("Discovery provider mismatch");
         }
         for (String[] pair : List.of(new String[]{"protocols", ProviderCrypto.PROTOCOL},
-                new String[]{"signatures", ProviderCrypto.SIGNATURE}, new String[]{"profiles", config.profile()},
-                new String[]{"modes", config.registrationMode()})) {
+                new String[]{"signatures", ProviderCrypto.SIGNATURE})) {
             if (!discovery.getAsJsonArray(pair[0]).contains(new JsonPrimitive(pair[1]))) {
                 throw new IOException("Unsupported required provider capability: " + pair[0]);
             }
         }
-        boolean authorizationSupported = false;
-        for (JsonElement item : discovery.getAsJsonObject("authorization").getAsJsonArray("schemes")) {
-            JsonObject scheme = item.getAsJsonObject();
-            if (config.authorizationScheme().equals(scheme.get("scheme").getAsString()) && scheme.getAsJsonArray(
-                    "modes").contains(new JsonPrimitive(config.registrationMode()))) {
-                authorizationSupported = true;
-            }
-        }
-        if (!authorizationSupported || !"Authorization".equals(
-                discovery.getAsJsonObject("authorization").get("header").getAsString())) {
+        if (!discovery.getAsJsonObject("authorization").getAsJsonArray("schemes")
+                .contains(new JsonPrimitive(config.authorizationScheme()))) {
             throw new IOException("Unsupported provider authorization");
-        }
-        for (String op : ProviderContract.operations()) {
-            if (!discovery.getAsJsonObject("operations").has(op)) {
-                throw new IOException("Missing required operation: " + op);
-            }
-        }
-        for (var op : discovery.getAsJsonObject("operations").entrySet()) {
-            trusted(URI.create(op.getValue().getAsString()));
         }
         intervalMs = discovery.getAsJsonObject("limits").get("heartbeatIntervalMs").getAsLong();
         if (intervalMs < 1000 || intervalMs > 30000) {
             throw new IOException("Unsupported heartbeat interval");
-        }
-        JsonObject limits = discovery.getAsJsonObject("limits");
-        if (limits.get("maxBodyBytes").getAsLong() < 1 || limits.get("maxBodyBytes").getAsLong() > 65536
-                || limits.get("clockSkewMs").getAsLong() < 0 || limits.get("clockSkewMs").getAsLong() > 60000) {
-            throw new IOException("Unsupported provider limits");
         }
     }
 
@@ -543,13 +613,41 @@ public final class ProviderClient implements AutoCloseable {
         JsonObject recovery = new JsonObject();
         recovery.addProperty("registrationId", registrationId);
         recovery.addProperty("protocol", ProviderCrypto.PROTOCOL);
-        recovery.addProperty("profile", config.profile());
         return recovery;
     }
 
-    private void recoverExisting() throws Exception {
+    /** A new logical instance gets a fresh machine key. */
+    private void loadMachineKey() throws IOException, GeneralSecurityException {
+        if (!state.has("privateKey")) {
+            KeyPair pair = ProviderCrypto.generate();
+            state.addProperty("provider", origin);
+            state.addProperty("privateKey", ProviderCrypto.base64(pair.getPrivate().getEncoded()));
+            state.add("publicKeyJwk", ProviderCrypto.publicJwk(pair.getPublic()));
+            save();
+        }
+        privateKey = ProviderCrypto.privateKey(state.get("privateKey").getAsString());
+    }
+
+    /** False when the provider has nothing to recover, so the saved registration is gone for good. */
+    private boolean recoverExisting() throws Exception {
         String registrationId = registration("registrationId");
-        completeRecovery(unsigned("register", recoveryRequest(registrationId)), registrationId);
+        JsonObject challenge = recoveryChallenge(registrationId);
+        if (challenge == null) {
+            return false;
+        }
+        completeRecovery(challenge, registrationId);
+        return true;
+    }
+
+    private JsonObject recoveryChallenge(String registrationId) throws Exception {
+        try {
+            return unsigned("register", recoveryRequest(registrationId));
+        } catch (ProviderException e) {
+            if ("recovery_unavailable".equals(e.code())) {
+                return null;
+            }
+            throw e;
+        }
     }
 
     /** Member order is the wire format: Gson writes in insertion order and these bytes are signed. */
@@ -574,15 +672,14 @@ public final class ProviderClient implements AutoCloseable {
         }
     }
 
+    /** @param registrationId The saved registration ID, or null after a lost completion */
     private void completeRecovery(JsonObject challenge, String registrationId) throws Exception {
         requireBoundChallenge(challenge, "Unbound recovery challenge");
         JsonObject context = challenge.getAsJsonObject("context");
-        if (!"recover".equals(context.get("mode").getAsString())
-                || !config.profile().equals(context.get("profile").getAsString()) || !registrationId.equals(
-                context.get("registrationId").getAsString())
+        String bound = context.get("registrationId").getAsString();
+        if (!"recover".equals(context.get("mode").getAsString()) || bound.isEmpty()
+                || registrationId != null && !registrationId.equals(bound)
                 || challenge.get("expiresAt").getAsLong() <= System.currentTimeMillis()
-                || !"sha256-leading-zero-bits-v0".equals(
-                challenge.getAsJsonObject("pow").get("algorithm").getAsString())
                 || challenge.getAsJsonObject("pow").get("difficulty").getAsInt() != 0) {
             throw new IOException("Unbound recovery challenge");
         }
@@ -596,7 +693,7 @@ public final class ProviderClient implements AutoCloseable {
         String intent = UUID.randomUUID().toString();
         JsonObject recovered = unsigned("complete", completion(challenge, "0", intent, key));
         validateRegistration(recovered);
-        if (!registrationId.equals(recovered.get("registrationId").getAsString())) {
+        if (!bound.equals(recovered.get("registrationId").getAsString())) {
             throw new IOException("Recovered registration changed");
         }
         if (state.has("registration")) {
@@ -608,7 +705,8 @@ public final class ProviderClient implements AutoCloseable {
         }
         registrationExtensions = ProtocolExtensions.copy(recovered);
         recovered.remove("extensions");
-        recovered.remove("ticketKey");
+        recovered.remove("admissionKey");
+        recovered.remove("operatorAction");
         state.add("registration", recovered);
         state.addProperty("generation", recovered.get("leaseGeneration").getAsLong());
         state.addProperty("sequence", 0);
@@ -626,42 +724,25 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private void enroll() throws Exception {
-        JsonObject challenge;
+        JsonObject challenge = null;
         if (state.has("challenge")) {
-            String registrationId = state.getAsJsonObject("challenge").get("challengeId").getAsString();
-            JsonObject recoveredChallenge = null;
-            try {
-                recoveredChallenge = unsigned("register", recoveryRequest(registrationId));
-            } catch (ProviderException e) {
-                if (e.status != 403) {
-                    throw e;
-                }
-            }
+            JsonObject saved = state.getAsJsonObject("challenge");
+            JsonObject recoveredChallenge = recoveryChallenge(saved.get("challengeId").getAsString());
             if (recoveredChallenge != null) {
-                completeRecovery(recoveredChallenge, registrationId);
+                completeRecovery(recoveredChallenge, null);
                 return;
             }
-            challenge = state.getAsJsonObject("challenge");
-        } else {
+            // Nothing was created, so an expired challenge is simply replaced
+            if (saved.get("expiresAt").getAsLong() > System.currentTimeMillis()) {
+                challenge = saved;
+            }
+        }
+        if (challenge == null) {
             JsonObject request = new JsonObject();
             request.addProperty("protocol", ProviderCrypto.PROTOCOL);
-            request.addProperty("mode", config.registrationMode());
-            request.addProperty("profile", config.profile());
             request.add("publicKeyJwk", state.get("publicKeyJwk"));
             if (config.label() != null) {
                 request.addProperty("label", config.label());
-            }
-            JsonObject authorization = new JsonObject();
-            authorization.addProperty("scheme", config.authorizationScheme());
-            request.add("authorization", authorization);
-            if (config.region() != null) {
-                JsonObject p = new JsonObject();
-                p.addProperty("region", config.region());
-                p.addProperty("pool", config.pool());
-                if (!config.tags().isEmpty()) {
-                    p.add("tags", JSON.toJsonTree(config.tags()));
-                }
-                request.add("placement", p);
             }
             challenge = unsigned("register", request, config.authorizationToken());
             state.add("challenge", challenge);
@@ -673,22 +754,8 @@ public final class ProviderClient implements AutoCloseable {
             throw new IOException("Unbound registration challenge");
         }
         JsonObject context = challenge.getAsJsonObject("context");
-        if (!config.profile().equals(context.get("profile").getAsString()) || !acceptsRegistrationMode(
-                context.get("mode").getAsString())) {
+        if (!acceptsRegistrationMode(context.get("mode").getAsString())) {
             throw new IOException("Challenge registration context changed");
-        }
-        String expectedTagsDigest = ProviderCrypto.tagsDigest(config.tags());
-        if (config.region() == null) {
-            if (!context.get("region").getAsString().isEmpty() || !context.get("pool").getAsString().isEmpty()
-                    || context.has("tagsDigest")) {
-                throw new IOException("Challenge placement changed");
-            }
-        } else if (!config.region().equals(context.get("region").getAsString()) || !config.pool()
-                .equals(context.get("pool").getAsString()) ||
-                (expectedTagsDigest == null ? context.has("tagsDigest") :
-                        !context.has("tagsDigest") || !expectedTagsDigest.equals(
-                                context.get("tagsDigest").getAsString()))) {
-            throw new IOException("Challenge placement changed");
         }
         if (challenge.has("authorization") && !config.authorizationScheme()
                 .equals(challenge.getAsJsonObject("authorization").get("scheme").getAsString())) {
@@ -700,8 +767,7 @@ public final class ProviderClient implements AutoCloseable {
         }
         String intent = UUID.randomUUID().toString(), nonce = null;
         int bits = challenge.getAsJsonObject("pow").get("difficulty").getAsInt();
-        if (!"sha256-leading-zero-bits-v0".equals(challenge.getAsJsonObject("pow").get("algorithm").getAsString())
-                || bits < 0 || bits > 24) {
+        if (bits < 0 || bits > 24) {
             throw new IOException("Unsupported proof of work");
         }
         if (BEARER_TOKEN.equals(config.authorizationScheme()) && bits != 0) {
@@ -721,6 +787,8 @@ public final class ProviderClient implements AutoCloseable {
         }
         JsonObject registration = unsigned("complete", completion(challenge, nonce, intent, privateKey));
         validateRegistration(registration);
+        JsonElement action = registration.remove("operatorAction");
+        operatorAction = action == null ? null : operatorAction(action);
         registrationExtensions = ProtocolExtensions.copy(registration);
         registration.remove("extensions");
         state.add("registration", registration);
@@ -728,17 +796,15 @@ public final class ProviderClient implements AutoCloseable {
         state.addProperty("sequence", 0);
         state.add("ticketKeys", new JsonArray());
         state.remove("challenge");
-        if (registration.has("ticketKey")) {
-            pendingTicketKey = registration.remove("ticketKey").getAsJsonObject();
+        if (registration.has("admissionKey")) {
+            pendingAdmissionKey = registration.remove("admissionKey").getAsJsonObject();
         }
         save();
     }
 
+    /** Anonymous hosts can only create a service; a token may also attach to one. */
     private boolean acceptsRegistrationMode(String selected) {
-        if (!AUTOMATIC.equals(config.registrationMode())) {
-            return config.registrationMode().equals(selected);
-        }
-        return NEW_SERVICE.equals(selected) || (BEARER_TOKEN.equals(config.authorizationScheme())
+        return NEW_SERVICE.equals(selected) || (config.authorizationToken() != null
                 && ATTACH_INSTANCE.equals(selected));
     }
 
@@ -757,21 +823,8 @@ public final class ProviderClient implements AutoCloseable {
                 }
             }
         }
-        if (!origin.equals(registration.get("provider").getAsString()) || !config.profile()
-                .equals(registration.get("profile").getAsString())) {
-            throw new IOException("Registration provider or profile changed");
-        }
-        JsonObject placement = registration.getAsJsonObject("placement");
-        String expectedRegion = config.region() == null ? "" : config.region(), expectedPool =
-                config.pool() == null ? "" : config.pool();
-        if (!expectedRegion.equals(placement.get("region").getAsString()) || !expectedPool.equals(
-                placement.get("pool").getAsString())) {
-            throw new IOException("Registration placement changed");
-        }
-        JsonObject expectedTags = JSON.toJsonTree(config.tags()).getAsJsonObject();
-        JsonObject actualTags = placement.has("tags") ? placement.getAsJsonObject("tags") : new JsonObject();
-        if (!expectedTags.equals(actualTags)) {
-            throw new IOException("Registration placement tags changed");
+        if (!origin.equals(registration.get("provider").getAsString())) {
+            throw new IOException("Registration provider changed");
         }
     }
 
@@ -785,15 +838,18 @@ public final class ProviderClient implements AutoCloseable {
                 }
             }
         }
-        if (pendingTicketKey != null) {
-            retained.add(pendingTicketKey);
+        if (pendingAdmissionKey != null) {
+            JsonObject delivered = new JsonObject();
+            delivered.add("keyId", pendingAdmissionKey.get("keyId"));
+            delivered.add("secret", pendingAdmissionKey.get("secret"));
+            retained.add(delivered);
         }
         if (retained.size() > 8) {
             throw new IOException("Too many admission key epochs");
         }
         if (retained.isEmpty()) {
             disableDiagnosticAdmission();
-            installedTicketKeys = List.of();
+            installedAdmissionKeys = List.of();
             state.add("ticketKeys", retained);
             installedKeyId = null;
             if (!state.has("keyRequestId")) {
@@ -803,35 +859,26 @@ public final class ProviderClient implements AutoCloseable {
             return;
         }
         // Reading the epochs is what rejects a malformed one, so it happens before anything is written
-        List<ProviderTransport.TicketKey> keys = new ArrayList<>();
+        List<AdmissionKey> keys = new ArrayList<>();
         for (JsonElement entry : retained) {
             JsonObject key = entry.getAsJsonObject();
-            keys.add(new ProviderTransport.TicketKey(key.get("keyId").getAsString(), key.get("secret").getAsString(),
-                    key.has("notBefore") ? key.get("notBefore").getAsLong() : 0,
+            keys.add(new AdmissionKey(key.get("keyId").getAsString(), key.get("secret").getAsString(),
                     key.has("retireAfter") ? key.get("retireAfter").getAsLong() : Long.MAX_VALUE));
         }
-        if (!keys.equals(installedTicketKeys)) {
+        if (!keys.equals(installedAdmissionKeys)) {
             disableDiagnosticAdmission();
         }
         transport
-                .installTicketKeys(List.copyOf(keys))
+                .installAdmissionKeys(List.copyOf(keys))
                 .toCompletableFuture()
                 .get(10, TimeUnit.SECONDS);
         // Only an epoch set the transport accepted is recorded, so the next heartbeat cannot advertise
         // a key that was never installed, and a bad one cannot survive a restart
         state.add("ticketKeys", retained);
-        pendingTicketKey = null;
+        pendingAdmissionKey = null;
         save();
         installedKeyId = keys.get(keys.size() - 1).keyId();
-        installedTicketKeys = List.copyOf(keys);
-    }
-
-    /**
-     * A complete immutable listing snapshot, independent of actual player telemetry.
-     */
-    public void setServerStatus(ServerStatus status) {
-        explicitStatus.set(Objects.requireNonNull(status));
-        requestStatusRefresh();
+        installedAdmissionKeys = List.copyOf(keys);
     }
 
     /**
@@ -858,8 +905,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private ServerStatus currentStatus() {
-        ServerStatus s = explicitStatus.get();
-        return s == null && statusSupplier != null ? statusSupplier.get() : s;
+        return statusSupplier == null ? null : statusSupplier.get();
     }
 
     private boolean statusChanged() {
@@ -875,7 +921,7 @@ public final class ProviderClient implements AutoCloseable {
                 || health.acceptingPlayers() != lastReportedHealth.acceptingPlayers()
                 || health.capacity() != lastReportedHealth.capacity()
                 || !Objects.equals(connectedPlayers(health), connectedPlayers(lastReportedHealth))
-                || !Objects.equals(health.build(), lastReportedHealth.build());
+                || !Objects.equals(health.software(), lastReportedHealth.software());
     }
 
     private static Integer connectedPlayers(Health health) {
@@ -947,8 +993,9 @@ public final class ProviderClient implements AutoCloseable {
                             if (!transport.supportsAssistedJoins()) {
                                 throw new IOException("Assisted transport unavailable");
                             }
-                            profile.getAsJsonObject("statelessAdmission")
-                                    .addProperty("assisted", "nethernet.websocket-assisted.v1");
+                            var families = new JsonArray();
+                            profileSnapshot.assistedFamilies().stream().sorted().forEach(families::add);
+                            profile.getAsJsonObject("statelessAdmission").add("assistedFamilies", families);
                         }
                         if (config.diagnosticAdmission()) {
                             if (!transport.supportsDiagnosticAdmission()) {
@@ -977,10 +1024,10 @@ public final class ProviderClient implements AutoCloseable {
                 for (JsonElement key : state.getAsJsonArray("ticketKeys")) {
                     installed.add(key.getAsJsonObject().get("keyId"));
                 }
-                body.add("installedKeyIds", installed);
+                body.add("installedAdmissionKeyIds", installed);
             }
             if (state.has("keyRequestId")) {
-                body.add("keyRequestId", state.get("keyRequestId"));
+                body.add("admissionKeyRequestId", state.get("keyRequestId"));
             }
             Health health = healthSupplier.get();
                 body.addProperty(
@@ -1001,28 +1048,9 @@ public final class ProviderClient implements AutoCloseable {
                     if (!probes.equals(profile.getAsJsonArray("candidates"))) {
                         data.add("probeCandidates", probes);
                     }
-                    var assistedFamilies = new JsonArray();
-                    if (config.assistedJoins()) {
-                        profileSnapshot.assistedFamilies().stream()
-                                .sorted()
-                                .forEach(assistedFamilies::add);
-                    }
-                    data.add("assistedFamilies", assistedFamilies);
-                    data.addProperty(
-                            "method",
-                            assistedMode
-                                    ? "per_join"
-                                    : profile.getAsJsonArray("candidates").asList().stream()
-                                                    .anyMatch(
-                                                            item ->
-                                                                    "srflx"
-                                                                            .equals(
-                                                                                    item.getAsJsonObject()
-                                                                                            .get(
-                                                                                                    "type")
-                                                                                            .getAsString()))
-                                            ? "warm_stun"
-                                            : config.connectivityMethod());
+                    boolean reflexive = profile.getAsJsonArray("candidates").asList().stream()
+                            .anyMatch(item -> "srflx".equals(item.getAsJsonObject().get("type").getAsString()));
+                    data.addProperty("method", reflexive ? "warm_stun" : config.connectivityMethod());
                     var extension = new JsonObject();
                     extension.addProperty("version", 1);
                     extension.addProperty("critical", false);
@@ -1039,16 +1067,19 @@ public final class ProviderClient implements AutoCloseable {
             if (health.playerCount() != null) {
                 body.add("playerCount", JSON.toJsonTree(health.playerCount()));
                 }
-                if (health.build() != null) {
-                    body.addProperty("build", health.build());
-                }
                 snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
             body.addProperty("clockUnixMillis", snapshotClock);
-            // Temporary historic field; acknowledging an echo never controls the listener.
-            body.addProperty("appliedStateRevision", appliedStateRevision);
-            boolean gameOutcomes = transport.supportsGameOutcomes();
+            boolean gameOutcomes = config.gameOutcomes();
             if (body.has("hostProfile") || !Objects.equals(lastReportedGameOutcomes, gameOutcomes)) {
                 body.addProperty("gameOutcomes", gameOutcomes ? "available" : "unavailable");
+            }
+            if (health.software() != null && (body.has("hostProfile") || lastReportedHealth == null
+                    || !health.software().equals(lastReportedHealth.software()))) {
+                body.add("software", JSON.toJsonTree(health.software()));
+            }
+            // Null clears a location an earlier configuration declared
+            if (body.has("hostProfile") || !locationReported) {
+                body.add("location", config.location() == null ? JsonNull.INSTANCE : config.location().toJson());
             }
             ServerStatus status = null;
             try {
@@ -1122,20 +1153,20 @@ public final class ProviderClient implements AutoCloseable {
                         save();
                     }
             }
-            if (response.has("ticketKey")) {
-                JsonObject key = response.remove("ticketKey").getAsJsonObject();
-                if (!state.has("keyRequestId") || !response.has("keyRequest") ||
-                        !state.get("keyRequestId").equals(response.getAsJsonObject("keyRequest").get("id")) ||
-                        !key.get("keyId").equals(response.getAsJsonObject("keyRequest").get("keyId"))) {
+            if (response.has("admissionKey")) {
+                JsonObject key = response.remove("admissionKey").getAsJsonObject();
+                if (!state.has("keyRequestId") || !response.has("admissionKeyRequest") ||
+                        !state.get("keyRequestId").equals(response.getAsJsonObject("admissionKeyRequest").get("id")) ||
+                        !key.get("keyId").equals(response.getAsJsonObject("admissionKeyRequest").get("keyId"))) {
                     throw new IOException("Unbound admission key response");
                 }
-                pendingTicketKey = key;
+                pendingAdmissionKey = key;
                 JsonElement pendingRequest = state.remove("keyRequestId");
                 try {
                     installKeys();
                 } catch (Exception e) {
                     // A key the transport will not take must not outlive this heartbeat, in memory or on disk
-                    pendingTicketKey = null;
+                    pendingAdmissionKey = null;
                     if (pendingRequest != null) {
                         state.add("keyRequestId", pendingRequest);
                     }
@@ -1143,15 +1174,15 @@ public final class ProviderClient implements AutoCloseable {
                 }
                 lastProfile = null;
                 again = true;
-            } else if (state.has("keyRequestId") && response.has("keyRequest") &&
-                    state.get("keyRequestId").equals(response.getAsJsonObject("keyRequest").get("id"))) {
+            } else if (state.has("keyRequestId") && response.has("admissionKeyRequest") &&
+                    state.get("keyRequestId").equals(response.getAsJsonObject("admissionKeyRequest").get("id"))) {
                 // The provider confirms delivery but the one-time response was lost.
                 state.addProperty("keyRequestId", UUID.randomUUID().toString());
                 save();
                 again = true;
             }
-            if (response.has("retirements") && !response.getAsJsonArray("retirements").isEmpty()) {
-                for (JsonElement retirement : response.getAsJsonArray("retirements")) {
+            if (response.has("admissionKeyRetirements") && !response.getAsJsonArray("admissionKeyRetirements").isEmpty()) {
+                for (JsonElement retirement : response.getAsJsonArray("admissionKeyRetirements")) {
                     for (JsonElement stored : state.getAsJsonArray("ticketKeys")) {
                         JsonObject retired = retirement.getAsJsonObject(), key = stored.getAsJsonObject();
                         if (retired.get("keyId").equals(key.get("keyId"))) {
@@ -1168,12 +1199,7 @@ public final class ProviderClient implements AutoCloseable {
                 CheckInSchedule schedule = CheckInSchedule.parse(response);
                 scheduledCheckIns = true;
                 minUpdateIntervalMs = schedule.minUpdateIntervalMillis();
-                long received = Instant.parse(response.get("receivedAt").getAsString()).toEpochMilli();
-                long remaining = Math.min(schedule.afterMillis(), Math.max(0,
-                        response.getAsJsonObject("checkIn").get("nextCheckInAt").getAsLong() - Math.max(received,
-                                System.currentTimeMillis())));
-                nextHeartbeat = Math.min(requestStarted + TimeUnit.MILLISECONDS.toNanos(schedule.afterMillis()),
-                        System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining));
+                nextHeartbeat = requestStarted + TimeUnit.MILLISECONDS.toNanos(schedule.afterMillis());
             } else {
                 scheduledCheckIns = false;
                 nextHeartbeat = requestStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs);
@@ -1183,17 +1209,23 @@ public final class ProviderClient implements AutoCloseable {
             lastReportedStatus = status;
             lastReportedHealth = health;
             lastReportedGameOutcomes = gameOutcomes;
+            locationReported |= body.has("location");
+            JsonElement available = response.get("operatorActionAvailable");
+            operatorActionAvailable = available != null && available.isJsonPrimitive()
+                    && available.getAsJsonPrimitive().isBoolean() && available.getAsBoolean();
             lastHeartbeat = response.deepCopy();
                 if (profileSnapshot != null) {
                     publishedProfileSnapshot = profileSnapshot;
                     publishedCandidateRevision = profileSnapshot.candidateRevision();
                     publishedCandidateVersion = profileSnapshot.publicationVersion();
                     nextCandidateRefresh = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                    connectivity.published(profileSnapshot);
                 }
                 if (diagnosticSnapshot != null) {
                     configureDiagnosticAdmission(
                             diagnosticSnapshot,
                             response,
+                            requestStarted,
                             diagnosticSuccessMillis,
                             diagnosticSuccessNanos);
                     if (!diagnosticsAdvertised) {
@@ -1235,16 +1267,6 @@ public final class ProviderClient implements AutoCloseable {
                         }
                     }
                 }
-            // Serving state belongs to this host. Provider routing decisions never command its listener.
-            if (response.has("desiredState") && response.get("desiredState").isJsonObject()) {
-                JsonObject echo = response.getAsJsonObject("desiredState");
-                if (echo.has("state") && hostState.equals(echo.get("state").getAsString()) && echo.has("revision")) {
-                        long revision = echo.get("revision").getAsBigDecimal().longValueExact();
-                        if (revision >= appliedStateRevision && revision <= 9007199254740991L) {
-                            appliedStateRevision = revision;
-                        }
-                    }
-            }
             if (!again) {
                     diagnostics.recovered(ProviderLog.Operation.STATUS);
                 return;
@@ -1285,8 +1307,7 @@ public final class ProviderClient implements AutoCloseable {
         for (JsonElement item : candidates) {
             JsonObject candidate = item.getAsJsonObject();
             String type = candidate.get("type").getAsString();
-            if (!"udp".equals(candidate.get("protocol").getAsString())
-                    || !Set.of("host", "srflx").contains(type)) {
+            if (!Set.of("host", "srflx").contains(type)) {
                 return false;
             }
             if (candidate.has("expiresAt")
@@ -1371,6 +1392,7 @@ public final class ProviderClient implements AutoCloseable {
                     .reportConnectivityChecks(snapshot.candidateRevision(), parsed)
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
+            connectivity.checks(snapshot, parsed);
             diagnostics.recovered(ProviderLog.Operation.CONNECTIVITY);
         } catch (Exception unavailable) {
             // Optional observations must not undo a successful ordinary heartbeat or change host
@@ -1436,6 +1458,7 @@ public final class ProviderClient implements AutoCloseable {
     private void configureDiagnosticAdmission(
             ProviderTransport.HostProfileSnapshot snapshot,
             JsonObject response,
+            long requestStartedNanos,
             long successMillis,
             long successNanos)
             throws Exception {
@@ -1447,12 +1470,9 @@ public final class ProviderClient implements AutoCloseable {
             JsonObject profile = snapshot.profile();
             long expiresAt = successMillis + DIAGNOSTIC_VALIDITY_MILLIS;
             if (response.has("checkIn")) {
-                expiresAt =
-                        Math.min(
-                                expiresAt,
-                                response.getAsJsonObject("checkIn")
-                                        .get("leaseExpiresAt")
-                                        .getAsLong());
+                // The lease counts from when the heartbeat was sent.
+                long sent = successMillis - TimeUnit.NANOSECONDS.toMillis(successNanos - requestStartedNanos);
+                expiresAt = Math.min(expiresAt, sent + CheckInSchedule.parse(response).leaseMillis());
             }
             long lifetime = expiresAt - successMillis;
             if (lifetime <= 0) {
@@ -1471,13 +1491,13 @@ public final class ProviderClient implements AutoCloseable {
                                     .getAsString(),
                             state.get("generation").getAsLong());
             var keys =
-                    installedTicketKeys.stream()
+                    installedAdmissionKeys.stream()
                             .map(
                                     key ->
                                             new DiagnosticAdmissionCodec.Key(
                                                     key.keyId(),
                                                     key.secret(),
-                                                    key.notBefore(),
+                                                    0,
                                                     Math.min(key.retireAfter(), 9007199254740991L)))
                             .toList();
             var endpointExpiries = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
@@ -1545,10 +1565,12 @@ public final class ProviderClient implements AutoCloseable {
             state.add("pendingEvents", new JsonArray());
         }
         JsonArray pending = state.getAsJsonArray("pendingEvents");
-        List<JsonObject> fresh = transport.pollEvents();
-        if (fresh.size() > 100 || pending.size() + fresh.size() > 1000) {
-            throw new IOException("Transport event queue exceeds limit");
+        int room = Math.min(100, 1000 - pending.size());
+        List<JsonObject> fresh = new ArrayList<>(room > 0 ? transport.pollEvents(room) : List.of());
+        if (fresh.size() > room) {
+            throw new IOException("Transport returned more events than requested");
         }
+        gameOutcomeQueue.drainTo(fresh, room - fresh.size());
         for (JsonObject event : fresh) {
             // Persist only the existing redacted telemetry fields, never native SDP or secret extensions.
             JsonObject safe = new JsonObject();
@@ -1566,6 +1588,11 @@ public final class ProviderClient implements AutoCloseable {
             }
             if (!safe.has("stage") || !safe.has("ticketId") || !safe.has("occurredAt")) {
                 throw new IOException("Malformed transport event");
+            }
+            // Assisted failures were already reported by the control carrier
+            if ("ticket.failed".equals(safe.get("stage").getAsString()) && !(safe.has("reason")
+                    && safe.get("reason").getAsString().startsWith("assisted_"))) {
+                diagnostics.playerConnectionFailed();
             }
             pending.add(safe);
         }
@@ -1627,6 +1654,73 @@ public final class ProviderClient implements AutoCloseable {
                 });
     }
 
+    /**
+     * Queues a game outcome for an admitted ticket without blocking. Requires
+     * {@link Configuration.Builder#gameOutcomes}.
+     *
+     * @param ticketId The ticket ID from the authenticated admission carrier
+     * @param reason A code of at most 128 characters, or null; never player identity or disconnect text
+     * @return false when the client is stopping or the queue is full, so the outcome was dropped
+     */
+    public boolean reportGameOutcome(String ticketId, GameOutcome outcome, String reason) {
+        if (!config.gameOutcomes()) {
+            throw new IllegalStateException("Game outcomes are not enabled");
+        }
+        if (ticketId.isEmpty() || ticketId.length() > 256 || reason != null && reason.length() > 128) {
+            throw new IllegalArgumentException("Invalid game outcome");
+        }
+        if (closing.get()) {
+            return false;
+        }
+        JsonObject event = new JsonObject();
+        event.addProperty("ticketId", ticketId);
+        event.addProperty("stage", outcome.stage);
+        event.addProperty("occurredAt", System.currentTimeMillis());
+        if (reason != null) {
+            event.addProperty("reason", reason);
+        }
+        return gameOutcomeQueue.offer(event);
+    }
+
+    /**
+     * The provider's current link for the host's operator, requesting a fresh one when a heartbeat said it is offered.
+     */
+    public CompletableFuture<Optional<OperatorAction>> operatorAction() {
+        return submit(() -> {
+            if (operatorAction != null && operatorAction.expiresAt() > System.currentTimeMillis()) {
+                return Optional.of(operatorAction);
+            }
+            operatorAction = null;
+            if (!started || !operatorActionAvailable) {
+                return Optional.empty();
+            }
+            requireResolvedOperation();
+            JsonElement action = signed("operator-action", "POST", new JsonObject()).get("operatorAction");
+            operatorAction = action == null ? null : operatorAction(action);
+            return Optional.ofNullable(operatorAction);
+        });
+    }
+
+    /** An invalid optional action is ignored rather than failing the operation that carried it. */
+    private static OperatorAction operatorAction(JsonElement value) {
+        try {
+            JsonObject json = value.getAsJsonObject();
+            String link = json.get("url").getAsString(), text = json.get("text").getAsString();
+            long expiresAt = json.get("expiresAt").getAsLong();
+            URI url = new URI(link);
+            boolean loopback = "http".equals(url.getScheme()) && Set.of("localhost", "127.0.0.1", "[::1]").contains(url.getHost());
+            if (link.length() > 2048 || url.getRawUserInfo() != null || url.getHost() == null
+                    || !("https".equals(url.getScheme()) || loopback) || text.isEmpty()
+                    || text.codePointCount(0, text.length()) > 256 || text.chars().anyMatch(c -> c < 0x20 || c == 0x7f)
+                    || expiresAt < 0) {
+                return null;
+            }
+            return new OperatorAction(url, text, expiresAt);
+        } catch (RuntimeException | URISyntaxException invalid) {
+            return null;
+        }
+    }
+
     /** Opaque registration metadata; the application decides what it means. */
     public CompletableFuture<JsonObject> extensions() {
         return submit(() -> registrationExtensions.deepCopy());
@@ -1675,17 +1769,16 @@ public final class ProviderClient implements AutoCloseable {
         return submit(
                 () -> {
                     disableDiagnosticAdmission();
-                    signed("deregister", "POST", new JsonObject());
+                    deregisterAndForget();
                     if (websocket != null) {
                         websocket.close();
                     }
                     transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
-                    started = false;
                     return null;
                 });
     }
 
-    public CompletableFuture<JsonObject> rotateTicketKey() {
+    public CompletableFuture<Registration> rotateAdmissionKey() {
         return submit(
                 () -> {
                     requireResolvedOperation();
@@ -1697,11 +1790,11 @@ public final class ProviderClient implements AutoCloseable {
                     state.addProperty("keyRequestId", UUID.randomUUID().toString());
                     save();
                     heartbeat();
-                    return redactedRegistration();
+                    return registrationView();
                 });
     }
 
-    public CompletableFuture<JsonObject> rotateMachineKey() {
+    public CompletableFuture<Registration> rotateMachineKey() {
         return submit(
                 () -> {
                     requireResolvedOperation();
@@ -1739,8 +1832,29 @@ public final class ProviderClient implements AutoCloseable {
                     JsonObject retire = new JsonObject();
                     retire.addProperty("keyId", oldKey);
                     signed("retire", "POST", retire);
-                    return result;
+                    return registrationView();
                 });
+    }
+
+    /**
+     * Saved state that will not outlive this process could never recover the registration. Clears only the
+     * registration state, not the DTLS identity files. Skipped when draining failed, as the provider is unreachable.
+     */
+    private void deregisterOnShutdown() {
+        try {
+            deregisterAndForget();
+        } catch (Exception e) {
+            diagnostics.failed(ProviderLog.Operation.DEREGISTER);
+        }
+    }
+
+    /** A deregistered instance can never recover, so its saved registration goes too; DTLS identity files stay. */
+    private void deregisterAndForget() throws Exception {
+        signed("deregister", "POST", new JsonObject());
+        started = false;
+        state = new JsonObject();
+        gameOutcomeQueue.clear();
+        store.write(state);
     }
 
     public CompletableFuture<Void> drain() {
@@ -1796,15 +1910,12 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private URI operation(String op) throws IOException {
-        if (!discovery.getAsJsonObject("operations").has(op)) {
-            throw new IOException("Missing provider operation: " + op);
-        }
-        return trusted(URI.create(discovery.getAsJsonObject("operations").get(op).getAsString()));
+        return trusted(URI.create(origin + "/v1/nxs/" + op));
     }
 
     private URI trusted(URI uri) throws IOException {
         URI authority = URI.create(uri.getScheme() + "://" + uri.getRawAuthority());
-        if (!ProviderCrypto.origin(authority).equals(origin) || uri.getUserInfo() != null
+        if (!ProviderOrigin.canonicalize(authority).equals(origin) || uri.getUserInfo() != null
                 || uri.getFragment() != null) {
             throw new IOException("Untrusted provider operation");
         }
@@ -1943,20 +2054,8 @@ public final class ProviderClient implements AutoCloseable {
                 } catch (RuntimeException ignored) {
                 }
             }
-            // These responses reject before mutation. A previous ambiguous attempt still needs
-            // recovery.
-            if (!ambiguous
-                    && (status == 429
-                            || (status / 100 == 4
-                                    && Set.of(
-                                                    "check_in_profile_required",
-                                                    "profile_key_not_installed",
-                                                    "invalid_heartbeat",
-                                                    "invalid_host_profile",
-                                                    "placement_forbidden",
-                                                    "invalid_host_location",
-                                                    "stateless_profile_required")
-                                            .contains(code)))) {
+            // An error response had no effect. A previous ambiguous attempt still needs recovery.
+            if (!ambiguous && status / 100 == 4) {
                 clearWebSocketPending();
             }
             if (status >= 500) {
@@ -2030,24 +2129,10 @@ public final class ProviderClient implements AutoCloseable {
         if (extension.get("version").getAsInt() != 1) {
             return;
         }
-        JsonObject data = extension.getAsJsonObject("data");
         try {
-            URI endpoint = URI.create(data.get("url").getAsString());
-            String scheme = origin.startsWith("https:") ? "wss" : "ws";
-            URI httpEndpoint =
-                    URI.create(
-                            (scheme.equals("wss") ? "https" : "http")
-                                    + "://"
-                                    + endpoint.getRawAuthority()
-                                    + endpoint.getRawPath());
-            if (!scheme.equals(endpoint.getScheme())
-                    || endpoint.getRawQuery() != null
-                    || endpoint.getFragment() != null
-                    || !"/v1/nxs/control".equals(endpoint.getRawPath())
-                    || !ProviderCrypto.PROTOCOL.equals(data.get("subprotocol").getAsString())) {
-                throw new IOException("Unsupported provider WebSocket capability");
-            }
-            trusted(httpEndpoint);
+            URI httpEndpoint = trusted(URI.create(origin + "/v1/nxs/control"));
+            URI endpoint = URI.create((origin.startsWith("https:") ? "wss" : "ws") + "://"
+                    + httpEndpoint.getRawAuthority() + httpEndpoint.getRawPath());
             websocketEndpoint = endpoint;
             websocket =
                     new ProviderWebSocket(
@@ -2065,11 +2150,7 @@ public final class ProviderClient implements AutoCloseable {
             return null;
         }
         for (String name : List.of("heartbeat", "outcomes", "rotate", "retire", "deregister")) {
-            // This capability carries the standard endpoints, never silently rewrites a signature
-            // target.
-            if (uri.equals(operation(name))
-                    && uri.getRawQuery() == null
-                    && uri.getRawPath().equals("/v1/nxs/" + name)) {
+            if (uri.equals(operation(name))) {
                 return name;
             }
         }
@@ -2140,7 +2221,7 @@ public final class ProviderClient implements AutoCloseable {
                             || !profile.get("dtlsFingerprint")
                                     .getAsString()
                                     .equalsIgnoreCase(join.hostFingerprint())
-                            || !profile.get("credentialKeyId").getAsString().equals(join.keyId())
+                            || !profile.get("admissionKeyId").getAsString().equals(join.keyId())
                             || join.expiresAt() > captured.expiresAt()) {
                         throw new IllegalStateException("Assisted binding mismatch");
                     }
@@ -2159,13 +2240,12 @@ public final class ProviderClient implements AutoCloseable {
         return state.getAsJsonObject("registration").get(field).getAsString();
     }
 
-    private JsonObject redactedRegistration() {
-        JsonObject copy = state.getAsJsonObject("registration").deepCopy();
-        copy.remove("ticketKey");
-        if (!registrationExtensions.isEmpty()) {
-            copy.add("extensions", registrationExtensions.deepCopy());
-        }
-        return copy;
+    private Registration registrationView() {
+        JsonObject r = state.getAsJsonObject("registration");
+        return new Registration(r.get("registrationId").getAsString(), r.get("instanceId").getAsString(),
+                r.get("keyId").getAsString(), r.get("leaseGeneration").getAsLong(),
+                r.has("serviceId") ? r.get("serviceId").getAsString() : null,
+                r.has("publicAddress") ? r.get("publicAddress").getAsString() : null);
     }
 
     private void save() throws IOException {
@@ -2206,7 +2286,14 @@ public final class ProviderClient implements AutoCloseable {
                     try {
                         if (started) {
                             drainAndReport();
-                            flushEvents();
+                            try {
+                                flushEvents();
+                            } catch (Exception e) {
+                                diagnostics.failed(ProviderLog.Operation.EVENTS);
+                            }
+                            if (config.deregisterOnShutdown()) {
+                                deregisterOnShutdown();
+                            }
                         }
                     } catch (Exception e) {
                         diagnostics.failed(ProviderLog.Operation.DRAIN);

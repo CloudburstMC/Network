@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createDecipheriv, createHash, createHmac } from "node:crypto";
 const fixture = JSON.parse(
-  readFileSync(new URL("diagnostic-v1.fixtures.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../fixtures/diagnostic-v1.fixtures.json", import.meta.url), "utf8"),
 );
 const audience = `nxs-stateless-host-v1/${fixture.context.incarnation}`;
 const hmac = (value) =>

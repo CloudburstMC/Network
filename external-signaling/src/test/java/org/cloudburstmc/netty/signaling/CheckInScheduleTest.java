@@ -6,17 +6,12 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
-import java.time.Instant;
 
 class CheckInScheduleTest {
     private JsonObject response(long delay) {
-        long now = 1800000000000L;
         JsonObject response = new JsonObject(), schedule = new JsonObject();
-        response.addProperty("receivedAt", Instant.ofEpochMilli(now).toString());
-        schedule.addProperty("version", 1);
         schedule.addProperty("afterMillis", delay);
-        schedule.addProperty("nextCheckInAt", now + delay);
-        schedule.addProperty("leaseExpiresAt", now + delay + 30000);
+        schedule.addProperty("leaseMillis", delay + 30000);
         schedule.addProperty("minUpdateIntervalMillis", 1000);
         response.add("checkIn", schedule);
         return response;
@@ -27,6 +22,7 @@ class CheckInScheduleTest {
         assertEquals(900000, CheckInSchedule.parse(response(900000)).afterMillis());
         assertEquals(3600000, CheckInSchedule.parse(response(3600000)).afterMillis());
         assertEquals(45000, CheckInSchedule.parse(response(45000)).afterMillis());
+        assertEquals(75000, CheckInSchedule.parse(response(45000)).leaseMillis());
     }
 
     @Test
@@ -36,11 +32,11 @@ class CheckInScheduleTest {
         JsonObject fractional = response(900000);
         fractional.getAsJsonObject("checkIn").addProperty("afterMillis", 900000.5);
         assertThrows(IOException.class, () -> CheckInSchedule.parse(fractional));
-        JsonObject wrongDeadline = response(900000);
-        wrongDeadline.getAsJsonObject("checkIn").addProperty("leaseExpiresAt", 1);
-        assertThrows(IOException.class, () -> CheckInSchedule.parse(wrongDeadline));
-        JsonObject wrongVersion = response(900000);
-        wrongVersion.getAsJsonObject("checkIn").addProperty("version", 2);
-        assertThrows(IOException.class, () -> CheckInSchedule.parse(wrongVersion));
+        JsonObject expiredLease = response(900000);
+        expiredLease.getAsJsonObject("checkIn").addProperty("leaseMillis", 900000);
+        assertThrows(IOException.class, () -> CheckInSchedule.parse(expiredLease));
+        JsonObject longLease = response(900000);
+        longLease.getAsJsonObject("checkIn").addProperty("leaseMillis", 1200001);
+        assertThrows(IOException.class, () -> CheckInSchedule.parse(longLease));
     }
 }

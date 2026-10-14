@@ -27,12 +27,6 @@ public record ServerStatus(String name, String level, Integer players, int maxPl
         this(name, level, null, maxPlayers, gameType);
     }
 
-    /** Temporary source adapter; advertised protocol and version belong to the provider. */
-    @Deprecated(forRemoval = true)
-    public ServerStatus(String name, int protocol, String version, String level, int players, int maxPlayers, int gameType) {
-        this(name, level, players, maxPlayers, gameType);
-    }
-
     public ServerStatus {
         if (name == null || name.isEmpty() || name.codePointCount(0, name.length()) > 128
                 || level == null || level.codePointCount(0, level.length()) > 128

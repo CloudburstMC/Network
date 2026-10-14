@@ -19,7 +19,6 @@ package org.cloudburstmc.netty.signaling;
 import com.google.gson.JsonObject;
 
 import java.math.BigInteger;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.interfaces.ECPublicKey;
@@ -30,7 +29,7 @@ import java.util.regex.Pattern;
 /**
  * Exact v0 canonical bytes. P1363 explicitly avoids the JVM's default DER ECDSA encoding.
  */
-public final class ProviderCrypto {
+final class ProviderCrypto {
     private static final Pattern BASE64URL = Pattern.compile("[A-Za-z0-9_-]+");
 
     public static final String PROTOCOL = "nethernet-external-signaling-v1";
@@ -144,16 +143,6 @@ public final class ProviderCrypto {
         return base64(digest(array(ProviderContract.contextValues(c))));
     }
 
-    public static String tagsDigest(Map<String, String> tags) {
-        if (tags == null || tags.isEmpty()) {
-            return null;
-        }
-
-        StringJoiner entries = new StringJoiner(",", "[", "]");
-        new TreeMap<>(tags).forEach((key, value) -> entries.add("[" + quote(key) + "," + quote(value) + "]"));
-        return base64(digest(entries.toString()));
-    }
-
     public static String proof(JsonObject c, String nonce, String intent) {
         return array(PROTOCOL, "complete", c.get("audience").getAsString(), c.get("challengeId").getAsString(),
                 c.get("nonce").getAsString(), c.get("thumbprint").getAsString(), c.get("contextDigest").getAsString(),
@@ -178,24 +167,6 @@ public final class ProviderCrypto {
                                  String key, String intent, long generation, long sequence, String body) {
         return array(PROTOCOL, SIGNATURE, audience, method, path, timestamp, instance, key, intent, generation,
                 sequence, base64(digest(body)));
-    }
-
-    public static String origin(URI uri) {
-        if (uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null || uri.getQuery() != null || !(
-                uri.getPath().isEmpty() || uri.getPath().equals("/"))) {
-            throw new IllegalArgumentException("Invalid provider origin");
-        }
-
-        String host = uri.getHost().toLowerCase(Locale.ROOT), scheme = uri.getScheme().toLowerCase(Locale.ROOT);
-        if (!scheme.equals("https") && !(scheme.equals("http") && Set.of("localhost", "127.0.0.1", "[::1]")
-                .contains(host))) {
-            throw new IllegalArgumentException("HTTPS provider required");
-        }
-
-        int port = uri.getPort();
-        return scheme + "://" + host + (
-                port < 0 || (scheme.equals("https") && port == 443) || (scheme.equals("http") && port == 80) ? "" :
-                        ":" + port);
     }
 
     public static String array(Object... values) {

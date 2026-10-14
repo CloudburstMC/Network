@@ -30,27 +30,15 @@ import java.util.*;
  * NXS1 token validation using locally installed keys and the incoming ICE username.
  */
 public final class StatelessAdmissionValidator implements AdmissionValidator {
-    public record TicketKey(String keyId, String secret, long notBefore, long retireAfter) {
-        public TicketKey(String keyId, String secret) {
-            this(keyId, secret, 0, Long.MAX_VALUE);
-        }
-
-        @Override
-        public String toString() {
-            return "TicketKey[keyId=" + keyId + "]";
-        }
-    }
-
     private static final class Material {
         final byte[] encryption, secret;
-        final long notBefore, retireAfter;
+        final long retireAfter;
         private int references;
         private boolean installed = true, revoked;
 
-        Material(byte[] encryption, byte[] secret, long notBefore, long retireAfter) {
+        Material(byte[] encryption, byte[] secret, long retireAfter) {
             this.encryption = encryption;
             this.secret = secret;
-            this.notBefore = notBefore;
             this.retireAfter = retireAfter;
         }
 
@@ -160,27 +148,26 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
     /**
      * Validates everything before atomically replacing a bounded snapshot.
      */
-    public synchronized void installKeys(List<TicketKey> snapshot) {
+    public synchronized void installKeys(List<AdmissionKey> snapshot) {
         if (snapshot.size() > 8) {
             throw new IllegalArgumentException("At most eight admission epochs");
         }
 
         Set<String> ids = new HashSet<>();
-        for (TicketKey key : snapshot) {
+        for (AdmissionKey key : snapshot) {
             if (key.keyId() == null || !key.keyId().matches("[A-Z0-9]{4}") || key.secret() == null
                     || key.secret().length() < 32 || key.secret().length() > 256 || !ids.add(key.keyId())
-                    || key.notBefore() < 0 || key.retireAfter() <= key.notBefore()) {
+                    || key.retireAfter() <= 0) {
                 throw new IllegalArgumentException("Invalid admission key snapshot");
             }
         }
 
         Map<String, Material> next = new HashMap<>();
         try {
-            for (TicketKey key : snapshot) {
+            for (AdmissionKey key : snapshot) {
                 byte[] secret = utf8(key.secret());
                 Material previous = keys.get(key.keyId());
-                if (previous != null && previous.notBefore == key.notBefore()
-                        && previous.retireAfter == key.retireAfter()
+                if (previous != null && previous.retireAfter == key.retireAfter()
                         && MessageDigest.isEqual(previous.secret, secret)) {
                     Arrays.fill(secret, (byte) 0);
                     next.put(key.keyId(), previous);
@@ -190,7 +177,6 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
                             new Material(
                                     StatelessAdmissionCodec.encryptionKey(secret, audience),
                                     secret,
-                                    key.notBefore(),
                                     key.retireAfter()));
                 }
             }
@@ -248,7 +234,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             }
             String keyId = token.substring(4, 8);
             Material key = keys.get(keyId);
-            if (key == null || nowMillis < key.notBefore || nowMillis >= key.retireAfter) {
+            if (key == null || nowMillis >= key.retireAfter) {
                 return null;
             }
             var claims =

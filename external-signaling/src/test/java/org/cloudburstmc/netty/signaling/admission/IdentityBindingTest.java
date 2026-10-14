@@ -21,8 +21,8 @@ class IdentityBindingTest extends AdmissionFixture {
                 .decode(f.getAsJsonObject("identity").get("canonicalCpk").getAsString())));
     }
 
-    StatelessAdmissionValidator.TicketKey epoch() {
-        return new StatelessAdmissionValidator.TicketKey("K001",
+    AdmissionKey epoch() {
+        return new AdmissionKey("K001",
                 f.getAsJsonObject("context").get("secret").getAsString());
     }
 
@@ -59,11 +59,11 @@ class IdentityBindingTest extends AdmissionFixture {
         v.installKeys(List.of(epoch()));
         assertNull(refresh.mismatch(key()));
         var replaced = v.validate(request(), now).identityVerifier();
-        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001",
+        v.installKeys(List.of(new AdmissionKey("K001",
                 "replacement-secret-at-least-thirty-two-characters")));
         assertNull(v.validate(request(), now));
         assertNull(replaced.mismatch(key()));
-        v.installKeys(List.of(new StatelessAdmissionValidator.TicketKey("K001", epoch().secret(), now, now + 1000)));
+        v.installKeys(List.of(new AdmissionKey("K001", epoch().secret(), now + 1000)));
         var retired = v.validate(request(), now).identityVerifier();
         v.retireKeys(now + 1000);
         assertFalse(v.ready());

@@ -87,7 +87,7 @@ class DiagnosticCodecTest {
         assertNull(
                 DiagnosticAdmissionCodec.open(
                         context,
-                        new Key(key.keyId(), "z".repeat(32), key.notBefore(), key.retireAt()),
+                        new Key(key.keyId(), "z".repeat(32), key.notBefore(), key.retireAfter()),
                         value("localUfrag"),
                         value("remoteUfrag"),
                         parent,
@@ -208,19 +208,19 @@ class DiagnosticCodecTest {
                                 "D001",
                                 "a".repeat(32) + (char) 0xd800,
                                 key.notBefore(),
-                                key.retireAt()));
+                                key.retireAfter()));
     }
 
     @Test
     void allSharedOriginsUseTheHttps256Subset() throws Exception {
-        Path path = Path.of("../docs/external-signaling/control-v1.origins.fixtures.json");
-        if (!Files.exists(path)) {
-            path = Path.of("docs/external-signaling/control-v1.origins.fixtures.json");
+        JsonArray rows;
+        try (var reader =
+                new InputStreamReader(
+                        DiagnosticCodecTest.class.getResourceAsStream(
+                                "/nxs/origins.fixtures.json"),
+                        StandardCharsets.UTF_8)) {
+            rows = JsonParser.parseReader(reader).getAsJsonObject().getAsJsonArray("vectors");
         }
-        JsonArray rows =
-                JsonParser.parseString(Files.readString(path))
-                        .getAsJsonObject()
-                        .getAsJsonArray("vectors");
         assertEquals(274, rows.size());
         for (var row : rows) {
             JsonObject v = row.getAsJsonObject();
@@ -329,8 +329,7 @@ class DiagnosticCodecTest {
                         "nxs-stateless-host-v1/" + context.incarnation(), 60000);
         validator.installKeys(
                 java.util.List.of(
-                        new org.cloudburstmc.netty.signaling.admission.StatelessAdmissionValidator
-                                .TicketKey(key.keyId(), key.secret())));
+                        new org.cloudburstmc.netty.signaling.admission.AdmissionKey(key.keyId(), key.secret())));
         var gate =
                 new org.cloudburstmc.netty.signaling.admission.AdmissionGate(
                         org.cloudburstmc.netty.signaling.admission.AdmissionGate.Limits.defaults(),

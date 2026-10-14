@@ -16,10 +16,14 @@
 
 package org.cloudburstmc.netty.signaling.provider;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.signaling.admission.AdmissionGate;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
+import org.cloudburstmc.netty.signaling.ProviderTransport;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.signaling.admission.NativeProviderTransport;
 import org.cloudburstmc.netty.signaling.admission.NativeCandidateSnapshot;
@@ -30,6 +34,7 @@ import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.Map;
@@ -40,11 +45,48 @@ import java.util.concurrent.CompletionStage;
 /**
  * Fixed native endpoint using the extension's existing Bedrock child pipeline.
  */
-public final class NativeProviderHostFactory implements ProviderHostFactory {
+public final class NativeProviderHostFactory {
     /** Complete configured set, otherwise public addresses owned by the gameplay listener. */
-    public static final String EXPLICIT_OR_PUBLIC_LOCAL = "explicit-or-public-local";
+    static final String EXPLICIT_OR_PUBLIC_LOCAL = "explicit-or-public-local";
 
-    public static final String MAINTAINED_V1 = "maintained-v1";
+    static final String MAINTAINED_V1 = "maintained-v1";
+
+    public record Host(ProviderTransport transport, Channel channel, List<String> warnings) {
+    }
+
+    private NativeProviderHostFactory() {
+    }
+
+    /**
+     * Opens the NXS endpoint on the host's gameplay port. The extension owns the Bedrock child pipeline.
+     */
+    public static CompletionStage<Host> open(ServerBootstrap bootstrap, ProviderRuntimeConfiguration runtime) {
+        return open(bootstrap, new InetSocketAddress(runtime.bindAddress(), runtime.udpPort()), options(runtime));
+    }
+
+    /** Maintained publication only when warming or assisted joins ask for it. */
+    static Map<String, String> options(ProviderRuntimeConfiguration runtime) {
+        var endpoints = new JsonArray();
+        for (InetSocketAddress endpoint : runtime.advertisedEndpoints()) {
+            var value = new JsonObject();
+            value.addProperty("address", endpoint.getAddress().getHostAddress());
+            value.addProperty("port", endpoint.getPort());
+            endpoints.add(value);
+        }
+        var options = new HashMap<String, String>();
+        options.put("stateDirectory", runtime.stateDirectory().toString());
+        options.put("advertisedEndpoints", endpoints.toString());
+        if (runtime.maintainedCandidates() || runtime.assistedJoins()) {
+            options.put("endpointPolicy", EXPLICIT_OR_PUBLIC_LOCAL);
+            options.put("candidatePublication", MAINTAINED_V1);
+            options.put("assistedJoins", Boolean.toString(runtime.assistedJoins()));
+            options.put("stunWarming", Boolean.toString(runtime.maintainedCandidates()));
+        } else {
+            options.put("localDevelopment",
+                    Boolean.toString(Set.of("127.0.0.1", "localhost", "[::1]").contains(runtime.origin().getHost())));
+        }
+        return Map.copyOf(options);
+    }
 
     @FunctionalInterface
     interface EndpointSource {
@@ -142,8 +184,7 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
         }
     }
 
-    @Override
-    public CompletionStage<Host> open(ServerBootstrap bootstrap, InetSocketAddress udpBind, Map<String, String> options) {
+    static CompletionStage<Host> open(ServerBootstrap bootstrap, InetSocketAddress udpBind, Map<String, String> options) {
         try {
             String directory = options.get("stateDirectory");
             if (directory == null || directory.isBlank()) {
@@ -158,10 +199,6 @@ public final class NativeProviderHostFactory implements ProviderHostFactory {
             String warming = options.getOrDefault("stunWarming", "true");
             if (!Set.of("true", "false").contains(warming)) {
                 throw new IllegalArgumentException("stunWarming must be a boolean");
-            }
-            String diagnostic = options.get("diagnosticAdmission");
-            if (diagnostic != null && !Set.of("true", "false").contains(diagnostic)) {
-                throw new IllegalArgumentException("diagnosticAdmission must be a boolean");
             }
             if (publication != null) {
                 if (!MAINTAINED_V1.equals(publication)) {

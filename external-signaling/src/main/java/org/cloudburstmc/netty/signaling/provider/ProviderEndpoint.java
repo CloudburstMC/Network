@@ -25,7 +25,7 @@ import java.util.*;
 /**
  * Bound addresses plus operator-provisioned forwarding endpoints. Discovery never guesses NAT mappings.
  */
-public record ProviderEndpoint(InetSocketAddress bind, List<InetSocketAddress> advertised) {
+record ProviderEndpoint(InetSocketAddress bind, List<InetSocketAddress> advertised) {
     public static ProviderEndpoint resolve(InetSocketAddress bind, List<InetSocketAddress> external, boolean localDevelopment) throws IOException {
         if (bind.isUnresolved()) throw new IOException("Provider bind-address could not be resolved");
         return resolve(bind, external, localDevelopment, bind.getAddress().isAnyLocalAddress() ? interfaces() : List.of());

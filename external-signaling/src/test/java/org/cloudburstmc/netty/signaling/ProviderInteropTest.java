@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderInteropTest {
     static JsonObject fixture(String name) throws Exception {
-        try (var in = ProviderInteropTest.class.getResourceAsStream("/" + name)) {
+        try (var in = ProviderInteropTest.class.getResourceAsStream("/nxs/" + name)) {
             return JsonParser.parseString(
                             new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8))
                     .getAsJsonObject();
@@ -80,14 +80,5 @@ class ProviderInteropTest {
         assertThrows(IllegalArgumentException.class, () -> new ServerStatus("name\n", "", 0, 1, 0));
         assertDoesNotThrow(() -> new ServerStatus("name", "", 20, 1, 0));
         assertNull(new ServerStatus("name", "", 1, 0).players());
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void historicConstructorsOnlyAdaptUsefulObservations() {
-        assertEquals(new ProviderClient.Health(false, 10, "build", null),
-                new ProviderClient.Health(false, true, 10, Double.NaN, null, "build"));
-        assertEquals(new ServerStatus("name", "", 2, 10, 0),
-                new ServerStatus("name", 0, null, "", 2, 10, 0));
     }
 }

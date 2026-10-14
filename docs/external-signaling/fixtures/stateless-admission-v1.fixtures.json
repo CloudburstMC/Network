@@ -1,7 +1,6 @@
 {
   "kind": "nxs-stateless-admission-vectors",
   "version": 1,
-  "experimental": true,
   "warning": "Public deterministic test material only. Never use fixture keys/nonces in production.",
   "context": {
     "keyId": "K001",

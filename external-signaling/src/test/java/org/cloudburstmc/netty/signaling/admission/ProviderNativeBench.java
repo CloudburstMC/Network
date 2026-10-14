@@ -59,11 +59,6 @@ public final class ProviderNativeBench {
         }
 
         @Override
-        public CompletionStage<JsonObject> hostProfile() {
-            return captureHostProfile().thenApply(HostProfileSnapshot::profile);
-        }
-
-        @Override
         public long candidatePublicationVersion() {
             return transport.candidatePublicationVersion();
         }
@@ -84,7 +79,7 @@ public final class ProviderNativeBench {
                                             requireCurrent.run();
                                             snapshot.requireCurrent();
                                             if (!snapshot.profile()
-                                                    .get("credentialKeyId")
+                                                    .get("admissionKeyId")
                                                     .getAsString()
                                                     .equals(join.keyId())) {
                                                 throw new IllegalStateException(
@@ -201,13 +196,13 @@ public final class ProviderNativeBench {
         }
 
         @Override
-        public CompletionStage<Void> installTicketKeys(List<TicketKey> keys) {
-            return transport.installTicketKeys(keys);
+        public CompletionStage<Void> installAdmissionKeys(List<AdmissionKey> keys) {
+            return transport.installAdmissionKeys(keys);
         }
 
         @Override
-        public List<JsonObject> pollEvents() {
-            return transport.pollEvents();
+        public List<JsonObject> pollEvents(int maximum) {
+            return transport.pollEvents(maximum);
         }
 
         @Override
@@ -343,43 +338,33 @@ public final class ProviderNativeBench {
                             .get(10, TimeUnit.SECONDS);
             ProviderTransport transport =
                     assisted ? new LoopbackAssistedTransport(nativeHost, bind) : nativeHost;
+            var listing = new java.util.concurrent.atomic.AtomicReference<>(
+                    new ServerStatus("Automatic native server", "Integration", 0, 4, 0));
             provider =
                     new ProviderClient(
-                            new ProviderClient.Configuration(
-                                    origin,
-                                    "nxs-admission-v1",
-                                    "Provider native integration",
-                                    ProviderClient.NEW_SERVICE,
-                                    ProviderClient.ANONYMOUS_PROOF_OF_WORK,
-                                    null,
-                                    null,
-                                    null,
-                                    Map.of(),
-                                    assisted
-                                            ? ProviderClient.ControlTransport.AUTO
-                                            : ProviderClient.ControlTransport.HTTP,
-                                    diagnostic,
-                                    advertisedAddress == null ? "discovered" : "defined",
-                                    assisted),
+                            ProviderClient.Configuration.builder(origin)
+                                    .label("Provider native integration")
+                                    .diagnosticAdmission(diagnostic)
+                                    .connectivityMethod(advertisedAddress == null ? "discovered" : "defined")
+                                    .assistedJoins(assisted)
+                                    .build(),
                             new ProviderStateStore(state),
                             transport,
-                            () ->
-                                    new ServerStatus(
-                                            "Automatic native server", "Integration", 0, 4, 0),
-                            () -> new ProviderClient.Health(true, 4, "provider-native-bench", null),
+                            () -> listing.get(),
+                            () -> new ProviderClient.Health(true, 4, new ProviderClient.Software("Provider native bench", "1.0"), null),
                             System.err::println);
-            JsonObject registration = provider.start().get(45, TimeUnit.SECONDS);
+            var registration = provider.start().get(45, TimeUnit.SECONDS);
             if (args.length > 4) {
-                ExtensionFixtureFile.write(Path.of(args[4]), provider.extensions().get(10, TimeUnit.SECONDS));
+                OperatorActionFile.write(Path.of(args[4]), provider.operatorAction().get(10, TimeUnit.SECONDS));
             }
             // Emit assigned IDs only; optional metadata and credentials are excluded.
             var assignedIds = new LinkedHashMap<String, String>();
-            assignedIds.put("instanceId", registration.get("instanceId").getAsString());
-            if (registration.has("serviceId")) {
-                assignedIds.put("serviceId", registration.get("serviceId").getAsString());
+            assignedIds.put("instanceId", registration.instanceId());
+            if (registration.serviceId() != null) {
+                assignedIds.put("serviceId", registration.serviceId());
             }
             emit("registered", assignedIds);
-            emit("profile", transport.hostProfile().toCompletableFuture().get());
+            emit("profile", transport.captureHostProfile().toCompletableFuture().get().profile());
             JsonObject readiness = provider.readiness().get(10, TimeUnit.SECONDS);
             readiness.remove("extensions");
             emit("readiness", readiness);
@@ -390,8 +375,8 @@ public final class ProviderNativeBench {
                     throw new IllegalStateException("Provider native bench deadline");
                 }
                 if (!updated && Files.exists(state.resolve("update-status"))) {
-                    provider.setServerStatus(
-                            new ServerStatus("Updated native server", "Updated level", 1, 8, 1));
+                    listing.set(new ServerStatus("Updated native server", "Updated level", 1, 8, 1));
+                    provider.requestStatusRefresh();
                     updated = true;
                 }
                 if (Files.deleteIfExists(state.resolve("check-connectivity"))) {

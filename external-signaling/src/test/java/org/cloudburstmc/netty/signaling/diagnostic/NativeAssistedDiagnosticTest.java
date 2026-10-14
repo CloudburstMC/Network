@@ -80,7 +80,7 @@ class NativeAssistedDiagnosticTest {
                     new StatelessAdmissionValidator(
                             NativeProviderTransport.audience(context.incarnation()), 60000);
             validator.installKeys(
-                    List.of(new StatelessAdmissionValidator.TicketKey(key.keyId(), key.secret())));
+                    List.of(new AdmissionKey(key.keyId(), key.secret())));
             host =
                     new NativeAdmissionServerChannel(
                             identity, validator, AdmissionGate.Limits.defaults());

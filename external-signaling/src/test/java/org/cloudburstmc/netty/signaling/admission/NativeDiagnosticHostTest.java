@@ -29,7 +29,7 @@ class NativeDiagnosticHostTest {
                 new StatelessAdmissionValidator(
                         NativeProviderTransport.audience(context.incarnation()), 60000);
         validator.installKeys(
-                List.of(new StatelessAdmissionValidator.TicketKey(key.keyId(), key.secret())));
+                List.of(new AdmissionKey(key.keyId(), key.secret())));
         return (request, now) -> {
             var admission = validator.validate(request, now);
             if (admission != null && !admission.diagnostic()) {
@@ -226,7 +226,7 @@ class NativeDiagnosticHostTest {
                             claims,
                             ufrag,
                             utf8(offer),
-                            key.retireAt(),
+                            key.retireAfter(),
                             Clock.system());
             String answer =
                     "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\na=setup:active\r\na=ice-ufrag:"
@@ -607,7 +607,7 @@ class NativeDiagnosticHostTest {
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
                 List.of(
-                        new StatelessAdmissionValidator.TicketKey(
+                        new AdmissionKey(
                                 "K001", TestSignalingProvider.SECRET)));
         var diagnosticValidator = validator(context, key, new AtomicInteger());
         var endpoint =

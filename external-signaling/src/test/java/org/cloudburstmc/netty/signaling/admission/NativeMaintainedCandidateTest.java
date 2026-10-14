@@ -26,14 +26,14 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("native")
 class NativeMaintainedCandidateTest {
     @TempDir Path directory;
-    private static final List<ProviderTransport.TicketKey> KEYS =
-            List.of(new ProviderTransport.TicketKey("K001", TestSignalingProvider.SECRET));
+    private static final List<AdmissionKey> KEYS =
+            List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET));
 
     @Test
     @Timeout(20)
     void withdrawnEndpointRetainsDiagnosticAuthorityForRecovery() throws Exception {
         try (var host = new Host(Map.of(), List.of("8.8.8.8"))) {
-            host.transport.installTicketKeys(KEYS).toCompletableFuture().get();
+            host.transport.installAdmissionKeys(KEYS).toCompletableFuture().get();
             var before = host.transport.captureHostProfile().toCompletableFuture().get();
             long expires = System.currentTimeMillis() + 60_000;
             var context =
@@ -69,7 +69,7 @@ class NativeMaintainedCandidateTest {
                     .reportConnectivityChecks(
                             before.candidateRevision(),
                             List.of(
-                                    new ProviderTransport.ConnectivityCheck(
+                                    new ProviderTransport.ConnectivityCheck("unspecified", 
                                             4,
                                             "discovered",
                                             target,
@@ -90,7 +90,7 @@ class NativeMaintainedCandidateTest {
                     .reportConnectivityChecks(
                             before.candidateRevision(),
                             List.of(
-                                    new ProviderTransport.ConnectivityCheck(
+                                    new ProviderTransport.ConnectivityCheck("unspecified", 
                                             4,
                                             "discovered",
                                             target,
@@ -390,7 +390,7 @@ class NativeMaintainedCandidateTest {
                                 maintainedResponses(stun6, host.port);
                                 return null;
                             });
-            host.transport.installTicketKeys(KEYS).toCompletableFuture().get();
+            host.transport.installAdmissionKeys(KEYS).toCompletableFuture().get();
             // No publisher/heartbeat call drives the monitor or samples its native observations.
             Thread.sleep(1200);
             assertTrue(host.transport.candidatePublicationVersion() > 1);
@@ -417,7 +417,7 @@ class NativeMaintainedCandidateTest {
                                 .getAsJsonObject("statelessAdmission")
                                 .get("incarnation")
                                 .getAsString());
-                assertEquals("K001", remapped.profile().get("credentialKeyId").getAsString());
+                assertEquals("K001", remapped.profile().get("admissionKeyId").getAsString());
                 assertTrue(host.transport.channel().isServing());
                 assertEquals(2, host.transport.channel().creationAttempts());
                 long failedAt = System.currentTimeMillis();
@@ -429,7 +429,7 @@ class NativeMaintainedCandidateTest {
                                     candidate.get("address").getAsString(),
                                     candidate.get("port").getAsInt());
                     failure.add(
-                            new ProviderTransport.ConnectivityCheck(
+                            new ProviderTransport.ConnectivityCheck("unspecified", 
                                     target.getAddress() instanceof Inet4Address ? 4 : 6,
                                     "warm_stun",
                                     target,
@@ -476,12 +476,12 @@ class NativeMaintainedCandidateTest {
                                         EndpointSelection.Family.IPV4,
                                         (InetSocketAddress) stun.getLocalSocketAddress()),
                                 List.of("8.8.8.8"))) {
-            host.transport.installTicketKeys(KEYS).toCompletableFuture().get();
+            host.transport.installAdmissionKeys(KEYS).toCompletableFuture().get();
             var before = host.transport.captureHostProfile().toCompletableFuture().get();
             long revision = before.candidateRevision(), now = System.currentTimeMillis();
             var target = new InetSocketAddress("8.8.8.8", host.port);
             var negative =
-                    new ProviderTransport.ConnectivityCheck(
+                    new ProviderTransport.ConnectivityCheck("unspecified", 
                             4,
                             "discovered",
                             target,
@@ -489,7 +489,7 @@ class NativeMaintainedCandidateTest {
                             now - 2,
                             now + 10000);
             var positive =
-                    new ProviderTransport.ConnectivityCheck(
+                    new ProviderTransport.ConnectivityCheck("unspecified", 
                             4,
                             "discovered",
                             target,
@@ -526,7 +526,7 @@ class NativeMaintainedCandidateTest {
                             });
             assertTrue(entered.await(1, TimeUnit.SECONDS));
             var expired =
-                    new ProviderTransport.ConnectivityCheck(
+                    new ProviderTransport.ConnectivityCheck("unspecified", 
                             4,
                             "discovered",
                             target,
@@ -557,7 +557,7 @@ class NativeMaintainedCandidateTest {
                     .reportConnectivityChecks(
                             revision,
                             List.of(
-                                    new ProviderTransport.ConnectivityCheck(
+                                    new ProviderTransport.ConnectivityCheck("unspecified", 
                                             4,
                                             "discovered",
                                             target,
@@ -588,7 +588,7 @@ class NativeMaintainedCandidateTest {
                     .reportConnectivityChecks(
                             revision,
                             List.of(
-                                    new ProviderTransport.ConnectivityCheck(
+                                    new ProviderTransport.ConnectivityCheck("unspecified", 
                                             4,
                                             "discovered",
                                             target,

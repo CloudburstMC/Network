@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 
 const protocol = 'nethernet-external-signaling-v1', signature = 'nxs-es384-v1';
-const path = name => fileURLToPath(new URL(name, import.meta.url));
+const path = name => fileURLToPath(new URL('../fixtures/' + name, import.meta.url));
 const read = name => JSON.parse(readFileSync(path(name), 'utf8'));
 const write = (name, value) => writeFileSync(path(name), JSON.stringify(value, null, 2) + '\n');
 const digest = value => createHash('sha256').update(value).digest();
@@ -17,12 +17,11 @@ const updateAdmission = update || process.argv.includes('--write-admission');
 const f = read('nxs-v1.fixtures.json'), c = f.challenge;
 f.protocol = c.protocol = protocol;
 c.signature = signature;
-c.context.profile = 'nxs-admission-v1';
 c.thumbprint = b64(
     digest(JSON.stringify(Object.fromEntries(['crv', 'kty', 'x', 'y'].map(k => [k, f.publicKeyJwk[k]])))));
 c.contextDigest = b64(digest(JSON.stringify(
-    ['mode', 'profile', 'label', 'authorizationId', 'serviceId', 'region', 'pool', 'registrationId',
-      'tagsDigest'].filter(k => k in c.context).map(k => c.context[k]))));
+    ['mode', 'label', 'authorizationId', 'serviceId', 'registrationId']
+        .map(k => c.context[k] ?? ''))));
 const proof = JSON.stringify(
     [protocol, 'complete', c.audience, c.challengeId, c.nonce, c.thumbprint, c.contextDigest, c.expiresAt, f.proofNonce,
       f.idempotencyKey]);
@@ -91,7 +90,7 @@ if (updateAdmission) write('provenance.json', provenance);
 assert.deepEqual(read('provenance.json'), provenance);
 
 // Fleet examples keep public endpoint metadata optional and runtime counts independent.
-const schema = read('nxs-v1.schema.json');
+const schema = JSON.parse(readFileSync(new URL('../nxs-v1.schema.json', import.meta.url), 'utf8'));
 for (const [document, value] of Object.entries(f.fleetExamples)) {
   for (const field of schema.$defs[document].required) assert(field in value, document + ' omitted ' + field);
 }

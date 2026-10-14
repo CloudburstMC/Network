@@ -532,7 +532,7 @@ public final class NativeDiagnosticHostGate implements AutoCloseable {
                 && lastNanos - session.deadlineNanos < 0
                 && keyEquals(session.key, policy.key(session.key.keyId()))
                 && now >= session.key.notBefore()
-                && now < session.key.retireAt()
+                && now < session.key.retireAfter()
                 && policy.endpoints().contains(DiagnosticHostPolicy.Endpoint.from(claims));
     }
 

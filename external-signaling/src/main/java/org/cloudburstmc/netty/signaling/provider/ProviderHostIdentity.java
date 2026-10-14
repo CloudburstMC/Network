@@ -47,7 +47,7 @@ import java.util.Set;
 /**
  * Host-owned DTLS identity; first start creates it, all later starts preserve it.
  */
-public final class ProviderHostIdentity {
+final class ProviderHostIdentity {
     private static final Set<PosixFilePermission> PRIVATE_DIRECTORY = PosixFilePermissions.fromString("rwx------");
     private static final Set<PosixFilePermission> PRIVATE_FILE = PosixFilePermissions.fromString("rw-------");
 

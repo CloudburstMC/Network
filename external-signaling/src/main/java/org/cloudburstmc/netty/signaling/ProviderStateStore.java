@@ -74,7 +74,7 @@ public final class ProviderStateStore implements AutoCloseable {
         lock = acquired;
     }
 
-    public synchronized JsonObject read() throws IOException {
+    synchronized JsonObject read() throws IOException {
         requireOwnership();
         if (!Files.exists(stateFile)) {
             return new JsonObject();
@@ -88,11 +88,7 @@ public final class ProviderStateStore implements AutoCloseable {
         return JsonParser.parseString(Files.readString(stateFile)).getAsJsonObject();
     }
 
-    Path directory() {
-        return directory;
-    }
-
-    public synchronized void write(JsonObject state) throws IOException {
+    synchronized void write(JsonObject state) throws IOException {
         requireOwnership();
         Path tmp = Files.createTempFile(directory, "provider-state-", ".tmp", OWNER_ONLY_FILE);
         try {

@@ -6,12 +6,10 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.security.KeyPair;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -92,37 +90,37 @@ class ProviderCryptoTest {
 
     @Test
     void requiresHttpsUnlessTheProviderIsThisMachine() {
-        assertEquals("https://provider.example", ProviderCrypto.origin(URI.create("https://provider.example")));
-        assertEquals("http://localhost:8080", ProviderCrypto.origin(URI.create("http://localhost:8080")));
-        assertEquals("http://127.0.0.1", ProviderCrypto.origin(URI.create("http://127.0.0.1")));
+        assertEquals("https://provider.example", ProviderOrigin.canonicalize(URI.create("https://provider.example")));
+        assertEquals("http://localhost:8080", ProviderOrigin.canonicalize(URI.create("http://localhost:8080")));
+        assertEquals("http://127.0.0.1", ProviderOrigin.canonicalize(URI.create("http://127.0.0.1")));
 
-        assertThrows(IllegalArgumentException.class, () -> ProviderCrypto.origin(URI.create("http://provider.example")),
+        assertThrows(IllegalArgumentException.class, () -> ProviderOrigin.canonicalize(URI.create("http://provider.example")),
                 "plaintext to anywhere but this machine");
-        assertThrows(IllegalArgumentException.class, () -> ProviderCrypto.origin(URI.create("ftp://provider.example")));
+        assertThrows(IllegalArgumentException.class, () -> ProviderOrigin.canonicalize(URI.create("ftp://provider.example")));
     }
 
     @Test
     void takesNoOriginCarryingMoreThanAnOrigin() {
         assertThrows(IllegalArgumentException.class,
-                () -> ProviderCrypto.origin(URI.create("https://user@provider.example")), "credentials");
+                () -> ProviderOrigin.canonicalize(URI.create("https://user@provider.example")), "credentials");
         assertThrows(IllegalArgumentException.class,
-                () -> ProviderCrypto.origin(URI.create("https://provider.example#fragment")));
+                () -> ProviderOrigin.canonicalize(URI.create("https://provider.example#fragment")));
         assertThrows(IllegalArgumentException.class,
-                () -> ProviderCrypto.origin(URI.create("https://provider.example?query=1")));
+                () -> ProviderOrigin.canonicalize(URI.create("https://provider.example?query=1")));
         assertThrows(IllegalArgumentException.class,
-                () -> ProviderCrypto.origin(URI.create("https://provider.example/v1")), "a path");
-        assertThrows(IllegalArgumentException.class, () -> ProviderCrypto.origin(URI.create("/relative")), "no host");
+                () -> ProviderOrigin.canonicalize(URI.create("https://provider.example/v1")), "a path");
+        assertThrows(IllegalArgumentException.class, () -> ProviderOrigin.canonicalize(URI.create("/relative")), "no host");
     }
 
     @Test
     void writesOneOriginForTheSameProviderHoweverItIsSpelled() {
         assertEquals("https://provider.example",
-                ProviderCrypto.origin(URI.create("https://PROVIDER.Example")), "case folds");
+                ProviderOrigin.canonicalize(URI.create("https://PROVIDER.Example")), "case folds");
         assertEquals("https://provider.example",
-                ProviderCrypto.origin(URI.create("https://provider.example:443")), "the default port is implied");
-        assertEquals("http://localhost", ProviderCrypto.origin(URI.create("http://localhost:80")));
+                ProviderOrigin.canonicalize(URI.create("https://provider.example:443")), "the default port is implied");
+        assertEquals("http://localhost", ProviderOrigin.canonicalize(URI.create("http://localhost:80")));
         assertEquals("https://provider.example:8443",
-                ProviderCrypto.origin(URI.create("https://provider.example:8443")), "any other port is kept");
+                ProviderOrigin.canonicalize(URI.create("https://provider.example:8443")), "any other port is kept");
     }
 
     @Test
@@ -157,6 +155,30 @@ class ProviderCryptoTest {
     }
 
     @Test
+    void signsOnlyCanonicalProviderOrigins() {
+        assertEquals("https://signal.example.net",
+                ProviderOrigin.canonicalize(URI.create("HTTPS://Signal.Example.NET:443/")));
+        assertEquals("http://[::1]:8080", ProviderOrigin.canonicalize(URI.create("http://[::1]:8080")));
+        for (String rejected : java.util.List.of("https://xn--bcher-kva.example", "https://[2001:DB8:0:0::1]",
+                "https://010.0.0.1", "https://example.com.")) {
+            assertThrows(IllegalArgumentException.class, () -> ProviderOrigin.canonicalize(URI.create(rejected)),
+                    rejected);
+        }
+    }
+
+    @Test
+    void digestsAMissingContextStringAsEmpty() {
+        JsonObject full = JsonParser.parseString("{\"mode\":\"new-service\",\"profile\":\"nxs-admission-v1\","
+                + "\"label\":\"Lobby\",\"authorizationId\":\"\",\"serviceId\":\"\",\"registrationId\":\"\"}")
+                .getAsJsonObject();
+        JsonObject sparse = full.deepCopy();
+        sparse.remove("authorizationId");
+        sparse.remove("serviceId");
+        assertEquals(ProviderCrypto.contextDigest(full), ProviderCrypto.contextDigest(sparse),
+                "an absent context string digests as empty");
+    }
+
+    @Test
     void acceptsNoProofBelowTheDifficultyItAsked() {
         assertTrue(ProviderCrypto.meetsDifficulty(new byte[]{0, 0, 0}, 0), "nothing is asked of it");
         assertTrue(ProviderCrypto.meetsDifficulty(new byte[]{0, 0, 0}, 24));
@@ -164,22 +186,6 @@ class ProviderCryptoTest {
         assertTrue(ProviderCrypto.meetsDifficulty(new byte[]{1, 0, 0}, 7), "which one fewer bit does not reach");
         assertFalse(ProviderCrypto.meetsDifficulty(new byte[]{0, 0, 0}, -1), "a difficulty it cannot honour");
         assertFalse(ProviderCrypto.meetsDifficulty(new byte[]{0, 0, 0}, 25));
-    }
-
-    @Test
-    void digestsTagsWithoutLettingTwoSetsCollide() {
-        assertNotEquals(ProviderCrypto.tagsDigest(Map.of("a", "b")), ProviderCrypto.tagsDigest(Map.of("b", "a")));
-        assertEquals(ProviderCrypto.tagsDigest(Map.of("a", "b", "c", "d")),
-                ProviderCrypto.tagsDigest(new java.util.TreeMap<>(Map.of("c", "d", "a", "b"))),
-                "order of a map is not part of what it means");
-        assertNotEquals(ProviderCrypto.tagsDigest(Map.of("a,b", "c")), ProviderCrypto.tagsDigest(Map.of("a", "b,c")),
-                "a separator inside a tag must not read as two tags");
-    }
-
-    @Test
-    void digestsNoTagsAtAllAsNothing() {
-        assertNull(ProviderCrypto.tagsDigest(null));
-        assertNull(ProviderCrypto.tagsDigest(Map.of()));
     }
 
     @Test
