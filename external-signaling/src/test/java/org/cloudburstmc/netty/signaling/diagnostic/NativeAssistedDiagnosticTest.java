@@ -59,7 +59,7 @@ class NativeAssistedDiagnosticTest {
             key =
                     new Key(
                             "D001",
-                            "test-assistance-" + NativeDiagnosticProbeAttemptTest.id(),
+                            NativeDiagnosticProbeAttemptTest.randomSecret(),
                             0,
                             expiry + 10000);
             var target =

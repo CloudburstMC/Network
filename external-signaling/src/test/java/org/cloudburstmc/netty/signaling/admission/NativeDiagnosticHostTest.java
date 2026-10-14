@@ -295,7 +295,7 @@ class NativeDiagnosticHostTest {
             int port = port(bind), family = bind instanceof Inet6Address ? 6 : 4;
             long expiry = (System.currentTimeMillis() + 20000) / 1000 * 1000;
             Context context = new Context("https://provider.example", "test-host", id(), 1);
-            Key key = new Key("D001", "test-only-diagnostic-secret-32-bytes", 0, expiry + 10000);
+            Key key = new Key("D001", "Avo-CRLrzd30fyTWZH80anItHtwXxJ0ABXJEmrmdouQ", 0, expiry + 10000);
             AtomicInteger playerValidations = new AtomicInteger(),
                     playerChildren = new AtomicInteger();
             var endpoint =
@@ -403,7 +403,7 @@ class NativeDiagnosticHostTest {
             int port = port(bind);
             long expiry = (System.currentTimeMillis() + 15000) / 1000 * 1000;
             Context context = new Context("https://provider.example", "test-host", id(), 1);
-            Key key = new Key("D001", "test-only-diagnostic-secret-32-bytes", 0, expiry + 10000);
+            Key key = new Key("D001", "Avo-CRLrzd30fyTWZH80anItHtwXxJ0ABXJEmrmdouQ", 0, expiry + 10000);
             AtomicInteger playerValidations = new AtomicInteger();
             var endpoint =
                     new NativeAdmissionServerChannel(
@@ -455,7 +455,7 @@ class NativeDiagnosticHostTest {
                                                 List.of(
                                                         new Key(
                                                                 "D002",
-                                                                "other-test-only-secret-at-least32bytes",
+                                                                "03YvE5Swnqb35n397g5W6h0IQHrgylkh7YNLrOIO1TA",
                                                                 0,
                                                                 expiry + 10000)),
                                                 Set.of(target),
@@ -535,7 +535,7 @@ class NativeDiagnosticHostTest {
         int port = port(bind);
         long expiry = (System.currentTimeMillis() + 15000) / 1000 * 1000;
         Context context = new Context("https://provider.example", "test-host", id(), 1);
-        Key key = new Key("D001", "test-only-diagnostic-secret-32-bytes", 0, expiry + 10000);
+        Key key = new Key("D001", "Avo-CRLrzd30fyTWZH80anItHtwXxJ0ABXJEmrmdouQ", 0, expiry + 10000);
         AtomicInteger playerValidations = new AtomicInteger();
         var endpoint =
                 new NativeAdmissionServerChannel(
@@ -603,7 +603,7 @@ class NativeDiagnosticHostTest {
         int port = port(bind);
         long expiry = (System.currentTimeMillis() + 15000) / 1000 * 1000;
         Context context = new Context("https://provider.example", "test-host", id(), 1);
-        Key key = new Key("D001", "test-only-diagnostic-secret-32-bytes", 0, expiry + 10000);
+        Key key = new Key("D001", "Avo-CRLrzd30fyTWZH80anItHtwXxJ0ABXJEmrmdouQ", 0, expiry + 10000);
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
         validator.installKeys(
                 List.of(
@@ -749,7 +749,7 @@ class NativeDiagnosticHostTest {
         int port = port(bind);
         long expiry = (System.currentTimeMillis() + 5000) / 1000 * 1000;
         Context context = new Context("https://provider.example", "test-host", id(), 1);
-        Key key = new Key("D001", "test-only-diagnostic-secret-32-bytes", 0, expiry + 10000);
+        Key key = new Key("D001", "Avo-CRLrzd30fyTWZH80anItHtwXxJ0ABXJEmrmdouQ", 0, expiry + 10000);
         var endpoint =
                 new NativeAdmissionServerChannel(
                         identity,
@@ -839,7 +839,7 @@ class NativeDiagnosticHostTest {
         int port = port(bind);
         long expiry = (System.currentTimeMillis() + 30000) / 1000 * 1000;
         Context context = new Context("https://provider.example", "test-host", id(), 1);
-        Key key = new Key("D001", "test-only-diagnostic-secret-32-bytes", 0, expiry + 10000);
+        Key key = new Key("D001", "Avo-CRLrzd30fyTWZH80anItHtwXxJ0ABXJEmrmdouQ", 0, expiry + 10000);
         var endpoint =
                 new NativeAdmissionServerChannel(
                         identity,

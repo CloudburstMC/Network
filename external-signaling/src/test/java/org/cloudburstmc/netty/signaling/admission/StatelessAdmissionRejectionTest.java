@@ -164,7 +164,7 @@ class StatelessAdmissionRejectionTest extends AdmissionFixture {
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
                 List.of(new AdmissionKey("K1", secret))), "key id must be four characters");
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
-                List.of(new AdmissionKey("K001", "too-short"))), "secret is under 32 bytes");
+                List.of(new AdmissionKey("K001", "too-short"))), "secret is not 32 random bytes");
         assertThrows(IllegalArgumentException.class, () -> validator.installKeys(
                 List.of(new AdmissionKey("K001", secret),
                         new AdmissionKey("K001", secret))), "duplicate epoch");

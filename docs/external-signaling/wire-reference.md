@@ -23,6 +23,11 @@ layouts and limits do not change within v1.
 - Senders MUST NOT rely on a new member or value unless the receiver advertised
   support for it in discovery or through an extension.
 
+The schemas constrain senders. Receivers apply these rules before validating, so
+an unknown member or value fails a message only where the rules above say so.
+Where text must not contain control characters, that means U+0000 to U+001F and
+U+007F to U+009F.
+
 ### Provider origin and operation URLs
 
 The provider origin is a [canonical origin](#canonical-origins), and every
@@ -40,9 +45,9 @@ Signed contexts and trusted expected origins use exact ASCII strings. Validate
 or reject them without normalization or DNS resolution. An origin is lowercase
 `https://HOST`, optionally followed by a decimal port between 1 and 65535 without
 leading zeros. Omit default port 443. Development `http://HOST` permits only
-`localhost`, `127.0.0.1` or `[::1]`, and omits default port 80. The limit is
-2,048 characters; path (including `/`), query, fragment, userinfo, whitespace,
-control characters, percent escapes and backslashes are prohibited.
+`localhost`, `127.0.0.1` or `[::1]`, and omits default port 80. Path (including
+`/`), query, fragment, userinfo, whitespace, control characters, percent escapes
+and backslashes are prohibited, so an accepted origin has at most 267 characters.
 
 HOST is one of:
 
@@ -63,9 +68,10 @@ independently generated IPv6 cases; their [Node verifier](tests/origins.fixtures
 checks the accepted WHATWG bytes.
 
 Discovery contains `provider`, the arrays `protocols` and `signatures`,
-`authorization`, `limits`, and optional `extensions`. Before sending credentials,
-clients reject an unsupported protocol, signature, authorization scheme, or
-required extension.
+`authorization`, `limits`, and optional `extensions`. Clients ignore list entries
+they do not recognize. Before sending credentials, they reject discovery that
+lists none of their protocols, signatures or authorization schemes, or that
+carries an unsupported critical extension.
 
 Each [operation](README.md#operation-reference) is at `/v1/nxs/<operation>` on
 the provider origin.
@@ -81,8 +87,8 @@ can be reused. Every flow also requires proof that the instance owns its signing
 response, between 1000 and 30000. The heartbeat response sets later check-ins.
 
 Request bodies are at most 65536 bytes, and providers accept request timestamps
-within 60 seconds of their clock. Providers reject larger bodies. Clients limit
-response size before parsing.
+within 60 seconds of their clock. Providers reject larger bodies. Clients reject
+response bodies larger than 65536 bytes before parsing.
 
 ### Errors
 
@@ -112,7 +118,7 @@ contain neither machine identity nor DTLS private keys.
 
 Clients lock their state directory and write private state atomically with
 owner-only permissions. Sync both files and directories to durable storage.
-If saving state fails, stop advertising healthy readiness.
+If saving state fails, report `acceptingPlayers: false`.
 
 ### `register` request
 
@@ -125,8 +131,8 @@ The provider selects the mode from the token's authority: `new-service` or
 contains the selected mode, bound into its digest and proof; hosts reject unknown
 modes and anonymous attachment. Hosts never parse token contents.
 
-`label` is the instance's initial display name, at most 128 characters. Providers
-may let operators rename it later. It grants no permission.
+`label` is the instance's initial display name, at most 128 characters without
+control characters. Providers may let operators rename it later. It grants no permission.
 
 Send a bearer credential only to the enrollment `register` operation, in
 `Authorization: Bearer <token>`. It MUST NOT appear in JSON, proofs, saved state,
@@ -147,7 +153,14 @@ bearer challenge without it.
 
 Proof-of-work difficulty is between 0 and 24. Bearer-authorized and recovery
 flows use zero. An authorization reference is an opaque identifier, never the
-credential itself. Expiry and server times are integer epoch milliseconds.
+credential itself; a bearer challenge's `context.authorizationId` equals it, and
+other challenges leave it empty. Expiry and server times are integer epoch
+milliseconds; `serverTime` is the provider's clock when it issued the challenge.
+
+Before solving or signing a challenge, the host MUST check that `audience` is its
+provider origin, `thumbprint` is its own key's, `contextDigest` matches `context`,
+`expiresAt` is in the future, and the mode is one it asked for: `new-service`,
+`attach-instance` only with a bearer token, or `recover` when recovering.
 
 ### `complete` request
 
@@ -169,21 +182,26 @@ The completion proof is:
 
 Proof of work counts the leading zero bits in SHA-256 of those bytes. Send
 `protocol,challengeId,proofNonce,idempotencyKey,signature` to complete registration.
+`proofNonce` is a string of at most 128 characters chosen by the host, and
+`idempotencyKey` is a fresh random string of 16 to 128 URL-safe characters.
 The provider MUST check expiry, binding, signature, difficulty, current authority,
 and single-use completion atomically with resource creation.
 
-Retrying completion MUST NOT return one-time key secrets again. If completion
-was interrupted, recover the registration by proving ownership of the same key.
+A challenge completes once: any later `complete` for it, including a retry,
+returns `recovery_required`. If the reply was lost, [recover](#recovery) by
+proving ownership of the same key.
 
 Completion returns `protocol,provider,registrationId,instanceId,keyId,
 leaseGeneration`, plus optional one-time `admissionKey` and `extensions`. It
-atomically starts a new generation, clears previous readiness and resets the
-operational sequence to zero. Save the IDs and key material before heartbeat.
+atomically starts a new generation, numbered by `leaseGeneration`, clears
+previous readiness and restarts the [sequence](#sign-operational-requests). Save
+the IDs and key material before heartbeat.
 Remove secrets from registration results exposed to applications and from
 diagnostic output.
 
 Completion may also return `serviceId` and `publicAddress`, always together.
-They describe a public endpoint at that observation and are not stable runtime
+`publicAddress` is the `https` URL players use to reach the service. They
+describe a public endpoint at that observation and are not stable runtime
 identity. Attached instances may return neither, since a service may have zero
 or several public endpoints. The default standalone registration creates a
 public endpoint alongside the runtime.
@@ -201,9 +219,10 @@ a reply may a host without an unexpired action request one with the signed
 `url` is an `https` URL, or `http` on the loopback hosts canonical origins allow,
 of at most 2048 characters without userinfo. `text` is 1 to 256 characters without
 control characters and `expiresAt` is epoch milliseconds. The URL may carry a
-one-time credential: hosts show `text` and `url` to their operator and never open,
-forward or save them. A retry with the same idempotency key does not return the
-link again, and recovery never returns one; request a fresh link instead.
+one-time credential: hosts show `text` and `url` to their operator, for example on
+the console, and never open or forward them or keep them in saved state. A retry
+with the same idempotency key does not return the link again, and recovery never
+returns one; request a fresh link instead.
 
 ### Recovery
 
@@ -225,9 +244,9 @@ Use the registered machine key for every operational request.
 
 Required headers are `nxs-instance-id`, `nxs-key-id`, `nxs-timestamp`,
 `nxs-signature-version`, `nxs-generation`, `nxs-sequence`, `nxs-signature`, and
-`idempotency-key`. The timestamp is epoch milliseconds. Generation and sequence
-are nonnegative integers. Save each reserved sequence number before sending its
-request. The signature covers this array:
+`idempotency-key`. The timestamp is epoch milliseconds, the generation is the
+latest `leaseGeneration`, and the idempotency key is a fresh random string of 16
+to 128 URL-safe characters for each new request. The signature covers this array:
 
 ```text
 [protocol,signatureVersion,audience,method,encodedPathAndQuery,timestamp,
@@ -235,9 +254,16 @@ request. The signature covers this array:
 ```
 
 For an empty body, hash a zero-length byte sequence. Providers reject stale
-generations, reused sequence numbers, invalid timestamps, and invalid signatures.
-An idempotent retry can return the recorded result, with secrets removed, if its
-intent and semantic request are unchanged. It cannot apply the operation again.
+generations, invalid timestamps, and invalid signatures.
+
+The sequence starts at 1 in each generation and increases with every new request,
+so a delayed request can never overwrite newer state. Save each reserved number
+before sending its request, and send signed requests one at a time. A retry reuses
+the request's sequence, idempotency key and body; it can return the recorded
+result, with secrets removed, but cannot apply the operation again. Providers
+reject any other request whose sequence is not above the last one they accepted.
+A request that keeps failing is abandoned, and the next request takes the next
+number.
 
 Each completed registration or recovery starts a generation exactly once. The
 provider rejects writes from previous generations. A replay cannot advance the
@@ -246,7 +272,8 @@ generation or extend the original lease. Replaying a consumed completion returns
 
 ### Rotate a machine key
 
-Send `rotate {publicKeyJwk,proof}` with the replacement key. The proof bytes are
+Send `rotate {publicKeyJwk,proof}` with the replacement key. `proof` is that
+key's signature, encoded as above, over
 `[protocol,"rotate",audience,instanceId,oldKeyId,newThumbprint,generation,idempotencyKey]`.
 The reply is `{keyId,oldKeyRetiresAt?}`: the new key's ID and when the provider
 stops accepting the old key unless it is retired sooner. Save the replacement
@@ -263,8 +290,8 @@ registration.
 
 ## `heartbeat`
 
-Required fields: `acceptingPlayers,capacity,clockUnixMillis`.
-Optional observations: `playerCount,software,location,serverStatus,gameOutcomes,extensions`.
+Required fields: `acceptingPlayers,capacity,connectedPlayers`.
+Optional observations: `software,location,serverStatus,gameOutcomes,extensions`.
 Profile/key exchange: `hostProfile,hostProfileRevision,installedAdmissionKeyIds,admissionKeyRequestId`.
 
 - `acceptingPlayers` is the host's willingness and ability to accept new players.
@@ -274,6 +301,7 @@ Profile/key exchange: `hostProfile,hostProfileRevision,installedAdmissionKeyIds,
   heartbeats independently expire routing. Neither acceptance nor actual counts
   are derived from public listing values.
 - `capacity` is an integer from 0 to 1000000.
+- `connectedPlayers` is the [actual player count](#actual-player-counts).
 - `gameOutcomes` is `available` when the integration observes game acceptance and
   rejection, otherwise `unavailable`. Send it with the initial profile and whenever
   it changes. Omission preserves the value in this generation, initially unavailable.
@@ -288,17 +316,15 @@ Profile/key exchange: `hostProfile,hostProfileRevision,installedAdmissionKeyIds,
   profile and whenever it changes. `null` clears an earlier declaration and
   omission preserves the value. Without one, providers estimate location from the
   connection; they may let operators override either.
-- `clockUnixMillis` is an increasing snapshot clock within the generation and
-  must be within 30000 milliseconds of provider time.
-- `serverStatus` carries `name,level,maxPlayers,gameType` and optional `players`.
-  When players is omitted, use the supplied actual `playerCount`; without either,
-  the listing is incomplete. Providers own advertised protocol and version.
-  Renew metadata together: omission does not refresh a previous snapshot.
-  Providers may ignore host listing metadata when several hosts share a public endpoint.
-  `name` is 1 to 128 Unicode characters and `level` is 0 to 128; neither permits
-  control characters or unpaired surrogates. `players` and `maxPlayers` are
-  integers from 0 to 1000000. `gameType` is 0 (survival), 1 (creative) or
-  2 (adventure).
+- `serverStatus` carries the public listing: `name,level,maxPlayerCount,gameType`.
+  Providers list the sum of `connectedPlayers.count` over the hosts behind a
+  listing, and own its advertised protocol and version. Send `serverStatus` with
+  every heartbeat while it applies; an omitted listing expires with the previous
+  heartbeat's lease. Providers may ignore host listing metadata when several hosts
+  share a public endpoint. `name` is 1 to 128 Unicode characters and `level` is 0
+  to 128; neither permits control characters or unpaired surrogates.
+  `maxPlayerCount` is the listed maximum, an integer from 0 to 1000000 independent
+  of `capacity`. `gameType` is 0 (survival), 1 (creative) or 2 (adventure).
 
 The reply is described under [readiness, lease and schedule](#readiness-lease-and-schedule).
 
@@ -311,21 +337,21 @@ assisted joins (players or connectivity checks) can be unsolicited, over
 
 ### Actual player counts
 
-Optional `playerCount: {connectedPlayers, sampledAt}` reports the actual number of
-players connected to this runtime, including existing players while it is draining.
-`connectedPlayers` is an integer from 0 to 1000000; `sampledAt` is epoch
-milliseconds from the host clock. The heartbeat's admission `capacity` must come
-from the same observation. A cached count keeps its original `sampledAt`. Count
-may exceed capacity after a capacity reduction. Capacity zero means no admission.
+`connectedPlayers: {count, sampledAt}` reports the actual number of players
+connected to this runtime, including existing players while it accepts no new
+ones. `count` is an integer from 0 to 1000000; `sampledAt` is epoch milliseconds
+from the host clock, no later than the request's `nxs-timestamp`. The heartbeat's
+admission `capacity` must come from the same observation. A cached count keeps its
+original `sampledAt`. Count may exceed capacity after a capacity reduction.
+Capacity zero means no admission.
 
-This count is independent of the public `serverStatus.players` and its advertised
-`maxPlayers`. A public/global override must never change the count or admission
-capacity. Do not estimate connected players from load, successful tickets, reserved
-slots or public listing totals. Omit `playerCount` when it is unknown; omission and
-zero are distinct. Omission does not refresh the previous count. Providers fence
-samples by the authenticated lease generation and sequence, track sample and receipt
-times separately, and exclude stale/unknown samples from count-dependent routing
-unless an explicit fallback policy applies. A retry must not freshen a sample.
+Each host counts only its own players; providers add up the hosts behind a
+listing. A provider's listing override never changes a count or admission
+capacity. Do not estimate connected players from load, successful tickets or
+reserved slots. Providers fence samples by the authenticated lease generation and
+sequence, track sample and receipt times separately, and exclude stale samples
+from count-dependent routing unless an explicit fallback policy applies. A retry
+must not freshen a sample.
 
 ### Publish the host profile
 
@@ -334,7 +360,10 @@ unless an explicit fallback policy applies. A retry must not freshen a sample.
 `statelessAdmission: {capability,incarnation,assistedFamilies?}`. Generate a fresh
 random 16-byte `incarnation`, encoded as lowercase hex, for each bound endpoint.
 `sctpPort` (1 to 65535) and `maxMessageSize` (1 to 262144) are the host's SCTP port
-and largest message; providers carry them into the admission token and client SDP.
+and largest message; providers put them in the answer SDP they give the client.
+`admissionKeyId` names the admission key the provider uses for this profile's
+tokens. It is the last of `installedAdmissionKeyIds`; a host whose two disagree is
+not routable.
 `assistedFamilies` lists the address families, 4 and 6, on which the host accepts
 [assisted joins](control-v1.md#assisted-joins); omit it when assistance is off. The fingerprint is `sha-256 ` followed by the
 certificate's digest bytes in colon-separated uppercase hex.
@@ -344,7 +373,7 @@ Each candidate is a UDP ICE candidate for component 1 and contains
 empty array withdraws advertised routes without draining the listener or
 established peers. Foundations match `[A-Za-z0-9._:-]{1,32}`; priority is 1 to
 2147483647, port is 1 to 65535, and type is `host`, `srflx` or `relay`.
-Addresses are IP literals.
+Addresses are numeric IPv4 or unbracketed IPv6 literals.
 
 Publish the latest same-socket STUN mapping as an ordinary `srflx` candidate.
 The host keeps the mapping warm independently of heartbeat timing and republishes
@@ -371,23 +400,27 @@ Three types of key have separate jobs:
 | DTLS certificate and private key | Authenticate the host during the client connection |
 | Admission key | Protect and validate the client's admission token |
 
-The provider assigns `hostProfileRevision` in its reply. Send that revision
-on later heartbeats until the profile changes. A request retry returns the same
-revision. Profile publication, acknowledgement of its installed key, and the
+The reply's `hostProfileRevision` names the profile the provider holds, as an
+opaque string of at most 184 characters, or is `null` when it holds none. While
+the profile is unchanged, send that revision instead of `hostProfile`; send the
+full profile when it changes or the reply's revision is `null`. A request retry
+returns the same revision. Profile publication, acknowledgement of its installed key, and the
 lease update must commit consistently. A profile using an uninstalled epoch
 cannot become routable.
 
 ### Admission-key exchange
 
-`installedAdmissionKeyIds` contains at most eight distinct four-character uppercase
-alphanumeric IDs, ordered with the active epoch last. Save and install every
+Each admission key is an epoch named by its four-character `keyId`.
+`installedAdmissionKeyIds` contains at most eight distinct uppercase alphanumeric
+key IDs, ordered with the active epoch last. Save and install every
 listed key before sending it. The last ID must be the provider's current or
 pending epoch. Publish a matching profile when changing the active epoch.
 
 To provision a replacement, include a random `admissionKeyRequestId` of 16 to 128 URL-safe
 characters, saved before sending. The response includes `admissionKeyRequest: {id,keyId}`
-and, on first delivery only, `admissionKey: {keyId,secret}`. A key secret has 32 to
-256 UTF-8 characters. An idempotent retry cannot mint another key or return the
+and, on first delivery only, `admissionKey: {keyId,secret}`. A `secret` is 43
+base64url characters encoding 32 fresh random bytes; hosts reject any other form.
+An idempotent retry cannot mint another key or return the
 secret again. If its delivery was lost, use a fresh request ID to provision a
 replacement. A provider may retire an unacknowledged, superseded pending key.
 
@@ -402,7 +435,8 @@ retired epoch and erase retired material. Key rotation never extends token expir
 ### Readiness, lease and schedule
 
 The reply includes `hostProfileRevision`, `readiness: {routable,reasons}`,
-`admissionKeyRetirements`, and:
+`admissionKeyRetirements`, optional `operatorActionAvailable` and `extensions`
+(such as [connectivity feedback](connectivity-v1.md)), and:
 
 ```text
 checkIn: {afterMillis,leaseMillis,minUpdateIntervalMillis}
@@ -411,13 +445,17 @@ checkIn: {afterMillis,leaseMillis,minUpdateIntervalMillis}
 Each duration counts from when the host sent the heartbeat, so it does not depend
 on either clock. Check in again after `afterMillis`, 1000 to 86400000. The
 provider routes to the host until `leaseMillis` passes without a newer heartbeat;
-it exceeds `afterMillis` by at most 300000. Publish changed activity or status no
-sooner than `minUpdateIntervalMillis` apart, at least 1000 and at most
-`afterMillis`. Hosts reject a schedule outside these bounds. While an initial usable profile is unavailable,
+it exceeds `afterMillis` by at most 300000. Between check-ins, a host may send an
+early heartbeat for changed `serverStatus` or player counts, no sooner than
+`minUpdateIntervalMillis` after the previous one; that interval is at least 1000
+and at most `afterMillis`. Changes to `acceptingPlayers`, the host profile and key
+acknowledgements are sent at once. Hosts reject a schedule outside these bounds. While an initial usable profile is unavailable,
 the provider can omit `checkIn`; the host then checks in at the discovery
 interval. A host is routable only with a live lease, a usable profile and an
 acknowledged installed key, and never while it reports `acceptingPlayers: false`.
 
+`routable` is a boolean, and `reasons` lists lowercase provider-defined codes for
+why the host is not routable. Hosts may log them but do not act on them.
 Readiness is a current provider observation; only the recorded `checkIn` grants a
 lease. Request replay returns that original grant. Hosts use monotonic timers and
 count network time against the interval. Restart immediately publishes fresh state
@@ -427,9 +465,9 @@ does not close established sessions.
 ## `outcomes`
 
 Request: `{events:[{ticketId,stage,occurredAt,reason?}]}` with at most 100 events.
-`occurredAt` is epoch milliseconds; `reason` is a bounded code of at most 128 characters.
-The ticket ID derives from the authenticated admission carrier, never from an
-unauthenticated packet. The provider scopes correlation to the signed instance.
+`ticketId` is the admitted token's [ticket correlation ID](#bind-signaling-identity-to-the-game-login),
+never derived from an unauthenticated packet. `occurredAt` is epoch milliseconds.
+`reason` is a short lowercase code chosen by the host, at most 128 characters. The provider scopes correlation to the signed instance.
 
 | Observation | Stage |
 | --- | --- |
@@ -448,9 +486,10 @@ also include the observed client `remoteAddress` (numeric IP) and `remotePort`
 unavailable.
 
 Send batches asynchronously, independently of heartbeat timing. Reporting never
-delays admission or renews a lease. A successful empty response acknowledges the
+delays admission or renews a lease. A successful `{}` response acknowledges the
 whole batch. Repeated observations must be deduplicated by instance, ticket,
-stage, occurrence time and reason, including when a retry uses a new request ID.
+stage, occurrence time and reason, including when a retry uses a new idempotency
+key.
 Queue and persist redacted reports with a finite bound. Backpressure must not
 block admission or lease renewal. Neither absent reports nor an unreachable host
 proves a particular client's outcome. Never send SDP, credentials, private keys,
@@ -475,7 +514,9 @@ allocating peer state, reject noncanonical encoding, trailing padding, a wrong
 prefix, unknown key epochs, and oversized input.
 
 AES-256-GCM uses a random 12-byte nonce and a 16-byte tag. Its key is
-`HMAC-SHA256(secret, "nxs-stateless-aead-v1" || NUL || audience)`.
+`HMAC-SHA256(secret, "nxs-stateless-aead-v1" || NUL || audience)`. Here and below,
+`secret` is the ASCII bytes of the admission key's 43-character string, **not**
+its base64url decoding.
 The audience is `nxs-stateless-host-v1/<incarnation>`. The additional authenticated
 data (AAD) is
 `"nxs-stateless-admission-v1" || NUL || ("NXS1"+keyId) || NUL || audience || NUL || clientUfrag`.
@@ -491,16 +532,16 @@ data (AAD) is
 | 66 | 1 | Client ICE password length, 22 to 91 |
 | 67 | N | Client ICE password in ICE base64 alphabet |
 
-Network ID **zero is reserved for [diagnostics](diagnostic-v1.md)**. For zero,
-the identity-binding slot carries the attempt ID and a mandatory 59-byte target
-extension follows the password. Player issuers reject zero; nonzero admissions
-reject trailing diagnostic data. Hosts select the diagnostic handler only after
-AEAD verification, before any player reservation or pipeline event.
+Network ID **zero is reserved for [diagnostics](diagnostic-v1.md)**, which
+extend this plaintext. Player issuers reject zero, and hosts reject trailing data
+after a nonzero admission's password. Hosts select the diagnostic handler only
+after AEAD verification, before any player reservation or pipeline event.
 
 ### Bind signaling identity to the game login
 
-The provider MUST verify the client's signaling assertion, including its proof
-of possession over the offered DTLS fingerprint. It MUST derive the binding from
+The provider MUST verify the client's signaling assertion, the `a=identity`
+attribute of its offer, including its proof of possession over the offered DTLS
+fingerprint. It MUST derive the binding from
 that verified assertion's `cpk`, never from request headers, account identifiers
 or other account metadata:
 
@@ -509,8 +550,7 @@ identityBinding = HMAC-SHA256(secret,
     UTF8("nxs-identity-binding-v1") || 0x00 || UTF8(audience) || 0x00 || UTF8(cpk))[0:16]
 ```
 
-`secret` is the UTF-8 encoding of the installed admission key secret, **not** a
-base64 decoding. `audience` is exactly `nxs-stateless-host-v1/<incarnation>`, as used
+`audience` is exactly `nxs-stateless-host-v1/<incarnation>`, as used
 for this token's encryption. `cpk` is standard base64 of canonical P-384 public-key
 SPKI DER: `id-ecPublicKey`, named curve `secp384r1`, and an uncompressed SEC1 point
 (`04 || X[48] || Y[48]`). Validate curve parameters and the point; normalize the
@@ -553,11 +593,11 @@ ufrag, encoded as lowercase hex.
 
 ### Validate the first packet
 
-A token can be valid for at most 120 seconds; hosts accept any token within that
-limit, measured on their own clock. Providers mint lifetimes short enough to absorb
-clock skew between them. Before assigning the UDP tuple to a
-peer or allocating a peer connection, the host checks expiry, field bounds, GCM
-authentication, client binding, and STUN MESSAGE-INTEGRITY. The DTLS handshake
+Hosts reject a token whose expiry has passed or is more than 120 seconds ahead
+of their own clock. Providers mint lifetimes well below that to absorb clock skew.
+Before assigning the UDP tuple to a peer or allocating a peer connection, the
+host checks expiry, field bounds, GCM authentication (which binds the client
+ufrag), and STUN MESSAGE-INTEGRITY. The DTLS handshake
 MUST then verify the client fingerprint from the token.
 
 Only a retransmission of the identical token from the same UDP tuple can reuse
@@ -565,7 +605,9 @@ a reservation. Reject the same token from another tuple. Also reject a conflicti
 admission on an occupied tuple.
 
 Limit the number of sessions, pending handshakes, used-token records, queued
-validation tasks, and retained requests. Duplicate requests for the same pending
+validation tasks, and retained requests. Keep each used-token record until its
+token expires; when that limit is reached, reject new admissions instead of
+evicting records. Duplicate requests for the same pending
 attempt share one decision. Preserve enough of the first request to respond after
 acceptance: completing admission MUST NOT depend on the client retransmitting.
 Release admission capacity only after the connection's resources have been
@@ -574,16 +616,16 @@ token alone does not prove that the sender has its ICE password.
 
 ## Optional extensions
 
-Providers can add optional application metadata, such as an account-claim link,
-without making it part of NXS.
+Providers can add optional application metadata without making it part of NXS.
 
 `extensions` is an object with at most 16 reverse-DNS namespace keys, such as
 `com.example.feature`, and at most 16384 bytes of encoded UTF-8 JSON. Keys use
 lowercase domain-style labels and have at most 128 characters. Each value is
 `{version:positiveInteger,critical:boolean,data:object}`.
 
-Extensions defined by this specification use `dev.opencollab.nxs.*`, including
-`dev.opencollab.nxs.connectivity` and `dev.opencollab.nxs.websocket`.
+Extensions defined by this specification use `dev.opencollab.nxs.*`:
+[`dev.opencollab.nxs.connectivity`](connectivity-v1.md) and
+[`dev.opencollab.nxs.websocket`](control-v1.md).
 Provider-specific extensions use the provider's own reverse-DNS namespace.
 
 Pass through or ignore unknown optional extensions; never execute them
@@ -591,74 +633,16 @@ automatically. Reject unsupported critical extensions before sending credentials
 or publishing readiness. An optional extension cannot change the core protocol rules.
 TLS and request signatures still authenticate bodies and operation paths.
 
-An extension can advertise URLs in `data.operations`. An application can request
-one of these operations only after validating the namespace, version, and meaning.
-The generic transport still requires the same provider origin and signs the
-exact path.
-
-## Optional connectivity observation
-
-The noncritical `dev.opencollab.nxs.connectivity` version 1 extension carries discovery,
-heartbeat capability and regional feedback. Discovery supplies STUN servers:
-
-```json
-{"version":1,"critical":false,"data":{"stunServers":[{"host":"stun.cloudflare.com","port":3478}]}}
-```
-
-Resolve up to two servers, choosing a numeric address per supported family.
-Without configured endpoints, prefer public local addresses, then discover STUN
-mappings on the gameplay socket. Publish fresh mappings immediately and maintain
-them independently of heartbeat timing. Explicit endpoints are the complete
-eligible set and suppress automatic discovery and STUN for all families. An
-absent or empty server list leaves STUN discovery unavailable.
-
-Host heartbeats report:
-
-```json
-{"version":1,"critical":false,"data":{"diagnostics":false,"candidateRevision":1,"method":"discovered"}}
-```
-
-Assistance defaults off and requires WebSocket; when enabled it uses bounded
-per-join discovery instead of background warming. Configured endpoints restrict
-assistance to their public families. Probe verdicts never change this choice.
-`method` says how the candidates were found: `defined`, `discovered` or `warm_stun`.
-`candidateRevision` changes with candidate material or native mapping ownership,
-including replacement with the same address; unchanged STUN refreshes retain it.
-When diagnostic targets differ from the player candidates, include `probeCandidates`
-in the connectivity data using the same candidate shape. This list replaces the
-profile candidates for diagnostics only, so withdrawn endpoints can still be
-tested for recovery. Omit it when the two lists match; an empty list withdraws
-all direct probe targets.
-
-Provider feedback uses `{method,candidateRevision,checks}`. Up to eighteen checks
-retain `{region,family,method?,target?,outcome,checkedAt,expiresAt}`. `method` is
-how the checked candidate was found, or `per_join` for an assisted check. A target
-is an exact numeric `{address,port}`; an assisted failure may omit it. Outcomes are
-`established`, `not-established`, `unknown` and `unavailable`. Accept fresh results
-only for the current revision and endpoint. Newer results replace older ones per
-region/method/target; failure wins equal timestamps, while inconclusive results
-leave the previous decision intact.
-
-Without assistance, failed public endpoints are withheld from player offers
-unless another region has a successful result for that endpoint. Keep those
-endpoints eligible for recovery probes and keep STUN warming; a subsequent success
-can restore them. Observation expiry alone does not change the last decision.
-Mapping replacement discards the old mapping's feedback. With assistance enabled,
-failed public candidates remain available. Automatic discovery also includes
-private local candidates when no public address exists or a matching check fails.
-Private addresses remain useful for LAN/VPN clients but are not regional targets.
-Publication changes leave established sessions intact.
-
-Diagnostic admission is a separate local opt-in. A successful heartbeat installs
-context, existing admission keys and current probe targets for at most five
-minutes, bounded by the check-in lease, key retirement and mapping expiry. Report
-`diagnostics:true` only while that installation is current. Withdrawn player
-offers may remain diagnostic targets; assisted-only families need no published
-player candidate. Retries cannot extend authority; drain/close disable diagnostics.
-See [diagnostics](diagnostic-v1.md) for admission, signatures and the exchange.
+An extension can advertise operations in `data.operations`, an object mapping
+each name to an absolute URL on the provider origin. An application can request
+one with `GET` or `POST`, signed like other operations, only after validating the
+namespace, version, and meaning. Hosts never call them automatically.
 
 ## Conformance
 
 Run `node docs/external-signaling/tests/nxs-v1.fixtures.mjs` to verify the
-signature and admission fixtures independently. Report stock-client gameplay
-separately from these checks.
+signature and admission fixtures independently; it also checks the hashes in
+[provenance](fixtures/provenance.json). The
+[protocol vectors](fixtures/cloudburst-protocol-vectors.v1.json) cover STUN
+MESSAGE-INTEGRITY and NetherNet framing. Report stock-client gameplay separately
+from these checks.

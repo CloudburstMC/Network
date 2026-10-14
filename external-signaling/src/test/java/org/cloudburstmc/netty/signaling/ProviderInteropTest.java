@@ -76,9 +76,9 @@ class ProviderInteropTest {
 
     @Test
     void exactStatusBounds() {
-        assertThrows(IllegalArgumentException.class, () -> new ServerStatus("name", "", -1, 1, 0));
-        assertThrows(IllegalArgumentException.class, () -> new ServerStatus("name\n", "", 0, 1, 0));
-        assertDoesNotThrow(() -> new ServerStatus("name", "", 20, 1, 0));
-        assertNull(new ServerStatus("name", "", 1, 0).players());
+        assertThrows(IllegalArgumentException.class, () -> new ServerStatus("name", "", -1, 0));
+        assertThrows(IllegalArgumentException.class, () -> new ServerStatus("name\n", "", 1, 0));
+        assertDoesNotThrow(() -> new ServerStatus("name", "", 1, 0));
+        assertThrows(IllegalArgumentException.class, () -> new ProviderClient.Health(true, 1, null, null));
     }
 }

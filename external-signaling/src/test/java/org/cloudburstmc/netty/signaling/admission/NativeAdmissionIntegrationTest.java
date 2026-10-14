@@ -104,7 +104,7 @@ class NativeAdmissionIntegrationTest {
         long cutoff = System.currentTimeMillis() + 2_000;
         var now = new AtomicLong(cutoff - 1);
         var validator = new StatelessAdmissionValidator(TestSignalingProvider.AUDIENCE, 60_000);
-        String newSecret = "replacement-fixture-secret-32-bytes-minimum";
+        String newSecret = "Qpk2_BjhOKX0xFTUa73LbW9v3cABB0buQEVnBbj3X7U";
         validator.installKeys(
                 List.of(
                         new AdmissionKey(
@@ -991,7 +991,7 @@ class NativeAdmissionIntegrationTest {
                     List.of(new AdmissionKey("K001",
                                     TestSignalingProvider.SECRET, System.currentTimeMillis() + 60_000),
                             new AdmissionKey("K002",
-                                    "next-background-key-of-at-least-32-bytes"))).toCompletableFuture().get();
+                                    "a3eawL4xT02G5z_D5dYCcJI61tZNf9Llq3G9MHq7YPg"))).toCompletableFuture().get();
             assertEquals("K002",
                     transport.hostProfile().toCompletableFuture().get().get("admissionKeyId").getAsString());
             transport.drain().toCompletableFuture().get();

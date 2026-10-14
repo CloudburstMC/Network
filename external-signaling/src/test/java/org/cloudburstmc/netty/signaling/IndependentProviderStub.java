@@ -395,7 +395,7 @@ public final class IndependentProviderStub implements AutoCloseable {
     private static JsonObject ticket() {
         JsonObject key = new JsonObject();
         key.addProperty("keyId", "T001");
-        key.addProperty("secret", "independent-stub-only-secret-32-bytes-minimum");
+        key.addProperty("secret", "LYDph--S9dykiRFwmo5VAzY5GO_QGapcKQ4luEgrCRM");
         return key;
     }
 

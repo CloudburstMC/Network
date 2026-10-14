@@ -250,11 +250,11 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     /**
-     * Sampled actual players on this runtime; keep counting existing players while draining.
+     * Sampled actual players on this runtime; keep counting existing players while not accepting new ones.
      */
-    public record PlayerCount(int connectedPlayers, long sampledAt) {
-        public PlayerCount {
-            if (connectedPlayers < 0 || connectedPlayers > 1000000 || sampledAt < 0 || sampledAt > 9007199254740991L) {
+    public record ConnectedPlayers(int count, long sampledAt) {
+        public ConnectedPlayers {
+            if (count < 0 || count > 1000000 || sampledAt < 0 || sampledAt > 9007199254740991L) {
                 throw new IllegalArgumentException("Invalid player count sample");
             }
         }
@@ -333,11 +333,11 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     /**
-     * Capacity and playerCount describe the same observation. Public server status is independent.
+     * Capacity and connectedPlayers describe the same observation.
      */
-    public record Health(boolean acceptingPlayers, int capacity, Software software, PlayerCount playerCount) {
+    public record Health(boolean acceptingPlayers, int capacity, Software software, ConnectedPlayers connectedPlayers) {
         public Health {
-            if (capacity < 0 || capacity > 1000000) {
+            if (capacity < 0 || capacity > 1000000 || connectedPlayers == null) {
                 throw new IllegalArgumentException("Invalid health");
             }
         }
@@ -398,7 +398,7 @@ public final class ProviderClient implements AutoCloseable {
     private JsonObject pendingAdmissionKey;
     private long intervalMs = 10000;
     private long nextHeartbeat;
-    private long snapshotClock;
+    private long heartbeatSentAt;
     private boolean started;
     private boolean closed;
     private boolean scheduledCheckIns;
@@ -920,12 +920,8 @@ public final class ProviderClient implements AutoCloseable {
         return !Objects.equals(status, lastReportedStatus) || lastReportedHealth == null
                 || health.acceptingPlayers() != lastReportedHealth.acceptingPlayers()
                 || health.capacity() != lastReportedHealth.capacity()
-                || !Objects.equals(connectedPlayers(health), connectedPlayers(lastReportedHealth))
+                || health.connectedPlayers().count() != lastReportedHealth.connectedPlayers().count()
                 || !Objects.equals(health.software(), lastReportedHealth.software());
-    }
-
-    private static Integer connectedPlayers(Health health) {
-        return health.playerCount() == null ? null : health.playerCount().connectedPlayers();
     }
 
     /** Sample the cheap local counter; material replacement bypasses freshness-only coalescing. */
@@ -1064,11 +1060,8 @@ public final class ProviderClient implements AutoCloseable {
                 }
                 ProtocolExtensions.validate(body);
             body.addProperty("capacity", health.capacity());
-            if (health.playerCount() != null) {
-                body.add("playerCount", JSON.toJsonTree(health.playerCount()));
-                }
-                snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
-            body.addProperty("clockUnixMillis", snapshotClock);
+            body.add("connectedPlayers", JSON.toJsonTree(health.connectedPlayers()));
+            heartbeatSentAt = System.currentTimeMillis();
             boolean gameOutcomes = config.gameOutcomes();
             if (body.has("hostProfile") || !Objects.equals(lastReportedGameOutcomes, gameOutcomes)) {
                 body.addProperty("gameOutcomes", gameOutcomes ? "available" : "unavailable");
@@ -1084,20 +1077,12 @@ public final class ProviderClient implements AutoCloseable {
             ServerStatus status = null;
             try {
                 status = currentStatus();
-                    diagnostics.recovered(ProviderLog.Operation.SERVER_STATUS);
+                diagnostics.recovered(ProviderLog.Operation.SERVER_STATUS);
                 if (status != null) {
-                        if (status.players() == null && health.playerCount() == null) {
-                            throw new IllegalStateException(
-                                    "Server status requires players or an actual player count");
-                        }
-                        JsonObject listing = JSON.toJsonTree(status).getAsJsonObject();
-                        if (health.playerCount() != null) {
-                            listing.remove("players");
-                        }
-                        body.add("serverStatus", listing);
+                    body.add("serverStatus", JSON.toJsonTree(status));
                 }
             } catch (RuntimeException failure) {
-                    diagnostics.failed(ProviderLog.Operation.SERVER_STATUS);
+                diagnostics.failed(ProviderLog.Operation.SERVER_STATUS);
             }
             long requestStarted = System.nanoTime();
                 var captured = profileSnapshot;
@@ -1139,7 +1124,7 @@ public final class ProviderClient implements AutoCloseable {
                                             state.get("generation").getAsLong(),
                                             profileSnapshot,
                                             requestStarted + TimeUnit.MINUTES.toNanos(5),
-                                            snapshotClock + 300000)
+                                            heartbeatSentAt + 300000)
                                     : null;
                 }
             if (body.has("hostProfile")) {

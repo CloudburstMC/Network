@@ -60,7 +60,7 @@ class IdentityBindingTest extends AdmissionFixture {
         assertNull(refresh.mismatch(key()));
         var replaced = v.validate(request(), now).identityVerifier();
         v.installKeys(List.of(new AdmissionKey("K001",
-                "replacement-secret-at-least-thirty-two-characters")));
+                "D-RcoACxXuZnQ8oyLohoC-ctg5Q-bFMgVYPLDCsYb3g")));
         assertNull(v.validate(request(), now));
         assertNull(replaced.mismatch(key()));
         v.installKeys(List.of(new AdmissionKey("K001", epoch().secret(), now + 1000)));

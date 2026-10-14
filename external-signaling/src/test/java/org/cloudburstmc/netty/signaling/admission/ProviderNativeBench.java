@@ -339,7 +339,7 @@ public final class ProviderNativeBench {
             ProviderTransport transport =
                     assisted ? new LoopbackAssistedTransport(nativeHost, bind) : nativeHost;
             var listing = new java.util.concurrent.atomic.AtomicReference<>(
-                    new ServerStatus("Automatic native server", "Integration", 0, 4, 0));
+                    new ServerStatus("Automatic native server", "Integration", 4, 0));
             provider =
                     new ProviderClient(
                             ProviderClient.Configuration.builder(origin)
@@ -351,7 +351,7 @@ public final class ProviderNativeBench {
                             new ProviderStateStore(state),
                             transport,
                             () -> listing.get(),
-                            () -> new ProviderClient.Health(true, 4, new ProviderClient.Software("Provider native bench", "1.0"), null),
+                            () -> new ProviderClient.Health(true, 4, new ProviderClient.Software("Provider native bench", "1.0"), new ProviderClient.ConnectedPlayers(0, System.currentTimeMillis())),
                             System.err::println);
             var registration = provider.start().get(45, TimeUnit.SECONDS);
             if (args.length > 4) {
@@ -375,7 +375,7 @@ public final class ProviderNativeBench {
                     throw new IllegalStateException("Provider native bench deadline");
                 }
                 if (!updated && Files.exists(state.resolve("update-status"))) {
-                    listing.set(new ServerStatus("Updated native server", "Updated level", 1, 8, 1));
+                    listing.set(new ServerStatus("Updated native server", "Updated level", 8, 1));
                     provider.requestStatusRefresh();
                     updated = true;
                 }

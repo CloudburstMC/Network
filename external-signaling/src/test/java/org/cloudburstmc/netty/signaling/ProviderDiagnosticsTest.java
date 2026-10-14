@@ -170,7 +170,7 @@ class ProviderDiagnosticsTest {
                     new ProviderStateStore(directory),
                     transport,
                     () -> null,
-                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, null),
+                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)),
                     ignored -> {});
         }
 

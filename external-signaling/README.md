@@ -53,15 +53,13 @@ One instance owns one private state directory; restarts preserve that directory.
 An attached instance may have no public address. Public endpoints can change without
 changing the runtime identity.
 
-Applications report `Health(acceptingPlayers, capacity, software, playerCount)`.
-`playerCount` is an optional `PlayerCount` with actual connected players and sample
-time, separate from the public `ServerStatus` supplier. A changed connected count
-can wake a scheduled check-in even if public status is unchanged; a new timestamp
-alone causes no extra network traffic. For listing metadata, use
-`ServerStatus(name, level, maxPlayers, gameType)` when an actual player count is
-available, or supply an explicit listing count with
-`ServerStatus(name, level, players, maxPlayers, gameType)`. The provider owns the
-advertised game protocol and version. Local `drain()` and `close()` manage the
+Applications report `Health(acceptingPlayers, capacity, software, connectedPlayers)`.
+`connectedPlayers` is a required `ConnectedPlayers(count, sampledAt)` with the
+players actually connected to this runtime. A changed count can wake a scheduled
+check-in even if the listing is unchanged; a new timestamp alone causes no extra
+network traffic. Listing metadata is `ServerStatus(name, level, maxPlayerCount,
+gameType)`; the provider lists the connected count and owns the advertised game
+protocol and version. Local `drain()` and `close()` manage the
 listener; provider responses do not command it.
 
 With `gameOutcomes`, the application calls `reportGameOutcome` once for each admitted
@@ -82,8 +80,7 @@ remain individual warnings; background diagnostic attempts remain debug observat
 until their completed regional results are reported by the host integration.
 
 `ProviderClient.extensions()` exposes bounded optional provider metadata. Applications explicitly interpret
-known namespaces and invoke only their advertised same-origin operations. The core never
-performs product account/claim actions. Assisted joins require explicit host opt-in.
+known namespaces and invoke only their advertised same-origin operations.
 
 Geyser and WaterdogPE name their NXS options after these settings.
 
@@ -126,7 +123,7 @@ through profile publication. A changed mapping withdraws the old candidate; exis
 keys and the native identity survive. Fresh mappings are published immediately.
 Completed connectivity checks can withhold failed public endpoints from player offers while preserving recovery probes
 and STUN warming. Configured endpoints suppress automatic discovery; see the
-[publication policy](../docs/external-signaling/wire-reference.md#optional-connectivity-observation).
+[publication policy](../docs/external-signaling/connectivity-v1.md).
 
 `captureHostProfile` returns immutable profile bytes and a nonblocking ownership guard.
 The client retains that guard through persistence and the HTTPS or WebSocket send queue,
@@ -162,9 +159,9 @@ Admission principals expose no ticket secret or key handle.
 
 ### Assisted joins and diagnostics
 
-Both builders accept `assistedJoins(true)`; it defaults to `false` and requires `ControlTransport.AUTO` and
-`NativeProviderTransport`, reusing the gameplay listener, identity, capacity and
-CPK verifier. Wrappers must delegate `supportsAssistedJoins()` and
+Both builders accept `assistedJoins(true)`; it defaults to `false` and requires `NativeProviderTransport`
+and the client's `ControlTransport.AUTO`, which the settings builder selects. Assistance reuses the
+gameplay listener, identity, capacity and CPK verifier. Wrappers must delegate `supportsAssistedJoins()` and
 `assistedJoin(join, requireCurrent)` with the original guard and future. Assistance uses per-join discovery instead of background
 warming; connectivity feedback never changes the configured choice. The
 [WebSocket reference](../docs/external-signaling/control-v1.md) defines the exchange.

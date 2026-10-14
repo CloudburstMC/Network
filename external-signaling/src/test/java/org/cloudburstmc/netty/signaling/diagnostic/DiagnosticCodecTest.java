@@ -87,7 +87,7 @@ class DiagnosticCodecTest {
         assertNull(
                 DiagnosticAdmissionCodec.open(
                         context,
-                        new Key(key.keyId(), "z".repeat(32), key.notBefore(), key.retireAfter()),
+                        new Key(key.keyId(), "z".repeat(42) + "A", key.notBefore(), key.retireAfter()),
                         value("localUfrag"),
                         value("remoteUfrag"),
                         parent,

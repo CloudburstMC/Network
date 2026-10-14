@@ -43,7 +43,8 @@
     },
     "label": {
       "type": "string",
-      "maxLength": 128
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$"
     }
   },
   "$defs": {
@@ -57,6 +58,28 @@
         "limits"
       ],
       "properties": {
+        "provider": {
+          "type": "string",
+          "maxLength": 267
+        },
+        "protocols": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "signatures": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
         "authorization": {
           "type": "object",
           "required": [
@@ -68,10 +91,8 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": {
-                "enum": [
-                  "anonymous-proof-of-work",
-                  "bearer-token"
-                ]
+                "type": "string",
+                "maxLength": 64
               }
             }
           }
@@ -92,7 +113,8 @@
             }
           }
         }
-      }
+      },
+      "description": "Clients ignore unknown list entries and fail only when none they support is listed."
     },
     "challenge": {
       "type": "object",
@@ -117,10 +139,14 @@
           "const": "nxs-es384-v1"
         },
         "expiresAt": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "serverTime": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "authorization": {
           "type": "object",
@@ -136,7 +162,9 @@
               ]
             },
             "reference": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
             }
           }
         },
@@ -154,16 +182,21 @@
               ]
             },
             "label": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$"
             },
             "authorizationId": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 256
             },
             "serviceId": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 256
             },
             "registrationId": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 256
             }
           },
           "description": "Absent strings digest as empty. recover selects recovery of registrationId."
@@ -180,6 +213,27 @@
               "maximum": 24
             }
           }
+        },
+        "challengeId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "audience": {
+          "type": "string",
+          "maxLength": 267
+        },
+        "thumbprint": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "contextDigest": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
         }
       }
     },
@@ -195,6 +249,23 @@
       "properties": {
         "protocol": {
           "const": "nethernet-external-signaling-v1"
+        },
+        "challengeId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "proofNonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{128}$"
         }
       }
     },
@@ -212,16 +283,38 @@
         "protocol": {
           "const": "nethernet-external-signaling-v1"
         },
+        "provider": {
+          "type": "string",
+          "maxLength": 267
+        },
+        "registrationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "leaseGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
         "extensions": {
           "$ref": "#/$defs/extensions"
         },
         "serviceId": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
         },
         "publicAddress": {
           "type": "string",
-          "minLength": 1
+          "maxLength": 2048,
+          "pattern": "^https://[^/?#@\\s]+(?:[/?#]\\S*)?$"
         },
         "admissionKey": {
           "$ref": "#/$defs/admissionKey"
@@ -245,7 +338,17 @@
       "required": [
         "publicKeyJwk",
         "proof"
-      ]
+      ],
+      "properties": {
+        "publicKeyJwk": {
+          "$ref": "#/properties/publicKeyJwk"
+        },
+        "proof": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{128}$"
+        }
+      },
+      "description": "proof is the replacement key's signature over the rotation proof array."
     },
     "rotationResponse": {
       "type": "object",
@@ -255,7 +358,7 @@
       "properties": {
         "keyId": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
         },
         "oldKeyRetiresAt": {
           "type": "integer",
@@ -278,8 +381,8 @@
         },
         "secret": {
           "type": "string",
-          "minLength": 32,
-          "maxLength": 256
+          "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+          "description": "43 base64url characters encoding 32 random bytes. Derivations use the characters' ASCII bytes, not the decoding."
         }
       }
     },
@@ -328,7 +431,7 @@
       "properties": {
         "registrationId": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
         },
         "protocol": {
           "const": "nethernet-external-signaling-v1"
@@ -381,7 +484,16 @@
               },
               "address": {
                 "type": "string",
-                "maxLength": 253
+                "maxLength": 45,
+                "pattern": "^[0-9A-Fa-f:.]+$",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
               },
               "port": {
                 "type": "integer",
@@ -474,7 +586,7 @@
       "required": [
         "acceptingPlayers",
         "capacity",
-        "clockUnixMillis"
+        "connectedPlayers"
       ],
       "properties": {
         "capacity": {
@@ -482,10 +594,8 @@
           "minimum": 0,
           "maximum": 1000000
         },
-        "clockUnixMillis": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
+        "connectedPlayers": {
+          "$ref": "#/$defs/connectedPlayers"
         },
         "gameOutcomes": {
           "enum": [
@@ -525,7 +635,7 @@
         },
         "serverStatus": {
           "$ref": "#/$defs/serverStatus",
-          "description": "Renew listing metadata together. Omit players when the heartbeat supplies playerCount."
+          "description": "The public listing. Send it with every heartbeat while it applies; providers list the sum of connectedPlayers.count."
         },
         "hostProfile": {
           "$ref": "#/$defs/hostProfile"
@@ -550,41 +660,11 @@
         "extensions": {
           "$ref": "#/$defs/extensions"
         },
-        "playerCount": {
-          "$ref": "#/$defs/playerCount"
-        },
         "acceptingPlayers": {
           "type": "boolean",
           "description": "Application ability and willingness to accept new players, independent of sampled counts."
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "required": [
-              "serverStatus"
-            ]
-          },
-          "then": {
-            "anyOf": [
-              {
-                "required": [
-                  "playerCount"
-                ]
-              },
-              {
-                "properties": {
-                  "serverStatus": {
-                    "required": [
-                      "players"
-                    ]
-                  }
-                }
-              }
-            ]
-          }
-        }
-      ]
+      }
     },
     "checkIn": {
       "type": "object",
@@ -624,14 +704,31 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "maxLength": 184,
+          "description": "The profile the provider holds; null when it holds none, so the host sends hostProfile again."
         },
         "readiness": {
           "type": "object",
           "required": [
             "routable",
             "reasons"
-          ]
+          ],
+          "properties": {
+            "routable": {
+              "type": "boolean"
+            },
+            "reasons": {
+              "type": "array",
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              },
+              "description": "Provider-defined codes for why the host is not routable; informational only."
+            }
+          }
         },
         "checkIn": {
           "$ref": "#/$defs/checkIn"
@@ -645,7 +742,7 @@
           "properties": {
             "id": {
               "type": "string",
-              "maxLength": 128
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
             },
             "keyId": {
               "type": "string",
@@ -679,6 +776,9 @@
         },
         "operatorActionAvailable": {
           "type": "boolean"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
         }
       }
     },
@@ -702,8 +802,7 @@
             "properties": {
               "ticketId": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 256
+                "pattern": "^[0-9a-f]{32}$"
               },
               "stage": {
                 "enum": [
@@ -721,6 +820,7 @@
               },
               "reason": {
                 "type": "string",
+                "minLength": 1,
                 "maxLength": 128
               },
               "remoteAddress": {
@@ -750,19 +850,35 @@
               "remotePort": [
                 "remoteAddress"
               ]
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "stage": {
+                      "const": "ticket.failed"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              }
+            ]
           }
         }
       }
     },
-    "playerCount": {
+    "connectedPlayers": {
       "type": "object",
       "required": [
-        "connectedPlayers",
+        "count",
         "sampledAt"
       ],
       "properties": {
-        "connectedPlayers": {
+        "count": {
           "type": "integer",
           "minimum": 0,
           "maximum": 1000000
@@ -773,7 +889,7 @@
           "maximum": 9007199254740991
         }
       },
-      "description": "Actual players connected to this runtime, including still-connected draining players. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Absence means unknown. Never derive this value from public serverStatus, load, tickets or reservations."
+      "description": "Actual players connected to this runtime, including players kept while it accepts no new ones. sampledAt is Unix milliseconds and covers this count and the heartbeat capacity from the same host observation. Never derive it from listing values, load, tickets or reservations."
     },
     "connectivityObservation": {
       "type": "object",
@@ -973,7 +1089,7 @@
       "required": [
         "name",
         "level",
-        "maxPlayers",
+        "maxPlayerCount",
         "gameType"
       ],
       "properties": {
@@ -982,22 +1098,17 @@
           "minLength": 1,
           "maxLength": 128,
           "not": {
-            "pattern": "[\\u0000-\\u001f\\u007f-\\u009f\\ud800-\\udfff]"
+            "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
           }
         },
         "level": {
           "type": "string",
           "maxLength": 128,
           "not": {
-            "pattern": "[\\u0000-\\u001f\\u007f-\\u009f\\ud800-\\udfff]"
+            "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
           }
         },
-        "players": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 1000000
-        },
-        "maxPlayers": {
+        "maxPlayerCount": {
           "type": "integer",
           "minimum": 0,
           "maximum": 1000000
@@ -1022,7 +1133,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 120,
-          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
         },
         "latitude": {
           "type": "number",
@@ -1068,13 +1179,13 @@
         "url": {
           "type": "string",
           "maxLength": 2048,
-          "pattern": "^(?:https://|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?:[:/]|$))"
+          "pattern": "^(?:https://[^/?#@\\s]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]{1,5})?)(?:[/?#]\\S*)?$"
         },
         "text": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
         },
         "expiresAt": {
           "type": "integer",
@@ -1082,7 +1193,7 @@
           "maximum": 9007199254740991
         }
       },
-      "description": "A link for the host's operator. It may carry a one-time credential: show it, never open, forward or save it."
+      "description": "A link for the host's operator. It may carry a one-time credential: show it, but never open or forward it or keep it in saved state."
     },
     "operatorActionResponse": {
       "type": "object",
@@ -1091,6 +1202,209 @@
           "$ref": "#/$defs/operatorAction"
         }
       }
+    },
+    "retire": {
+      "type": "object",
+      "required": [
+        "keyId"
+      ],
+      "properties": {
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        }
+      }
+    },
+    "websocketOperation": {
+      "type": "object",
+      "required": [
+        "kind",
+        "operation",
+        "headers",
+        "body"
+      ],
+      "properties": {
+        "kind": {
+          "const": "operation"
+        },
+        "operation": {
+          "enum": [
+            "heartbeat",
+            "outcomes",
+            "rotate",
+            "retire",
+            "deregister"
+          ]
+        },
+        "headers": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "body": {
+          "type": "string"
+        }
+      },
+      "description": "Host to provider. headers carries the signed NXS request headers; body is the original JSON text."
+    },
+    "websocketResponse": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id",
+        "status",
+        "headers",
+        "body"
+      ],
+      "properties": {
+        "kind": {
+          "const": "response"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 599
+        },
+        "headers": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "body": {
+          "type": "string",
+          "x-max-utf8-bytes": 65536
+        }
+      },
+      "description": "Provider to host. id is the operation's idempotency key."
+    },
+    "assistedJoin": {
+      "type": "object",
+      "required": [
+        "kind",
+        "version",
+        "id",
+        "expiresAt",
+        "instanceId",
+        "generation",
+        "incarnation",
+        "keyId",
+        "hostFingerprint",
+        "networkId",
+        "localUfrag",
+        "localPassword",
+        "offer"
+      ],
+      "properties": {
+        "kind": {
+          "const": "assisted-join"
+        },
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "incarnation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "hostFingerprint": {
+          "$ref": "#/$defs/hostProfile/properties/dtlsFingerprint"
+        },
+        "networkId": {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        },
+        "cpk": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{160}$"
+        },
+        "localUfrag": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^NXS1"
+        },
+        "localPassword": {
+          "type": "string",
+          "minLength": 22,
+          "maxLength": 256
+        },
+        "offer": {
+          "type": "string",
+          "maxLength": 16384
+        }
+      },
+      "description": "Provider to host. cpk is present for players and absent for diagnostics (networkId 0)."
+    },
+    "assistedJoinResult": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id",
+        "accepted"
+      ],
+      "properties": {
+        "kind": {
+          "const": "assisted-join-result"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "answer": {
+          "type": "string",
+          "maxLength": 16384
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accepted": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "answer"
+            ]
+          }
+        }
+      ],
+      "description": "Host to provider."
     }
   },
   "x-context-order": [
@@ -1120,6 +1434,7 @@
     "outcomes",
     "rotate",
     "retire",
-    "deregister"
+    "deregister",
+    "operator-action"
   ]
 }

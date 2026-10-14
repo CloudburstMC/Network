@@ -102,7 +102,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         assertNull(v.validate(request(token, "clientOtherUfrag"), now));
         assertThrows(IllegalArgumentException.class, () -> request(token + "=", remote));
         v.installKeys(List.of(new AdmissionKey("K001",
-                "a-different-secret-that-has-32-characters")));
+                "JqwJXXCJs74ZVL_KmUrdKSAHk6Ja_gRFYUOmuQsvQqI")));
         assertNull(v.validate(request(), now));
         v.clear();
         assertFalse(v.ready());
@@ -120,7 +120,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
     void keyUpdatesAreBoundedAtomicAndRedacted() {
         var v = validator();
         var duplicate =
-                new AdmissionKey("K002", "a-valid-background-key-of-at-least-32-bytes");
+                new AdmissionKey("K002", "OXyFGxR_CkTZ6Klea0O17wQPSCtckSIM3ALR12_b3Wc");
         assertThrows(IllegalArgumentException.class, () -> v.installKeys(List.of(duplicate, duplicate)));
         assertEquals(Set.of("K001"), v.keyIds());
         assertFalse(duplicate.toString().contains(duplicate.secret()));

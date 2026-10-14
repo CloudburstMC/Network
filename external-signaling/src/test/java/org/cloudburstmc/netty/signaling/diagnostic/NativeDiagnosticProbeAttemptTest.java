@@ -22,6 +22,12 @@ import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCod
 class NativeDiagnosticProbeAttemptTest {
     @TempDir Path directory;
 
+    static String randomSecret() {
+        byte[] bytes = new byte[32];
+        new java.security.SecureRandom().nextBytes(bytes);
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
     static String id() {
         byte[] value = new byte[16];
         new SecureRandom().nextBytes(value);
@@ -95,7 +101,7 @@ class NativeDiagnosticProbeAttemptTest {
             localPort = port(bind);
             int family = bind instanceof Inet6Address ? 6 : 4;
             expiry = (System.currentTimeMillis() + duration) / 1000 * 1000;
-            permit = new Key("D001", "random-test-permit-" + id(), 0, expiry + 10000);
+            permit = new Key("D001", randomSecret(), 0, expiry + 10000);
             var target =
                     new DiagnosticHostPolicy.Endpoint(
                             family, DiagnosticAdmissionCodec.address(family, address), port, 7);
