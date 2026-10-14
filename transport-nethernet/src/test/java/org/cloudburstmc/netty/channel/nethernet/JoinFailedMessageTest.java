@@ -26,26 +26,33 @@ class JoinFailedMessageTest {
     void namesThePortAPlayerCouldNotReach() {
         assertEquals("Steve could not connect over NetherNet: no network path to this server was found. Their device "
                         + "needs to reach UDP port 19132 on one of the addresses this server advertises.",
-                joinFailedMessage("Steve", false, 19132));
+                joinFailedMessage("Steve", false, 19132, false));
         assertEquals("A player could not connect over NetherNet: no network path to this server was found. Their device "
                         + "needs to reach this server over UDP on one of the addresses it advertises.",
-                joinFailedMessage(null, false, 0));
+                joinFailedMessage(null, false, 0, false));
+    }
+
+    @Test
+    void pointsAtTheRelaysWhenTheMediaIsRelayed() {
+        assertEquals("Steve could not connect over NetherNet: nothing arrived through the PROXY protocol relays this "
+                        + "server advertises. Each relay has to forward to UDP port 19132 and be listed.",
+                joinFailedMessage("Steve", false, 19132, true));
     }
 
     @Test
     void saysWhenThePlayerGotAsFarAsThisServer() {
         assertEquals("Steve reached this server over NetherNet, but the connection did not finish setting up.",
-                joinFailedMessage("Steve", true, 19132));
+                joinFailedMessage("Steve", true, 19132, false));
     }
 
     @Test
     void aClaimedNameCannotForgeLogLines() {
         assertEquals("Steve[00:00 INFO] Op granted reached this server over NetherNet, but the connection did not "
                         + "finish setting up.",
-                joinFailedMessage("Steve\n[00:00 INFO] Op granted", true, 19132));
+                joinFailedMessage("Steve\n[00:00 INFO] Op granted", true, 19132, false));
         assertEquals("A player reached this server over NetherNet, but the connection did not finish setting up.",
-                joinFailedMessage(" \r\n ", true, 19132));
+                joinFailedMessage(" \r\n ", true, 19132, false));
         assertEquals("x".repeat(32) + " reached this server over NetherNet, but the connection did not finish setting up.",
-                joinFailedMessage("x".repeat(40), true, 19132));
+                joinFailedMessage("x".repeat(40), true, 19132, false));
     }
 }

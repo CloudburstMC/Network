@@ -22,6 +22,7 @@ import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
+import org.cloudburstmc.netty.util.nethernet.IceProxyProtocol;
 import org.cloudburstmc.netty.signaling.control.AssistedJoin;
 import java.security.MessageDigest;
 import java.util.Arrays;
@@ -122,6 +123,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
     private volatile boolean open = true;
     private volatile InetSocketAddress address;
     private volatile IceUdpMuxListener mux;
+    private volatile IceProxyProtocol proxyProtocol;
     private EndpointConnectivityController connectivity;
     private volatile NativeDiagnosticHostGate diagnostics;
     private ScheduledFuture<?> maintenance;
@@ -153,6 +155,9 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         // Without this, NXS joins get NetherNet's SCTP settings only when a built-in server channel binds too
         NetherNetNative.initialize();
         address = inetSocketAddress;
+        // Before the listener, so no relayed join reaches it unread
+        proxyProtocol = IceProxyProtocol.set(inetSocketAddress.getAddress(), inetSocketAddress.getPort(),
+                config.getOption(NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL));
         mux = new IceUdpMuxListener(inetSocketAddress.getAddress(), inetSocketAddress.getPort(), Math.min(limits.pending(), 4096),
                 Duration.ofMillis(Math.min(limits.handshakeMillis(), 30_000)), eventLoop(), this::admit);
         maintenance = eventLoop().scheduleWithFixedDelay(this::maintain, 100, 100, TimeUnit.MILLISECONDS);
@@ -1126,6 +1131,15 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         mux = null;
         if (listener != null) {
             listener.close();
+        }
+        IceProxyProtocol relays = proxyProtocol;
+        proxyProtocol = null;
+        if (relays != null) {
+            try {
+                relays.close();
+            } catch (RuntimeException failure) {
+                nativeCloseFailure.compareAndSet(null, failure);
+            }
         }
 
         for (Session session : sessions.values()) {

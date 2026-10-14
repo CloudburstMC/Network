@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import org.cloudburstmc.netty.signaling.ProviderClient;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -54,6 +55,26 @@ class ProviderRuntimeConfigurationTest {
         var unset = ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net").build();
         assertNull(ProviderRuntimeConfiguration.resolve(unset, directory, "0.0.0.0", 19132, 10)
                 .clientConfiguration().bedrockProtocols());
+    }
+
+    @Test
+    void relaysTurnAssistanceAndDiscoveryOff(@TempDir Path directory) throws Exception {
+        // Assistance contacts clients directly and discovery publishes this host, both around the relays
+        var settings =
+                ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net")
+                        .assistedJoins(true)
+                        .stunDiscovery(true)
+                        .advertiseAddresses(List.of("8.8.8.8:19165"))
+                        .proxyProtocolRelays(IpRangeSet.parse(List.of("10.0.0.0/8")))
+                        .build();
+        var runtime = ProviderRuntimeConfiguration.resolve(settings, directory, "0.0.0.0", 19132, 10);
+        assertFalse(runtime.assistedJoins());
+        assertFalse(runtime.clientConfiguration().assistedJoins());
+        assertFalse(runtime.stunDiscovery());
+        assertEquals(List.of("10.0.0.0/8"), runtime.proxyProtocolRelays().entries());
+        var options = NativeProviderHostFactory.options(runtime);
+        assertFalse(options.containsKey("candidatePublication"));
+        assertEquals("true", options.get("relayed"));
     }
 
     private static final String PROVIDER = "https://signal.example.net";

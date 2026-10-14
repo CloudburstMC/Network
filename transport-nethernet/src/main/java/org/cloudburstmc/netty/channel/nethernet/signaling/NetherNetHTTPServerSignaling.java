@@ -86,7 +86,9 @@ import java.io.InputStream;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
 import java.net.SocketAddress;
+import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ServerSocketChannel;
@@ -139,6 +141,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final List<InetSocketAddress> configuredAddresses;
     /** What the configured ones resolved to when binding. */
     private volatile List<InetSocketAddress> advertisedAddresses = List.of();
+    private volatile boolean mediaRelayed;
     private final List<InetSocketAddress> stunServers;
     private final Duration stunMaxAge;
     private final TokenTrust tokenTrust;
@@ -216,12 +219,25 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         if (!(localAddress instanceof InetSocketAddress)) {
             throw new IllegalArgumentException("Unsupported address type");
         }
+        // Players reach the media only through the relays, which nothing else could name
+        if (this.mediaRelayed && this.configuredAddresses.isEmpty()) {
+            throw new ConnectException("PROXY protocol relays front the media port, so the advertised addresses "
+                    + "have to name them");
+        }
         try {
             this.advertisedAddresses = AdvertisedAddresses.resolve(this.configuredAddresses);
         } catch (UnknownHostException | IllegalArgumentException e) {
             ConnectException failure = new ConnectException(e.getMessage());
             failure.initCause(e);
             throw failure;
+        }
+        if (this.mediaRelayed && iceAddress != null) {
+            for (InetSocketAddress relay : this.advertisedAddresses) {
+                if (isMediaEndpoint(relay, iceAddress)) {
+                    throw new ConnectException(NetUtil.toSocketAddressString(relay) + " is this host's own media "
+                            + "endpoint, which players only reach through the PROXY protocol relays");
+                }
+            }
         }
         this.eventLoop = eventLoop;
         this.iceAddress = iceAddress;
@@ -433,6 +449,27 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         return this.advertisedAddresses;
     }
 
+    @Override
+    public void setMediaRelayed(boolean relayed) {
+        this.mediaRelayed = relayed;
+    }
+
+    /** Whether the endpoint is the ICE socket itself, port 0 standing for its port. */
+    private static boolean isMediaEndpoint(InetSocketAddress endpoint, InetSocketAddress ice) {
+        if (endpoint.getPort() != 0 && endpoint.getPort() != ice.getPort()) {
+            return false;
+        }
+        InetAddress bound = ice.getAddress();
+        if (bound != null && !bound.isAnyLocalAddress()) {
+            return bound.equals(endpoint.getAddress());
+        }
+        try {
+            return endpoint.getAddress().isLoopbackAddress() || NetworkInterface.getByInetAddress(endpoint.getAddress()) != null;
+        } catch (SocketException e) {
+            return false;
+        }
+    }
+
     /**
      * The public mappings STUN discovery currently finds, see {@link Builder#setStunServers}. Answers
      * announce these along with what ICE gathers and the endpoint the player typed in. Safe to call
@@ -533,7 +570,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      */
     private String announced(String sdp, @Nullable InetSocketAddress typed) {
         if (!this.advertisedAddresses.isEmpty()) {
-            return SdpUtil.withAdvertisedCandidates(sdp, this.advertisedAddresses);
+            return this.mediaRelayed ? SdpUtil.withRelayedCandidates(sdp, this.advertisedAddresses)
+                    : SdpUtil.withAdvertisedCandidates(sdp, this.advertisedAddresses);
         }
         List<InetSocketAddress> added = new ArrayList<>();
         DiscoveredEndpoints discovered = this.discovered;
@@ -1284,7 +1322,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * Empty, the default, announces everything ICE gathers, plus what {@link #setStunServers}
          * finds and the IP literal a player typed in, when those are not among them. The typed one
          * reaches a host behind NAT or in a container nobody configured, but not a player who typed
-         * a name or arrived through a trusted proxy.
+         * a name or arrived through a trusted proxy. While PROXY protocol relays front the media
+         * port, these have to name the relays rather than this host, and binding fails otherwise.
          *
          * @param advertisedAddresses Endpoints reachable by connecting peers
          * @return This builder

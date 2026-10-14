@@ -25,6 +25,7 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import org.cloudburstmc.netty.signaling.ProviderTransport;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.signaling.admission.NativeProviderTransport;
 import org.cloudburstmc.netty.signaling.admission.NativeCandidateSnapshot;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
@@ -62,7 +63,9 @@ public final class NativeProviderHostFactory {
      * Opens the NXS endpoint on the host's gameplay port. The extension owns the Bedrock child pipeline.
      */
     public static CompletionStage<Host> open(ServerBootstrap bootstrap, ProviderRuntimeConfiguration runtime) {
-        return open(bootstrap, new InetSocketAddress(runtime.bindAddress(), runtime.udpPort()), options(runtime))
+        ServerBootstrap relayed = bootstrap.clone()
+                .option(NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL, runtime.proxyProtocolRelays());
+        return open(relayed, new InetSocketAddress(runtime.bindAddress(), runtime.udpPort()), options(runtime))
                 .thenApply(host -> runtime.warnings().isEmpty() ? host : new Host(host.transport(), host.channel(),
                         Stream.concat(runtime.warnings().stream(), host.warnings().stream()).toList()));
     }
@@ -86,6 +89,9 @@ public final class NativeProviderHostFactory {
             options.put("stunWarming", Boolean.toString(runtime.stunDiscovery()));
         } else {
             options.put("localDevelopment", Boolean.toString(runtime.localDevelopment()));
+            if (!runtime.proxyProtocolRelays().isEmpty()) {
+                options.put("relayed", "true");
+            }
         }
         return Map.copyOf(options);
     }
@@ -105,7 +111,10 @@ public final class NativeProviderHostFactory {
         boolean localDevelopment =
                 Boolean.parseBoolean(options.getOrDefault("localDevelopment", "false"));
         if (policy == null) {
-            return () -> ProviderEndpoint.resolve(bind, external, localDevelopment);
+            // Behind relays, players reach only the configured endpoints
+            return Boolean.parseBoolean(options.getOrDefault("relayed", "false"))
+                    ? () -> ProviderEndpoint.relayed(bind, external, localDevelopment)
+                    : () -> ProviderEndpoint.resolve(bind, external, localDevelopment);
         }
         return () -> {
             // A configured set never invokes interface discovery, even for an omitted family.

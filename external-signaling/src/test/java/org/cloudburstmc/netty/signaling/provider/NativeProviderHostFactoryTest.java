@@ -241,4 +241,21 @@ class NativeProviderHostFactoryTest {
         assertTrue(legacy.contains(bind));
         assertTrue(legacy.contains(endpoint("8.8.8.8", 29133)));
     }
+
+    @Test
+    void relayedHostsOfferOnlyTheRelays() throws Exception {
+        var relays = "[{\"address\":\"8.8.8.8\",\"port\":29133}]";
+        var bind = endpoint("1.1.1.1", 19133);
+        assertEquals(
+                List.of(endpoint("8.8.8.8", 29133)),
+                NativeProviderHostFactory.endpointSource(
+                                bind, Map.of("advertisedEndpoints", relays, "relayed", "true"))
+                        .get()
+                        .advertised(),
+                "Players never reach the bind directly");
+        var none =
+                NativeProviderHostFactory.endpointSource(
+                        bind, Map.of("advertisedEndpoints", "[]", "relayed", "true"));
+        assertThrows(IOException.class, none::get);
+    }
 }

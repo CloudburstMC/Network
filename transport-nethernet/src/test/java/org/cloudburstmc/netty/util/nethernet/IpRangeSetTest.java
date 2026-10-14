@@ -23,6 +23,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Arrays;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,6 +40,18 @@ class IpRangeSetTest {
         assertTrue(contains(set, "10.0.0.1"));
         assertTrue(contains(set, "192.168.1.5"));
         assertFalse(contains(set, "192.168.1.6"));
+        assertEquals(List.of("10.0.0.0/8", "192.168.1.5/32"), set.entries());
+    }
+
+    @Test
+    void keepsOnlyTheEntriesItCouldParse() {
+        assertEquals(List.of("10.0.0.0/8"), IpRangeSet.parse(List.of(" 10.0.0.0/8 ", "not an address")).entries());
+    }
+
+    @Test
+    void writesEntriesAsNumericCidr() {
+        assertEquals(List.of("2001:db8::1/128", "2001:db8::/32"),
+                IpRangeSet.parse(List.of("2001:0db8:0:0::1", "2001:db8::/ 32")).entries());
     }
 
     @Test

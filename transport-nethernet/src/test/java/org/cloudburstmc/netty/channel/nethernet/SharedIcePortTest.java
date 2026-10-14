@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.channel.nethernet;
 
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import tel.schich.libdatachannel.IceUdpMuxListener;
@@ -24,11 +25,14 @@ import tel.schich.libdatachannel.PeerConnection;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SharedIcePortTest {
@@ -78,6 +82,45 @@ class SharedIcePortTest {
             }
             assertEquals(1, nxs.statistics().agents());
             assertTrue(accepted.child().isOpen());
+        }
+    }
+
+    /** Signaling learns the media is relayed before it binds, so no answer names this host past the relays. */
+    @Test
+    @Timeout(20)
+    void signalingKnowsTheMediaIsRelayedBeforeItBinds() throws Exception {
+        int port;
+        try (var available = new DatagramSocket(new InetSocketAddress(LOOPBACK, 0))) {
+            port = available.getLocalPort();
+        }
+        try (var relayed = new NetherNetTestServer(new InetSocketAddress(LOOPBACK, port))) {
+            relayed.relays = IpRangeSet.parse(List.of("127.0.0.1"));
+            relayed.bind();
+            assertTrue(relayed.signaling.relayedAtBind);
+        }
+        try (var direct = new NetherNetTestServer(new InetSocketAddress(LOOPBACK, port))) {
+            direct.bind();
+            assertFalse(direct.signaling.relayedAtBind);
+        }
+    }
+
+    /** Signaling that cannot keep the media behind relays fails the bind, which releases the relays. */
+    @Test
+    @Timeout(20)
+    void signalingThatCannotHideTheMediaReleasesTheRelays() throws Exception {
+        int port;
+        try (var available = new DatagramSocket(new InetSocketAddress(LOOPBACK, 0))) {
+            port = available.getLocalPort();
+        }
+        try (var refusing = new NetherNetTestServer(new InetSocketAddress(LOOPBACK, port))) {
+            refusing.relays = IpRangeSet.parse(List.of(LOOPBACK.getHostAddress()));
+            refusing.signaling.refuseRelays = true;
+            assertThrows(UnsupportedOperationException.class, refusing::bind);
+        }
+        // A listed relay's headerless checks would be dropped, so this only connects once they are gone
+        try (var direct = new NetherNetTestServer(new InetSocketAddress(LOOPBACK, port));
+             var client = PeerConnection.createPeer(NetherNetTestServer.CONFIG.withBindAddress(LOOPBACK))) {
+            assertTrue(direct.bindAndConnect(client).isActive());
         }
     }
 }

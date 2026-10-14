@@ -99,12 +99,16 @@ class HttpSignalingRequestTest {
         this.start(builder, null);
     }
 
-    /** Binds with ICE where the channel would say it binds, null for a port per connection. */
     private void start(NetherNetHTTPServerSignaling.Builder builder, Integer icePort) throws Exception {
+        this.signaling = builder.build();
+        this.bind(icePort);
+    }
+
+    /** Binds with ICE where the channel would say it binds, null for a port per connection. */
+    private void bind(Integer icePort) throws Exception {
         try (ServerSocket probe = new ServerSocket(0)) {
             this.port = probe.getLocalPort();
         }
-        this.signaling = builder.build();
         InetSocketAddress ice = null;
         if (icePort != null) {
             // 0 shares the signaling port, as the channel's default does
@@ -350,6 +354,20 @@ class HttpSignalingRequestTest {
     }
 
     @Test
+    void relayedMediaAnnouncesOnlyTheRelays() throws Exception {
+        this.signaling = this.builder().setAdvertisedAddresses(List.of("10.0.0.5:19165")).build();
+        // As the server channel does when PROXY protocol relays front its media port
+        this.signaling.setMediaRelayed(true);
+        this.bind(null);
+        this.answerGathered(this.port);
+
+        String answer = this.answerFor("192.168.1.2:19132");
+        assertTrue(answer.contains(" 10.0.0.5 19165 typ srflx raddr 0.0.0.0 rport 0\r\n"), answer);
+        assertFalse(answer.contains("172.17.0.2"), answer);
+        assertFalse(answer.contains("192.168.1.2"), answer);
+    }
+
+    @Test
     void announcesWhatAConfiguredNameResolvedToWhenBinding() throws Exception {
         this.start(this.builder().setAdvertisedAddresses(List.of("localhost:19140")));
         this.answerGathered(this.port);
@@ -362,6 +380,24 @@ class HttpSignalingRequestTest {
         assertTrue(advertised.contains(new InetSocketAddress("127.0.0.1", 19140)), advertised.toString());
         assertTrue(advertised.stream().allMatch(a -> a.getAddress().isLoopbackAddress() && a.getPort() == 19140),
                 advertised.toString());
+    }
+
+    @Test
+    void refusesToBindRelayedMediaWithoutAddressesNamingTheRelays() throws Exception {
+        this.signaling = this.builder().build();
+        this.signaling.setMediaRelayed(true);
+
+        assertThrows(ConnectException.class,
+                () -> this.signaling.bind(new InetSocketAddress("127.0.0.1", 0), null, this.group.next()));
+    }
+
+    @Test
+    void refusesARelayThatIsThisHostsOwnMediaEndpoint() throws Exception {
+        this.signaling = this.builder().setAdvertisedAddresses(List.of("127.0.0.1:19140")).build();
+        this.signaling.setMediaRelayed(true);
+
+        assertThrows(ConnectException.class, () -> this.signaling.bind(new InetSocketAddress("127.0.0.1", 0),
+                new InetSocketAddress("0.0.0.0", 19140), this.group.next()));
     }
 
     @Test

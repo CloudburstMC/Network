@@ -21,6 +21,7 @@ import org.cloudburstmc.netty.channel.nethernet.signaling.AdvertisedAddresses;
 import org.cloudburstmc.netty.signaling.ProviderClient;
 import org.cloudburstmc.netty.signaling.ProviderOrigin;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.SecretValue;
 
 import java.io.IOException;
@@ -99,7 +100,7 @@ public final class ProviderRuntimeConfiguration {
         // The list may be shared with built-in signaling, where a client on this machine can use loopback.
         // Players get these from the provider, so loopback stays only where the endpoint policy takes it.
         List<String> warnings = List.of();
-        if (!localDevelopment(origin) || settings.stunDiscovery() || settings.assistedJoins()) {
+        if (!localDevelopment(origin) || stunDiscovery(settings) || assistedJoins(settings)) {
             List<InetSocketAddress> loopback = endpoints.stream()
                     .filter(endpoint -> EndpointAddress.scope(endpoint.getAddress()) == EndpointAddress.Scope.LOOPBACK)
                     .toList();
@@ -153,6 +154,7 @@ public final class ProviderRuntimeConfiguration {
         private final boolean gameOutcomes;
         private final ProviderClient.Location location;
         private final ProviderClient.BedrockProtocols bedrockProtocols;
+        private final IpRangeSet proxyProtocolRelays;
 
         private Settings(Builder builder) {
             endpoint = builder.endpoint;
@@ -166,6 +168,7 @@ public final class ProviderRuntimeConfiguration {
             gameOutcomes = builder.gameOutcomes;
             location = builder.location;
             bedrockProtocols = builder.bedrockProtocols;
+            proxyProtocolRelays = builder.proxyProtocolRelays;
         }
 
         /**
@@ -219,6 +222,10 @@ public final class ProviderRuntimeConfiguration {
             return bedrockProtocols;
         }
 
+        public IpRangeSet proxyProtocolRelays() {
+            return proxyProtocolRelays;
+        }
+
         public static final class Builder {
             private final String endpoint;
             private String token;
@@ -231,6 +238,7 @@ public final class ProviderRuntimeConfiguration {
             private boolean gameOutcomes;
             private ProviderClient.Location location;
             private ProviderClient.BedrockProtocols bedrockProtocols;
+            private IpRangeSet proxyProtocolRelays = IpRangeSet.empty();
 
             private Builder(String endpoint) {
                 this.endpoint = endpoint;
@@ -322,6 +330,18 @@ public final class ProviderRuntimeConfiguration {
                 return this;
             }
 
+            /**
+             * @param proxyProtocolRelays Relays in front of the gameplay port whose PROXY protocol v2
+             *                            header gives the client's address, empty for none. While
+             *                            set, only the advertised addresses are offered, and assisted
+             *                            joins and STUN discovery are off, since they contact clients
+             *                            directly and publish this host's own address
+             */
+            public Builder proxyProtocolRelays(IpRangeSet proxyProtocolRelays) {
+                this.proxyProtocolRelays = proxyProtocolRelays == null ? IpRangeSet.empty() : proxyProtocolRelays;
+                return this;
+            }
+
             public Settings build() {
                 return new Settings(this);
             }
@@ -375,11 +395,25 @@ public final class ProviderRuntimeConfiguration {
     }
 
     boolean stunDiscovery() {
-        return settings.stunDiscovery();
+        return stunDiscovery(settings);
     }
 
     boolean assistedJoins() {
-        return settings.assistedJoins();
+        return assistedJoins(settings);
+    }
+
+    private static boolean stunDiscovery(Settings settings) {
+        // Discovery publishes this host's own public address, around the relays
+        return settings.stunDiscovery() && settings.proxyProtocolRelays().isEmpty();
+    }
+
+    private static boolean assistedJoins(Settings settings) {
+        // Assistance contacts clients directly, around the relays
+        return settings.assistedJoins() && settings.proxyProtocolRelays().isEmpty();
+    }
+
+    IpRangeSet proxyProtocolRelays() {
+        return settings.proxyProtocolRelays();
     }
 
     public ProviderClient.Configuration clientConfiguration() {
@@ -387,10 +421,10 @@ public final class ProviderRuntimeConfiguration {
                 .label(label)
                 .authorizationToken(authorizationToken)
                 // Only assistance needs the provider's WebSocket
-                .controlTransport(settings.assistedJoins() ? ProviderClient.ControlTransport.AUTO : ProviderClient.ControlTransport.HTTP)
+                .controlTransport(assistedJoins() ? ProviderClient.ControlTransport.AUTO : ProviderClient.ControlTransport.HTTP)
                 .diagnosticAdmission(settings.connectionChecks())
                 .connectivityMethod(advertisedEndpoints.isEmpty() ? "discovered" : "defined")
-                .assistedJoins(settings.assistedJoins())
+                .assistedJoins(assistedJoins())
                 .deregisterOnShutdown(settings.deregisterOnShutdown())
                 .gameOutcomes(settings.gameOutcomes())
                 .location(settings.location())

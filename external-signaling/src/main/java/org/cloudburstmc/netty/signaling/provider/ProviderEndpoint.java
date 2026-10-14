@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.provider;
 
+import io.netty.util.NetUtil;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 
 import java.io.IOException;
@@ -31,21 +32,38 @@ record ProviderEndpoint(InetSocketAddress bind, List<InetSocketAddress> advertis
         return resolve(bind, external, localDevelopment, bind.getAddress().isAnyLocalAddress() ? interfaces() : List.of());
     }
 
+    /**
+     * Only the configured endpoints, for a host players reach through PROXY protocol relays, which these
+     * name. The host's own addresses stay out, as nothing reaches them directly.
+     */
+    public static ProviderEndpoint relayed(InetSocketAddress bind, List<InetSocketAddress> external, boolean localDevelopment) throws IOException {
+        checkBind(bind);
+        return relayed(bind, external, localDevelopment, bind.getAddress().isAnyLocalAddress() ? interfaces() : List.of());
+    }
+
+    static ProviderEndpoint relayed(InetSocketAddress bind, List<InetSocketAddress> external, boolean localDevelopment,
+                                    List<InetAddress> interfaces) throws IOException {
+        checkBind(bind);
+        Set<InetSocketAddress> endpoints = configured(external, localDevelopment);
+        if (endpoints.isEmpty()) {
+            throw new IOException("No UDP endpoints; configure nxs.advertise-addresses naming the PROXY protocol relays");
+        }
+        for (InetSocketAddress endpoint : endpoints) {
+            InetAddress address = endpoint.getAddress();
+            boolean local = bind.getAddress().isAnyLocalAddress()
+                    ? address.isLoopbackAddress() || interfaces.contains(address) : address.equals(bind.getAddress());
+            if (local && endpoint.getPort() == bind.getPort()) {
+                throw new IOException(NetUtil.toSocketAddressString(endpoint) + " is this host's own gameplay endpoint, "
+                        + "which players only reach through the PROXY protocol relays");
+            }
+        }
+        return sorted(bind, endpoints);
+    }
+
     static ProviderEndpoint resolve(InetSocketAddress bind, List<InetSocketAddress> external, boolean localDevelopment,
                                     List<InetAddress> interfaces) throws IOException {
-        if (bind.isUnresolved() || bind.getPort() < 1 || bind.getAddress().isMulticastAddress()) {
-            throw new IOException("Provider bind-address must resolve to a local unicast or wildcard address and fixed UDP port");
-        }
-        Set<InetSocketAddress> endpoints = new LinkedHashSet<>();
-        // Configured mappings are explicit assertions about the forwarder, which may translate IP families.
-        for (InetSocketAddress endpoint : external) {
-            if (endpoint.isUnresolved() || endpoint.getPort() < 1 || !EndpointAddress.advertisable(endpoint.getAddress(), localDevelopment)) {
-                throw new IOException("Advertised endpoint must be a usable numeric unicast IP and UDP port");
-            }
-
-            endpoints.add(endpoint);
-        }
-
+        checkBind(bind);
+        Set<InetSocketAddress> endpoints = configured(external, localDevelopment);
         if (!bind.getAddress().isAnyLocalAddress()) {
             // A local proxy may forward a configured external endpoint to a loopback listener.
             if (EndpointAddress.advertisable(bind.getAddress(), localDevelopment)) {
@@ -66,7 +84,29 @@ record ProviderEndpoint(InetSocketAddress bind, List<InetSocketAddress> advertis
         if (endpoints.isEmpty()) {
             throw new IOException("No usable UDP endpoints; configure nxs.advertise-addresses for external forwarding");
         }
+        return sorted(bind, endpoints);
+    }
 
+    private static void checkBind(InetSocketAddress bind) throws IOException {
+        if (bind.isUnresolved() || bind.getPort() < 1 || bind.getAddress().isMulticastAddress()) {
+            throw new IOException("Provider bind-address must resolve to a local unicast or wildcard address and fixed UDP port");
+        }
+    }
+
+    private static Set<InetSocketAddress> configured(List<InetSocketAddress> external, boolean localDevelopment) throws IOException {
+        Set<InetSocketAddress> endpoints = new LinkedHashSet<>();
+        // Configured mappings are explicit assertions about the forwarder, which may translate IP families.
+        for (InetSocketAddress endpoint : external) {
+            if (endpoint.isUnresolved() || endpoint.getPort() < 1 || !EndpointAddress.advertisable(endpoint.getAddress(), localDevelopment)) {
+                throw new IOException("Advertised endpoint must be a usable numeric unicast IP and UDP port");
+            }
+
+            endpoints.add(endpoint);
+        }
+        return endpoints;
+    }
+
+    private static ProviderEndpoint sorted(InetSocketAddress bind, Set<InetSocketAddress> endpoints) throws IOException {
         if (endpoints.size() > 32) {
             throw new IOException("More than 32 UDP endpoints; bind to a specific address to limit interface discovery");
         }

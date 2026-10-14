@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet.config;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetServerChannel;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
@@ -28,6 +29,7 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
     private volatile boolean inferPeerCandidates = true;
     private volatile NetherServerMetrics serverMetrics;
     private volatile InetSocketAddress iceAddress;
+    private volatile IpRangeSet proxyProtocol = IpRangeSet.empty();
     private volatile NetherServerThrottle throttle;
 
     public DefaultNetherServerChannelConfig(Channel channel) {
@@ -39,7 +41,8 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
         return this.getOptions(
                 super.getOptions(), NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS,
                 NetherChannelOption.NETHER_INFER_PEER_CANDIDATES, NetherChannelOption.NETHER_SERVER_METRICS,
-                NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, NetherChannelOption.NETHER_SERVER_THROTTLE
+                NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, NetherChannelOption.NETHER_SERVER_THROTTLE,
+                NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL
         );
     }
 
@@ -56,6 +59,8 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
             return (T) this.iceAddress;
         } else if (option == NetherChannelOption.NETHER_SERVER_THROTTLE) {
             return (T) this.throttle;
+        } else if (option == NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL) {
+            return (T) this.proxyProtocol;
         }
 
         return super.getOption(option);
@@ -71,6 +76,10 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
         // Null turns throttling off again
         if (option == NetherChannelOption.NETHER_SERVER_THROTTLE) {
             this.throttle = (NetherServerThrottle) value;
+            return true;
+        }
+        if (option == NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL) {
+            this.proxyProtocol = value == null ? IpRangeSet.empty() : (IpRangeSet) value;
             return true;
         }
         this.validate(option, value);

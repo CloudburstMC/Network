@@ -343,6 +343,34 @@ class SdpUtilTest {
     }
 
     @Test
+    void relayedMediaAnnouncesOnlyTheRelaysWithTheirBaseHidden() {
+        String result = SdpUtil.withRelayedCandidates(GATHERED, endpoints("203.0.113.99:19165", "[2001:db8::99]:19165"));
+
+        assertEquals("v=0\r\n"
+                + "a=candidate:80000000 1 udp 1694498815 203.0.113.99 19165 typ srflx raddr 0.0.0.0 rport 0\r\n"
+                + "a=candidate:80000001 1 udp 1694498559 2001:db8:0:0:0:0:0:99 19165 typ srflx raddr :: rport 0\r\n"
+                + "a=end-of-candidates\r\n"
+                + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n", result);
+    }
+
+    @Test
+    void relayedMediaNeverKeepsAGatheredCandidate() {
+        String gathered = GATHERED.replace("a=end-of-candidates",
+                "a=candidate:5 1 udp 1677729535 203.0.113.50 1454 typ srflx raddr 10.88.0.4 rport 19135\r\n"
+                        + "a=end-of-candidates");
+        String result = SdpUtil.withRelayedCandidates(gathered, endpoints("10.88.0.4:19135"));
+
+        assertEquals(1, result.lines().filter(line -> line.startsWith("a=candidate:")).count(), result);
+        assertTrue(result.contains(" 10.88.0.4 19135 typ srflx raddr 0.0.0.0 rport 0\r\n"), result);
+    }
+
+    @Test
+    void relayedMediaAnnouncesNothingRatherThanThisHost() {
+        String ipv4Only = "v=0\r\na=candidate:1 1 udp 2130706431 10.88.0.4 19135 typ host\r\n";
+        assertEquals("v=0\r\n", SdpUtil.withRelayedCandidates(ipv4Only, endpoints("[2001:db8::99]:19165")));
+    }
+
+    @Test
     void aTranslationIsBasedOnAHeldHostWhenThereIsOne() {
         String result = SdpUtil.withAdvertisedCandidates(GATHERED, endpoints("172.17.0.2", "203.0.113.99"));
         assertTrue(result.contains(" 203.0.113.99 19135 typ srflx raddr 172.17.0.2 rport 19135\r\n"));

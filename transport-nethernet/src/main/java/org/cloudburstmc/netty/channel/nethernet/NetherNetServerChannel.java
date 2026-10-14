@@ -27,7 +27,9 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChanne
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.SignalHandler;
+import org.cloudburstmc.netty.util.nethernet.IceProxyProtocol;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TransportIdentityBinding;
 import io.netty.channel.AbstractServerChannel;
@@ -58,6 +60,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private final NetherNetServerSignaling signaling;
 
     private InetSocketAddress localAddress;
+    /** Null unless PROXY protocol relays are read on the ICE port. */
+    private volatile @Nullable IceProxyProtocol proxyProtocol;
     private volatile boolean open = true;
     /**
      * Open connections, each holding a native peer, closed with this channel.
@@ -106,9 +110,29 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         });
         this.signaling.setMetrics(serverMetrics());
 
+        // Before signaling serves anything, so no answer names this host past the relays
+        this.proxyProtocol = bindProxyProtocol();
         // Only a fixed port is one every connection shares, so only that one is worth telling
         InetSocketAddress ice = iceAddress();
-        this.signaling.bind(localAddress, ice != null && ice.getPort() > 0 ? ice : null, eventLoop());
+        try {
+            this.signaling.setMediaRelayed(this.proxyProtocol != null);
+            this.signaling.bind(localAddress, ice != null && ice.getPort() > 0 ? ice : null, eventLoop());
+        } catch (Exception e) {
+            closeProxyProtocol();
+            throw e;
+        }
+    }
+
+    private @Nullable IceProxyProtocol bindProxyProtocol() throws IOException {
+        IpRangeSet relays = this.config.getOption(NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL);
+        if (relays.isEmpty()) {
+            return null;
+        }
+        InetSocketAddress ice = iceAddress();
+        if (ice == null || ice.getPort() <= 0) {
+            throw new IOException("PROXY protocol relays need a fixed ICE port");
+        }
+        return IceProxyProtocol.set(iceBindAddress(ice), ice.getPort(), relays);
     }
 
     /**
@@ -287,7 +311,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                                       PendingSignals remoteSignals) throws Exception {
         int handshakeTimeoutSeconds =
                 this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
-        RemoteCandidates candidates = RemoteCandidates.server(pc, connectionId);
+        RemoteCandidates candidates = this.proxyProtocol != null
+                ? RemoteCandidates.relayed(pc, connectionId) : RemoteCandidates.server(pc, connectionId);
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId,
                 offerSdp, clientAddress, child, pc, candidates, handshakeTimeoutSeconds);
         observer.register(pc);
@@ -364,14 +389,19 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * @param player        The player's name, null when the signaling does not know it
      * @param reachedServer Whether ICE found a path, so the join failed after that
      * @param icePort       The UDP port ICE uses, 0 when each connection takes its own
+     * @param relayed       Whether players only reach that port through PROXY protocol relays
      * @return The warning
      */
-    static String joinFailedMessage(@Nullable String player, boolean reachedServer, int icePort) {
+    static String joinFailedMessage(@Nullable String player, boolean reachedServer, int icePort, boolean relayed) {
         // Self asserted under TokenTrust.ANY, so it must not be able to forge log lines
         String name = player == null ? "" : player.replaceAll("\\p{Cntrl}", "").strip();
         String who = name.isEmpty() ? "A player" : name.length() > 32 ? name.substring(0, 32) : name;
         if (reachedServer) {
             return who + " reached this server over NetherNet, but the connection did not finish setting up.";
+        }
+        if (relayed) {
+            return who + " could not connect over NetherNet: nothing arrived through the PROXY protocol relays this "
+                    + "server advertises. Each relay has to forward to UDP port " + icePort + " and be listed.";
         }
         return who + " could not connect over NetherNet: no network path to this server was found. Their device "
                 + "needs to reach " + (icePort > 0 ? "UDP port " + icePort + " on one of the addresses this server"
@@ -437,7 +467,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             PlayerInfo player = child.attr(NetherNetChildChannel.PLAYER_INFO).get();
             InetSocketAddress ice = iceAddress();
             log.warn(joinFailedMessage(player == null ? null : player.displayName(), iceConnected,
-                    ice == null ? 0 : ice.getPort()));
+                    ice == null ? 0 : ice.getPort(), proxyProtocol != null));
             log.debug("Join {} from {} failed: {}{}", connectionId, clientAddress, reason,
                     iceConnected ? ", after ICE connected" : "");
         }
@@ -450,7 +480,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
          */
         private void inferPeerCandidates(String local) {
             if (!config.getOption(NetherChannelOption.NETHER_INFER_PEER_CANDIDATES)
-                    || SdpUtil.hasRoutableHostCandidate(local)) {
+                    || proxyProtocol != null || SdpUtil.hasRoutableHostCandidate(local)) {
                 return;
             }
             for (String candidate : SdpUtil.inferredPeerCandidates(this.offerSdp, this.clientAddress)) {
@@ -580,6 +610,19 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         signaling.close();
         for (NetherNetChildChannel child : this.children) {
             child.close();
+        }
+        closeProxyProtocol();
+    }
+
+    private void closeProxyProtocol() {
+        IceProxyProtocol relays = this.proxyProtocol;
+        if (relays != null) {
+            this.proxyProtocol = null;
+            try {
+                relays.close();
+            } catch (RuntimeException e) {
+                log.warn("Could not clear PROXY protocol relays", e);
+            }
         }
     }
 

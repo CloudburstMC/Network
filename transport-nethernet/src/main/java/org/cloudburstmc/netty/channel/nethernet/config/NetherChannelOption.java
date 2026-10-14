@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
 import io.netty.channel.ChannelOption;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
@@ -84,6 +85,17 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
      */
     public static final ChannelOption<InetSocketAddress> NETHER_SERVER_ICE_ADDRESS =
             valueOf(NetherChannelOption.class, "NETHER_SERVER_ICE_ADDRESS");
+
+    /**
+     * Relays whose PROXY protocol v2 header is read on the ICE port, so their datagrams count as
+     * coming from the client the header declares. Needs a fixed ICE port, see
+     * {@link #NETHER_SERVER_ICE_ADDRESS}. While set, peers only come through these relays: their
+     * own candidates are not checked, so every reply goes back through the relay a peer came
+     * through, and the port drops anything else but STUN responses to its own requests. Empty by
+     * default.
+     */
+    public static final ChannelOption<IpRangeSet> NETHER_SERVER_PROXY_PROTOCOL =
+            valueOf(NetherChannelOption.class, "NETHER_SERVER_PROXY_PROTOCOL");
 
     /**
      * Whether to check the address a peer signaled from when its offer holds nothing routable.

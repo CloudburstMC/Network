@@ -58,4 +58,13 @@ class ProviderEndpointTest {
         assertThrows(IOException.class, () -> ProviderEndpoint.resolve(endpoint("127.0.0.1", 19133), List.of(), false, List.of()));
         assertEquals(List.of(endpoint("127.0.0.1", 19133)), ProviderEndpoint.resolve(endpoint("127.0.0.1", 19133), List.of(), true, List.of()).advertised());
     }
+
+    @Test void relayedHostsRefuseTheirOwnEndpointButNotARelayOnThisHost() throws Exception {
+        var bind = endpoint("0.0.0.0", 19133);
+        var interfaces = List.of(address("192.168.1.5"));
+        assertThrows(IOException.class, () -> ProviderEndpoint.relayed(bind, List.of(endpoint("192.168.1.5", 19133)), false, interfaces));
+        assertThrows(IOException.class, () -> ProviderEndpoint.relayed(endpoint("192.168.1.5", 19133), List.of(endpoint("192.168.1.5", 19133)), false, List.of()));
+        assertEquals(List.of(endpoint("192.168.1.5", 19165)),
+            ProviderEndpoint.relayed(bind, List.of(endpoint("192.168.1.5", 19165)), false, interfaces).advertised());
+    }
 }

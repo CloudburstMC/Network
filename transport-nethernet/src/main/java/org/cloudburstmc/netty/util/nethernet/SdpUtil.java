@@ -265,7 +265,7 @@ public final class SdpUtil {
         // A held host is the more honest base for a translation, so it goes first for its family
         List<String[]> hosts = new ArrayList<>(gathered.udpHosts());
         hosts.sort(Comparator.comparing((String[] host) -> !namedByAny(held, host)));
-        List<String> translated = translatedCandidates(hosts, foreign, Set.of());
+        List<String> translated = translatedCandidates(hosts, foreign, Set.of(), false);
         if (held.isEmpty() && translated.isEmpty()) {
             log.warn("None of the gathered ICE candidates match the advertised addresses {}, "
                     + "announcing all of them instead", allowed);
@@ -273,6 +273,26 @@ public final class SdpUtil {
         }
         return gathered.rewrite(line -> !held.isEmpty() && !isReflexiveOrRelayed(line)
                 && !namedByAny(held, line.split(" ")), translated);
+    }
+
+    /**
+     * Announces only the endpoints in {@code relays}, for media that PROXY protocol relays front, each
+     * as {@link #withAdvertisedCandidates} translates an endpoint this host did not gather, with its
+     * related address hidden. So players only learn the relays, and neither reach nor learn this host's
+     * own addresses. A relay is announced only when ICE gathered a host candidate of its family.
+     *
+     * @param sdp    The description to filter
+     * @param relays The relay endpoints, port 0 for the media port
+     * @return The filtered description, with no candidates when none of the relays can be announced
+     */
+    public static String withRelayedCandidates(String sdp, List<InetSocketAddress> relays) {
+        Gathered gathered = Gathered.of(sdp);
+        List<String> translated = translatedCandidates(gathered.udpHosts(), relays, Set.of(), true);
+        if (translated.isEmpty()) {
+            log.warn("None of the relays {} can be announced from the gathered ICE candidates, "
+                    + "so the answer names none", relays);
+        }
+        return gathered.rewrite(line -> true, translated);
     }
 
     /**
@@ -290,7 +310,7 @@ public final class SdpUtil {
             return sdp;
         }
         Gathered gathered = Gathered.of(sdp);
-        List<String> translated = translatedCandidates(gathered.udpHosts(), endpoints, gathered.udpEndpoints());
+        List<String> translated = translatedCandidates(gathered.udpHosts(), endpoints, gathered.udpEndpoints(), false);
         return translated.isEmpty() ? sdp : gathered.rewrite(line -> false, translated);
     }
 
@@ -361,10 +381,10 @@ public final class SdpUtil {
      * A server reflexive candidate for every foreign endpoint, based on the first host candidate
      * of the same family. One per address and port, since every interface shares the socket and
      * would otherwise give the same line, and none for an {@code address port} already in
-     * {@code present}.
+     * {@code present}. A hidden base is announced as the unspecified address and port 0.
      */
     private static List<String> translatedCandidates(List<String[]> hosts, List<InetSocketAddress> foreign,
-                                                     Set<String> present) {
+                                                     Set<String> present, boolean hideBase) {
         List<String> candidates = new ArrayList<>();
         Set<String> emitted = new HashSet<>(present);
         int foundation = 80000000;
@@ -379,8 +399,10 @@ public final class SdpUtil {
                 }
                 log.debug("Announcing {} {} as a translation of {} {}", address, port, host[4], host[5]);
                 long priority = TRANSLATED_PRIORITY - ((long) candidates.size() << 8);
+                String base = hideBase ? (local.length == 4 ? "0.0.0.0" : "::") + " rport 0"
+                        : host[4] + " rport " + host[5];
                 candidates.add(CANDIDATE_PREFIX + foundation++ + " 1 " + host[2] + " " + priority + " "
-                        + address + " " + port + " typ srflx raddr " + host[4] + " rport " + host[5]);
+                        + address + " " + port + " typ srflx raddr " + base);
             }
         }
         return candidates;

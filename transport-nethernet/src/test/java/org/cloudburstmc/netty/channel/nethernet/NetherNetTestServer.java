@@ -21,6 +21,7 @@ import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
+import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import tel.schich.libdatachannel.*;
 
 import java.net.InetSocketAddress;
@@ -45,6 +46,8 @@ final class NetherNetTestServer implements AutoCloseable {
     /** User events and errors that reached the end of the child's pipeline. */
     final BlockingQueue<Object> childEvents = new LinkedBlockingQueue<>();
     private final InetSocketAddress iceAddress;
+    /** PROXY protocol relays in front of the ICE port. */
+    IpRangeSet relays = IpRangeSet.empty();
 
     NetherNetTestServer() {
         this(null);
@@ -60,6 +63,7 @@ final class NetherNetTestServer implements AutoCloseable {
     void bind() throws InterruptedException {
         new ServerBootstrap().group(group).channelFactory(() -> server)
                 .option(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, iceAddress)
+                .option(NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL, relays)
                 .handler(new ChannelInboundHandlerAdapter() {
                     @Override
                     public void channelRead(ChannelHandlerContext ctx, Object message) {
@@ -191,7 +195,10 @@ final class NetherNetTestServer implements AutoCloseable {
         final CompletableFuture<Void> removed = new CompletableFuture<>();
         /** What the server trickles, one {@code CONNECTRESPONSE} or {@code CANDIDATEADD} each. */
         final BlockingQueue<String> sent = new LinkedBlockingQueue<>();
-        boolean failSetup, failRemoval, trickle;
+        boolean failSetup, failRemoval, trickle, refuseRelays;
+        volatile boolean mediaRelayed;
+        /** Whether the media was relayed when signaling bound, null before. */
+        volatile Boolean relayedAtBind;
         volatile SignalHandler handler;
 
         public void setSignalHandler(String id, SignalHandler handler) {
@@ -205,7 +212,11 @@ final class NetherNetTestServer implements AutoCloseable {
         public void sendDescription(String remoteNetworkId, String sdp) { answer.complete(sdp); }
         public void sendSignal(String targetNetworkId, String data) { sent.add(data); }
         public boolean usesTrickleIce() { return trickle; }
-        public void bind(SocketAddress address, InetSocketAddress iceAddress, EventLoop loop) { }
+        public void bind(SocketAddress address, InetSocketAddress iceAddress, EventLoop loop) { relayedAtBind = mediaRelayed; }
+        public void setMediaRelayed(boolean relayed) {
+            if (refuseRelays) NetherNetServerSignaling.super.setMediaRelayed(relayed);
+            mediaRelayed = relayed;
+        }
         public void setNewConnectionHandler(NewConnectionHandler handler) { }
         public void setAdvertisementData(PongData data) { }
         public String getLocalNetworkId() { return "server"; }

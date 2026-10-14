@@ -35,12 +35,14 @@ final class RemoteCandidates {
     private final PeerConnection peer;
     private final String connectionId;
     private final boolean ipOnly;
+    private final int limit;
     private final AtomicInteger trickled = new AtomicInteger();
 
-    private RemoteCandidates(PeerConnection peer, String connectionId, boolean ipOnly) {
+    private RemoteCandidates(PeerConnection peer, String connectionId, boolean ipOnly, int limit) {
         this.peer = peer;
         this.connectionId = connectionId;
         this.ipOnly = ipOnly;
+        this.limit = limit;
     }
 
     /**
@@ -48,7 +50,15 @@ final class RemoteCandidates {
      * from trickling.
      */
     static RemoteCandidates server(PeerConnection peer, String connectionId) {
-        return new RemoteCandidates(peer, connectionId, true);
+        return new RemoteCandidates(peer, connectionId, true, MAX_CANDIDATES);
+    }
+
+    /**
+     * For a server behind PROXY protocol relays, which takes none, so it only answers the checks a
+     * peer sends through its relay and never contacts the peer directly.
+     */
+    static RemoteCandidates relayed(PeerConnection peer, String connectionId) {
+        return new RemoteCandidates(peer, connectionId, true, 0);
     }
 
     /**
@@ -56,21 +66,21 @@ final class RemoteCandidates {
      * as a cluster DNS name, for libdatachannel to resolve.
      */
     static RemoteCandidates client(PeerConnection peer, String connectionId) {
-        return new RemoteCandidates(peer, connectionId, false);
+        return new RemoteCandidates(peer, connectionId, false, MAX_CANDIDATES);
     }
 
     /**
      * Applies the remote description, keeping the candidates {@link #trickle} would take.
      */
     void setDescription(String sdp, SessionDescriptionType type) {
-        this.peer.setRemoteDescription(this.ipOnly ? SdpUtil.withIpCandidates(sdp, MAX_CANDIDATES) : sdp, type);
+        this.peer.setRemoteDescription(this.ipOnly ? SdpUtil.withIpCandidates(sdp, this.limit) : sdp, type);
     }
 
     /**
      * Applies a candidate the remote side trickled.
      */
     void trickle(String candidate) {
-        if (this.ipOnly && (!SdpUtil.hasIpAddress(candidate) || this.trickled.incrementAndGet() > MAX_CANDIDATES)) {
+        if (this.ipOnly && (!SdpUtil.hasIpAddress(candidate) || this.trickled.incrementAndGet() > this.limit)) {
             log.debug("Ignoring remote candidate for {}: {}", this.connectionId, candidate);
             return;
         }
