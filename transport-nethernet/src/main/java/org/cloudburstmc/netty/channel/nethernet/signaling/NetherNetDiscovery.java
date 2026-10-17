@@ -49,6 +49,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     private final Map<String, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
     private final Map<Long, InetSocketAddress> peerAddresses = new ConcurrentHashMap<>();
     private Channel channel;
+    private EventLoopGroup group;
     private byte[] pongData;
     private NetherNetServerSignaling.NewConnectionHandler newConnectionHandler;
     private BiConsumer<Long, ByteBuf> discoveryCallback;
@@ -67,35 +68,30 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     }
 
     public void bind(int port) {
-        EventLoopGroup group = new NioEventLoopGroup(1);
-        try {
-            Bootstrap bootstrap = new Bootstrap();
-            bootstrap.group(group)
-                    .channel(NioDatagramChannel.class)
-                    .option(ChannelOption.SO_BROADCAST, true)
-                    .handler(this);
-
-            this.channel = bootstrap.bind(port).sync().channel();
-            log.info("NetherNet Discovery listening on port {}", port);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        bind(new InetSocketAddress(port));
     }
 
+    /**
+     * Opens the discovery socket on a loop of its own, which {@link #close} shuts down.
+     */
     public void bind(InetSocketAddress address) {
-        EventLoopGroup group = new NioEventLoopGroup(1);
+        EventLoopGroup group = this.group = new NioEventLoopGroup(1);
         try {
-            Bootstrap bootstrap = new Bootstrap();
-            bootstrap.group(group)
+            this.channel = new Bootstrap().group(group)
                     .channel(NioDatagramChannel.class)
                     .option(ChannelOption.SO_BROADCAST, true)
-                    .handler(this);
-
-            this.channel = bootstrap.bind(address).sync().channel();
-            log.info("NetherNet Discovery listening on {}", address);
+                    .handler(this)
+                    .bind(address).sync().channel();
         } catch (InterruptedException e) {
+            group.shutdownGracefully();
             Thread.currentThread().interrupt();
+            return;
+        } catch (Throwable t) {
+            // sync() rethrows a failed bind, such as a port in use
+            group.shutdownGracefully();
+            throw t;
         }
+        log.info("NetherNet Discovery listening on {}", address);
     }
 
     public void sendDiscoveryRequest(InetSocketAddress target, BiConsumer<Long, ByteBuf> onServerFound) {
@@ -315,6 +311,13 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         if (channel != null) {
             channel.close();
         }
+        if (group != null) {
+            group.shutdownGracefully();
+        }
+    }
+
+    EventLoopGroup group() {
+        return this.group;
     }
 
     public boolean isActive() {
