@@ -33,10 +33,13 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
      * Binds the signaling medium to listen for incoming connections (Server mode).
      *
      * @param localAddress The local address to bind to.
+     * @param iceAddress   Where ICE binds, on a fixed port shared by every connection, or null when each
+     *                     connection takes a port of its own. A wildcard address gathers on every interface.
      * @param eventLoop    The owning channel's event loop, where new connections are handed over.
      * @throws ConnectException If the signaling cannot bind
      */
-    void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException;
+    void bind(SocketAddress localAddress, @Nullable InetSocketAddress iceAddress, EventLoop eventLoop)
+            throws ConnectException;
 
     /**
      * Sets the handler a new connection is handed to, see {@link NewConnectionHandler#onConnect}.
@@ -85,8 +88,9 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
     }
 
     /**
-     * Returns the ICE servers (STUN/TURN) obtained from the signaling handshake.
-     * Returns empty list if none available or not applicable.
+     * Returns the ICE servers (STUN/TURN) obtained from the signaling handshake, which every connection
+     * gathers through. Returns empty list if none available or not applicable. Servers of the host's own
+     * go in {@code NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG}.
      */
     default List<IceServerInfo> getIceServers() {
         return Collections.emptyList();

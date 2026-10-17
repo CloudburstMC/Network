@@ -49,6 +49,7 @@ import org.jspecify.annotations.Nullable;
 import javax.net.ssl.SSLException;
 
 import java.net.ConnectException;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
 import java.nio.channels.ClosedChannelException;
@@ -95,7 +96,8 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     @Override
-    public void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException {
+    public void bind(SocketAddress localAddress, @Nullable InetSocketAddress iceAddress, EventLoop eventLoop)
+            throws ConnectException {
         try {
             connectInternal().join();
         } catch (Exception e) {

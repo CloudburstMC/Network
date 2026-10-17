@@ -95,11 +95,21 @@ class HttpSignalingRequestTest {
     }
 
     private void start(NetherNetHTTPServerSignaling.Builder builder) throws Exception {
+        this.start(builder, null);
+    }
+
+    /** Binds with ICE where the channel would say it binds, null for a port per connection. */
+    private void start(NetherNetHTTPServerSignaling.Builder builder, Integer icePort) throws Exception {
         try (ServerSocket probe = new ServerSocket(0)) {
             this.port = probe.getLocalPort();
         }
         this.signaling = builder.build();
-        this.signaling.bind(new InetSocketAddress("127.0.0.1", this.port), this.group.next());
+        InetSocketAddress ice = null;
+        if (icePort != null) {
+            // 0 shares the signaling port, as the channel's default does
+            ice = new InetSocketAddress("127.0.0.1", icePort == 0 ? this.port : icePort);
+        }
+        this.signaling.bind(new InetSocketAddress("127.0.0.1", this.port), ice, this.group.next());
     }
 
     private HttpResponse<String> send(String method, String path, String body) throws Exception {
@@ -132,7 +142,7 @@ class HttpSignalingRequestTest {
                 this.port = probe.getLocalPort();
             }
             this.signaling = this.builder().build();
-            this.signaling.bind(new InetSocketAddress("127.0.0.1", this.port), plain.next());
+            this.signaling.bind(new InetSocketAddress("127.0.0.1", this.port), null, plain.next());
 
             assertEquals(200, this.status("GET", "/v1/join", null));
         } finally {
@@ -303,6 +313,73 @@ class HttpSignalingRequestTest {
         assertEquals(200, response.statusCode());
         assertEquals("application/sdp", response.headers().firstValue("content-type").orElse(""));
         assertTrue(response.body().startsWith("v=0"), "the answer is the SDP the transport produced");
+    }
+
+    @Test
+    void announcesTheAddressAPlayerTypedInWhenNoneAreConfigured() throws Exception {
+        // A container gathers only its own address, while the player typed the one forwarded to it.
+        // Media shares the signaling port here, so the typed port is the outside one for both
+        this.start(this.builder(), 0);
+        String gathered = this.answerGathered(this.port);
+
+        assertTrue(this.answerFor("192.168.1.2:19132").contains(
+                " 192.168.1.2 19132 typ srflx raddr 172.17.0.2 rport " + this.port + "\r\n"));
+        assertEquals(gathered, this.answerFor("play.example.test:19132"), "a name would need a lookup");
+        assertEquals(gathered, this.answerFor("127.0.0.1:19132"), "and loopback reaches no player elsewhere");
+    }
+
+    @Test
+    void announcesTheTypedAddressOnTheMediaPortWhenSignalingHasItsOwn() throws Exception {
+        // The typed port is the TCP forward, which says nothing about where media is forwarded
+        this.start(this.builder(), 19135);
+        this.answerGathered(19135);
+
+        assertTrue(this.answerFor("192.168.1.2:19132").contains(
+                " 192.168.1.2 19135 typ srflx raddr 172.17.0.2 rport 19135\r\n"));
+    }
+
+    @Test
+    void configuredAddressesWinOverTheTypedOne() throws Exception {
+        this.start(this.builder().setAdvertisedAddresses(List.of("10.0.0.5")));
+        this.answerGathered(this.port);
+
+        String answer = this.answerFor("192.168.1.2:19132");
+        assertTrue(answer.contains(" 10.0.0.5 " + this.port + " typ srflx"));
+        assertFalse(answer.contains("192.168.1.2"));
+    }
+
+    @Test
+    void ignoresTheTypedAddressBehindATrustedProxy() throws Exception {
+        // The player typed the proxy's address, which forwards signaling and not necessarily media
+        this.start(this.builder().setTrustedProxies(List.of("127.0.0.1")));
+        String gathered = this.answerGathered(this.port);
+
+        assertEquals(gathered, this.answerFor("192.168.1.2:19132"));
+    }
+
+    /** Answers every join with one host candidate, on the given media port. */
+    private String answerGathered(int mediaPort) {
+        String gathered = ANSWER + "a=candidate:1 1 udp 2130706431 172.17.0.2 " + mediaPort + " typ host\r\n";
+        this.signaling.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->
+                this.signaling.sendDescription(networkId, gathered));
+        return gathered;
+    }
+
+    /** Joins with a Host header of our choosing, which {@link HttpClient} refuses to send. */
+    private String answerFor(String host) throws Exception {
+        byte[] offer = TestOffers.selfSigned().getBytes(StandardCharsets.US_ASCII);
+        try (Socket socket = new Socket("127.0.0.1", this.port)) {
+            socket.setSoTimeout(10_000);
+            OutputStream out = socket.getOutputStream();
+            out.write(("POST /v1/join/42 HTTP/1.1\r\nHost: " + host + "\r\nContent-Length: " + offer.length
+                    + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(offer);
+            out.flush();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+            assertEquals(200, TestHttp.readStatus(in));
+            return TestHttp.readBody(in);
+        }
     }
 
     @Test

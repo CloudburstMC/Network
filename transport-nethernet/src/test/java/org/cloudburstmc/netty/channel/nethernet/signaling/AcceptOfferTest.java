@@ -68,7 +68,7 @@ class AcceptOfferTest {
     @Test
     void bindsNothingWhenHttpIsOff() throws Exception {
         int port = freePort();
-        build(false, true).bind(new InetSocketAddress("127.0.0.1", port), group.next());
+        build(false, true).bind(new InetSocketAddress("127.0.0.1", port), null, group.next());
 
         // The port is still free, so nothing is listening on it
         try (ServerSocket taken = new ServerSocket(port)) {
@@ -79,7 +79,7 @@ class AcceptOfferTest {
     @Test
     void answersAnOfferHandedInFromOutside() throws Exception {
         NetherNetHTTPServerSignaling s = build(false, true);
-        s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
+        s.bind(new InetSocketAddress("127.0.0.1", freePort()), null, group.next());
 
         CompletableFuture<String> answer =
                 s.acceptOffer("42", TestOffers.selfSigned(), new InetSocketAddress("203.0.113.7", 1234), null, null);
@@ -99,7 +99,7 @@ class AcceptOfferTest {
     @Test
     void reportsWhyAnOfferWasRejected() throws Exception {
         NetherNetHTTPServerSignaling s = build(false, false);
-        s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
+        s.bind(new InetSocketAddress("127.0.0.1", freePort()), null, group.next());
 
         ExecutionException e = assertThrows(ExecutionException.class,
                 () -> s.acceptOffer("42", TestOffers.selfSigned(), null, null, null).get(10, TimeUnit.SECONDS));
@@ -112,7 +112,7 @@ class AcceptOfferTest {
     @Test
     void reportsAnUnusableIdentity() throws Exception {
         NetherNetHTTPServerSignaling s = build(false, true);
-        s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
+        s.bind(new InetSocketAddress("127.0.0.1", freePort()), null, group.next());
 
         ExecutionException e = assertThrows(ExecutionException.class,
                 () -> s.acceptOffer("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n",
@@ -126,7 +126,7 @@ class AcceptOfferTest {
     @Test
     void failsTheJoinAsSoonAsItsChildCloses() throws Exception {
         NetherNetHTTPServerSignaling s = build(false, true);
-        s.bind(new InetSocketAddress("127.0.0.1", freePort()), group.next());
+        s.bind(new InetSocketAddress("127.0.0.1", freePort()), null, group.next());
         // A child that dies during setup closes before answering, which the channel reports by
         // removing its handler. The join must not sit out the answer timeout
         s.setNewConnectionHandler((connectionId, networkId, payload, clientAddress, player) ->

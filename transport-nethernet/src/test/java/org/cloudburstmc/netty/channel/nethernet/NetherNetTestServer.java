@@ -156,7 +156,7 @@ final class NetherNetTestServer implements AutoCloseable {
         public void sendDescription(String remoteNetworkId, String sdp) { answer.complete(sdp); }
         public void sendSignal(String targetNetworkId, String data) { sent.add(data); }
         public boolean usesTrickleIce() { return trickle; }
-        public void bind(SocketAddress address, EventLoop loop) { }
+        public void bind(SocketAddress address, InetSocketAddress iceAddress, EventLoop loop) { }
         public void setNewConnectionHandler(NewConnectionHandler handler) { }
         public void setAdvertisementData(PongData data) { }
         public String getLocalNetworkId() { return "server"; }

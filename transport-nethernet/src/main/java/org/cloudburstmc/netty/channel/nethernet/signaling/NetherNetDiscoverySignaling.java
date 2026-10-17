@@ -21,6 +21,7 @@ import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jspecify.annotations.Nullable;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -121,7 +122,7 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     }
 
     @Override
-    public void bind(SocketAddress localAddress, EventLoop eventLoop) {
+    public void bind(SocketAddress localAddress, @Nullable InetSocketAddress iceAddress, EventLoop eventLoop) {
         if (!this.discovery.isActive()) {
             if (localAddress instanceof InetSocketAddress) {
                 this.discovery.bind((InetSocketAddress) localAddress);

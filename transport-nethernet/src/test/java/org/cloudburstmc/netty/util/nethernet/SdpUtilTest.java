@@ -305,6 +305,36 @@ class SdpUtilTest {
     }
 
     @Test
+    void aBareAddedAddressTakesTheMediaPort() {
+        String expected = GATHERED.replace("a=end-of-candidates", TRANSLATED + "a=end-of-candidates");
+        assertEquals(expected, SdpUtil.withAddedEndpoints(GATHERED, endpoints("203.0.113.99")));
+        String ipv4Only = "v=0\r\na=candidate:1 1 udp 2130706431 10.88.0.4 19135 typ host\r\n";
+        assertSame(ipv4Only, SdpUtil.withAddedEndpoints(ipv4Only, endpoints("[2001:db8::99]:19132")),
+                "nor one with no host of the family");
+    }
+
+    @Test
+    void addsADiscoveredMappingOnItsOwnPortWithoutNarrowing() {
+        String result = SdpUtil.withAddedEndpoints(GATHERED, endpoints("203.0.113.99:40404"));
+        assertTrue(result.contains(" 203.0.113.99 40404 typ srflx raddr 10.88.0.4 rport 19135\r\n"));
+        assertTrue(result.contains("172.17.0.2") && result.contains("fd7a::1"));
+        assertSame(GATHERED, SdpUtil.withAddedEndpoints(GATHERED, endpoints("10.88.0.4:19135")),
+                "an endpoint this host gathered is not repeated");
+    }
+
+    @Test
+    void aGatheredMappingHidesOnlyItsOwnPort() {
+        // ICE's own STUN found the port the router moved to, while a forward may still take the typed one
+        String gathered = GATHERED.replace("a=end-of-candidates",
+                "a=candidate:5 1 udp 1677729535 203.0.113.99 1454 typ srflx raddr 10.88.0.4 rport 19135\r\n"
+                        + "a=end-of-candidates");
+
+        assertSame(gathered, SdpUtil.withAddedEndpoints(gathered, endpoints("203.0.113.99:1454")));
+        assertTrue(SdpUtil.withAddedEndpoints(gathered, endpoints("203.0.113.99:19135"))
+                .contains(" 203.0.113.99 19135 typ srflx raddr 10.88.0.4 rport 19135\r\n"));
+    }
+
+    @Test
     void narrowsToTheHeldAddressesAndTranslatesTheRest() {
         String result = SdpUtil.withAdvertisedCandidates(GATHERED, endpoints("10.88.0.4", "203.0.113.99"));
         assertTrue(result.contains("a=candidate:1 1 udp 2130706431 10.88.0.4 19135 typ host\r\n"));

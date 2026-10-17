@@ -70,7 +70,7 @@ class ForwardedForTest {
                 }))
                 .build();
 
-        signaling.bind(new InetSocketAddress("127.0.0.1", port), group.next());
+        signaling.bind(new InetSocketAddress("127.0.0.1", port), null, group.next());
         return port;
     }
 

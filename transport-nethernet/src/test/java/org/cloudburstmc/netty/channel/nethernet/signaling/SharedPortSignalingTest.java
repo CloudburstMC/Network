@@ -84,7 +84,7 @@ class SharedPortSignalingTest {
      */
     private void start(NetherNetHTTPServerSignaling.Builder builder) throws Exception {
         signaling = builder.build();
-        signaling.bind(new InetSocketAddress("127.0.0.1", 0), group.next());
+        signaling.bind(new InetSocketAddress("127.0.0.1", 0), null, group.next());
 
         host = new ServerBootstrap()
                 .group(group)

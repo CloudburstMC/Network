@@ -71,17 +71,15 @@ class NetherNetHTTPServerSignalingBuilderTest {
 
     @Test
     void reportsWhatItWillDoWithIce(@TempDir Path dir) throws Exception {
-        IceServerInfo turn =
-                new IceServerInfo("user", "secret", List.of("turn:turn.example:3478"));
         NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setIceOnLocalPort(false)
-                .setIceServers(List.of(turn))
+                .setStunServers(List.of("stun:stun.example.test"))
                 .build();
 
         assertFalse(signaling.usesTrickleIce(), "an answer is sent once, with the candidates it has");
         assertFalse(signaling.allowsIceOnLocalPort());
-        assertEquals(List.of(turn), signaling.getIceServers());
+        assertEquals(List.of(), signaling.getIceServers(), "it obtains none, and STUN is asked in the background");
         assertNotNull(signaling.serverIdentity());
         assertFalse(signaling.isActive(), "nothing is serving until it is bound");
         signaling.close();
@@ -92,7 +90,7 @@ class NetherNetHTTPServerSignalingBuilderTest {
         NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setAdvertisedAddresses(null)
-                .setIceServers(null)
+                .setStunServers(null)
                 .build();
 
         assertTrue(signaling.allowsIceOnLocalPort(), "ICE may use the signaling port unless told otherwise");
@@ -128,7 +126,7 @@ class NetherNetHTTPServerSignalingBuilderTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> signaling.bind(new java.net.SocketAddress() {
-                }, null));
+                }, null, null));
         signaling.close();
     }
 
@@ -140,7 +138,7 @@ class NetherNetHTTPServerSignalingBuilderTest {
         signaling.close();
 
         assertThrows(IllegalStateException.class,
-                () -> signaling.bind(new java.net.InetSocketAddress("127.0.0.1", 0), null));
+                () -> signaling.bind(new java.net.InetSocketAddress("127.0.0.1", 0), null, null));
     }
 
     @Test
@@ -172,5 +170,43 @@ class NetherNetHTTPServerSignalingBuilderTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> new NetherNetHTTPServerSignaling.Builder().setIdentityPem(unreadable, "example.test"));
+    }
+
+    @Test
+    void reportsBadStunSettingsAtConfigurationTime() {
+        NetherNetHTTPServerSignaling.Builder builder = new NetherNetHTTPServerSignaling.Builder();
+        assertThrows(IllegalArgumentException.class, () -> builder.setStunServers(List.of("turn:turn.example")));
+        assertThrows(IllegalArgumentException.class, () -> builder.setStunMaxAge(java.time.Duration.ZERO));
+    }
+
+    @Test
+    void refusesStunServersNextToAdvertisedAddresses() throws Exception {
+        // The configured addresses already say what STUN would find, so asking for both is a mistake
+        assertThrows(IllegalStateException.class, () -> new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
+                .setStunServers(List.of("stun:stun.example.test"))
+                .setAdvertisedAddresses(List.of("203.0.113.10"))
+                .build());
+    }
+
+    @Test
+    void refusesStunServersWithoutAFixedIcePort() throws Exception {
+        // Discovery shares the ICE socket, so a port per connection leaves it nothing to share
+        NetherNetHTTPServerSignaling signaling = new NetherNetHTTPServerSignaling.Builder()
+                .setIdentity(OperatorIdentity.generate("example.test"))
+                .setServeHttp(false)
+                .setStunServers(List.of("stun:stun.example.test"))
+                .build();
+        io.netty.channel.DefaultEventLoopGroup group = new io.netty.channel.DefaultEventLoopGroup(1);
+        try {
+            java.net.ConnectException refused = assertThrows(java.net.ConnectException.class,
+                    () -> signaling.bind(new java.net.InetSocketAddress("127.0.0.1", 0), null, group.next()));
+            assertTrue(refused.getMessage().contains("fixed port"), refused.getMessage());
+            assertThrows(IllegalStateException.class,
+                    () -> signaling.bind(new java.net.InetSocketAddress("127.0.0.1", 0), null, group.next()),
+                    "and it does not linger half bound");
+        } finally {
+            group.shutdownGracefully(0, 1, java.util.concurrent.TimeUnit.SECONDS);
+        }
     }
 }

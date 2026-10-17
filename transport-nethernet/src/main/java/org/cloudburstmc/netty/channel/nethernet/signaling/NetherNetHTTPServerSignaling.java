@@ -90,6 +90,8 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.SecureRandom;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -128,7 +130,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final int answerTimeoutSeconds;
     private final boolean iceOnLocalPort;
     private final List<InetSocketAddress> advertisedAddresses;
-    private final List<IceServerInfo> iceServers;
+    private final List<InetSocketAddress> stunServers;
+    private final Duration stunMaxAge;
     private final TokenTrust tokenTrust;
     private final boolean serveHttp;
     private final boolean requiresTls;
@@ -136,7 +139,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private volatile MotdProvider motdProvider;
 
     private final Random random = new SecureRandom();
-    private final Map<String, Promise<String>> pendingAnswers = new ConcurrentHashMap<>();
+    private final Map<String, PendingJoin> pendingAnswers = new ConcurrentHashMap<>();
     /** The joins whose child has not answered yet, by the connection id the channel was handed. */
     private final Map<String, Promise<String>> pendingByConnection = new ConcurrentHashMap<>();
     private final Map<InetAddress, Integer> connectionsPerAddress = new ConcurrentHashMap<>();
@@ -154,7 +157,17 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private volatile EventLoop eventLoop;
     /** Identity validation runs here rather than on the loop, since a trust anchor may fetch keys. */
     private volatile ExecutorService validation;
+    /** Where ICE binds, as the channel told it, null when every connection takes its own port. */
+    private volatile @Nullable InetSocketAddress iceAddress;
+    private volatile @Nullable DiscoveredEndpoints discovered;
+    private volatile @Nullable ScheduledFuture<?> discoveryTask;
     private volatile boolean closed;
+
+    /**
+     * A join waiting for its answer, with the endpoint the player typed in when it is one to announce.
+     */
+    private record PendingJoin(Promise<String> answer, @Nullable InetSocketAddress typed) {
+    }
 
     private NetherNetHTTPServerSignaling(Builder builder) {
         this.serverIdentity = builder.identity;
@@ -171,7 +184,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         this.answerTimeoutSeconds = builder.answerTimeoutSeconds;
         this.iceOnLocalPort = builder.iceOnLocalPort;
         this.advertisedAddresses = builder.advertisedAddresses;
-        this.iceServers = builder.iceServers;
+        this.stunServers = builder.stunServers;
+        this.stunMaxAge = builder.stunMaxAge;
         this.tokenTrust = builder.tokenTrust;
         this.serveHttp = builder.serveHttp;
         this.requiresTls = builder.requiresTls;
@@ -180,7 +194,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     }
 
     @Override
-    public void bind(SocketAddress localAddress, EventLoop eventLoop) throws ConnectException {
+    public void bind(SocketAddress localAddress, @Nullable InetSocketAddress iceAddress, EventLoop eventLoop)
+            throws ConnectException {
         // Whatever reached it would be closed on arrival, so a second life would serve nothing
         if (this.closed) {
             throw new IllegalStateException("Signaling cannot be bound again once closed");
@@ -189,6 +204,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             throw new IllegalArgumentException("Unsupported address type");
         }
         this.eventLoop = eventLoop;
+        this.iceAddress = iceAddress;
 
         // One thread and a queue no longer than the joins that may wait keep validation as serial
         // as the loop was, so a flood of bad offers is refused rather than piled up
@@ -202,11 +218,51 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         // Fetches the trust anchor's keys now rather than under the first join
         validation.execute(this.tokenTrust::prepare);
 
-        // Offers arrive through acceptOffer instead, so there is nothing to listen on
-        if (!this.serveHttp) {
-            return;
+        // Without it offers arrive through acceptOffer instead, so there is nothing to listen on
+        if (this.serveHttp) {
+            listen(localAddress);
         }
+        if (!this.stunServers.isEmpty()) {
+            try {
+                this.discovered = startDiscovery(iceAddress, eventLoop);
+            } catch (ConnectException e) {
+                close();
+                throw e;
+            }
+        }
+    }
 
+    /**
+     * Starts STUN discovery on the ICE port, which it has to share with the peers, so a port that
+     * is not fixed fails the bind rather than discovering a mapping nobody uses.
+     */
+    private DiscoveredEndpoints startDiscovery(@Nullable InetSocketAddress ice, EventLoop eventLoop)
+            throws ConnectException {
+        if (ice == null) {
+            throw new ConnectException("STUN discovery needs ICE on a fixed port, set NETHER_SERVER_ICE_ADDRESS "
+                    + "or let ICE use the signaling port");
+        }
+        // Unresolved or wildcard, ICE binds the wildcard, which the monitors have to match
+        InetAddress host = ice.getAddress();
+        InetAddress bind = host == null || host.isAnyLocalAddress() ? null : host;
+        DiscoveredEndpoints discovered;
+        try {
+            discovered = new DiscoveredEndpoints(this.stunServers, this.stunMaxAge, ice.getPort(),
+                    DiscoveredEndpoints.nativeMonitors(bind, ice.getPort()), System::nanoTime);
+        } catch (RuntimeException e) {
+            ConnectException failure = new ConnectException(
+                    "Could not start STUN discovery on udp/" + ice.getPort() + ": " + e.getMessage());
+            failure.initCause(e);
+            throw failure;
+        }
+        this.discoveryTask = eventLoop.scheduleAtFixedRate(discovered::refresh,
+                DiscoveredEndpoints.FIRST_REFRESH_SECONDS, DiscoveredEndpoints.REFRESH_SECONDS, TimeUnit.SECONDS);
+        log.info("Running STUN discovery on udp/{} through {}", ice.getPort(),
+                this.stunServers.stream().map(NetUtil::toSocketAddressString).toList());
+        return discovered;
+    }
+
+    private void listen(SocketAddress localAddress) throws ConnectException {
         // Bind the listening socket ourselves so a failure throws correctly
         ServerSocketChannel channel;
         try {
@@ -281,6 +337,14 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         if (validation != null) {
             validation.shutdownNow();
         }
+        ScheduledFuture<?> discoveryTask = this.discoveryTask;
+        if (discoveryTask != null) {
+            discoveryTask.cancel(false);
+        }
+        DiscoveredEndpoints discovered = this.discovered;
+        if (discovered != null) {
+            discovered.close();
+        }
     }
 
     @Override
@@ -310,15 +374,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     @Override
     public OperatorIdentity serverIdentity() {
         return this.serverIdentity;
-    }
-
-    /**
-     * The STUN and TURN servers ICE may use, which this signaling takes from its configuration
-     * rather than from a handshake, since it speaks to nothing that would hand them out.
-     */
-    @Override
-    public List<IceServerInfo> getIceServers() {
-        return this.iceServers;
     }
 
     /**
@@ -371,6 +426,13 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
                                                  @Nullable InetSocketAddress clientAddress,
                                                  @Nullable String host, @Nullable ClientInfo client) {
+        return acceptOffer(networkId, sdpOffer, clientAddress, host, client, null);
+    }
+
+    /** As the public one, with the endpoint the player typed in when its answer should carry it. */
+    private CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
+                                                  @Nullable InetSocketAddress clientAddress, @Nullable String host,
+                                                  @Nullable ClientInfo client, @Nullable InetSocketAddress typed) {
         // Validation needs the thread that bind starts. Whether a channel is listening is checked
         // once the offer has earned it, so a bad offer is refused for what it is
         EventLoop loop = this.eventLoop;
@@ -408,7 +470,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 log.debug("Refused the offer from {}: {} ({})", clientAddress, reason, failure.toString());
                 throw new CompletionException(new OfferRejected(JoinRefusal.INVALID_IDENTITY, reason, failure));
             }
-            return admit(networkId, sdpOffer, clientAddress, host, client, claims);
+            return admit(networkId, sdpOffer, clientAddress, host, client, claims, typed);
         }, loop).thenCompose(Function.identity());
     }
 
@@ -416,12 +478,32 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     public void sendDescription(String targetNetworkId, String sdp) {
         log.debug("Sending sdp to " + targetNetworkId);
 
-        Promise<String> answer = pendingAnswers.get(targetNetworkId);
-        if (answer != null) {
-            answer.trySuccess(SdpUtil.withAdvertisedCandidates(sdp, this.advertisedAddresses));
+        PendingJoin join = pendingAnswers.get(targetNetworkId);
+        if (join != null) {
+            join.answer().trySuccess(announced(sdp, join.typed()));
         } else {
             log.debug("No pending join waiting for " + targetNetworkId);
         }
+    }
+
+    /**
+     * The answer with what it announces besides what ICE gathered: the configured addresses when
+     * there are any, else the mappings STUN discovered and the endpoint the player typed in.
+     */
+    private String announced(String sdp, @Nullable InetSocketAddress typed) {
+        if (!this.advertisedAddresses.isEmpty()) {
+            return SdpUtil.withAdvertisedCandidates(sdp, this.advertisedAddresses);
+        }
+        List<InetSocketAddress> added = new ArrayList<>();
+        DiscoveredEndpoints discovered = this.discovered;
+        if (discovered != null) {
+            added.addAll(discovered.fresh());
+        }
+        if (typed != null) {
+            log.debug("Announcing {} from the Host header", typed);
+            added.add(typed);
+        }
+        return SdpUtil.withAddedEndpoints(sdp, added);
     }
 
     @Override
@@ -443,7 +525,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      */
     private CompletableFuture<String> admit(String networkId, String sdpOffer,
                                             @Nullable InetSocketAddress clientAddress, @Nullable String host,
-                                            @Nullable ClientInfo client, JwtClaims claims) {
+                                            @Nullable ClientInfo client, JwtClaims claims,
+                                            @Nullable InetSocketAddress typed) {
         PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
                 claims.getClaimValueAsString("xname"), networkId, clientAddress, client, claims);
         log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
@@ -480,8 +563,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
         // Register the pending answer before firing the callback so a fast answer isn't missed
         Promise<String> answer = loop.newPromise();
+        PendingJoin join = new PendingJoin(answer, typed);
         // Never replace the answer owned by another offer for this network ID.
-        if (pendingAnswers.putIfAbsent(networkId, answer) != null) {
+        if (pendingAnswers.putIfAbsent(networkId, join) != null) {
             return CompletableFuture.failedFuture(new OfferRejected(JoinRefusal.DUPLICATE,
                     "network ID already pending", null));
         }
@@ -496,7 +580,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 answerTimeoutSeconds, TimeUnit.SECONDS);
 
         answer.addListener((FutureListener<String>) future -> {
-            pendingAnswers.remove(networkId, answer);
+            pendingAnswers.remove(networkId, join);
             pendingByConnection.remove(connectionId);
             timeout.cancel(false);
 
@@ -720,7 +804,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             log.trace("Received sdp offer: " + sdpOffer);
 
             ClientInfo client = ClientInfo.fromQuery(parameters(uri));
-            acceptOffer(networkId, sdpOffer, remoteAddress, host, client).whenComplete((sdpAnswer, failure) -> {
+            InetSocketAddress typed = typedEndpoint(ctx, host);
+            acceptOffer(networkId, sdpOffer, remoteAddress, host, client, typed).whenComplete((sdpAnswer, failure) -> {
                 if (!ctx.channel().isActive()) {
                     return; // The peer left while the join was in flight
                 }
@@ -773,6 +858,43 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             return literal == null ? remote : new InetSocketAddress(literal, remote.getPort());
         }
 
+        /**
+         * The endpoint the peer typed in, from its Host header, which is what an operator would
+         * otherwise advertise. Only when none are configured, never through a proxy, whose Host names
+         * the proxy, and only an IP literal a peer could reach: a name would need a lookup per join.
+         * <p>
+         * When ICE shares the port the request arrived on, one forward carries both, so the typed
+         * port is the outside one for media too. Otherwise the typed port is signaling's alone, and
+         * the media port is assumed forwarded as it is.
+         */
+        private @Nullable InetSocketAddress typedEndpoint(ChannelHandlerContext ctx, @Nullable String host) {
+            if (host == null || !advertisedAddresses.isEmpty()) {
+                return null;
+            }
+            InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+            if (forwardedForProxies.contains(remote) || proxyProtocolProxies.contains(remote)) {
+                return null;
+            }
+            InetSocketAddress endpoint;
+            try {
+                endpoint = EndpointAddress.parseEndpoint(host);
+            } catch (IllegalArgumentException notALiteral) {
+                return null;
+            }
+            if (!EndpointAddress.advertisable(endpoint.getAddress(), false)) {
+                return null;
+            }
+            InetSocketAddress ice = iceAddress;
+            if (ice == null) {
+                // Port 0 leaves each host candidate's own, for ICE without a fixed port
+                return new InetSocketAddress(endpoint.getAddress(), 0);
+            }
+            boolean sharedPort = ctx.channel().localAddress() instanceof InetSocketAddress local
+                    && local.getPort() == ice.getPort();
+            int port = sharedPort && endpoint.getPort() != 0 ? endpoint.getPort() : ice.getPort();
+            return new InetSocketAddress(endpoint.getAddress(), port);
+        }
+
         @Override
         public void userEventTriggered(ChannelHandlerContext ctx, Object event) {
             if (event instanceof IdleStateEvent idle && idle.state() == IdleState.READER_IDLE) {
@@ -817,7 +939,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         private int answerTimeoutSeconds = 30;
         private boolean iceOnLocalPort = true;
         private List<InetSocketAddress> advertisedAddresses = List.of();
-        private List<IceServerInfo> iceServers = List.of();
+        private List<InetSocketAddress> stunServers = List.of();
+        private Duration stunMaxAge = DiscoveredEndpoints.DEFAULT_MAX_AGE;
         private TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
         private boolean serveHttp = true;
         private boolean proxyProtocol = false;
@@ -1089,12 +1212,16 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the endpoints announced as ICE candidates; empty, the default, announces everything
-         * ICE gathers. Each is an IP literal, {@code IPv4:port} or {@code [IPv6]:port}, and a bare
-         * address takes the media port. Listed endpoints this host holds narrow its host candidates
-         * to those; any other is announced as the public side of a NAT forwarding it to the media
-         * port here. A signaling proxy's address does not belong here unless it also forwards the
-         * media port.
+         * Sets the endpoints announced as ICE candidates. Each is an IP literal, {@code IPv4:port} or
+         * {@code [IPv6]:port}, and a bare address takes the media port. Listed endpoints this host
+         * holds narrow its host candidates to those; any other is announced as the public side of a
+         * NAT forwarding it to the media port here. A signaling proxy's address does not belong here
+         * unless it also forwards the media port.
+         * <p>
+         * Empty, the default, announces everything ICE gathers, plus what {@link #setStunServers}
+         * finds and the IP literal a player typed in, when those are not among them. The typed one
+         * reaches a host behind NAT or in a container nobody configured, but not a player who typed
+         * a name or arrived through a trusted proxy.
          *
          * @param advertisedAddresses Endpoints reachable by connecting peers
          * @return This builder
@@ -1108,18 +1235,42 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the STUN and TURN servers ICE may use, empty by default.
+         * Finds this host's public address through these STUN servers and adds it to every answer,
+         * the way {@link #setAdvertisedAddresses} adds an endpoint this host does not hold. Off by
+         * default. Each is a {@code stun:host[:port]} URL, port 3478 when it names none.
          * <p>
-         * A host behind NAT gathers only the addresses its interfaces carry, none of which a peer
-         * elsewhere can reach. A STUN server is what turns that into the address the peer sees,
-         * and a TURN server relays when no direct path exists. Neither is needed when the host
-         * holds a reachable address itself.
+         * They are asked from the ICE port in the background, every 15 seconds, which also keeps the
+         * NAT mapping open, so no join waits for them. A mapping is announced until
+         * {@link #setStunMaxAge} after its last answer. That suits a router that keeps one mapping
+         * for all incoming traffic, as a port forward does. A router that moved the port on the way
+         * out, which it does when the port is taken outside, often by a forward to this host, gets
+         * the address announced on the ICE port as well, costing a peer one failed check when there
+         * is no such forward.
+         * <p>
+         * Binding fails when ICE has no fixed port, see {@link #setIceOnLocalPort}, and building fails
+         * when advertised addresses are set as well.
          *
-         * @param iceServers The servers to offer ICE
+         * @param stunServers The servers to ask, empty for none
+         * @return This builder
+         * @throws IllegalArgumentException If an entry is not a {@code stun:} URL
+         */
+        public Builder setStunServers(Collection<String> stunServers) {
+            this.stunServers = stunServers == null ? List.of() : DiscoveredEndpoints.servers(stunServers);
+            return this;
+        }
+
+        /**
+         * Sets how long a mapping found through {@link #setStunServers} is still announced after its
+         * last answer. Defaults to 5 minutes.
+         *
+         * @param maxAge The age past which a mapping is dropped, must be positive
          * @return This builder
          */
-        public Builder setIceServers(Collection<IceServerInfo> iceServers) {
-            this.iceServers = iceServers == null ? List.of() : List.copyOf(iceServers);
+        public Builder setStunMaxAge(Duration maxAge) {
+            if (maxAge == null || maxAge.isNegative() || maxAge.isZero()) {
+                throw new IllegalArgumentException("maxAge");
+            }
+            this.stunMaxAge = maxAge;
             return this;
         }
 
@@ -1222,11 +1373,15 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * Builds the signaling instance.
          *
          * @return A new signaling instance
-         * @throws IllegalStateException If no identity was set
+         * @throws IllegalStateException If no identity was set, or STUN discovery and advertised
+         *                               addresses both were
          */
         public NetherNetHTTPServerSignaling build() {
             if (identity == null) {
                 throw new IllegalStateException("An identity is required");
+            }
+            if (!stunServers.isEmpty() && !advertisedAddresses.isEmpty()) {
+                throw new IllegalStateException("STUN discovery and advertised addresses cannot both be set");
             }
 
             return new NetherNetHTTPServerSignaling(this);

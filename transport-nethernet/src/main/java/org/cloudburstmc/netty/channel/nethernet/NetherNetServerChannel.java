@@ -105,29 +105,46 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         });
         this.signaling.setMetrics(serverMetrics());
 
-        this.signaling.bind(localAddress, eventLoop());
+        // Only a fixed port is one every connection shares, so only that one is worth telling
+        InetSocketAddress ice = iceAddress();
+        this.signaling.bind(localAddress, ice != null && ice.getPort() > 0 ? ice : null, eventLoop());
     }
 
     /**
-     * Pins ICE to one address, so the transport uses one predictable port rather than an ephemeral
-     * one per connection: {@link NetherChannelOption#NETHER_SERVER_ICE_ADDRESS} when set, else the
-     * bound address unless the signaling holds that UDP port itself.
+     * Where ICE binds: {@link NetherChannelOption#NETHER_SERVER_ICE_ADDRESS} when set, else the bound
+     * address unless the signaling holds that UDP port itself.
+     *
+     * @return The address, or null when each connection takes an ephemeral port
+     */
+    private @Nullable InetSocketAddress iceAddress() {
+        InetSocketAddress ice = this.config.getOption(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS);
+        if (ice != null) {
+            return ice;
+        }
+        return localAddress == null || !signaling.allowsIceOnLocalPort() ? null : localAddress;
+    }
+
+    /** The address ICE binds to, null for a wildcard, which is left unset so ICE gathers on every interface. */
+    private static @Nullable InetAddress iceBindAddress(InetSocketAddress ice) {
+        InetAddress host = ice.getAddress();
+        return host == null || host.isAnyLocalAddress() ? null : host;
+    }
+
+    /**
+     * Pins ICE to {@link #iceAddress}, so the transport uses one predictable port rather than an
+     * ephemeral one per connection.
      *
      * @param config The configuration to derive from.
      * @return The configuration with the ICE address applied.
      */
     private PeerConnectionConfiguration bindIce(PeerConnectionConfiguration config) {
-        InetSocketAddress ice = this.config.getOption(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS);
+        InetSocketAddress ice = iceAddress();
         if (ice == null) {
-            if (localAddress == null || !signaling.allowsIceOnLocalPort()) {
-                return config;
-            }
-            ice = localAddress;
+            return config;
         }
 
-        // A wildcard bind is left unset so ICE keeps gathering on every interface
-        InetAddress host = ice.getAddress();
-        if (host != null && !host.isAnyLocalAddress()) {
+        InetAddress host = iceBindAddress(ice);
+        if (host != null) {
             config = config.withBindAddress(host);
         }
 

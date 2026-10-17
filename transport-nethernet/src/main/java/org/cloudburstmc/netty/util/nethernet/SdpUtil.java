@@ -29,6 +29,8 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 /**
  * Helpers for the SDP documents exchanged during signaling.
@@ -249,59 +251,104 @@ public final class SdpUtil {
         if (allowed.isEmpty()) {
             return sdp;
         }
-        String[] lines = sdp.split("\r\n|\n");
-        List<String[]> gathered = new ArrayList<>();
-        List<String[]> hosts = new ArrayList<>();
-        for (String line : lines) {
-            if (!line.startsWith(CANDIDATE_PREFIX)) {
-                continue;
-            }
-            String[] parts = line.split(" ");
-            gathered.add(parts);
-            if (isHostCandidate(line) && "udp".equalsIgnoreCase(parts[2])) {
-                hosts.add(parts);
-            }
-        }
+        Gathered gathered = Gathered.of(sdp);
 
         List<InetSocketAddress> held = new ArrayList<>();
         List<InetSocketAddress> foreign = new ArrayList<>();
         for (InetSocketAddress endpoint : allowed) {
-            if (gathered.stream().anyMatch(candidate -> names(endpoint, candidate))) {
+            if (gathered.names(endpoint)) {
                 held.add(endpoint);
             } else {
                 foreign.add(endpoint);
             }
         }
         // A held host is the more honest base for a translation, so it goes first for its family
+        List<String[]> hosts = new ArrayList<>(gathered.udpHosts());
         hosts.sort(Comparator.comparing((String[] host) -> !namedByAny(held, host)));
-        List<String> translated = translatedCandidates(hosts, foreign);
+        List<String> translated = translatedCandidates(hosts, foreign, Set.of());
         if (held.isEmpty() && translated.isEmpty()) {
             log.warn("None of the gathered ICE candidates match the advertised addresses {}, "
                     + "announcing all of them instead", allowed);
             return sdp;
         }
+        return gathered.rewrite(line -> !held.isEmpty() && !isReflexiveOrRelayed(line)
+                && !namedByAny(held, line.split(" ")), translated);
+    }
 
-        StringBuilder out = new StringBuilder(sdp.length());
-        boolean seenCandidates = false;
-        for (String line : lines) {
-            // A trailing empty line makes libwebrtc reject the whole description
-            if (line.isEmpty()) {
-                continue;
-            }
-            if (line.startsWith(CANDIDATE_PREFIX)) {
-                seenCandidates = true;
-                if (!held.isEmpty() && !isReflexiveOrRelayed(line) && !namedByAny(held, line.split(" "))) {
+    /**
+     * Adds each endpoint no UDP candidate announces yet, as {@link #withAdvertisedCandidates} adds one
+     * this host did not gather, port 0 taking the media port. Nothing is removed. A candidate at the
+     * same address on another port does not count: a router that moved the port on its way out may
+     * still forward the original one in.
+     *
+     * @param sdp       The description to add to
+     * @param endpoints The endpoints to add
+     * @return The description with the endpoints added
+     */
+    public static String withAddedEndpoints(String sdp, List<InetSocketAddress> endpoints) {
+        if (endpoints.isEmpty()) {
+            return sdp;
+        }
+        Gathered gathered = Gathered.of(sdp);
+        List<String> translated = translatedCandidates(gathered.udpHosts(), endpoints, gathered.udpEndpoints());
+        return translated.isEmpty() ? sdp : gathered.rewrite(line -> false, translated);
+    }
+
+    /** The lines of a description, its candidates split into fields, and the UDP host candidates among them. */
+    private record Gathered(String[] lines, List<String[]> candidates, List<String[]> udpHosts) {
+        static Gathered of(String sdp) {
+            String[] lines = sdp.split("\r\n|\n");
+            List<String[]> candidates = new ArrayList<>();
+            List<String[]> udpHosts = new ArrayList<>();
+            for (String line : lines) {
+                if (!line.startsWith(CANDIDATE_PREFIX)) {
                     continue;
                 }
-            } else if (seenCandidates && !translated.isEmpty()) {
-                // Translations join the end of the candidate block, ahead of end-of-candidates
-                appendAll(out, translated);
-                translated = List.of();
+                String[] parts = line.split(" ");
+                candidates.add(parts);
+                if (isHostCandidate(line) && "udp".equalsIgnoreCase(parts[2])) {
+                    udpHosts.add(parts);
+                }
             }
-            out.append(line).append("\r\n");
+            return new Gathered(lines, candidates, udpHosts);
         }
-        appendAll(out, translated);
-        return out.toString();
+
+        boolean names(InetSocketAddress endpoint) {
+            return this.candidates.stream().anyMatch(candidate -> SdpUtil.names(endpoint, candidate));
+        }
+
+        /** Every UDP candidate as {@code address port}, in the form {@link #translatedCandidates} compares. */
+        Set<String> udpEndpoints() {
+            return this.candidates.stream()
+                    .filter(candidate -> candidate.length >= 6 && "udp".equalsIgnoreCase(candidate[2]))
+                    .map(candidate -> normaliseAddress(candidate[4]) + " " + candidate[5])
+                    .collect(Collectors.toSet());
+        }
+
+        /** The description without the candidates {@code dropped} picks, and with {@code added} ending the block. */
+        String rewrite(Predicate<String> dropped, List<String> added) {
+            StringBuilder out = new StringBuilder();
+            boolean seenCandidates = false;
+            for (String line : this.lines) {
+                // A trailing empty line makes libwebrtc reject the whole description
+                if (line.isEmpty()) {
+                    continue;
+                }
+                if (line.startsWith(CANDIDATE_PREFIX)) {
+                    seenCandidates = true;
+                    if (dropped.test(line)) {
+                        continue;
+                    }
+                } else if (seenCandidates && !added.isEmpty()) {
+                    // Additions join the end of the candidate block, ahead of end-of-candidates
+                    appendAll(out, added);
+                    added = List.of();
+                }
+                out.append(line).append("\r\n");
+            }
+            appendAll(out, added);
+            return out.toString();
+        }
     }
 
     /**
@@ -313,11 +360,13 @@ public final class SdpUtil {
     /**
      * A server reflexive candidate for every foreign endpoint, based on the first host candidate
      * of the same family. One per address and port, since every interface shares the socket and
-     * would otherwise give the same line.
+     * would otherwise give the same line, and none for an {@code address port} already in
+     * {@code present}.
      */
-    private static List<String> translatedCandidates(List<String[]> hosts, List<InetSocketAddress> foreign) {
+    private static List<String> translatedCandidates(List<String[]> hosts, List<InetSocketAddress> foreign,
+                                                     Set<String> present) {
         List<String> candidates = new ArrayList<>();
-        Set<String> emitted = new HashSet<>();
+        Set<String> emitted = new HashSet<>(present);
         int foundation = 80000000;
         for (InetSocketAddress endpoint : foreign) {
             String address = endpoint.getAddress().getHostAddress();
