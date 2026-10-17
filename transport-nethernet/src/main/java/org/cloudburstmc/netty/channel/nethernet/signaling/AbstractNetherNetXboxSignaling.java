@@ -59,6 +59,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboundHandler<TextWebSocketFrame>
         implements NetherNetClientSignaling, NetherNetServerSignaling {
@@ -72,6 +74,9 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     protected Channel channel;
     protected CompletableFuture<List<IceServerInfo>> connectFuture;
+    private volatile boolean closed;
+    /** Socket loop only. */
+    private ScheduledFuture<?> keepalive;
     protected volatile List<IceServerInfo> iceServers = new ArrayList<>();
 
     protected final Map<String, SignalHandler> handlers = new ConcurrentHashMap<>();
@@ -126,6 +131,10 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
     }
 
     protected synchronized CompletableFuture<List<IceServerInfo>> connectInternal() {
+        if (closed) {
+            // Its loop is gone, which would otherwise surface as a rejected task
+            return CompletableFuture.failedFuture(new IllegalStateException("Signaling is closed"));
+        }
         if (connectFuture != null) {
             return connectFuture;
         }
@@ -185,6 +194,14 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
      */
     protected abstract void onConnected(ChannelHandlerContext ctx);
 
+    /** Runs {@code ping} on the socket's loop until the socket goes inactive. */
+    protected void keepAlive(ChannelHandlerContext ctx, long initialSeconds, long periodSeconds, Runnable ping) {
+        if (this.keepalive != null) {
+            this.keepalive.cancel(false);
+        }
+        this.keepalive = ctx.executor().scheduleAtFixedRate(ping, initialSeconds, periodSeconds, TimeUnit.SECONDS);
+    }
+
     @Override
     public List<IceServerInfo> getIceServers() {
         return this.iceServers;
@@ -210,6 +227,14 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         this.handlers.remove(connectionId);
     }
 
+    /** Tells the failure handler, if there is one, that the connection cannot be made. */
+    protected void reportFailure(String reason) {
+        FailureHandler handler = this.failureHandler;
+        if (handler != null) {
+            handler.onFailure(reason);
+        }
+    }
+
     @Override
     public void setAdvertisementData(PongData pongData) {
         // Nothing to do for Xbox signaling
@@ -226,6 +251,15 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        if (!this.closed) {
+            // Nothing reconnects it, so a server stops hearing of joins until it is replaced
+            log.warn("{} WebSocket to {} closed, no more signals arrive through it", getClass().getSimpleName(),
+                    this.uri.getHost());
+        }
+        if (this.keepalive != null) {
+            this.keepalive.cancel(false);
+            this.keepalive = null;
+        }
         synchronized (this) {
             if (connectFuture != null && !connectFuture.isDone()) {
                 connectFuture.completeExceptionally(new ClosedChannelException());
@@ -244,6 +278,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
 
     @Override
     public void close() {
+        closed = true;
         if (channel != null) {
             channel.close();
         }

@@ -18,11 +18,11 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
@@ -34,7 +34,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
 public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     private static final Gson gson = new GsonBuilder().serializeNulls().create();
@@ -72,11 +71,7 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
-        ctx.executor().scheduleAtFixedRate(() -> {
-            if (channel != null && channel.isActive()) {
-                sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_PING, new JsonObject());
-            }
-        }, 30, 50, TimeUnit.SECONDS);
+        keepAlive(ctx, 30, 50, () -> sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_PING, new JsonObject()));
 
         sendJsonRpcRequest(NetherNetConstants.XBOX_RPC_METHOD_TURN_AUTH, new JsonObject())
                 .thenAccept(response -> {
@@ -130,8 +125,8 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
                     }
                 }
 
-                if (isNotFound && failureHandler != null) {
-                    failureHandler.onFailure(msg);
+                if (isNotFound) {
+                    reportFailure(msg);
                 }
                 future.completeExceptionally(new RuntimeException(msg));
             } else {
@@ -152,18 +147,14 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
                     sendJsonRpcResult(id, null);
                 }
 
-                if (json.isJsonArray()) {
-                    JsonArray params = json.getAsJsonArray("params");
-                    if (params != null) {
-                        for (JsonElement el : params) {
-                            processIncomingMessage(el.getAsJsonObject());
-                        }
+                // One message, or a batch of them
+                JsonElement params = json.get("params");
+                if (params != null && params.isJsonArray()) {
+                    for (JsonElement el : params.getAsJsonArray()) {
+                        processIncomingMessage(el.getAsJsonObject());
                     }
-                } else if (json.isJsonObject()) {
-                    JsonObject params = json.getAsJsonObject("params");
-                    if (params != null) {
-                        processIncomingMessage(params);
-                    }
+                } else if (params != null && params.isJsonObject()) {
+                    processIncomingMessage(params.getAsJsonObject());
                 }
             }
             case NetherNetConstants.XBOX_RPC_METHOD_PONG, NetherNetConstants.XBOX_RPC_METHOD_PING -> {
@@ -228,6 +219,10 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
     }
 
     private CompletableFuture<JsonObject> sendJsonRpcRequest(String method, JsonObject params) {
+        Channel channel = this.channel;
+        if (channel == null || !channel.isActive()) {
+            return CompletableFuture.failedFuture(new ClosedChannelException());
+        }
         String id = UUID.randomUUID().toString();
         JsonObject rpc = new JsonObject();
         rpc.add("params", params);
@@ -237,13 +232,32 @@ public class NetherNetXboxRpcSignaling extends AbstractNetherNetXboxSignaling {
 
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
         pendingRequests.put(id, future);
-
-        if (channel != null && channel.isActive()) {
-            channel.writeAndFlush(new TextWebSocketFrame(gson.toJson(rpc)));
-        } else {
-            future.completeExceptionally(new ClosedChannelException());
-        }
+        channel.writeAndFlush(new TextWebSocketFrame(gson.toJson(rpc))).addListener(write -> {
+            if (!write.isSuccess() && pendingRequests.remove(id, future)) {
+                future.completeExceptionally(write.cause());
+            }
+        });
         return future;
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        // Nothing answers them anymore, and a count that keeps growing means the service ignores some
+        if (!pendingRequests.isEmpty()) {
+            log.debug("Failing {} Xbox RPC requests still unanswered as the socket closed", pendingRequests.size());
+            ClosedChannelException closed = new ClosedChannelException();
+            for (String id : pendingRequests.keySet()) {
+                CompletableFuture<JsonObject> pending = pendingRequests.remove(id);
+                if (pending != null) {
+                    pending.completeExceptionally(closed);
+                }
+            }
+        }
+        super.channelInactive(ctx);
+    }
+
+    int pendingRequestCount() {
+        return pendingRequests.size();
     }
 
     private void sendJsonRpcResult(JsonElement id, JsonElement result) {

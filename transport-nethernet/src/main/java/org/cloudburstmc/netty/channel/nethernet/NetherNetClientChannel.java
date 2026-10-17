@@ -71,7 +71,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private RemoteCandidates remoteCandidates;
 
     /**
-     * Creates a NetherNetClientChannel.
+     * Creates a NetherNetClientChannel, which closes the signaling when it closes.
      *
      * @param signaling The NetherNetClientSignaling instance for signaling.
      */
@@ -146,8 +146,13 @@ public class NetherNetClientChannel extends NetherNetChannel {
             handshakeTimeoutTask.cancel(false);
         }
 
-        // Signaling reports from its own threads, so the channel is only touched on the loop
+        // Signaling reports from its own threads, so the channel is only touched on the loop.
+        // Once connected the media no longer needs the signaling, so a late report changes nothing.
         signaling.setFailureHandler(reason -> eventLoop().execute(() -> {
+            if (handshakeComplete) {
+                log.debug("Ignoring a signaling failure for connected {}: {}", this, reason);
+                return;
+            }
             String target = remoteAddress instanceof NetherNetAddress
                     ? "network " + this.targetNetworkId : String.valueOf(remoteAddress);
             failConnect(new ConnectException("Signaling to " + target + " failed: " + reason));

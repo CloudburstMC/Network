@@ -26,7 +26,6 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
 import java.net.URI;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
 @Sharable
 public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
@@ -64,11 +63,11 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
 
     @Override
     protected void onConnected(ChannelHandlerContext ctx) {
-        ctx.executor().scheduleAtFixedRate(() -> {
+        keepAlive(ctx, 5, 5, () -> {
             JsonObject ping = new JsonObject();
             ping.addProperty("Type", 0);
             ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(ping)));
-        }, 5, 5, TimeUnit.SECONDS);
+        });
     }
 
     @Override
@@ -84,10 +83,8 @@ public class NetherNetXboxSignaling extends AbstractNetherNetXboxSignaling {
             switch (type) {
                 case NetherNetConstants.XBOX_SIGNAL_NOT_FOUND -> {
                     log.debug("Peer Not Found: {}", text);
-                    if (failureHandler != null) {
-                        String reason = json.has("Message") ? json.get("Message").getAsString() : text;
-                        failureHandler.onFailure(reason);
-                    }
+                    String reason = json.has("Message") ? json.get("Message").getAsString() : text;
+                    reportFailure(reason);
                 }
                 case NetherNetConstants.XBOX_SIGNAL_SIGNAL -> {
                     String sender = json.has("From") ? json.get("From").getAsString() : "0";
