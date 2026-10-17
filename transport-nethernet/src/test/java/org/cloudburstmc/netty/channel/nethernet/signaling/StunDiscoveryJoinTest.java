@@ -80,7 +80,6 @@ class StunDiscoveryJoinTest {
     private static NetherNetHTTPServerSignaling.Builder signaling(StunServer stun) throws Exception {
         return new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("host.test"))
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY)
                 .setStunServers(List.of("stun:127.0.0.1:" + stun.socket.getLocalPort()));
     }

@@ -50,8 +50,8 @@ class ProxyProtocolTest {
         group.shutdownGracefully();
     }
 
-    private int start(List<String> trusted, boolean proxyProtocol) throws Exception {
-        return start(builder -> builder.setTrustedProxies(trusted).setProxyProtocol(proxyProtocol));
+    private int start(List<String> proxies) throws Exception {
+        return start(builder -> builder.setProxyProtocolProxies(proxies));
     }
 
     private int start(UnaryOperator<NetherNetHTTPServerSignaling.Builder> configure) throws Exception {
@@ -96,7 +96,7 @@ class ProxyProtocolTest {
 
     @Test
     void readsAProxyHeaderFromATrustedProxy() throws Exception {
-        int port = start(List.of("127.0.0.0/8"), true);
+        int port = start(List.of("127.0.0.0/8"));
         request(port, TestHttp.proxyV2Header("203.0.113.7", 5555));
 
         assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
@@ -105,27 +105,17 @@ class ProxyProtocolTest {
     @Test
     void neverBelievesAProxyHeaderFromAnUntrustedSource() throws Exception {
         // Trusting a range this connection is not in, so the header must not be believed
-        assertProxyHeaderIgnored(start(List.of("10.0.0.0/8"), true));
-    }
-
-    @Test
-    void readsAProxyHeaderFromItsOwnList() throws Exception {
-        int port = start(builder -> builder.setTrustedProxies(List.of("10.0.0.0/8"))
-                .setProxyProtocolProxies(List.of("127.0.0.0/8")).setProxyProtocol(true));
-        request(port, TestHttp.proxyV2Header("203.0.113.7", 5555));
-
-        assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
+        assertProxyHeaderIgnored(start(List.of("10.0.0.0/8")));
     }
 
     @Test
     void neverBelievesAProxyHeaderFromAForwardedForOnlyProxy() throws Exception {
-        assertProxyHeaderIgnored(start(builder -> builder.setForwardedForProxies(List.of("127.0.0.0/8"))
-                .setProxyProtocol(true)));
+        assertProxyHeaderIgnored(start(builder -> builder.setForwardedForProxies(List.of("127.0.0.0/8"))));
     }
 
     @Test
     void ignoresForwardedForFromAProxyHeaderOnlyProxy() throws Exception {
-        int port = start(builder -> builder.setProxyProtocolProxies(List.of("127.0.0.0/8")).setProxyProtocol(true));
+        int port = start(List.of("127.0.0.0/8"));
         request(port, null, "X-Forwarded-For: 203.0.113.7\r\n");
 
         assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
@@ -144,17 +134,14 @@ class ProxyProtocolTest {
 
     @Test
     void servesPlainHttpFromATrustedProxyToo() throws Exception {
-        int port = start(List.of("127.0.0.0/8"), true);
+        int port = start(List.of("127.0.0.0/8"));
         request(port, null);
 
         assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
     }
 
     @Test
-    void ignoresProxyProtocolWhenItIsOff() throws Exception {
-        int port = start(List.of("127.0.0.0/8"), false);
-        request(port, null);
-
-        assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
+    void readsNoProxyHeaderByDefault() throws Exception {
+        assertProxyHeaderIgnored(start(List.of()));
     }
 }

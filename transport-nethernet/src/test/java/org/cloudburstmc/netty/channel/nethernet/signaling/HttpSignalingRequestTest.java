@@ -84,7 +84,6 @@ class HttpSignalingRequestTest {
     private NetherNetHTTPServerSignaling.Builder builder() throws Exception {
         return new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY);
     }
 
@@ -412,7 +411,7 @@ class HttpSignalingRequestTest {
     @Test
     void ignoresTheTypedAddressBehindATrustedProxy() throws Exception {
         // The player typed the proxy's address, which forwards signaling and not necessarily media
-        this.start(this.builder().setTrustedProxies(List.of("127.0.0.1")));
+        this.start(this.builder().setForwardedForProxies(List.of("127.0.0.1")));
         String gathered = this.answerGathered(this.port);
 
         assertEquals(gathered, this.answerFor("192.168.1.2:19132"));
@@ -634,10 +633,10 @@ class HttpSignalingRequestTest {
     }
 
     @Test
-    void countsNoConnectionAgainstATrustedProxy() throws Exception {
+    void countsNoConnectionAgainstAForwardedForProxy() throws Exception {
         // Every client behind a proxy shares its address, so counting them together would throttle
         // all of them at once
-        this.start(this.builder().setMaxConnectionsPerAddress(1).setTrustedProxies(List.of("127.0.0.1")));
+        this.start(this.builder().setMaxConnectionsPerAddress(1).setForwardedForProxies(List.of("127.0.0.1")));
 
         try (Socket first = this.keptConnection(); Socket second = this.keptConnection()) {
             assertNotNull(first);
@@ -647,24 +646,11 @@ class HttpSignalingRequestTest {
 
     @Test
     void countsNoConnectionAgainstAProxyHeaderProxy() throws Exception {
-        this.start(this.builder().setMaxConnectionsPerAddress(1)
-                .setProxyProtocolProxies(List.of("127.0.0.1")).setProxyProtocol(true));
+        this.start(this.builder().setMaxConnectionsPerAddress(1).setProxyProtocolProxies(List.of("127.0.0.1")));
 
         try (Socket first = this.keptConnection(); Socket second = this.keptConnection()) {
             assertNotNull(first);
             assertNotNull(second);
-        }
-    }
-
-    @Test
-    void countsATrustedProxyLeftOffTheExemptList() throws Exception {
-        this.start(this.builder().setMaxConnectionsPerAddress(1).setTrustedProxies(List.of("127.0.0.1"))
-                .setConnectionLimitExempt(List.of()));
-
-        try (Socket held = this.keptConnection(); Socket refused = new Socket("127.0.0.1", this.port)) {
-            assertNotNull(held);
-            refused.setSoTimeout(10_000);
-            assertEquals(-1, refused.getInputStream().read(), "the second is closed unanswered");
         }
     }
 

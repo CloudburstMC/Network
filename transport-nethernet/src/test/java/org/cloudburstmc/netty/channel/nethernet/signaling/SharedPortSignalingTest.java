@@ -174,7 +174,7 @@ class SharedPortSignalingTest {
 
     @Test
     void readsAProxyHeaderTheHostLeftInPlace() throws Exception {
-        start(builder().setProxyProtocol(true).setTrustedProxies(List.of("127.0.0.0/8")));
+        start(builder().setProxyProtocolProxies(List.of("127.0.0.0/8")));
 
         try (Client proxied = new Client(TestHttp.proxyV2Header("203.0.113.7", 5555))) {
             assertEquals(200, proxied.status(false));

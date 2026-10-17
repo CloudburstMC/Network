@@ -50,7 +50,6 @@ import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.PublicKey;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -117,7 +116,6 @@ class HttpClientSignalingTest {
     private NetherNetHTTPServerSignaling.Builder plaintextServer() throws Exception {
         return new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("host.test"))
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY);
     }
 
@@ -173,7 +171,6 @@ class HttpClientSignalingTest {
         OperatorIdentity host = OperatorIdentity.generate("host.test");
         InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(host)
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY));
         OperatorIdentity player = OperatorIdentity.generate("proxy.test").forPlayer("2535000000000001", "Tester");
 
@@ -189,7 +186,6 @@ class HttpClientSignalingTest {
         Files.writeString(pem, NetherNetHTTPServerSignalingBuilderTest.PEM);
         InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
                 .setIdentityPem(pem.toFile(), "host.test")
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY));
         // The key the operator copies into the client's config, as the file's owner would print it
         String configured = IdentityUtils.encodePublicKey(this.signaling.serverIdentity().publicKey());
@@ -206,7 +202,6 @@ class HttpClientSignalingTest {
     void refusesAServerAnsweringWithAnotherIdentity() throws Exception {
         InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("host.test"))
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY));
         OperatorIdentity player = OperatorIdentity.generate("proxy.test").forPlayer("2535000000000001", "Tester");
         TokenTrust expected = TokenTrust.pinnedTo(OperatorIdentity.generate("host.test").publicKey());
@@ -223,7 +218,6 @@ class HttpClientSignalingTest {
     void connectsAndIsAdmittedAsThePlayerItSignedFor() throws Exception {
         InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("host.test"))
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY));
         OperatorIdentity player = OperatorIdentity.generate("proxy.test").forPlayer("2535000000000001", "Tester");
 
@@ -240,7 +234,6 @@ class HttpClientSignalingTest {
     void reportsWhyTheServerRefusedTheOffer() throws Exception {
         InetSocketAddress endpoint = this.serve(new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("host.test"))
-                .setTrustedProxies(List.of())
                 .setTokenTrust(TokenTrust.ANY));
 
         // No identity, which a validating endpoint answers with 401 rather than an SDP
