@@ -28,7 +28,7 @@ import io.netty.channel.unix.Socket;
 import io.netty.util.concurrent.Promise;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.RakClientChannel;
-import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
@@ -103,15 +103,15 @@ public class ProxyChannelTests {
 
     @Test
     public void testDisconnectEndsOpenSession() {
-        Promise<RakDisconnectReason> serverReason = group.next().newPromise();
+        Promise<TransportDisconnectReason> serverReason = group.next().newPromise();
         this.serverChannel = new ServerBootstrap()
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel.class))
                 .group(group)
                 .childHandler(new ChannelInboundHandlerAdapter() {
                     @Override
                     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
-                        if (evt instanceof RakDisconnectReason) {
-                            serverReason.trySuccess((RakDisconnectReason) evt);
+                        if (evt instanceof TransportDisconnectReason) {
+                            serverReason.trySuccess((TransportDisconnectReason) evt);
                         }
                     }
                 })
@@ -133,7 +133,7 @@ public class ProxyChannelTests {
 
         // Well below the session timeout, so the server must have received the notification
         Assertions.assertTrue(serverReason.awaitUninterruptibly(5, TimeUnit.SECONDS));
-        Assertions.assertEquals(RakDisconnectReason.CLOSED_BY_REMOTE_PEER, serverReason.getNow());
+        Assertions.assertEquals(TransportDisconnectReason.CLOSED_BY_REMOTE_PEER, serverReason.getNow());
         Assertions.assertTrue(client.closeFuture().awaitUninterruptibly(5, TimeUnit.SECONDS));
     }
 }
