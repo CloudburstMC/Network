@@ -96,9 +96,9 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
      * What a probe found: the scheme that answered and the status the server advertises.
      *
      * @param scheme {@link Scheme#HTTPS} or {@link Scheme#HTTP}, never {@link Scheme#AUTO}
-     * @param motd   The status the server sent
+     * @param motd   The status the server sent, or null when it sent none, as vanilla BDS does
      */
-    public record Probe(Scheme scheme, PongData motd) {
+    public record Probe(Scheme scheme, @Nullable PongData motd) {
     }
 
     /**
@@ -176,8 +176,13 @@ public class NetherNetHTTPClientSignaling implements NetherNetClientSignaling {
                                 @Nullable Throwable httpsFailure) {
         int code = response.statusCode();
         if (code / 100 == 2) {
+            String body = response.body();
+            // Vanilla BDS answers with an empty body, and serves NetherNet all the same
+            if (body == null || body.isBlank()) {
+                return new Probe(scheme, null);
+            }
             try {
-                return new Probe(scheme, PongData.fromJson(response.body()));
+                return new Probe(scheme, PongData.fromJson(body));
             } catch (IllegalArgumentException e) {
                 throw refused(address + " answered the probe with something other than a NetherNet status");
             }

@@ -334,16 +334,50 @@ class HttpClientSignalingTest {
 
     /** A bare endpoint that answers every request with a status and records what was asked for. */
     private InetSocketAddress record(CompletableFuture<URI> request) throws Exception {
+        return this.answer(request, new PongData.Builder().build().toJson());
+    }
+
+    /** A bare endpoint that answers every request with a 200 and this body. */
+    private InetSocketAddress answer(CompletableFuture<URI> request, String body) throws Exception {
         this.http = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         this.http.createContext("/v1/join", exchange -> {
             request.complete(exchange.getRequestURI());
-            byte[] body = new PongData.Builder().build().toJson().getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, body.length);
-            exchange.getResponseBody().write(body);
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length == 0 ? -1 : bytes.length);
+            exchange.getResponseBody().write(bytes);
             exchange.close();
         });
         this.http.start();
         return this.http.getAddress();
+    }
+
+    /** BDS 26.60 answers the join probe with a 200 and no body at all. */
+    @Test
+    void probeTakesAnEmptyStatusAsNetherNet() throws Exception {
+        InetSocketAddress endpoint = this.answer(new CompletableFuture<>(), "");
+
+        HttpSignalingSettings plaintext = HttpSignalingSettings.DEFAULT.withScheme(Scheme.HTTP);
+
+        NetherNetHTTPClientSignaling.Probe probe = NetherNetHTTPClientSignaling
+                .probe(endpoint, plaintext).get(10, TimeUnit.SECONDS);
+
+        assertEquals(Scheme.HTTP, probe.scheme());
+        assertNull(probe.motd());
+    }
+
+    /** A web server that happens to answer the path is not taken for NetherNet. */
+    @Test
+    void probeRefusesABodyThatIsNotAStatus() throws Exception {
+        InetSocketAddress endpoint = this.answer(new CompletableFuture<>(), "<html>Hello</html>");
+
+        HttpSignalingSettings plaintext = HttpSignalingSettings.DEFAULT.withScheme(Scheme.HTTP);
+
+        ExecutionException refused = assertThrows(ExecutionException.class,
+                () -> NetherNetHTTPClientSignaling.probe(endpoint, plaintext).get(10, TimeUnit.SECONDS));
+
+        ConnectException cause = assertInstanceOf(ConnectException.class, refused.getCause());
+        assertTrue(cause.getMessage().contains("something other than a NetherNet status"), cause.getMessage());
     }
 
     @Test
