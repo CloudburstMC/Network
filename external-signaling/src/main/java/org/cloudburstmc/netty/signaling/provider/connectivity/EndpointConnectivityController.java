@@ -251,16 +251,7 @@ public final class EndpointConnectivityController implements AutoCloseable {
                             observed ? age / 1_000_000 : -1,
                             sampledAt + remaining);
             setFresh(lane, fresh && eligible ? sample.mapped() : null);
-            return view(
-                    lane,
-                    !observed
-                            ? (sample.state() == TransactionState.FAILED
-                                    ? State.STUN_FAILED
-                                    : State.STUN_PENDING)
-                            : !fresh
-                                    ? State.STUN_STALE
-                                    : !eligible ? State.STUN_INELIGIBLE : State.STUN_FRESH,
-                    observation);
+            return view(lane, state(observed, sample.state(), fresh, eligible), observation);
         } catch (RuntimeException failure) {
             lane.failed = true;
             // A failed close retains its handle for explicit close/replacement retry. It must
@@ -272,6 +263,17 @@ public final class EndpointConnectivityController implements AutoCloseable {
             }
             return view(lane, State.MONITOR_FAILED, null);
         }
+    }
+
+    private static State state(
+            boolean observed, TransactionState transaction, boolean fresh, boolean eligible) {
+        if (!observed) {
+            return transaction == TransactionState.FAILED ? State.STUN_FAILED : State.STUN_PENDING;
+        }
+        if (!fresh) {
+            return State.STUN_STALE;
+        }
+        return eligible ? State.STUN_FRESH : State.STUN_INELIGIBLE;
     }
 
     private FamilySnapshot view(Lane lane, State state, Observation observation) {

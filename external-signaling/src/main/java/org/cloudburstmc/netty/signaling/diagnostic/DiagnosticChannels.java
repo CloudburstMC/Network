@@ -60,8 +60,12 @@ final class DiagnosticChannels implements DataChannelCallback.Message {
     }
 
     private void install(DataChannel channel) {
-        int index =
-                channel.label().equals(label(0)) ? 0 : channel.label().equals(label(1)) ? 1 : -1;
+        int index = -1;
+        if (channel.label().equals(label(0))) {
+            index = 0;
+        } else if (channel.label().equals(label(1))) {
+            index = 1;
+        }
         DataChannelReliability reliability = channel.reliability();
         if (index < 0
                 || channels[index] != null

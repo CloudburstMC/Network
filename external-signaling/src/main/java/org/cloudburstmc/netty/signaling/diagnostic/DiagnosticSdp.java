@@ -103,10 +103,10 @@ public record DiagnosticSdp(
                     if (!reflexive) {
                         throw invalid();
                     }
-                    int family =
-                            answer && claims.profile() == PROFILE
-                                    ? (value.contains(":") ? 6 : 4)
-                                    : claims.family();
+                    int family = claims.family();
+                    if (answer && claims.profile() == PROFILE) {
+                        family = value.contains(":") ? 6 : 4;
+                    }
                     address(family, value);
                 }
                 case "rport" -> {

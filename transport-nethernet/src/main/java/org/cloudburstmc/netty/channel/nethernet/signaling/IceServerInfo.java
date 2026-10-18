@@ -95,7 +95,10 @@ public record IceServerInfo(String username, String password, List<String> urls)
             return url;
         }
         int scheme = url.indexOf(':');
-        int authority = scheme < 0 ? 0 : (url.startsWith("://", scheme) ? scheme + 3 : scheme + 1);
+        int authority = 0;
+        if (scheme >= 0) {
+            authority = url.startsWith("://", scheme) ? scheme + 3 : scheme + 1;
+        }
         return url.substring(0, authority) + "***@" + url.substring(at + 1);
     }
 

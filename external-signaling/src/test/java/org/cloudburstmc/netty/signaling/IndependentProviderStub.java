@@ -135,8 +135,14 @@ public final class IndependentProviderStub implements AutoCloseable {
             }
             JsonObject key =
                     recovery ? keys.get(registration.get("keyId").getAsString()) : body.getAsJsonObject("publicKeyJwk");
-            String authorization = recovery ? "recovery"
-                    : e.getRequestHeaders().containsKey("Authorization") ? "bearer-token" : "anonymous-proof-of-work";
+            String authorization;
+            if (recovery) {
+                authorization = "recovery";
+            } else if (e.getRequestHeaders().containsKey("Authorization")) {
+                authorization = "bearer-token";
+            } else {
+                authorization = "anonymous-proof-of-work";
+            }
             if (authorization.equals("bearer-token")) {
                 challengeAuthorization = e.getRequestHeaders().getFirst("Authorization");
                 if (!"Bearer independent-provider-token".equals(challengeAuthorization)) {
@@ -159,8 +165,15 @@ public final class IndependentProviderStub implements AutoCloseable {
             if (!recovery && body.has("label")) {
                 context.add("label", body.get("label"));
             }
-            context.addProperty("mode", recovery ? "recover"
-                    : authorization.equals("bearer-token") && attachToken ? "attach-instance" : "new-service");
+            String mode;
+            if (recovery) {
+                mode = "recover";
+            } else if (authorization.equals("bearer-token") && attachToken) {
+                mode = "attach-instance";
+            } else {
+                mode = "new-service";
+            }
+            context.addProperty("mode", mode);
             if (recovery) {
                 context.add("registrationId", registration.get("registrationId"));
             }

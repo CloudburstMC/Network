@@ -438,8 +438,12 @@ public final class JdkWebSocketTransport implements AutoCloseable {
                 bytes += 4;
             } else if (Character.isLowSurrogate(c)) {
                 throw new IllegalArgumentException("Text contains an unpaired surrogate");
+            } else if (c < 0x80) {
+                bytes += 1;
+            } else if (c < 0x800) {
+                bytes += 2;
             } else {
-                bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+                bytes += 3;
             }
         }
         return bytes;

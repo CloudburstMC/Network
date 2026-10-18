@@ -175,8 +175,12 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         // Each list not given falls back to the trusted proxies
         this.forwardedForProxies = builder.forwardedForProxies != null
                 ? builder.forwardedForProxies : builder.trustedProxies;
-        this.proxyProtocolProxies = !builder.proxyProtocol ? IpRangeSet.empty()
-                : builder.proxyProtocolProxies != null ? builder.proxyProtocolProxies : builder.trustedProxies;
+        if (builder.proxyProtocol) {
+            this.proxyProtocolProxies = builder.proxyProtocolProxies != null
+                    ? builder.proxyProtocolProxies : builder.trustedProxies;
+        } else {
+            this.proxyProtocolProxies = IpRangeSet.empty();
+        }
         this.connectionLimitExempt = builder.connectionLimitExempt != null
                 ? builder.connectionLimitExempt : forwardedForProxies.union(proxyProtocolProxies);
         this.maxConnectionsPerAddress = builder.maxConnectionsPerAddress;
