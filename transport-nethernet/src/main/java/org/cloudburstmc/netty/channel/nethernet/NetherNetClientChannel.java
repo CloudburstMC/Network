@@ -456,7 +456,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
             if (connectPromise != null && !connectPromise.isDone()) {
                 connectPromise.trySuccess();
             }
-            pipeline().fireChannelActive();
+            fireActive();
         }));
     }
 

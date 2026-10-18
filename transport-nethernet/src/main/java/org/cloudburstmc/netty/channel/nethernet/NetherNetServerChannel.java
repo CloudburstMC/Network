@@ -462,7 +462,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 if (child.isOpen()) {
                     log.debug("Closing connection {} due to state change: {}", this.connectionId,
                             state);
-                    child.close();
+                    child.closeFromTransport();
                 }
                 handshakeTimeout.cancel(false);
             }

@@ -41,6 +41,8 @@ final class NetherNetTestServer implements AutoCloseable {
     private final DefaultEventLoopGroup group = new DefaultEventLoopGroup(1);
     private final CompletableFuture<Accepted> accepted = new CompletableFuture<>();
     private final CompletableFuture<NetherNetChildChannel> active = new CompletableFuture<>();
+    /** User events and errors that reached the end of the child's pipeline. */
+    final BlockingQueue<Object> childEvents = new LinkedBlockingQueue<>();
 
     record Accepted(NetherNetChildChannel child, PeerConnection peer) { }
 
@@ -59,6 +61,16 @@ final class NetherNetTestServer implements AutoCloseable {
                     public void channelActive(ChannelHandlerContext ctx) {
                         active.complete((NetherNetChildChannel) ctx.channel());
                         ctx.fireChannelActive();
+                    }
+
+                    @Override
+                    public void userEventTriggered(ChannelHandlerContext ctx, Object event) {
+                        childEvents.add(event);
+                    }
+
+                    @Override
+                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                        childEvents.add(cause);
                     }
                 }).bind("127.0.0.1", 0).sync();
     }
@@ -104,6 +116,31 @@ final class NetherNetTestServer implements AutoCloseable {
         accept(offer(client));
         client.setRemoteDescription(signaling.answer.get(5, TimeUnit.SECONDS), SessionDescriptionType.ANSWER);
         return active();
+    }
+
+    /** Binds, then connects {@code client} with the two data channels a Bedrock client opens. */
+    NetherNetChildChannel bindAndConnect(PeerConnection client) throws Exception {
+        bind();
+        client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+        client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+        return connect(client);
+    }
+
+    /** The one event the child's pipeline saw by the time it closed. */
+    Object eventOnceClosed(NetherNetChildChannel child) throws Exception {
+        if (!child.closeFuture().await(10, TimeUnit.SECONDS)) {
+            throw new AssertionError("the channel never closed");
+        }
+        Object event = childEvents.poll(1, TimeUnit.SECONDS);
+        if (!childEvents.isEmpty()) {
+            throw new AssertionError("more than one event: " + event + ", " + childEvents);
+        }
+        return event;
+    }
+
+    /** Shuts the loop down under the server and its child, leaving both open. */
+    void shutDownLoop() throws InterruptedException {
+        group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
     }
 
     NetherNetChildChannel active() throws Exception {

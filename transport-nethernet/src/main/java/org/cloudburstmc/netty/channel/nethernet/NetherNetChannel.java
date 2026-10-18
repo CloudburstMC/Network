@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 import org.cloudburstmc.netty.channel.PendingMessages;
 import org.cloudburstmc.netty.channel.TransportChannel;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
 import io.netty.buffer.ByteBuf;
@@ -32,7 +33,9 @@ import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jspecify.annotations.Nullable;
 import tel.schich.libdatachannel.CandidatePair;
+import tel.schich.libdatachannel.CloseReason;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
 import tel.schich.libdatachannel.DataChannel;
@@ -41,6 +44,7 @@ import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.SctpStats;
 import tel.schich.libdatachannel.PeerState;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.ArrayList;
 import java.net.URI;
@@ -52,6 +56,7 @@ import java.nio.ByteBuffer;
 import java.util.function.Consumer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.RejectedExecutionException;
 
 public abstract class NetherNetChannel extends AbstractChannel implements TransportChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
@@ -265,6 +270,15 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     }
 
     /**
+     * Fires {@code channelActive} for a channel that activates itself instead of through
+     * {@link #activate}, so it reports why the connection ends like any other. Event loop only.
+     */
+    protected void fireActive() {
+        activeFired = true;
+        pipeline().fireChannelActive();
+    }
+
+    /**
      * Binds the data channels this channel carries, reading any that {@link #readDataChannel} does not
      * already.
      */
@@ -355,8 +369,75 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
                 unsafe().flush();
             }
         } else if (reliableChannel != null && reliableChannel.isClosed()) {
-            close();
+            closeFromTransport();
         }
+    }
+
+    /**
+     * Closes because the connection ended underneath this channel, first telling the pipeline why.
+     * Safe to call from a libdatachannel callback. Those are registered only once the channel is,
+     * and its loop stays set after it closes, so there always is a loop to close on.
+     */
+    protected void closeFromTransport() {
+        if (!isOpen()) {
+            return;
+        }
+        if (!eventLoop().inEventLoop()) {
+            try {
+                eventLoop().execute(this::closeFromTransport);
+            } catch (RejectedExecutionException shutDown) {
+                closeWithoutLoop();
+            }
+            return;
+        }
+        fireDisconnectReason();
+        close();
+    }
+
+    /**
+     * Tears the connection down off the loop, for a loop that was shut down under an open channel
+     * and runs nothing anymore, as Netty does for a channel it could not register.
+     */
+    private void closeWithoutLoop() {
+        log.debug("Closing {} without its event loop, which was shut down", this);
+        try {
+            doClose();
+        } catch (Exception e) {
+            log.debug("Closing {} failed", this, e);
+        }
+    }
+
+    private void fireDisconnectReason() {
+        TransportDisconnectReason reason = disconnectReason();
+        if (reason != null) {
+            pipeline().fireUserEventTriggered(reason);
+        }
+    }
+
+    /** Why the connection ended, or null before activation and when this side closed it. */
+    private @Nullable TransportDisconnectReason disconnectReason() {
+        PeerConnection peer = this.peerConnection;
+        if (!activeFired || peer == null) {
+            return null;
+        }
+        CloseReason reason;
+        try {
+            reason = peer.closeReason();
+        } catch (RuntimeException deleted) {
+            return null;
+        }
+        log.debug("{} ended: {}", this, reason);
+        return switch (reason) {
+            // The peer is still up, so either the remote closed the data channel or a send failed
+            case RTC_CLOSE_REASON_NONE -> reliableChannel != null && reliableChannel.isClosed()
+                    ? TransportDisconnectReason.CLOSED_BY_REMOTE_PEER : TransportDisconnectReason.TRANSPORT_FAILED;
+            case RTC_CLOSE_REASON_REMOTE_SHUTDOWN -> TransportDisconnectReason.CLOSED_BY_REMOTE_PEER;
+            case RTC_CLOSE_REASON_REMOTE_ABORT -> TransportDisconnectReason.ABORTED_BY_REMOTE_PEER;
+            case RTC_CLOSE_REASON_SCTP_TIMEOUT -> TransportDisconnectReason.TIMED_OUT;
+            case RTC_CLOSE_REASON_ICE_FAILED -> TransportDisconnectReason.CONNECTION_LOST;
+            case RTC_CLOSE_REASON_TRANSPORT_FAILED -> TransportDisconnectReason.TRANSPORT_FAILED;
+            case RTC_CLOSE_REASON_LOCAL -> null;
+        };
     }
 
     @Override
@@ -380,23 +461,37 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
             return;
         }
 
-        while (!pendingWrites.isEmpty()) {
-            Object msg = pendingWrites.poll();
-            try {
-                writeInternal(msg);
-            } finally {
-                ReferenceCountUtil.release(msg);
+        Object msg = null;
+        try {
+            while (!pendingWrites.isEmpty()) {
+                Object pending = pendingWrites.poll();
+                try {
+                    writeInternal(pending);
+                } finally {
+                    ReferenceCountUtil.release(pending);
+                }
             }
-        }
 
-        Object msg;
-        while ((msg = in.current()) != null) {
-            writeInternal(msg);
-            in.remove();
+            while ((msg = in.current()) != null) {
+                writeInternal(msg);
+                in.remove();
+            }
+        } catch (IOException sendFailed) {
+            // Closed here whatever AUTO_CLOSE says: without it Netty only shuts the output down,
+            // which leaves a channel that never reports closing
+            log.debug("Sending on {} failed: {}", this, sendFailed.getCause().toString());
+            if (msg != null) {
+                in.remove(sendFailed);
+            }
+            fireDisconnectReason();
+            close();
         }
     }
 
-    private void writeInternal(Object msg) {
+    /**
+     * @throws IOException if the send failed, after which the message stream cannot go on
+     */
+    private void writeInternal(Object msg) throws IOException {
         if (!(msg instanceof ByteBuf payload)) {
             log.debug("Dropping an outbound {}, which this channel cannot frame",
                     msg == null ? null : msg.getClass().getName());
@@ -418,8 +513,8 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
                 log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
                 countSent(totalLength, segments);
             }
-        } catch (Exception e) {
-            pipeline().fireExceptionCaught(e);
+        } catch (RuntimeException e) {
+            throw new IOException("Sending on the reliable data channel failed", e);
         } finally {
             framed.release();
         }
