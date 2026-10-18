@@ -216,6 +216,22 @@ public final class ProviderNativeBench {
         }
     }
 
+    /** What the bench registers with, chosen as a host's runtime configuration would. */
+    static ProviderClient.Configuration configuration(
+            URI origin, boolean diagnostic, boolean definedAddress, boolean assisted) {
+        return ProviderClient.Configuration.builder(origin)
+                .label("Provider native integration")
+                .diagnosticAdmission(diagnostic)
+                .connectivityMethod(definedAddress ? "defined" : "discovered")
+                // Assisted joins arrive over the WebSocket control channel
+                .controlTransport(
+                        assisted
+                                ? ProviderClient.ControlTransport.AUTO
+                                : ProviderClient.ControlTransport.HTTP)
+                .assistedJoins(assisted)
+                .build();
+    }
+
     private static synchronized void emit(String kind, Object value) {
         JsonObject event = new JsonObject();
         event.addProperty("kind", kind);
@@ -342,12 +358,7 @@ public final class ProviderNativeBench {
                     new ServerStatus("Automatic native server", "Integration", 4, 0));
             provider =
                     new ProviderClient(
-                            ProviderClient.Configuration.builder(origin)
-                                    .label("Provider native integration")
-                                    .diagnosticAdmission(diagnostic)
-                                    .connectivityMethod(advertisedAddress == null ? "discovered" : "defined")
-                                    .assistedJoins(assisted)
-                                    .build(),
+                            configuration(origin, diagnostic, advertisedAddress != null, assisted),
                             new ProviderStateStore(state),
                             transport,
                             () -> listing.get(),
