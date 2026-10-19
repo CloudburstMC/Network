@@ -20,6 +20,7 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import tel.schich.libdatachannel.LibDataChannel;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -33,7 +34,40 @@ public final class NetherNetLogging {
      */
     public static final String NATIVE_LOGGER = "tel.schich.libdatachannel.LibDataChannel";
 
+    /** NetherNet's own loggers: the channels, their utilities, and external signaling. */
+    private static final List<String> JAVA_LOGGERS = javaLoggers();
+
     private NetherNetLogging() {
+    }
+
+    /** Derived from this class, so a relocated build still names its own packages. */
+    static List<String> javaLoggers() {
+        String util = NetherNetLogging.class.getPackageName();
+        String base = util.substring(0, util.length() - ".util.nethernet".length());
+        return List.of(base + ".channel.nethernet", util, base + ".signaling");
+    }
+
+    /**
+     * Sets the native threshold, as {@link #setNativeLogLevel} does, and NetherNet's own loggers to
+     * the same level, on Log4j2 or Logback. DEBUG then also shows what signaling, STUN discovery and
+     * the channels do, which an operator can turn on to send a log.
+     *
+     * @param level One of OFF, ERROR, WARN, INFO, DEBUG, TRACE or ALL
+     * @return true if the native threshold was set, false if the level was invalid.
+     */
+    public static boolean setLogLevel(String level) {
+        if (!setNativeLogLevel(level)) {
+            return false;
+        }
+        String normalised = level.trim().toUpperCase(Locale.ROOT);
+        boolean applied = false;
+        for (String logger : JAVA_LOGGERS) {
+            applied |= applyLog4j2(logger, normalised) || applyLogback(logger, normalised);
+        }
+        if (!applied) {
+            log.info("NetherNet's own logs keep the platform's level, as its logging is neither Log4j2 nor Logback");
+        }
+        return true;
     }
 
     /**
@@ -61,14 +95,14 @@ public final class NetherNetLogging {
             return false;
         }
         LibDataChannel.setLogLevel(nativeLevel);
-        if (!applyLog4j2(normalised)) {
-            applyLogback(normalised);
+        if (!applyLog4j2(NATIVE_LOGGER, normalised)) {
+            applyLogback(NATIVE_LOGGER, normalised);
         }
         log.debug("Set native transport log level to {}", normalised);
         return true;
     }
 
-    private static boolean applyLog4j2(String level) {
+    private static boolean applyLog4j2(String logger, String level) {
         try {
             Class<?> levelClass = Class.forName("org.apache.logging.log4j.Level");
             Class<?> configurator = Class.forName("org.apache.logging.log4j.core.config.Configurator");
@@ -77,7 +111,7 @@ public final class NetherNetLogging {
                     .invoke(null, level, levelClass.getField("WARN").get(null));
 
             configurator.getMethod("setLevel", String.class, levelClass)
-                    .invoke(null, NATIVE_LOGGER, parsed);
+                    .invoke(null, logger, parsed);
             return true;
         } catch (Throwable t) {
             // Not on Log4j2, or it resolved a different logger context than ours
@@ -85,11 +119,11 @@ public final class NetherNetLogging {
         }
     }
 
-    private static boolean applyLogback(String level) {
+    private static boolean applyLogback(String name, String level) {
         try {
             Object logger = Class.forName("org.slf4j.LoggerFactory")
                     .getMethod("getLogger", String.class)
-                    .invoke(null, NATIVE_LOGGER);
+                    .invoke(null, name);
 
             Class<?> logbackLogger = Class.forName("ch.qos.logback.classic.Logger");
             if (!logbackLogger.isInstance(logger)) {
