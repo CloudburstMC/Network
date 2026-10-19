@@ -22,6 +22,7 @@ import io.netty.channel.DefaultChannelPipeline;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
 public class RakChannelPipeline extends DefaultChannelPipeline {
@@ -77,7 +78,7 @@ public class RakChannelPipeline extends DefaultChannelPipeline {
     @Override
     protected void onUnhandledInboundUserEventTriggered(Object evt) {
         this.child.pipeline().fireUserEventTriggered(evt);
-        if (evt instanceof RakDisconnectReason) {
+        if (evt instanceof TransportDisconnectReason) {
             this.child.close();
         }
     }

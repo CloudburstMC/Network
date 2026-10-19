@@ -21,7 +21,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.channel.PendingMessages;
 import org.cloudburstmc.netty.channel.raknet.RakChannel;
-import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 
@@ -62,7 +62,7 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
             // Read here, child options are applied after this handler is added.
             long timeout = this.channel.config().getOption(RakChannelOption.RAK_SESSION_TIMEOUT);
             if (System.currentTimeMillis() - this.addedTime >= timeout) {
-                this.close(RakDisconnectReason.TIMED_OUT);
+                this.close(TransportDisconnectReason.TIMED_OUT);
             }
             return;
         }
@@ -79,7 +79,7 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
     protected void channelRead0(ChannelHandlerContext ctx, EncapsulatedPacket msg) throws Exception {
         if (!this.channel.isActive()) {
             if (!this.closing && !this.messages.offer(msg.retain())) {
-                this.close(RakDisconnectReason.QUEUE_TOO_LONG);
+                this.close(TransportDisconnectReason.QUEUE_TOO_LONG);
             }
             return;
         }
@@ -88,7 +88,7 @@ public class RakUnhandledMessagesQueue extends SimpleChannelInboundHandler<Encap
         ctx.fireChannelRead(msg.retain());
     }
 
-    private void close(RakDisconnectReason reason) {
+    private void close(TransportDisconnectReason reason) {
         this.closing = true;
         this.cancelFuture();
         this.messages.clear();

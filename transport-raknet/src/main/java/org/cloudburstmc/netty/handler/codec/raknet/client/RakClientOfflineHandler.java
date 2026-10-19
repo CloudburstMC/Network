@@ -22,7 +22,7 @@ import io.netty.channel.*;
 import io.netty.handler.codec.CorruptedFrameException;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.channel.raknet.RakChannel;
-import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.RakOfflineState;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
@@ -45,7 +45,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
     private RakOfflineState state = RakOfflineState.HANDSHAKE_1;
     private int connectionAttempts = 0;
     private int deniedConnectionAttempts = 0;
-    private RakDisconnectReason denyReason;
+    private TransportDisconnectReason denyReason;
     private String denyMessage;
     private int cookie;
     private boolean security;
@@ -146,17 +146,17 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
                 this.onSuccess(ctx);
                 return;
             case ID_INCOMPATIBLE_PROTOCOL_VERSION:
-                this.rakChannel.pipeline().fireUserEventTriggered(RakDisconnectReason.INCOMPATIBLE_PROTOCOL_VERSION);
+                this.rakChannel.pipeline().fireUserEventTriggered(TransportDisconnectReason.INCOMPATIBLE_PROTOCOL_VERSION);
                 this.successPromise.tryFailure(new IllegalStateException("Incompatible raknet version"));
                 return;
             case ID_ALREADY_CONNECTED:
-                this.onConnectionDenied(RakDisconnectReason.ALREADY_CONNECTED, "Already connected");
+                this.onConnectionDenied(TransportDisconnectReason.ALREADY_CONNECTED, "Already connected");
                 return;
             case ID_NO_FREE_INCOMING_CONNECTIONS:
-                this.onConnectionDenied(RakDisconnectReason.NO_FREE_INCOMING_CONNECTIONS, "No free incoming connections");
+                this.onConnectionDenied(TransportDisconnectReason.NO_FREE_INCOMING_CONNECTIONS, "No free incoming connections");
                 return;
             case ID_IP_RECENTLY_CONNECTED:
-                this.onConnectionDenied(RakDisconnectReason.IP_RECENTLY_CONNECTED, "Address recently connected");
+                this.onConnectionDenied(TransportDisconnectReason.IP_RECENTLY_CONNECTED, "Address recently connected");
                 return;
         }
     }
@@ -166,7 +166,7 @@ public class RakClientOfflineHandler extends SimpleChannelInboundHandler<ByteBuf
      * Instead of failing immediately, the current handshake state is kept so the periodic retry task
      * resends the open connection request. The connection is only failed once we run out of attempts.
      */
-    private void onConnectionDenied(RakDisconnectReason reason, String message) {
+    private void onConnectionDenied(TransportDisconnectReason reason, String message) {
         // Remember the latest denial so the timeout path can surface the real reason even if
         // we never reach the attempt limit (e.g. some replies are lost).
         this.denyReason = reason;

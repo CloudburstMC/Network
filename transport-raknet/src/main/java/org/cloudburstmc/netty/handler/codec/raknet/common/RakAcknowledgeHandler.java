@@ -21,7 +21,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelMetrics;
 import org.cloudburstmc.netty.util.IntRange;
 
@@ -75,7 +75,7 @@ public class RakAcknowledgeHandler extends SimpleChannelInboundHandler<ByteBuf> 
             if (log.isTraceEnabled()) {
                 log.trace("{} sent an IntRange with a start value {} greater than an end value of {}", sessionCodec.getChannel().remoteAddress(), start, end);
             }
-            this.sessionCodec.disconnect(RakDisconnectReason.BAD_PACKET);
+            this.sessionCodec.disconnect(TransportDisconnectReason.BAD_PACKET);
             return;
         }
 

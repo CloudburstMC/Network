@@ -27,6 +27,7 @@ import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.util.ReferenceCountUtil;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.*;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
@@ -193,7 +194,7 @@ public class RakTests {
         return new ChannelInboundHandlerAdapter() {
             @Override
             public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
-                if (evt instanceof RakDisconnectReason) {
+                if (evt instanceof TransportDisconnectReason) {
                     fired.set(true);
                 }
                 ctx.fireUserEventTriggered(evt);
@@ -279,7 +280,7 @@ public class RakTests {
 
         RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
         Assertions.assertNotNull(child, "Server should create a child channel");
-        child.rakPipeline().get(RakSessionCodec.class).disconnect(RakDisconnectReason.DISCONNECTED);
+        child.rakPipeline().get(RakSessionCodec.class).disconnect(TransportDisconnectReason.DISCONNECTED);
 
         Assertions.assertTrue(channel.closeFuture().await(5, TimeUnit.SECONDS),
                 "Client should close when the server disconnects");
@@ -352,7 +353,7 @@ public class RakTests {
         RakChildChannel child = children.poll(5, TimeUnit.SECONDS);
         Assertions.assertNotNull(child, "Server should create a child channel");
         allocator.failNotification = true;
-        child.rakPipeline().get(RakSessionCodec.class).disconnect(RakDisconnectReason.DISCONNECTED);
+        child.rakPipeline().get(RakSessionCodec.class).disconnect(TransportDisconnectReason.DISCONNECTED);
 
         // The live client keeps the session from timing out, so only the disconnect can close it
         Assertions.assertTrue(child.closeFuture().await(5, TimeUnit.SECONDS),
