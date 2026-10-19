@@ -56,7 +56,7 @@ class ProviderClientTest {
                                         e ->
                                                 e.level() == ProviderDiagnostic.Level.WARN
                                                         && e.message()
-                                                                .equals(
+                                                                .startsWith(
                                                                         ProviderLog.Operation
                                                                                 .SERVER_STATUS
                                                                                 .failure))
@@ -67,7 +67,7 @@ class ProviderClientTest {
                                         e ->
                                                 e.level() == ProviderDiagnostic.Level.DEBUG
                                                         && e.message()
-                                                                .equals(
+                                                                .startsWith(
                                                                         ProviderLog.Operation
                                                                                 .SERVER_STATUS
                                                                                 .failure)));

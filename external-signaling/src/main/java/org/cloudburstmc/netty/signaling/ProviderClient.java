@@ -534,9 +534,7 @@ public final class ProviderClient implements AutoCloseable {
                                                     System.nanoTime()
                                                             + TimeUnit.SECONDS.toNanos(10);
                                             nextStatusUpdate = nextHeartbeat;
-                                            diagnostics.failed(ProviderLog.Operation.STATUS);
-                                            diagnostics.detail(
-                                                    ProviderLog.Operation.STATUS, safeFailure(e));
+                                            diagnostics.failed(ProviderLog.Operation.STATUS, safeFailure(e));
                                         }
                                         if (started && System.nanoTime() >= nextOutcomes) {
                                             try {
@@ -545,10 +543,7 @@ public final class ProviderClient implements AutoCloseable {
                                                 nextOutcomes =
                                                         System.nanoTime()
                                                                 + TimeUnit.SECONDS.toNanos(10);
-                                                diagnostics.failed(ProviderLog.Operation.EVENTS);
-                                                diagnostics.detail(
-                                                        ProviderLog.Operation.EVENTS,
-                                                        safeFailure(e));
+                                                diagnostics.failed(ProviderLog.Operation.EVENTS, safeFailure(e));
                                             }
                                         }
                                     },
@@ -930,8 +925,7 @@ public final class ProviderClient implements AutoCloseable {
                                 }
                             } catch (Exception e) {
                                 nextStatusUpdate = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                                diagnostics.failed(ProviderLog.Operation.STATUS);
-                                diagnostics.detail(ProviderLog.Operation.STATUS, safeFailure(e));
+                                diagnostics.failed(ProviderLog.Operation.STATUS, safeFailure(e));
                             }
                         }
                     });
@@ -1117,7 +1111,7 @@ public final class ProviderClient implements AutoCloseable {
                     body.add("serverStatus", JSON.toJsonTree(status));
                 }
             } catch (RuntimeException failure) {
-                diagnostics.failed(ProviderLog.Operation.SERVER_STATUS);
+                diagnostics.failed(ProviderLog.Operation.SERVER_STATUS, safeFailure(failure));
             }
             long requestStarted = System.nanoTime();
                 var captured = profileSnapshot;
@@ -1423,7 +1417,7 @@ public final class ProviderClient implements AutoCloseable {
         } catch (Exception unavailable) {
             // Optional observations must not undo a successful ordinary heartbeat or change host
             // serving state.
-            diagnostics.failed(ProviderLog.Operation.CONNECTIVITY);
+            diagnostics.failed(ProviderLog.Operation.CONNECTIVITY, safeFailure(unavailable));
         }
     }
 
@@ -1878,7 +1872,7 @@ public final class ProviderClient implements AutoCloseable {
         try {
             deregisterAndForget();
         } catch (Exception e) {
-            diagnostics.failed(ProviderLog.Operation.DEREGISTER);
+            diagnostics.failed(ProviderLog.Operation.DEREGISTER, safeFailure(e));
         }
     }
 
@@ -2046,7 +2040,7 @@ public final class ProviderClient implements AutoCloseable {
                     // Retry the SAME signed operation over HTTPS; neither intent nor body is
                     // replaced.
                     ambiguous |= state.has("pendingWebSocketOperation");
-                    diagnostics.failed(ProviderLog.Operation.WEBSOCKET);
+                    diagnostics.failed(ProviderLog.Operation.WEBSOCKET, safeFailure(failure));
                 }
             }
             boolean usedWebSocket = response != null;
@@ -2289,13 +2283,17 @@ public final class ProviderClient implements AutoCloseable {
         try {
             store.write(state);
         } catch (IOException failure) {
-            diagnostics.failed(ProviderLog.Operation.STORAGE);
+            diagnostics.failed(ProviderLog.Operation.STORAGE, safeFailure(failure));
             stop();
             throw failure;
         }
     }
 
-    private static String safeFailure(Exception e) {
+    private static String safeFailure(Throwable e) {
+        // A future's wrapper says nothing about what failed
+        while ((e instanceof ExecutionException || e instanceof CompletionException) && e.getCause() != null) {
+            e = e.getCause();
+        }
         return e instanceof ProviderException ? e.getMessage() : e.getClass().getSimpleName();
     }
 
@@ -2336,14 +2334,14 @@ public final class ProviderClient implements AutoCloseable {
                             try {
                                 flushEvents();
                             } catch (Exception e) {
-                                diagnostics.failed(ProviderLog.Operation.EVENTS);
+                                diagnostics.failed(ProviderLog.Operation.EVENTS, safeFailure(e));
                             }
                             if (config.deregisterOnShutdown()) {
                                 deregisterOnShutdown();
                             }
                         }
                     } catch (Exception e) {
-                        diagnostics.failed(ProviderLog.Operation.DRAIN);
+                        diagnostics.failed(ProviderLog.Operation.DRAIN, safeFailure(e));
                     } finally {
                         closed = true;
                         started = false;
@@ -2356,12 +2354,12 @@ public final class ProviderClient implements AutoCloseable {
                         try {
                             transport.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
                         } catch (Exception e) {
-                            diagnostics.failed(ProviderLog.Operation.TRANSPORT_CLOSE);
+                            diagnostics.failed(ProviderLog.Operation.TRANSPORT_CLOSE, safeFailure(e));
                         }
                         try {
                             store.close();
                         } catch (Exception e) {
-                            diagnostics.failed(ProviderLog.Operation.STATE_CLOSE);
+                            diagnostics.failed(ProviderLog.Operation.STATE_CLOSE, safeFailure(e));
                         }
                         executor.shutdown();
                         stopped.complete(null);

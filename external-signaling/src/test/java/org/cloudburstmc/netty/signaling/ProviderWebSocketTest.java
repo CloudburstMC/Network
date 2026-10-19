@@ -98,7 +98,7 @@ class ProviderWebSocketTest {
                                         e ->
                                                 e.level() == ProviderDiagnostic.Level.DEBUG
                                                         && e.message()
-                                                                .equals(
+                                                                .startsWith(
                                                                         ProviderLog.Operation
                                                                                 .WEBSOCKET
                                                                                 .failure))
@@ -114,7 +114,7 @@ class ProviderWebSocketTest {
                                         e ->
                                                 e.level() == ProviderDiagnostic.Level.WARN
                                                         && e.message()
-                                                                .equals(
+                                                                .startsWith(
                                                                         ProviderLog.Operation
                                                                                 .WEBSOCKET
                                                                                 .failure))
@@ -125,7 +125,7 @@ class ProviderWebSocketTest {
                                         e ->
                                                 e.level() == ProviderDiagnostic.Level.DEBUG
                                                         && e.message()
-                                                                .equals(
+                                                                .startsWith(
                                                                         ProviderLog.Operation
                                                                                 .WEBSOCKET
                                                                                 .failure)));

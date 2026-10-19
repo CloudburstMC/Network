@@ -23,32 +23,36 @@ import java.util.function.Consumer;
 final class ProviderLog {
     enum Operation {
         STATUS(
-                "Cannot update the signaling service. Retrying automatically.",
+                "Cannot update the signaling service",
+                "Retrying automatically.",
                 "Signaling service updates have resumed."),
-        EVENTS(
-                "Cannot send connection reports. Retrying automatically.",
-                "Connection reports are being sent again."),
-        SERVER_STATUS(
-                "Cannot read the server status. Retrying automatically.",
-                "Server status is available again."),
+        EVENTS("Cannot send connection reports", "Retrying automatically.", "Connection reports are being sent again."),
+        SERVER_STATUS("Cannot read the server status", "Retrying automatically.", "Server status is available again."),
         CONNECTIVITY(
-                "Cannot read connection check results. Retrying automatically.",
+                "Cannot read connection check results",
+                "Retrying automatically.",
                 "Connection check results are available again."),
         WEBSOCKET(
-                "Lost the live connection to the signaling service. Reconnecting automatically.",
+                "Lost the live connection to the signaling service",
+                "Reconnecting automatically.",
                 "Reconnected to the signaling service."),
-        STORAGE(
-                "Cannot save signaling settings. Signaling is stopping.",
-                "Signaling settings can be saved again."),
-        DRAIN("Could not tell the signaling service that the server is stopping.", ""),
-        DEREGISTER("Could not remove this server from the signaling service. It expires there instead.", ""),
-        TRANSPORT_CLOSE("Could not close the player connection listener.", ""),
-        STATE_CLOSE("Could not close the signaling settings file.", "");
-        final String failure, recovery;
+        STORAGE("Cannot save signaling settings", "Signaling is stopping.", "Signaling settings can be saved again."),
+        DRAIN("Could not tell the signaling service that the server is stopping", "", ""),
+        DEREGISTER("Could not remove this server from the signaling service", "It expires there instead.", ""),
+        TRANSPORT_CLOSE("Could not close the player connection listener", "", ""),
+        STATE_CLOSE("Could not close the signaling settings file", "", "");
 
-        Operation(String failure, String recovery) {
+        final String failure, outcome, recovery;
+
+        Operation(String failure, String outcome, String recovery) {
             this.failure = failure;
+            this.outcome = outcome;
             this.recovery = recovery;
+        }
+
+        /** Such as "Cannot update the signaling service: ConnectException. Retrying automatically." */
+        String message(String reason) {
+            return failure + ": " + reason + "." + (outcome.isEmpty() ? "" : " " + outcome);
         }
     }
 
@@ -59,13 +63,14 @@ final class ProviderLog {
         this.sink = sink;
     }
 
-    void failed(Operation operation) {
+    /** The first failure of a streak warns and later ones go to debug, each with its reason. */
+    void failed(Operation operation, String reason) {
         sink.accept(
                 new ProviderDiagnostic(
                         failures.add(operation)
                                 ? ProviderDiagnostic.Level.WARN
                                 : ProviderDiagnostic.Level.DEBUG,
-                        operation.failure));
+                        operation.message(reason)));
     }
 
     void recovered(Operation operation) {
