@@ -39,6 +39,7 @@ import java.io.InputStreamReader;
 import java.io.BufferedReader;
 import javax.net.ssl.SSLSocket;
 import java.security.cert.X509Certificate;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -346,6 +347,25 @@ class HttpSignalingRequestTest {
         String answer = this.answerFor("192.168.1.2:19132");
         assertTrue(answer.contains(" 10.0.0.5 " + this.port + " typ srflx"));
         assertFalse(answer.contains("192.168.1.2"));
+    }
+
+    @Test
+    void announcesWhatAConfiguredNameResolvedToWhenBinding() throws Exception {
+        this.start(this.builder().setAdvertisedAddresses(List.of("localhost:19140")));
+        this.answerGathered(this.port);
+
+        String answer = this.answerFor("192.168.1.2:19132");
+        assertTrue(answer.contains(" 127.0.0.1 19140 typ srflx"), answer);
+        assertFalse(answer.contains("192.168.1.2"));
+    }
+
+    @Test
+    void refusesToBindWhenAConfiguredNameDoesNotResolve() throws Exception {
+        this.signaling = this.builder().setAdvertisedAddresses(List.of("nothing.invalid")).build();
+
+        ConnectException refused = assertThrows(ConnectException.class,
+                () -> this.signaling.bind(new InetSocketAddress("127.0.0.1", 0), null, this.group.next()));
+        assertEquals("Could not resolve advertised address nothing.invalid", refused.getMessage());
     }
 
     @Test

@@ -16,9 +16,9 @@
 
 package org.cloudburstmc.netty.signaling.provider;
 
+import org.cloudburstmc.netty.channel.nethernet.signaling.AdvertisedAddresses;
 import org.cloudburstmc.netty.signaling.ProviderClient;
 import org.cloudburstmc.netty.signaling.ProviderOrigin;
-import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.util.nethernet.SecretValue;
 
 import java.io.IOException;
@@ -63,6 +63,7 @@ public final class ProviderRuntimeConfiguration {
      * @param bindAddress The address the host listens on
      * @param udpPort    The fixed UDP port the provider hands out, which cannot be ephemeral
      * @param maxPlayers The routing capacity to register with
+     * @throws IOException If a setting is invalid, or an advertised name does not resolve
      */
     public static ProviderRuntimeConfiguration resolve(Settings settings, Path directory, String bindAddress,
                                                        int udpPort, int maxPlayers) throws IOException {
@@ -83,13 +84,11 @@ public final class ProviderRuntimeConfiguration {
             throw new IOException("NXS needs a fixed UDP port between 1 and 65535");
         }
 
-        Set<InetSocketAddress> endpoints = new LinkedHashSet<>();
-        for (String address : settings.advertiseAddresses()) {
-            endpoints.add(endpoint(address));
-        }
-
-        if (endpoints.size() > 32) {
-            throw new IOException("NXS allows at most 32 advertised addresses");
+        List<InetSocketAddress> endpoints;
+        try {
+            endpoints = AdvertisedAddresses.resolve(AdvertisedAddresses.parse(settings.advertiseAddresses(), port));
+        } catch (IllegalArgumentException invalid) {
+            throw new IOException(invalid.getMessage(), invalid);
         }
 
         int capacity = Math.max(1, maxPlayers);
@@ -105,7 +104,7 @@ public final class ProviderRuntimeConfiguration {
                         label,
                         bind,
                         port,
-                        List.copyOf(endpoints),
+                        endpoints,
                         capacity,
                         settings);
         try {
@@ -217,7 +216,8 @@ public final class ProviderRuntimeConfiguration {
             }
 
             /**
-             * @param advertiseAddresses Reachable {@code host:port} endpoints, empty to derive them
+             * @param advertiseAddresses Reachable endpoints as {@link AdvertisedAddresses} reads them, one
+             *                           without a port on the UDP port, empty to derive them
              */
             public Builder advertiseAddresses(List<String> advertiseAddresses) {
                 this.advertiseAddresses = List.copyOf(advertiseAddresses);
@@ -343,20 +343,6 @@ public final class ProviderRuntimeConfiguration {
                 .gameOutcomes(settings.gameOutcomes())
                 .location(settings.location())
                 .build();
-    }
-
-    private static InetSocketAddress endpoint(String value) throws IOException {
-        try {
-            InetSocketAddress endpoint = EndpointAddress.parseEndpoint(value);
-            if (endpoint.getPort() != 0
-                    && EndpointAddress.scope(endpoint.getAddress()) != EndpointAddress.Scope.UNUSABLE) {
-                return endpoint;
-            }
-        } catch (RuntimeException invalid) {
-            // Falls through to the one message
-        }
-        throw new IOException(
-                "NXS advertised addresses must be numeric IPv4:port or [IPv6]:port with ports 1-65535");
     }
 
     private static String label(String configured) throws IOException {

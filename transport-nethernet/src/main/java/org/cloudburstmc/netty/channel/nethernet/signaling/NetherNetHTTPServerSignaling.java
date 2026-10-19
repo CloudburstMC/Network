@@ -85,6 +85,7 @@ import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.net.UnknownHostException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.charset.StandardCharsets;
@@ -129,7 +130,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final int maxPendingJoins;
     private final int answerTimeoutSeconds;
     private final boolean iceOnLocalPort;
-    private final List<InetSocketAddress> advertisedAddresses;
+    /** As configured, so a name is looked up when binding. */
+    private final List<InetSocketAddress> configuredAddresses;
+    /** What the configured ones resolved to when binding. */
+    private volatile List<InetSocketAddress> advertisedAddresses = List.of();
     private final List<InetSocketAddress> stunServers;
     private final Duration stunMaxAge;
     private final TokenTrust tokenTrust;
@@ -187,7 +191,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         this.maxPendingJoins = builder.maxPendingJoins;
         this.answerTimeoutSeconds = builder.answerTimeoutSeconds;
         this.iceOnLocalPort = builder.iceOnLocalPort;
-        this.advertisedAddresses = builder.advertisedAddresses;
+        this.configuredAddresses = builder.advertisedAddresses;
         this.stunServers = builder.stunServers;
         this.stunMaxAge = builder.stunMaxAge;
         this.tokenTrust = builder.tokenTrust;
@@ -206,6 +210,13 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
         if (!(localAddress instanceof InetSocketAddress)) {
             throw new IllegalArgumentException("Unsupported address type");
+        }
+        try {
+            this.advertisedAddresses = AdvertisedAddresses.resolve(this.configuredAddresses);
+        } catch (UnknownHostException | IllegalArgumentException e) {
+            ConnectException failure = new ConnectException(e.getMessage());
+            failure.initCause(e);
+            throw failure;
         }
         this.eventLoop = eventLoop;
         this.iceAddress = iceAddress;
@@ -1216,11 +1227,16 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Sets the endpoints announced as ICE candidates. Each is an IP literal, {@code IPv4:port} or
-         * {@code [IPv6]:port}, and a bare address takes the media port. Listed endpoints this host
-         * holds narrow its host candidates to those; any other is announced as the public side of a
-         * NAT forwarding it to the media port here. A signaling proxy's address does not belong here
-         * unless it also forwards the media port.
+         * Sets the endpoints announced as ICE candidates. Each is an IP literal or a host name, alone
+         * or with a port as {@code host:port}, {@code IPv4:port} or {@code [IPv6]:port}; one without a
+         * port takes the media port. Listed endpoints this host holds narrow its host candidates to
+         * those; any other is announced as the public side of a NAT forwarding it to the media port
+         * here. A signaling proxy's address does not belong here unless it also forwards the media
+         * port.
+         * <p>
+         * A name stands for every address it resolves to. It is looked up once, when binding, which
+         * fails if it does not resolve, so a change takes a new bind. Binding also fails beyond
+         * {@value AdvertisedAddresses#MAX_ENDPOINTS} endpoints.
          * <p>
          * Empty, the default, announces everything ICE gathers, plus what {@link #setStunServers}
          * finds and the IP literal a player typed in, when those are not among them. The typed one
@@ -1229,12 +1245,13 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          *
          * @param advertisedAddresses Endpoints reachable by connecting peers
          * @return This builder
-         * @throws IllegalArgumentException If an entry is none of those forms
+         * @throws IllegalArgumentException If an entry is none of those forms, or an address no player
+         *                                  can reach
          * @see SdpUtil#withAdvertisedCandidates
          */
         public Builder setAdvertisedAddresses(Collection<String> advertisedAddresses) {
             this.advertisedAddresses = advertisedAddresses == null ? List.of()
-                    : advertisedAddresses.stream().map(EndpointAddress::parseEndpoint).distinct().toList();
+                    : AdvertisedAddresses.parse(advertisedAddresses, 0);
             return this;
         }
 

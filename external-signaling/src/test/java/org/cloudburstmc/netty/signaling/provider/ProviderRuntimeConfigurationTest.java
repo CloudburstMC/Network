@@ -6,6 +6,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import org.cloudburstmc.netty.signaling.ProviderClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -155,11 +157,21 @@ class ProviderRuntimeConfigurationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"example.com:19133", "::1:19133", "[::]:19133", "1.1.1.1:0", "1.1.1.1:65536",
+    @ValueSource(strings = {"nothing.invalid:19133", "::1:19133", "[::]:19133", "1.1.1.1:0", "1.1.1.1:65536",
             "224.0.0.1:19133", "1.1.1.1:1.5", "[fe80::1]:19133", "203.0.113.1:19133", "[2001:db8::1]:19133",
             "255.255.255.255:19133", "198.18.0.1:19133"})
     void refusesAnAdvertisedEndpointAPeerCouldNotUse(String endpoint, @TempDir Path dir) {
         assertThrows(IOException.class, () -> runtime(dir, settings(PROVIDER, "", List.of(endpoint), null)));
+    }
+
+    @Test
+    void readsNamesAndTakesTheUdpPortWhenAnEntryNamesNone(@TempDir Path dir) throws Exception {
+        var endpoints = runtime(dir, settings(PROVIDER, "", List.of("1.1.1.1", "localhost:29133"), null))
+                .advertisedEndpoints();
+
+        assertEquals(new InetSocketAddress(InetAddress.getByName("1.1.1.1"), 20000), endpoints.get(0));
+        assertTrue(endpoints.contains(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 29133)),
+                endpoints.toString());
     }
 
     @Test

@@ -104,7 +104,7 @@ class NetherNetHTTPServerSignalingBuilderTest {
     void reportsAMalformedAdvertisedAddressAtConfigurationTime() {
         // A typo has to fail where it is written, not warn on every join
         assertThrows(IllegalArgumentException.class, () -> new NetherNetHTTPServerSignaling.Builder()
-                .setAdvertisedAddresses(List.of("203.0.113.10", "proxy.example:19133")));
+                .setAdvertisedAddresses(List.of("1.1.1.1", "1.0.0.1:191333")));
     }
 
     @Test
@@ -185,7 +185,7 @@ class NetherNetHTTPServerSignalingBuilderTest {
         assertThrows(IllegalStateException.class, () -> new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setStunServers(List.of("stun:stun.example.test"))
-                .setAdvertisedAddresses(List.of("203.0.113.10"))
+                .setAdvertisedAddresses(List.of("1.1.1.1"))
                 .build());
     }
 

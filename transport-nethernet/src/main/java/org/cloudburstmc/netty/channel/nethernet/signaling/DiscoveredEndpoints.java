@@ -152,40 +152,12 @@ final class DiscoveredEndpoints implements AutoCloseable {
 
     private static InetSocketAddress server(String url) {
         String value = url == null ? "" : url.trim();
-        if (!value.regionMatches(true, 0, "stun:", 0, 5)) {
-            throw invalid(url);
+        InetSocketAddress server = value.regionMatches(true, 0, "stun:", 0, 5)
+                ? HostPort.parse(value.substring(5), DEFAULT_PORT) : null;
+        if (server == null) {
+            throw new IllegalArgumentException("Expected a stun:host[:port] URL, got " + url);
         }
-        String rest = value.substring(5);
-        String host = rest;
-        String port = null;
-        if (rest.startsWith("[")) {
-            int close = rest.indexOf(']');
-            if (close < 0 || (close + 1 < rest.length() && rest.charAt(close + 1) != ':')) {
-                throw invalid(url);
-            }
-            host = rest.substring(1, close);
-            port = close + 1 < rest.length() ? rest.substring(close + 2) : null;
-        } else if (rest.indexOf(':') >= 0) {
-            int colon = rest.indexOf(':');
-            host = rest.substring(0, colon);
-            port = rest.substring(colon + 1);
-        }
-        // Names and literals only: no userinfo, path, query or unbracketed IPv6
-        if (host.isEmpty() || host.length() > 255 || !host.matches(rest.startsWith("[") ? "[0-9a-fA-F:.]+"
-                : "[A-Za-z0-9.-]+")) {
-            throw invalid(url);
-        }
-        if (port == null) {
-            return InetSocketAddress.createUnresolved(host, DEFAULT_PORT);
-        }
-        if (!port.matches("[0-9]{1,5}") || Integer.parseInt(port) < 1 || Integer.parseInt(port) > 65535) {
-            throw invalid(url);
-        }
-        return InetSocketAddress.createUnresolved(host, Integer.parseInt(port));
-    }
-
-    private static IllegalArgumentException invalid(String url) {
-        return new IllegalArgumentException("Expected a stun:host[:port] URL, got " + url);
+        return server;
     }
 
     /**
