@@ -16,9 +16,11 @@
 
 package org.cloudburstmc.netty.signaling.provider;
 
+import io.netty.util.NetUtil;
 import org.cloudburstmc.netty.channel.nethernet.signaling.AdvertisedAddresses;
 import org.cloudburstmc.netty.signaling.ProviderClient;
 import org.cloudburstmc.netty.signaling.ProviderOrigin;
+import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.util.nethernet.SecretValue;
 
 import java.io.IOException;
@@ -27,6 +29,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Validated NXS settings, with the listener and capacity inherited from whatever is hosting.
@@ -39,12 +42,13 @@ public final class ProviderRuntimeConfiguration {
     private final String bindAddress;
     private final int udpPort;
     private final List<InetSocketAddress> advertisedEndpoints;
+    private final List<String> warnings;
     private final int capacity;
     private final Settings settings;
 
     private ProviderRuntimeConfiguration(URI origin, Path stateDirectory, String authorizationToken, String label,
                                          String bindAddress, int udpPort, List<InetSocketAddress> advertisedEndpoints,
-                                         int capacity, Settings settings) {
+                                         List<String> warnings, int capacity, Settings settings) {
         this.origin = origin;
         this.stateDirectory = stateDirectory;
         this.authorizationToken = authorizationToken;
@@ -52,6 +56,7 @@ public final class ProviderRuntimeConfiguration {
         this.bindAddress = bindAddress;
         this.udpPort = udpPort;
         this.advertisedEndpoints = advertisedEndpoints;
+        this.warnings = warnings;
         this.capacity = capacity;
         this.settings = settings;
     }
@@ -91,6 +96,22 @@ public final class ProviderRuntimeConfiguration {
             throw new IOException(invalid.getMessage(), invalid);
         }
 
+        // The list may be shared with built-in signaling, where a client on this machine can use loopback.
+        // Players get these from the provider, so loopback stays only where the endpoint policy takes it.
+        List<String> warnings = List.of();
+        if (!localDevelopment(origin) || settings.stunDiscovery() || settings.assistedJoins()) {
+            List<InetSocketAddress> loopback = endpoints.stream()
+                    .filter(endpoint -> EndpointAddress.scope(endpoint.getAddress()) == EndpointAddress.Scope.LOOPBACK)
+                    .toList();
+            if (!loopback.isEmpty()) {
+                endpoints = endpoints.stream().filter(endpoint -> !loopback.contains(endpoint)).toList();
+                String skipped = loopback.stream().map(NetUtil::toSocketAddressString)
+                        .collect(Collectors.joining(", "));
+                warnings = List.of("Not announcing " + skipped
+                        + " through the signaling service: players on other machines cannot reach a loopback address.");
+            }
+        }
+
         int capacity = Math.max(1, maxPlayers);
         if (capacity > 1000000) {
             throw new IOException("Invalid inherited routing capacity");
@@ -105,6 +126,7 @@ public final class ProviderRuntimeConfiguration {
                         bind,
                         port,
                         endpoints,
+                        warnings,
                         capacity,
                         settings);
         try {
@@ -217,7 +239,8 @@ public final class ProviderRuntimeConfiguration {
 
             /**
              * @param advertiseAddresses Reachable endpoints as {@link AdvertisedAddresses} reads them, one
-             *                           without a port on the UDP port, empty to derive them
+             *                           without a port on the UDP port, empty to derive them. Loopback ones
+             *                           are left out with a warning, unless a provider on this machine takes them
              */
             public Builder advertiseAddresses(List<String> advertiseAddresses) {
                 this.advertiseAddresses = List.copyOf(advertiseAddresses);
@@ -320,6 +343,20 @@ public final class ProviderRuntimeConfiguration {
 
     List<InetSocketAddress> advertisedEndpoints() {
         return advertisedEndpoints;
+    }
+
+    /** Settings that were left out rather than refused, for the host to log. */
+    List<String> warnings() {
+        return warnings;
+    }
+
+    /** A provider on this machine, which may also be handed loopback endpoints. */
+    boolean localDevelopment() {
+        return localDevelopment(origin);
+    }
+
+    private static boolean localDevelopment(URI origin) {
+        return Set.of("127.0.0.1", "localhost", "[::1]").contains(origin.getHost());
     }
 
     boolean stunDiscovery() {

@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.EnumMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.stream.Stream;
 
 /**
  * Fixed native endpoint using the extension's existing Bedrock child pipeline.
@@ -61,7 +62,9 @@ public final class NativeProviderHostFactory {
      * Opens the NXS endpoint on the host's gameplay port. The extension owns the Bedrock child pipeline.
      */
     public static CompletionStage<Host> open(ServerBootstrap bootstrap, ProviderRuntimeConfiguration runtime) {
-        return open(bootstrap, new InetSocketAddress(runtime.bindAddress(), runtime.udpPort()), options(runtime));
+        return open(bootstrap, new InetSocketAddress(runtime.bindAddress(), runtime.udpPort()), options(runtime))
+                .thenApply(host -> runtime.warnings().isEmpty() ? host : new Host(host.transport(), host.channel(),
+                        Stream.concat(runtime.warnings().stream(), host.warnings().stream()).toList()));
     }
 
     /** Maintained publication only when warming or assisted joins ask for it. */
@@ -82,8 +85,7 @@ public final class NativeProviderHostFactory {
             options.put("assistedJoins", Boolean.toString(runtime.assistedJoins()));
             options.put("stunWarming", Boolean.toString(runtime.stunDiscovery()));
         } else {
-            options.put("localDevelopment",
-                    Boolean.toString(Set.of("127.0.0.1", "localhost", "[::1]").contains(runtime.origin().getHost())));
+            options.put("localDevelopment", Boolean.toString(runtime.localDevelopment()));
         }
         return Map.copyOf(options);
     }

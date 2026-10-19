@@ -166,12 +166,39 @@ class ProviderRuntimeConfigurationTest {
 
     @Test
     void readsNamesAndTakesTheUdpPortWhenAnEntryNamesNone(@TempDir Path dir) throws Exception {
-        var endpoints = runtime(dir, settings(PROVIDER, "", List.of("1.1.1.1", "localhost:29133"), null))
+        // A provider on this machine, so the loopback name stays
+        var endpoints = runtime(dir, settings("http://127.0.0.1:8080", "", List.of("1.1.1.1", "localhost:29133"), null))
                 .advertisedEndpoints();
 
         assertEquals(new InetSocketAddress(InetAddress.getByName("1.1.1.1"), 20000), endpoints.get(0));
         assertTrue(endpoints.contains(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 29133)),
                 endpoints.toString());
+    }
+
+    @Test
+    void leavesOutLoopbackThatPlayersCouldNotReach(@TempDir Path dir) throws Exception {
+        var mixed = runtime(dir, settings(PROVIDER, "", List.of("127.0.0.1", "1.1.1.1", "[::1]:29133"), null));
+        assertEquals(List.of(new InetSocketAddress(InetAddress.getByName("1.1.1.1"), 20000)),
+                mixed.advertisedEndpoints());
+        assertEquals(1, mixed.warnings().size());
+        assertTrue(mixed.warnings().get(0).contains("127.0.0.1:20000, [::1]:29133"), mixed.warnings().toString());
+        assertEquals("defined", mixed.clientConfiguration().connectivityMethod());
+
+        // With nothing left the host derives its endpoints, as with an empty list
+        var none = runtime(dir, settings(PROVIDER, "", List.of("127.0.0.1"), null));
+        assertTrue(none.advertisedEndpoints().isEmpty());
+        assertEquals("discovered", none.clientConfiguration().connectivityMethod());
+
+        // A provider on this machine takes loopback, unless STUN or assistance pick the maintained policy
+        var local = runtime(dir, settings("http://127.0.0.1:8080", "", List.of("127.0.0.1"), null));
+        assertEquals(1, local.advertisedEndpoints().size());
+        assertTrue(local.warnings().isEmpty());
+        var localStun = runtime(dir, ProviderRuntimeConfiguration.Settings.builder("http://127.0.0.1:8080")
+                .advertiseAddresses(List.of("127.0.0.1"))
+                .stunDiscovery(true)
+                .build());
+        assertTrue(localStun.advertisedEndpoints().isEmpty());
+        assertEquals(1, localStun.warnings().size());
     }
 
     @Test
