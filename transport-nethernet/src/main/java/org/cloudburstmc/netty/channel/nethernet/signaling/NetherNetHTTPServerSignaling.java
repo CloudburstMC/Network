@@ -71,6 +71,7 @@ import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
+import org.cloudburstmc.netty.util.nethernet.StunObserver;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import org.jose4j.jwt.JwtClaims;
 import org.jose4j.jwt.consumer.InvalidJwtException;
@@ -263,7 +264,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         DiscoveredEndpoints discovered;
         try {
             discovered = new DiscoveredEndpoints(this.stunServers, this.stunMaxAge, ice.getPort(),
-                    DiscoveredEndpoints.nativeMonitors(bind, ice.getPort()), System::nanoTime);
+                    StunObserver.nativeMonitors(bind, ice.getPort()), System::nanoTime);
         } catch (RuntimeException e) {
             ConnectException failure = new ConnectException(
                     "Could not start STUN discovery on udp/" + ice.getPort() + ": " + e.getMessage());
@@ -271,9 +272,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             throw failure;
         }
         this.discoveryTask = eventLoop.scheduleAtFixedRate(discovered::refresh,
-                DiscoveredEndpoints.FIRST_REFRESH_SECONDS, DiscoveredEndpoints.REFRESH_SECONDS, TimeUnit.SECONDS);
-        log.info("Running STUN discovery on udp/{} through {}", ice.getPort(),
-                this.stunServers.stream().map(NetUtil::toSocketAddressString).toList());
+                DiscoveredEndpoints.REFRESH_SECONDS, DiscoveredEndpoints.REFRESH_SECONDS, TimeUnit.SECONDS);
         return discovered;
     }
 
@@ -1262,8 +1261,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * <p>
          * They are asked from the ICE port in the background, every 15 seconds, which also keeps the
          * NAT mapping open, so no join waits for them. A mapping is announced until
-         * {@link #setStunMaxAge} after its last answer. That suits a router that keeps one mapping
-         * for all incoming traffic, as a port forward does. A router that moved the port on the way
+         * {@link #setStunMaxAge} after its last answer, or until the server reports another. That
+         * suits a router that keeps one mapping for all incoming traffic, as a port forward does. A
+         * monitor that fails is opened again after {@link StunObserver#RETRY_DELAY}, see
+         * {@link StunObserver}. A router that moved the port on the way
          * out, which it does when the port is taken outside, often by a forward to this host, gets
          * the address announced on the ICE port as well, costing a peer one failed check when there
          * is no such forward.
@@ -1282,7 +1283,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
         /**
          * Sets how long a mapping found through {@link #setStunServers} is still announced after its
-         * last answer. Defaults to 5 minutes.
+         * last answer, as long as the server reports no other. Defaults to 5 minutes.
          *
          * @param maxAge The age past which a mapping is dropped, must be positive
          * @return This builder

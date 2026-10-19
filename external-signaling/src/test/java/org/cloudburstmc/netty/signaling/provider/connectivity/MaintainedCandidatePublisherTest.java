@@ -4,7 +4,9 @@ import org.cloudburstmc.netty.signaling.admission.NativeCandidateSnapshot;
 import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityCheck;
 import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityOutcome;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.util.nethernet.StunObserver;
 import org.junit.jupiter.api.Test;
+import tel.schich.libdatachannel.StunBinding;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -55,7 +57,7 @@ class MaintainedCandidatePublisherTest {
             nanos += millis * 1000000;
         }
 
-        final class Monitor implements EndpointConnectivityController.Monitor {
+        final class Monitor implements StunObserver.Monitor {
             final InetSocketAddress server;
             InetSocketAddress mapped;
             long succeededAt, sequence, revision = 1, failed;
@@ -76,21 +78,21 @@ class MaintainedCandidatePublisherTest {
             }
 
             @Override
-            public Optional<EndpointConnectivityController.Sample> read() {
+            public List<StunObserver.Reading> read() {
                 if (broken) {
                     throw new IllegalStateException("monitor unavailable");
                 }
-                return Optional.of(
-                        new EndpointConnectivityController.Sample(
+                StunBinding.State state = StunBinding.State.SUCCEEDED;
+                if (failed > 0) {
+                    state = StunBinding.State.FAILED;
+                } else if (sequence == 0) {
+                    state = StunBinding.State.PENDING;
+                }
+                return List.of(
+                        new StunObserver.Reading(
                                 server,
                                 mapped,
-                                failed > 0
-                                        ? EndpointConnectivityController.TransactionState.FAILED
-                                        : sequence == 0
-                                                ? EndpointConnectivityController.TransactionState
-                                                        .PENDING
-                                                : EndpointConnectivityController.TransactionState
-                                                        .SUCCEEDED,
+                                state,
                                 sequence,
                                 failed,
                                 revision,

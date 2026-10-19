@@ -1,6 +1,7 @@
 package org.cloudburstmc.netty.signaling.provider.connectivity;
 
-import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.util.nethernet.StunObserver;
+import tel.schich.libdatachannel.StunBinding;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -10,10 +11,11 @@ import java.util.function.LongSupplier;
 import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection.Family;
 
 /**
- * Opt-in same-mux observation lifecycle. Native monitors send/refresh STUN independently of polling.
- * Call snapshot periodically to observe remaps/expiry; no HTTP, provider profile or reachability is emitted.
- * All operations are serialized, including monitor close/replacement. The caller must stop this owner
- * before its listener and must not use an old snapshot beyond its monotonic freshness deadline.
+ * Opt-in same-mux observation lifecycle, one {@link StunObserver} per family that needs STUN.
+ * Native monitors send/refresh STUN independently of polling. Call snapshot periodically to observe
+ * remaps/expiry; no HTTP, provider profile or reachability is emitted. All operations are serialized,
+ * including monitor close/replacement. The caller must stop this owner before its listener and must
+ * not use an old snapshot beyond its monotonic freshness deadline.
  */
 public final class EndpointConnectivityController implements AutoCloseable {
     public enum State {
@@ -31,54 +33,10 @@ public final class EndpointConnectivityController implements AutoCloseable {
         CLOSED
     }
 
-    public enum TransactionState {
-        PENDING,
-        SUCCEEDED,
-        FAILED
-    }
-
-    /** Atomic native sample. Empty age means no successful Binding response has been received. */
-    public record Sample(
-            InetSocketAddress server,
-            InetSocketAddress mapped,
-            TransactionState state,
-            long successfulResponses,
-            long failedTransactions,
-            long mappingRevision,
-            Optional<Duration> lastSuccessAge) {
-        public Sample {
-            Objects.requireNonNull(server);
-            Objects.requireNonNull(state);
-            Objects.requireNonNull(lastSuccessAge);
-            EndpointSelection.requireEndpoint(server);
-            if (mapped != null) {
-                EndpointSelection.requireEndpoint(mapped);
-            }
-            if (successfulResponses < 0
-                    || failedTransactions < 0
-                    || mappingRevision < 0
-                    || lastSuccessAge.filter(Duration::isNegative).isPresent()) {
-                throw new IllegalArgumentException("Invalid native STUN sample");
-            }
-        }
-    }
-
-    public interface Monitor extends AutoCloseable {
-        Optional<Sample> read();
-
-        @Override
-        void close();
-    }
-
-    /** The factory must inherit the listener's exact bind address and fixed port. No utility socket. */
-    public interface MonitorFactory {
-        Monitor open(InetSocketAddress numericServer);
-    }
-
     public record Observation(
             InetSocketAddress server,
             InetSocketAddress mapped,
-            TransactionState transactionState,
+            StunBinding.State transactionState,
             long monitorEpoch,
             long mappingRevision,
             long successfulResponses,
@@ -110,31 +68,28 @@ public final class EndpointConnectivityController implements AutoCloseable {
 
     private static final class Lane {
         final List<EndpointSelection.Candidate> direct;
-        InetSocketAddress server;
-        Monitor monitor;
-        long epoch;
-        boolean failed;
+        StunObserver observer;
         InetSocketAddress fresh;
 
-        Lane(List<EndpointSelection.Candidate> direct, InetSocketAddress server) {
+        Lane(List<EndpointSelection.Candidate> direct) {
             this.direct = direct;
-            this.server = server;
         }
     }
 
     private final EndpointSelection selection;
-    private final MonitorFactory factory;
+    private final StunObserver.MonitorFactory factory;
     private final LongSupplier nanoTime;
-    private final long maxAgeNanos;
+    private final Duration maxAge;
     private final EnumMap<Family, Lane> lanes = new EnumMap<>(Family.class);
     private long candidateRevision = 1;
     private boolean closed;
 
+    /** The factory must inherit the listener's exact bind address and fixed port. No utility socket. */
     public EndpointConnectivityController(
             EndpointSelection selection,
             Map<Family, InetSocketAddress> numericServers,
             Duration maxObservationAge,
-            MonitorFactory factory) {
+            StunObserver.MonitorFactory factory) {
         this(selection, numericServers, maxObservationAge, factory, System::nanoTime);
     }
 
@@ -142,7 +97,7 @@ public final class EndpointConnectivityController implements AutoCloseable {
             EndpointSelection selection,
             Map<Family, InetSocketAddress> numericServers,
             Duration maxObservationAge,
-            MonitorFactory factory,
+            StunObserver.MonitorFactory factory,
             LongSupplier nanoTime) {
         this.selection = Objects.requireNonNull(selection);
         this.factory = Objects.requireNonNull(factory);
@@ -154,16 +109,19 @@ public final class EndpointConnectivityController implements AutoCloseable {
             throw new IllegalArgumentException(
                     "STUN observation age must be positive and at most five minutes");
         }
-        maxAgeNanos = maxObservationAge.toNanos();
+        maxAge = maxObservationAge;
         numericServers.forEach(EndpointConnectivityController::checkServer);
         for (Family family : Family.values()) {
-            lanes.put(
-                    family,
+            Lane lane =
                     new Lane(
                             selection.configured()
                                     ? selection.candidates(family)
-                                    : selection.publicCandidates(family),
-                            numericServers.get(family)));
+                                    : selection.publicCandidates(family));
+            InetSocketAddress server = numericServers.get(family);
+            if (server != null) {
+                lane.observer = observer(server);
+            }
+            lanes.put(family, lane);
         }
     }
 
@@ -172,108 +130,95 @@ public final class EndpointConnectivityController implements AutoCloseable {
         requireOpen();
         checkServer(family, numericServer);
         Lane lane = lanes.get(family);
-        stop(lane);
-        lane.server = numericServer;
-        lane.failed = false;
+        setFresh(lane, null);
+        if (lane.observer == null) {
+            lane.observer = observer(numericServer);
+        } else {
+            lane.observer.replace(numericServer);
+        }
     }
 
     public synchronized Snapshot snapshot() {
         EnumMap<Family, FamilySnapshot> result = new EnumMap<>(Family.class);
+        List<StunObserver> polled = new ArrayList<>();
         for (Family family : Family.values()) {
-            result.put(family, sample(family, lanes.get(family)));
+            Lane lane = lanes.get(family);
+            State inactive = inactive(family, lane);
+            if (inactive != null) {
+                result.put(family, view(lane, inactive, null));
+            } else {
+                result.put(family, sample(lane));
+                polled.add(lane.observer);
+            }
+        }
+        // A family that STUN cannot serve only matters while the other has no public mapping either
+        boolean covered = lanes.values().stream().anyMatch(lane -> lane.fresh != null);
+        for (StunObserver observer : polled) {
+            observer.report(covered);
         }
         return new Snapshot(candidateRevision, result);
     }
 
-    private FamilySnapshot sample(Family family, Lane lane) {
-        State inactive =
-                closed
-                        ? State.CLOSED
-                        : selection.configured()
-                                ? (lane.direct.isEmpty()
-                                        ? State.DISABLED_BY_CONFIG
-                                        : State.CONFIGURED)
-                                : !selection.socketFamilies().contains(family)
-                                        ? State.UNSUPPORTED_FAMILY
-                                        : lane.failed
-                                                ? State.MONITOR_FAILED
-                                                : !lane.direct.isEmpty()
-                                                        ? State.PUBLIC_DIRECT
-                                                        : lane.server == null
-                                                                ? State.STUN_NOT_CONFIGURED
-                                                                : null;
-        if (inactive != null) {
-            return view(lane, inactive, null);
+    /** Why a family has no observation to sample, or null when it does. */
+    private State inactive(Family family, Lane lane) {
+        if (closed) {
+            return State.CLOSED;
         }
-        try {
-            if (lane.monitor == null) {
-                lane.epoch = Math.incrementExact(lane.epoch);
-                lane.monitor = Objects.requireNonNull(factory.open(lane.server));
-            }
-            long sampledAt =
-                    nanoTime.getAsLong(); // Conservative deadline: sampled before the native read.
-            Optional<Sample> value = lane.monitor.read();
-            if (value.isEmpty()) {
-                setFresh(lane, null);
-                return view(lane, State.STUN_PENDING, null);
-            }
-            Sample sample = value.get();
-            if (!sample.server().equals(lane.server)
-                    || sample.mapped() != null
-                            && Family.of(sample.mapped().getAddress()) != family) {
-                throw new IllegalStateException("STUN source/family mismatch");
-            }
-            long age =
-                    sample.lastSuccessAge()
-                            .map(EndpointConnectivityController::saturatedNanos)
-                            .orElse(Long.MAX_VALUE);
-            boolean observed =
-                    sample.lastSuccessAge().isPresent()
-                            && sample.mapped() != null
-                            && sample.successfulResponses() > 0
-                            && sample.mappingRevision() > 0;
-            long readElapsed = Math.max(0, nanoTime.getAsLong() - sampledAt);
-            boolean fresh = observed && age < maxAgeNanos && readElapsed < maxAgeNanos - age;
-            boolean eligible =
-                    observed
-                            && EndpointAddress.scope(sample.mapped().getAddress())
-                                    == EndpointAddress.Scope.PUBLIC;
-            long remaining = fresh ? maxAgeNanos - age : 0;
-            Observation observation =
-                    new Observation(
-                            sample.server(),
-                            sample.mapped(),
-                            sample.state(),
-                            lane.epoch,
-                            sample.mappingRevision(),
-                            sample.successfulResponses(),
-                            sample.failedTransactions(),
-                            observed ? age / 1_000_000 : -1,
-                            sampledAt + remaining);
-            setFresh(lane, fresh && eligible ? sample.mapped() : null);
-            return view(lane, state(observed, sample.state(), fresh, eligible), observation);
-        } catch (RuntimeException failure) {
-            lane.failed = true;
-            // A failed close retains its handle for explicit close/replacement retry. It must
-            // neither leave a fresh endpoint visible nor allocate a second monitor on later reads.
-            try {
-                stop(lane);
-            } catch (RuntimeException closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
+        if (selection.configured()) {
+            return lane.direct.isEmpty() ? State.DISABLED_BY_CONFIG : State.CONFIGURED;
+        }
+        if (!selection.socketFamilies().contains(family)) {
+            return State.UNSUPPORTED_FAMILY;
+        }
+        if (!lane.direct.isEmpty()) {
+            return State.PUBLIC_DIRECT;
+        }
+        if (lane.observer == null) {
+            return State.STUN_NOT_CONFIGURED;
+        }
+        return null;
+    }
+
+    private FamilySnapshot sample(Lane lane) {
+        StunObserver observer = lane.observer;
+        observer.poll();
+        if (observer.failed()) {
+            setFresh(lane, null);
             return view(lane, State.MONITOR_FAILED, null);
         }
+        // A numeric server has one address, so one reading
+        List<StunObserver.Observed> observed = observer.observed();
+        if (observed.isEmpty()) {
+            setFresh(lane, null);
+            return view(lane, State.STUN_PENDING, null);
+        }
+        StunObserver.Observed latest = observed.get(0);
+        StunObserver.Reading reading = latest.reading();
+        boolean answered = reading.answered();
+        Observation observation =
+                new Observation(
+                        reading.server(),
+                        reading.mapped(),
+                        reading.state(),
+                        observer.epoch(),
+                        reading.mappingRevision(),
+                        reading.successfulResponses(),
+                        reading.failedTransactions(),
+                        answered ? ageMillis(reading) : -1,
+                        latest.freshUntilNanos());
+        setFresh(lane, latest.fresh() && latest.usable() ? reading.mapped() : null);
+        return view(lane, state(answered, reading.state(), latest.fresh(), latest.usable()), observation);
     }
 
     private static State state(
-            boolean observed, TransactionState transaction, boolean fresh, boolean eligible) {
-        if (!observed) {
-            return transaction == TransactionState.FAILED ? State.STUN_FAILED : State.STUN_PENDING;
+            boolean answered, StunBinding.State transaction, boolean fresh, boolean usable) {
+        if (!answered) {
+            return transaction == StunBinding.State.FAILED ? State.STUN_FAILED : State.STUN_PENDING;
         }
         if (!fresh) {
             return State.STUN_STALE;
         }
-        return eligible ? State.STUN_FRESH : State.STUN_INELIGIBLE;
+        return usable ? State.STUN_FRESH : State.STUN_INELIGIBLE;
     }
 
     private FamilySnapshot view(Lane lane, State state, Observation observation) {
@@ -284,6 +229,10 @@ public final class EndpointConnectivityController implements AutoCloseable {
                 Optional.ofNullable(lane.fresh));
     }
 
+    private StunObserver observer(InetSocketAddress server) {
+        return new StunObserver(server, maxAge, selection.bind().getPort(), factory, nanoTime);
+    }
+
     private void setFresh(Lane lane, InetSocketAddress fresh) {
         if (!Objects.equals(lane.fresh, fresh)) {
             candidateRevision = Math.incrementExact(candidateRevision);
@@ -291,23 +240,9 @@ public final class EndpointConnectivityController implements AutoCloseable {
         }
     }
 
-    private void stop(Lane lane) {
-        setFresh(lane, null);
-        Monitor monitor = lane.monitor;
-        if (monitor != null) {
-            try {
-                monitor.close();
-            } catch (RuntimeException failure) {
-                lane.failed = true;
-                throw failure;
-            }
-        }
-        lane.monitor = null;
-    }
-
-    private static long saturatedNanos(Duration duration) {
+    private static long ageMillis(StunObserver.Reading reading) {
         try {
-            return duration.toNanos();
+            return reading.lastSuccessAge().orElseThrow().toMillis();
         } catch (ArithmeticException tooOld) {
             return Long.MAX_VALUE;
         }
@@ -329,19 +264,21 @@ public final class EndpointConnectivityController implements AutoCloseable {
         }
     }
 
+    /** Closing again retries a monitor that failed to close. */
     @Override
     public synchronized void close() {
-        if (closed && lanes.values().stream().allMatch(lane -> lane.monitor == null)) {
-            return;
-        }
         if (!closed) {
             candidateRevision = Math.incrementExact(candidateRevision);
         }
         closed = true;
         RuntimeException failure = null;
         for (Lane lane : lanes.values()) {
+            setFresh(lane, null);
+            if (lane.observer == null) {
+                continue;
+            }
             try {
-                stop(lane);
+                lane.observer.close();
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;

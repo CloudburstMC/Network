@@ -1,6 +1,10 @@
 package org.cloudburstmc.netty.signaling.provider.connectivity;
 
+import org.cloudburstmc.netty.util.nethernet.StunObserver;
+import org.cloudburstmc.netty.util.nethernet.StunObserver.Monitor;
+import org.cloudburstmc.netty.util.nethernet.StunObserver.Reading;
 import org.junit.jupiter.api.Test;
+import tel.schich.libdatachannel.StunBinding;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -22,17 +26,17 @@ class EndpointConnectivityControllerTest {
                     endpoint("2606:4700:4700::1111", 3478));
 
     static final class FakeMonitor implements Monitor {
-        Optional<Sample> sample = Optional.empty();
+        Optional<Reading> sample = Optional.empty();
         boolean closed, fail;
         int closeFailures, closeCalls;
         Runnable beforeRead = () -> {};
 
-        public Optional<Sample> read() {
+        public List<Reading> read() {
             if (closed || fail) {
                 throw new IllegalStateException();
             }
             beforeRead.run();
-            return sample;
+            return sample.map(List::of).orElse(List.of());
         }
 
         public void close() {
@@ -48,10 +52,10 @@ class EndpointConnectivityControllerTest {
         void success(Family family, String ip, int port, long revision, long responses, long age) {
             sample =
                     Optional.of(
-                            new Sample(
+                            new Reading(
                                     SERVERS.get(family),
                                     endpoint(ip, port),
-                                    TransactionState.SUCCEEDED,
+                                    StunBinding.State.SUCCEEDED,
                                     responses,
                                     0,
                                     revision,
@@ -205,6 +209,28 @@ class EndpointConnectivityControllerTest {
     }
 
     @Test
+    void aFailedMonitorIsOpenedAgainAfterTheRetryDelay() {
+        var f = new Fixture(automatic(List.of()));
+        f.snapshot();
+        var first = f.monitors.get(Family.IPV4);
+        first.success(Family.IPV4, "8.8.8.8", 40000, 1, 1, 0);
+        assertEquals(State.STUN_FRESH, f.state(Family.IPV4));
+
+        first.fail = true;
+        assertEquals(State.MONITOR_FAILED, f.state(Family.IPV4));
+        f.clock.addAndGet(StunObserver.RETRY_DELAY.toNanos() - 1);
+        assertEquals(State.MONITOR_FAILED, f.state(Family.IPV4));
+        assertEquals(2, f.opens, "No new monitor before the delay");
+
+        f.clock.addAndGet(1);
+        assertEquals(State.STUN_PENDING, f.state(Family.IPV4));
+        assertEquals(3, f.opens, "One once it is over, so STUN does not stay down for good");
+        f.monitors.get(Family.IPV4).success(Family.IPV4, "8.8.8.8", 40000, 1, 1, 0);
+        assertEquals(State.STUN_FRESH, f.state(Family.IPV4));
+        f.controller.close();
+    }
+
+    @Test
     void privateMappingsAndWrongSourcesNeverBecomePublicCandidates() {
         var f = new Fixture(automatic(List.of()));
         f.snapshot();
@@ -214,10 +240,10 @@ class EndpointConnectivityControllerTest {
         assertTrue(f.snapshot().families().get(Family.IPV4).freshStunEndpoint().isEmpty());
         monitor.sample =
                 Optional.of(
-                        new Sample(
+                        new Reading(
                                 SERVERS.get(Family.IPV6),
                                 endpoint("8.8.8.8", 40000),
-                                TransactionState.SUCCEEDED,
+                                StunBinding.State.SUCCEEDED,
                                 1,
                                 0,
                                 1,
@@ -241,10 +267,10 @@ class EndpointConnectivityControllerTest {
         var monitor = f.monitors.get(Family.IPV4);
         monitor.sample =
                 Optional.of(
-                        new Sample(
+                        new Reading(
                                 SERVERS.get(Family.IPV4),
                                 null,
-                                TransactionState.FAILED,
+                                StunBinding.State.FAILED,
                                 0,
                                 1,
                                 0,
@@ -252,17 +278,17 @@ class EndpointConnectivityControllerTest {
         assertEquals(State.STUN_FAILED, f.state(Family.IPV4));
         monitor.sample =
                 Optional.of(
-                        new Sample(
+                        new Reading(
                                 SERVERS.get(Family.IPV4),
                                 endpoint("8.8.8.8", 40000),
-                                TransactionState.FAILED,
+                                StunBinding.State.FAILED,
                                 1,
                                 2,
                                 1,
                                 Optional.of(Duration.ofSeconds(29))));
         var warm = f.snapshot().families().get(Family.IPV4);
         assertEquals(State.STUN_FRESH, warm.state());
-        assertEquals(TransactionState.FAILED, warm.observation().orElseThrow().transactionState());
+        assertEquals(StunBinding.State.FAILED, warm.observation().orElseThrow().transactionState());
         monitor.beforeRead = () -> f.clock.addAndGet(Duration.ofSeconds(2).toNanos());
         var delayed = f.snapshot().families().get(Family.IPV4);
         assertEquals(

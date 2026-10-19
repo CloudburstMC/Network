@@ -25,6 +25,7 @@ import org.cloudburstmc.netty.signaling.control.AssistedJoin;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.util.nethernet.StunObserver;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection;
 import org.cloudburstmc.netty.signaling.provider.connectivity.EndpointConnectivityController;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
@@ -1012,74 +1013,11 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                                                     selection,
                                                     servers,
                                                     maxObservationAge,
-                                                    server -> {
-                                                        StunUdpMuxMonitor monitor =
-                                                                listener.monitorStun(
-                                                                        server.getAddress()
-                                                                                .getHostAddress(),
-                                                                        server.getPort());
-                                                        return new EndpointConnectivityController
-                                                                .Monitor() {
-                                                            @Override
-                                                            public Optional<
-                                                                            EndpointConnectivityController
-                                                                                    .Sample>
-                                                                    read() {
-                                                                return monitor.binding(0)
-                                                                        .map(
-                                                                                binding -> {
-                                                                                    try {
-                                                                                        var mapped =
-                                                                                                binding
-                                                                                                                        .mappedPort()
-                                                                                                                == 0
-                                                                                                        ? null
-                                                                                                        : new InetSocketAddress(
-                                                                                                                EndpointAddress
-                                                                                                                        .parse(
-                                                                                                                                binding
-                                                                                                                                        .mappedAddress()),
-                                                                                                                binding
-                                                                                                                        .mappedPort());
-                                                                                        return new EndpointConnectivityController
-                                                                                                .Sample(
-                                                                                                new InetSocketAddress(
-                                                                                                        EndpointAddress
-                                                                                                                .parse(
-                                                                                                                        binding
-                                                                                                                                .serverAddress()),
-                                                                                                        binding
-                                                                                                                .serverPort()),
-                                                                                                mapped,
-                                                                                                EndpointConnectivityController
-                                                                                                        .TransactionState
-                                                                                                        .valueOf(
-                                                                                                                binding.state()
-                                                                                                                        .name()),
-                                                                                                binding
-                                                                                                        .successfulResponses(),
-                                                                                                binding
-                                                                                                        .failedTransactions(),
-                                                                                                binding
-                                                                                                        .mappingRevision(),
-                                                                                                binding
-                                                                                                        .lastSuccessAge());
-                                                                                    } catch (
-                                                                                            UnknownHostException
-                                                                                                    invalid) {
-                                                                                        throw new IllegalStateException(
-                                                                                                "Native STUN observation is not numeric",
-                                                                                                invalid);
-                                                                                    }
-                                                                                });
-                                                            }
-
-                                                            @Override
-                                                            public void close() {
-                                                                monitor.close();
-                                                            }
-                                                        };
-                                                    });
+                                                    server ->
+                                                            StunObserver.monitor(
+                                                                    listener.monitorStun(
+                                                                            server.getAddress().getHostAddress(),
+                                                                            server.getPort())));
                                     result.complete(connectivity);
                                 } catch (Exception failure) {
                                     result.completeExceptionally(failure);
