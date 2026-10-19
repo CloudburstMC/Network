@@ -147,8 +147,13 @@ class MaintainedCandidatePublisherTest {
             assertEquals(
                     List.of(endpoint("10.0.0.8", 19132), endpoint("fd00::8", 19132)), published(h));
             h.both();
+            // Each mapping comes with its address on the ICE port
             assertEquals(
-                    List.of(endpoint("8.8.8.8", 43000), endpoint("2606:4700:4700::1001", 43001)),
+                    List.of(
+                            endpoint("8.8.8.8", 19132),
+                            endpoint("8.8.8.8", 43000),
+                            endpoint("2606:4700:4700::1001", 19132),
+                            endpoint("2606:4700:4700::1001", 43001)),
                     published(h));
             h.publisher.reportDirectChecks(
                     List.of(
@@ -160,8 +165,9 @@ class MaintainedCandidatePublisherTest {
                                     43000,
                                     ConnectivityOutcome.NOT_ESTABLISHED)),
                     h.wall);
-            assertEquals(2, published(h).size());
+            assertEquals(4, published(h).size());
             assertTrue(published(h).contains(endpoint("10.0.0.8", 19132)));
+            assertTrue(published(h).contains(endpoint("8.8.8.8", 19132)), "The twin has its own checks");
             assertFalse(published(h).contains(endpoint("8.8.8.8", 43000)));
             assertTrue(
                     h.publisher.refresh().probeCandidates().candidates().stream()
@@ -179,8 +185,39 @@ class MaintainedCandidatePublisherTest {
                                     43000,
                                     ConnectivityOutcome.ESTABLISHED)),
                     h.wall);
-            assertEquals(2, published(h).size());
+            assertEquals(4, published(h).size());
+            assertFalse(published(h).contains(endpoint("10.0.0.8", 19132)));
             assertTrue(h.monitors.values().stream().noneMatch(m -> m.closed));
+        }
+    }
+
+    @Test
+    void aFailedTwinWithdrawsOnlyItself() {
+        // Without a forward of the ICE port the twin fails, which says nothing about the mapping
+        try (var h = new Harness(List.of(local("10.0.0.8")))) {
+            h.both();
+            assertEquals(4, published(h).size());
+            h.publisher.reportDirectChecks(
+                    List.of(
+                            check(
+                                    h,
+                                    4,
+                                    "warm_stun",
+                                    "8.8.8.8",
+                                    19132,
+                                    ConnectivityOutcome.NOT_ESTABLISHED)),
+                    h.wall);
+            assertEquals(
+                    List.of(
+                            endpoint("8.8.8.8", 43000),
+                            endpoint("2606:4700:4700::1001", 19132),
+                            endpoint("2606:4700:4700::1001", 43001)),
+                    published(h),
+                    "No private fallback while the mapping works");
+            assertTrue(
+                    h.publisher.refresh().probeCandidates().candidates().stream()
+                            .anyMatch(c -> c.endpoint().equals(endpoint("8.8.8.8", 19132))),
+                    "It stays a probe target, so it can recover");
         }
     }
 
@@ -241,9 +278,11 @@ class MaintainedCandidatePublisherTest {
                                     43000,
                                     ConnectivityOutcome.NOT_ESTABLISHED)),
                     h.wall);
-            assertEquals(2, published(h).size());
+            assertEquals(4, published(h).size());
             h.monitors.get(Family.IPV4).success("8.8.4.4", 43002);
-            assertEquals(2, published(h).size());
+            assertEquals(4, published(h).size());
+            assertTrue(published(h).contains(endpoint("8.8.4.4", 43002)));
+            assertFalse(published(h).contains(endpoint("10.0.0.8", 19132)), "The remap cleared the failure");
             assertThrows(IllegalStateException.class, original::requireCurrent);
             h.monitors.get(Family.IPV4).success("8.8.8.8", 43000);
             var retained = h.publisher.refresh();
@@ -252,7 +291,7 @@ class MaintainedCandidatePublisherTest {
             assertThrows(IllegalStateException.class, retained::requireCurrent);
             assertEquals(List.of(endpoint("10.0.0.8", 19132)), published(h));
             h.both();
-            assertEquals(2, published(h).size());
+            assertEquals(4, published(h).size());
             assertTrue(h.monitors.values().stream().noneMatch(m -> m.closed));
         }
     }

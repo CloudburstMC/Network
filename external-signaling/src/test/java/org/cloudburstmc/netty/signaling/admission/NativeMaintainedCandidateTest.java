@@ -337,26 +337,29 @@ class NativeMaintainedCandidateTest {
         }
     }
 
+    /** Waits for both families' mapping on the port, each with its twin on the gameplay port. */
     private static ProviderTransport.HostProfileSnapshot awaitMaintained(
-            NativeProviderTransport transport, int port) throws Exception {
+            NativeProviderTransport transport, int port, int gameplayPort) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(35);
         do {
             var capture = transport.captureHostProfile().toCompletableFuture().get();
             var candidates = capture.profile().getAsJsonArray("candidates");
-            if (candidates.size() == 2
-                    && candidates.asList().stream()
-                            .allMatch(
+            var ports =
+                    candidates.asList().stream()
+                            .map(
                                     value -> {
                                         var candidate = value.getAsJsonObject();
                                         assertFalse(
                                                 candidate.has("expiresAt"),
                                                 "STUN uses the existing candidate wire shape");
-                                        return candidate.get("port").getAsInt() == port
-                                                && candidate
-                                                        .get("type")
-                                                        .getAsString()
-                                                        .equals("srflx");
-                                    })) {
+                                        boolean srflx =
+                                                candidate.get("type").getAsString().equals("srflx");
+                                        return srflx ? candidate.get("port").getAsInt() : -1;
+                                    })
+                            .toList();
+            if (ports.size() == 4
+                    && ports.stream().filter(p -> p == port).count() == 2
+                    && ports.stream().filter(p -> p == gameplayPort).count() == 2) {
                 return capture;
             }
             Thread.sleep(20);
@@ -394,21 +397,21 @@ class NativeMaintainedCandidateTest {
             // No publisher/heartbeat call drives the monitor or samples its native observations.
             Thread.sleep(1200);
             assertTrue(host.transport.candidatePublicationVersion() > 1);
-            var first = awaitMaintained(host.transport, 43000);
+            var first = awaitMaintained(host.transport, 43000, host.port);
             String incarnation =
                     first.profile()
                             .getAsJsonObject("statelessAdmission")
                             .get("incarnation")
                             .getAsString();
             assertEquals(
-                    2,
+                    4,
                     first.profile().getAsJsonArray("candidates").size(),
                     "Mapping publication needs no regional proof");
             try (var player4 = new ConnectedPlayer(host, "127.0.0.1", 55000);
                     var player6 = new ConnectedPlayer(host, "::1", 55000)) {
                 player4.exchange();
                 player6.exchange();
-                var remapped = awaitMaintained(host.transport, 43001);
+                var remapped = awaitMaintained(host.transport, 43001, host.port);
                 assertThrows(IllegalStateException.class, first::requireCurrent);
                 assertTrue(remapped.candidateRevision() > first.candidateRevision());
                 assertEquals(
@@ -451,7 +454,8 @@ class NativeMaintainedCandidateTest {
                         2,
                         after.profile().getAsJsonArray("candidates").size(),
                         "Failed public mappings are withheld; LAN/VPN fallback remains");
-                assertEquals(2, after.probeCandidates().size(), "Public mappings remain testable");
+                assertEquals(
+                        4, after.probeCandidates().size(), "Public mappings and twins remain testable");
                 assertThrows(IllegalStateException.class, remapped::requireCurrent);
                 player4.exchange();
                 player6.exchange();

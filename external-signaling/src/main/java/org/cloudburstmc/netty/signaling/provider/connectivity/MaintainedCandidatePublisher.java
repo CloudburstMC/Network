@@ -4,6 +4,7 @@ import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityCheck;
 import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityOutcome;
 import org.cloudburstmc.netty.signaling.admission.NativeCandidateSnapshot;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
+import org.cloudburstmc.netty.util.nethernet.StunObserver;
 
 import java.net.InetSocketAddress;
 import java.util.*;
@@ -149,18 +150,24 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
             if (lane != null && lane.freshStunEndpoint().isPresent()) {
                 var observation = lane.observation().orElseThrow();
                 var endpoint = lane.freshStunEndpoint().orElseThrow();
-                nextMappings.put(
-                        family,
+                var mapping =
                         new Mapping(
                                 endpoint,
                                 observation.monitorEpoch(),
-                                observation.mappingRevision()));
+                                observation.mappingRevision());
+                nextMappings.put(family, mapping);
                 observations.add(observation);
-                probes.add(
-                        0,
-                        new NativeCandidateSnapshot.Candidate(
-                                endpoint, NativeCandidateSnapshot.Type.SRFLX));
+                // The ICE port too, for a router that moved the port on the way out; provider
+                // checks withdraw it on their own where nothing forwards it
+                for (var announced : StunObserver.withIcePort(List.of(endpoint), icePort())) {
+                    probes.add(
+                            0,
+                            new NativeCandidateSnapshot.Candidate(
+                                    announced, NativeCandidateSnapshot.Type.SRFLX));
+                }
             }
+            var current = nextMappings.get(family);
+            var twin = current == null ? null : twin(current);
             if (!Objects.equals(mappings.get(family), nextMappings.get(family))) {
                 checks.entrySet()
                         .removeIf(
@@ -168,9 +175,11 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
                                         e.getValue().family() == number(family)
                                                 && e.getKey().method().equals("warm_stun"));
             }
+            // A failing twin only withdraws itself, it says nothing about the family
             boolean failed =
                     probes.stream()
                             .filter(c -> Family.of(c.endpoint().getAddress()) == family)
+                            .filter(c -> !c.endpoint().equals(twin))
                             .anyMatch(c -> failed(c.endpoint()));
             if (!selection.configured()
                     && (direct.isEmpty() && !nextMappings.containsKey(family) || failed)) {
@@ -236,11 +245,17 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
             }
             Family family = check.family() == 4 ? Family.IPV4 : Family.IPV6;
             var mapping = mappings.get(family);
-            boolean matches =
-                    check.method().equals("warm_stun")
-                            ? mapping != null && mapping.endpoint().equals(check.target())
-                            : selection.publicCandidates(family).stream()
-                                    .anyMatch(c -> c.endpoint().equals(check.target()));
+            boolean matches;
+            if (check.method().equals("warm_stun")) {
+                matches =
+                        mapping != null
+                                && (mapping.endpoint().equals(check.target())
+                                        || check.target().equals(twin(mapping)));
+            } else {
+                matches =
+                        selection.publicCandidates(family).stream()
+                                .anyMatch(c -> c.endpoint().equals(check.target()));
+            }
             var key = new CheckKey(check.region(), check.method(), check.target());
             var previous = checks.get(key);
             if (matches
@@ -261,6 +276,18 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
         // it.
         return matching.stream().anyMatch(c -> c.outcome() == ConnectivityOutcome.NOT_ESTABLISHED)
                 && matching.stream().noneMatch(c -> c.outcome() == ConnectivityOutcome.ESTABLISHED);
+    }
+
+    /** The mapping's address on the ICE port, or null when the mapping is already on it. */
+    private InetSocketAddress twin(Mapping mapping) {
+        if (mapping.endpoint().getPort() == icePort()) {
+            return null;
+        }
+        return new InetSocketAddress(mapping.endpoint().getAddress(), icePort());
+    }
+
+    private int icePort() {
+        return selection.bind().getPort();
     }
 
     private static int number(Family family) {
