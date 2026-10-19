@@ -8,9 +8,11 @@ import org.cloudburstmc.netty.util.nethernet.StunObserver;
 import org.junit.jupiter.api.Test;
 import tel.schich.libdatachannel.StunBinding;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Function;
 
 import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection.Family;
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,6 +32,12 @@ class MaintainedCandidatePublisherTest {
         final MaintainedCandidatePublisher publisher;
 
         Harness(List<EndpointSelection.Candidate> hints) {
+            this(hints, server -> Optional.empty());
+        }
+
+        Harness(
+                List<EndpointSelection.Candidate> hints,
+                Function<InetSocketAddress, Optional<InetAddress>> routeSource) {
             var selection = EndpointSelection.select(endpoint("::", 19132), List.of(), hints);
             var servers =
                     Map.of(
@@ -48,7 +56,7 @@ class MaintainedCandidatePublisherTest {
                                 return monitor;
                             },
                             () -> nanos);
-            publisher = new MaintainedCandidatePublisher(selection, controller, () -> nanos);
+            publisher = new MaintainedCandidatePublisher(selection, controller, false, () -> nanos, routeSource);
             publisher.configureStunServers(servers);
         }
 
@@ -219,6 +227,47 @@ class MaintainedCandidatePublisherTest {
                             .anyMatch(c -> c.endpoint().equals(endpoint("8.8.8.8", 19132))),
                     "It stays a probe target, so it can recover");
         }
+    }
+
+    @Test
+    void offersTheLanAddressAfterThePublicOnes() {
+        // Only the address this host reaches the internet from, not every private one it holds
+        Function<InetSocketAddress, Optional<InetAddress>> route =
+                server -> Optional.of(endpoint(server.getAddress() instanceof java.net.Inet4Address
+                        ? "10.0.0.8" : "2606:4700:4700::1001", 0).getAddress());
+        try (var h = new Harness(List.of(local("10.0.0.8"), local("10.0.0.9")), route)) {
+            h.both();
+            // Snapshots keep a canonical order, ICE ranks by candidate type
+            assertEquals(
+                    Set.of(
+                            endpoint("8.8.8.8", 19132),
+                            endpoint("8.8.8.8", 43000),
+                            endpoint("2606:4700:4700::1001", 19132),
+                            endpoint("2606:4700:4700::1001", 43001),
+                            endpoint("10.0.0.8", 19132)),
+                    Set.copyOf(published(h)));
+            // A failed mapping still falls back to every private address, once each
+            h.publisher.reportDirectChecks(
+                    List.of(check(h, 4, "warm_stun", "8.8.8.8", 43000, ConnectivityOutcome.NOT_ESTABLISHED)),
+                    h.wall);
+            assertEquals(1, published(h).stream().filter(e -> e.equals(endpoint("10.0.0.8", 19132))).count());
+            assertTrue(published(h).contains(endpoint("10.0.0.9", 19132)));
+        }
+        // A route through an address the listener does not own adds nothing
+        Function<InetSocketAddress, Optional<InetAddress>> elsewhere =
+                server -> Optional.of(endpoint("10.0.0.7", 0).getAddress());
+        try (var h = new Harness(List.of(local("10.0.0.8")), elsewhere)) {
+            h.both();
+            assertFalse(published(h).contains(endpoint("10.0.0.7", 19132)));
+            assertEquals(4, published(h).size());
+        }
+    }
+
+    @Test
+    void findsTheAddressTheSystemSendsFrom() {
+        assertEquals(
+                Optional.of(endpoint("127.0.0.1", 0).getAddress()),
+                MaintainedCandidatePublisher.routeSource(endpoint("127.0.0.1", 9)));
     }
 
     @Test

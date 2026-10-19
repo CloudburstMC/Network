@@ -1,19 +1,28 @@
 package org.cloudburstmc.netty.signaling.provider.connectivity;
 
+import io.netty.util.NetUtil;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityCheck;
 import org.cloudburstmc.netty.signaling.ProviderTransport.ConnectivityOutcome;
 import org.cloudburstmc.netty.signaling.admission.NativeCandidateSnapshot;
 import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
 import org.cloudburstmc.netty.util.nethernet.StunObserver;
 
+import java.io.IOException;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.*;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 
 import static org.cloudburstmc.netty.signaling.provider.connectivity.EndpointSelection.Family;
 
 /** Host-owned publication policy. Failed public paths remain probeable and recover without restarting. */
 public final class MaintainedCandidatePublisher implements AutoCloseable {
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(MaintainedCandidatePublisher.class);
+
     public record Publication(
             long mappingRevision,
             NativeCandidateSnapshot candidates,
@@ -42,6 +51,9 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     private final Map<CheckKey, ConnectivityCheck> checks = new HashMap<>();
     private final boolean assistedJoins;
     private final Map<Family, InetSocketAddress> servers = new EnumMap<>(Family.class);
+    private final Function<InetSocketAddress, Optional<InetAddress>> routeSource;
+    /** The private listener address each family reaches its STUN server from, for players on this network. */
+    private final Map<Family, InetSocketAddress> lan = new EnumMap<>(Family.class);
     private final Set<Integer> assistedFamilies;
     private volatile long mappingRevision = 1;
     private volatile boolean closed;
@@ -70,7 +82,17 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
             EndpointConnectivityController controller,
             boolean assistedJoins,
             LongSupplier nanoTime) {
+        this(selection, controller, assistedJoins, nanoTime, MaintainedCandidatePublisher::routeSource);
+    }
+
+    MaintainedCandidatePublisher(
+            EndpointSelection selection,
+            EndpointConnectivityController controller,
+            boolean assistedJoins,
+            LongSupplier nanoTime,
+            Function<InetSocketAddress, Optional<InetAddress>> routeSource) {
         this.assistedJoins = assistedJoins;
+        this.routeSource = Objects.requireNonNull(routeSource);
         this.selection = Objects.requireNonNull(selection);
         this.nanoTime = Objects.requireNonNull(nanoTime);
         if (selection.configured() && controller != null) {
@@ -112,8 +134,40 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
                             controller.replaceStunServer(family, server);
                         }
                         servers.put(family, server);
+                        updateLan(family, server);
                     }
                 });
+    }
+
+    private void updateLan(Family family, InetSocketAddress server) {
+        var address =
+                routeSource.apply(server)
+                        .filter(a -> EndpointAddress.scope(a) == EndpointAddress.Scope.PRIVATE)
+                        .map(a -> new InetSocketAddress(a, selection.bind().getPort()))
+                        .filter(e -> selection.candidates(family).stream().anyMatch(c -> c.endpoint().equals(e)))
+                        .orElse(null);
+        if (!Objects.equals(lan.get(family), address)) {
+            if (address == null) {
+                lan.remove(family);
+            } else {
+                lan.put(family, address);
+                log.info("Offering {} to players on this host's network as well",
+                        NetUtil.toSocketAddressString(address));
+            }
+        }
+    }
+
+    /** The local address the system sends to the target from. Connecting a UDP socket sends nothing. */
+    static Optional<InetAddress> routeSource(InetSocketAddress target) {
+        try (var socket = new DatagramSocket()) {
+            socket.connect(target);
+            InetAddress local = socket.getLocalAddress();
+            return local.isAnyLocalAddress()
+                    ? Optional.empty()
+                    : Optional.of(InetAddress.getByAddress(local.getAddress()));
+        } catch (IOException | RuntimeException unroutable) {
+            return Optional.empty();
+        }
     }
 
     public synchronized Map<Integer, InetSocketAddress> assistedStunServers() {
@@ -131,7 +185,7 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
     public synchronized Publication refresh() {
         requireOpen();
         var candidates = new ArrayList<NativeCandidateSnapshot.Candidate>();
-        var fallback = new ArrayList<NativeCandidateSnapshot.Candidate>();
+        var local = new ArrayList<NativeCandidateSnapshot.Candidate>();
         var probes = new ArrayList<NativeCandidateSnapshot.Candidate>();
         var observations = new ArrayList<EndpointConnectivityController.Observation>();
         var nextMappings = new EnumMap<Family, Mapping>(Family.class);
@@ -190,10 +244,13 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
                                                 == EndpointAddress.Scope.PRIVATE)
                         .forEach(
                                 c ->
-                                        fallback.add(
+                                        local.add(
                                                 new NativeCandidateSnapshot.Candidate(
                                                         c.endpoint(),
                                                         NativeCandidateSnapshot.Type.HOST)));
+            } else if (lan.containsKey(family)) {
+                // Players on this network reach it without looping through the router
+                local.add(new NativeCandidateSnapshot.Candidate(lan.get(family), NativeCandidateSnapshot.Type.HOST));
             }
         }
         if (!nextMappings.equals(mappings)) {
@@ -206,7 +263,7 @@ public final class MaintainedCandidatePublisher implements AutoCloseable {
         probes.stream()
                 .filter(c -> assistedJoins || !failed(c.endpoint()))
                 .forEach(candidates::add);
-        candidates.addAll(fallback);
+        candidates.addAll(local);
         var probeCandidates = new NativeCandidateSnapshot(probes.stream().limit(32).toList());
         checks.entrySet()
                 .removeIf(
