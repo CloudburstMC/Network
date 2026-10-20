@@ -422,7 +422,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * The configured advertised addresses as resolved when binding. When there are any, answers
      * announce these, see {@link Builder#setAdvertisedAddresses}. Safe to call from any thread.
      *
-     * @return The endpoints, empty before binding or when none are configured
+     * @return The endpoints, port 0 for an entry that names none, which answers announce on the
+     *         port ICE uses. Empty before binding or when none are configured
      */
     public List<InetSocketAddress> advertisedAddresses() {
         return this.advertisedAddresses;
