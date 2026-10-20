@@ -782,6 +782,28 @@ class ProviderClientTest {
     }
 
     @Test
+    void reportsTheEndpointsTheProviderAcknowledged(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path), new FakeTransport(), () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+            try {
+                assertTrue(client.publishedEndpoints().isEmpty());
+                client.start().get(20, TimeUnit.SECONDS);
+                var published = client.publishedEndpoints().orElseThrow();
+                assertEquals(List.of(new java.net.InetSocketAddress("127.0.0.1", 19133)), published.endpoints());
+                assertEquals(Set.of(), published.assistedFamilies());
+                client.drain().get(10, TimeUnit.SECONDS);
+                assertTrue(client.publishedEndpoints().isEmpty(), "A draining host offers nothing");
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+            assertTrue(client.publishedEndpoints().isEmpty());
+        }
+    }
+
+    @Test
     void republishesTheProfileWhenTheProviderHoldsNone(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var client = new ProviderClient(
@@ -798,6 +820,8 @@ class ProviderClientTest {
                 client.readiness().get(10, TimeUnit.SECONDS);
                 assertEquals("example-profile-" + (published + 1),
                         stub.lastHeartbeat.get("hostProfileRevision").getAsString());
+                assertEquals(List.of(new java.net.InetSocketAddress("127.0.0.1", 19133)),
+                        client.publishedEndpoints().orElseThrow().endpoints(), "Known again once republished");
             } finally {
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }

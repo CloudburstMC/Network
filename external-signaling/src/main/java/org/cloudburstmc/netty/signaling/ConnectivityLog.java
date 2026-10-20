@@ -172,7 +172,7 @@ final class ConnectivityLog {
                 .map(ConnectivityLog::endpoint).sorted().toList();
     }
 
-    private static InetSocketAddress candidate(JsonElement value) {
+    static InetSocketAddress candidate(JsonElement value) {
         try {
             var candidate = value.getAsJsonObject();
             return new InetSocketAddress(EndpointAddress.parse(candidate.get("address").getAsString()),

@@ -21,6 +21,7 @@ import org.cloudburstmc.netty.signaling.admission.AdmissionKey;
 import org.cloudburstmc.netty.signaling.diagnostic.*;
 
 import java.io.*;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.*;
@@ -335,6 +336,39 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     /**
+     * What the provider last acknowledged to hand joining players.
+     *
+     * @param endpoints        The endpoints players are offered
+     * @param assistedFamilies The IP families, 4 or 6, the provider assists joins for, empty when it assists none
+     */
+    public record PublishedEndpoints(List<InetSocketAddress> endpoints, Set<Integer> assistedFamilies) {
+        public PublishedEndpoints {
+            endpoints = List.copyOf(endpoints);
+            assistedFamilies = Set.copyOf(assistedFamilies);
+        }
+
+        static PublishedEndpoints of(JsonObject profile) {
+            List<InetSocketAddress> endpoints = new ArrayList<>();
+            JsonArray candidates = profile.getAsJsonArray("candidates");
+            if (candidates != null) {
+                for (JsonElement candidate : candidates) {
+                    InetSocketAddress endpoint = ConnectivityLog.candidate(candidate);
+                    if (endpoint != null) {
+                        endpoints.add(endpoint);
+                    }
+                }
+            }
+            Set<Integer> families = new HashSet<>();
+            JsonObject admission = profile.getAsJsonObject("statelessAdmission");
+            JsonElement assisted = admission == null ? null : admission.get("assistedFamilies");
+            if (assisted != null && assisted.isJsonArray()) {
+                assisted.getAsJsonArray().forEach(family -> families.add(family.getAsInt()));
+            }
+            return new PublishedEndpoints(endpoints, families);
+        }
+    }
+
+    /**
      * Capacity and connectedPlayers describe the same observation.
      */
     public record Health(boolean acceptingPlayers, int capacity, Software software, ConnectedPlayers connectedPlayers) {
@@ -427,6 +461,8 @@ public final class ProviderClient implements AutoCloseable {
 
     private volatile AssistedAuthority assistedAuthority;
     private volatile boolean assistedMode;
+    /** Set with each acknowledged profile, cleared once the provider may no longer hand it out. */
+    private volatile PublishedEndpoints published;
     private String hostState = "serving";
     private String installedKeyId;
     private List<AdmissionKey> installedAdmissionKeys = List.of();
@@ -459,6 +495,17 @@ public final class ProviderClient implements AutoCloseable {
     /** Carrier of the last successful signed operation, independent of advertised configuration. */
     public String lastControlCarrier() {
         return lastControlCarrier;
+    }
+
+    /**
+     * The endpoints the provider last acknowledged to hand joining players. Safe to call from any thread, and never
+     * waits for a heartbeat.
+     *
+     * @return The last acknowledged endpoints, empty before the first acknowledgement, while a changed profile is
+     * being published again, and once stopping
+     */
+    public Optional<PublishedEndpoints> publishedEndpoints() {
+        return Optional.ofNullable(published);
     }
 
     public CompletableFuture<Registration> start() {
@@ -995,6 +1042,7 @@ public final class ProviderClient implements AutoCloseable {
             configureWebSocket();
             profileRevision = null;
             lastProfile = null;
+            published = null;
             installKeys();
         }
         // Key delivery and local diagnostic installation can need an immediate second exchange.
@@ -1164,12 +1212,14 @@ public final class ProviderClient implements AutoCloseable {
                     if (profileSnapshot != null) {
                         profileRevision = response.get("hostProfileRevision").getAsString();
                         lastProfile = profile.deepCopy();
+                        published = PublishedEndpoints.of(profile);
                         state.addProperty("profilePublishedAt", System.currentTimeMillis());
                         save();
                     }
             } else if (profileRevision != null && !new JsonPrimitive(profileRevision).equals(response.get("hostProfileRevision"))) {
                 // The provider no longer holds the published profile, so send it in full
                 profileRevision = null;
+                published = null;
                 lastProfile = null;
                 again |= profileSnapshot != null;
             }
@@ -1307,6 +1357,7 @@ public final class ProviderClient implements AutoCloseable {
         publishedProfileSnapshot = null;
         lastProfile = null;
         profileRevision = null;
+        published = null;
         assistedAuthority = null;
         disableDiagnosticAdmission();
     }
@@ -1880,6 +1931,7 @@ public final class ProviderClient implements AutoCloseable {
     private void deregisterAndForget() throws Exception {
         signed("deregister", "POST", new JsonObject());
         started = false;
+        published = null;
         state = new JsonObject();
         gameOutcomeQueue.clear();
         store.write(state);
@@ -1893,6 +1945,7 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private void drainAndReport() throws Exception {
+        published = null;
         disableDiagnosticAdmission();
         if (!hostState.equals("closed")) {
             transport.drain().toCompletableFuture().get(10, TimeUnit.SECONDS);
@@ -2345,6 +2398,7 @@ public final class ProviderClient implements AutoCloseable {
                     } finally {
                         closed = true;
                         started = false;
+                        published = null;
                         if (websocket != null) {
                             websocket.close();
                         }
