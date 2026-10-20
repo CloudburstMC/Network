@@ -357,6 +357,11 @@ class HttpSignalingRequestTest {
         String answer = this.answerFor("192.168.1.2:19132");
         assertTrue(answer.contains(" 127.0.0.1 19140 typ srflx"), answer);
         assertFalse(answer.contains("192.168.1.2"));
+        // Every address the name has, which may include ::1
+        List<InetSocketAddress> advertised = this.signaling.advertisedAddresses();
+        assertTrue(advertised.contains(new InetSocketAddress("127.0.0.1", 19140)), advertised.toString());
+        assertTrue(advertised.stream().allMatch(a -> a.getAddress().isLoopbackAddress() && a.getPort() == 19140),
+                advertised.toString());
     }
 
     @Test

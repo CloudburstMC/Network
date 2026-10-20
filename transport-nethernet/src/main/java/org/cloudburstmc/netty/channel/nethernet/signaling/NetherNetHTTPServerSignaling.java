@@ -419,6 +419,28 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     }
 
     /**
+     * The configured advertised addresses as resolved when binding. When there are any, answers
+     * announce these, see {@link Builder#setAdvertisedAddresses}. Safe to call from any thread.
+     *
+     * @return The endpoints, empty before binding or when none are configured
+     */
+    public List<InetSocketAddress> advertisedAddresses() {
+        return this.advertisedAddresses;
+    }
+
+    /**
+     * The public mappings STUN discovery currently finds, see {@link Builder#setStunServers}. Answers
+     * announce these along with what ICE gathers and the endpoint the player typed in. Safe to call
+     * from any thread.
+     *
+     * @return The endpoints, empty when discovery is off or no server has answered recently
+     */
+    public List<InetSocketAddress> discoveredEndpoints() {
+        DiscoveredEndpoints discovered = this.discovered;
+        return discovered == null ? List.of() : discovered.fresh();
+    }
+
+    /**
      * Answers an SDP offer, whether it arrived over this server's HTTP endpoint or was handed in
      * from outside it.
      * <p>

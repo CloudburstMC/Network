@@ -118,6 +118,24 @@ class StunDiscoveryJoinTest {
     }
 
     @Test
+    void reportsTheMappingItAnnounces() throws Exception {
+        try (StunServer stun = new StunServer()) {
+            int port = freePort();
+            NetherNetHTTPServerSignaling signaling = signaling(stun).build();
+            assertEquals(List.of(), signaling.discoveredEndpoints());
+            this.server = bind(signaling, port).sync().channel();
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(DiscoveredEndpoints.REFRESH_SECONDS + 10);
+            while (signaling.discoveredEndpoints().isEmpty() && System.nanoTime() < deadline) {
+                Thread.sleep(100);
+            }
+            assertEquals(List.of(MAPPED, new InetSocketAddress(MAPPED.getAddress(), port)),
+                    signaling.discoveredEndpoints());
+            assertEquals(List.of(), signaling.advertisedAddresses());
+        }
+    }
+
+    @Test
     void refusesToBindWithoutAFixedIcePort() throws Exception {
         try (StunServer stun = new StunServer()) {
             ChannelFuture bound = bind(signaling(stun).setIceOnLocalPort(false).build(), freePort()).await();
