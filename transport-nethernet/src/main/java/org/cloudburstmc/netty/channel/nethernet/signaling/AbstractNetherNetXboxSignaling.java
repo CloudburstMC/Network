@@ -20,6 +20,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
@@ -42,11 +43,13 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
 import io.netty.handler.codec.http.websocketx.WebSocketVersion;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslHandler;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jspecify.annotations.Nullable;
 
-import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
 
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
@@ -122,12 +125,15 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
      * <p>
      * Netty leaves {@code endpointIdentificationAlgorithm} unset, which validates the chain but not
      * the name on it, so without this any publicly trusted certificate would be accepted for the
-     * signaling host.
+     * signaling host. Set on the engine, as the builder only takes it from Netty 4.1.112.
      */
-    static SslContext signalingSslContext() throws SSLException {
-        return SslContextBuilder.forClient()
-                .endpointIdentificationAlgorithm("HTTPS")
-                .build();
+    static SslHandler signalingSslHandler(SslContext context, ByteBufAllocator alloc, String host) {
+        SslHandler handler = context.newHandler(alloc, host, 443);
+        SSLEngine engine = handler.engine();
+        SSLParameters parameters = engine.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm("HTTPS");
+        engine.setSSLParameters(parameters);
+        return handler;
     }
 
     protected synchronized CompletableFuture<List<IceServerInfo>> connectInternal() {
@@ -143,7 +149,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
         connectFuture.thenAccept(servers -> this.iceServers = servers);
 
         try {
-            SslContext sslCtx = signalingSslContext();
+            SslContext sslCtx = SslContextBuilder.forClient().build();
             WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
                     uri, WebSocketVersion.V13, null, false,
                     new DefaultHttpHeaders()
@@ -160,7 +166,7 @@ public abstract class AbstractNetherNetXboxSignaling extends SimpleChannelInboun
                         @Override
                         protected void initChannel(SocketChannel ch) {
                             ChannelPipeline p = ch.pipeline();
-                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), 443));
+                            p.addLast(signalingSslHandler(sslCtx, ch.alloc(), uri.getHost()));
                             p.addLast(new HttpClientCodec(), new HttpObjectAggregator(8192));
                             p.addLast("ws-handshake", new WebSocketClientProtocolHandler(handshaker));
                             p.addLast("ws-aggregator",

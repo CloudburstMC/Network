@@ -27,6 +27,8 @@ import java.util.List;
  * Rejects TLS clients on a plaintext port
  */
 public class TlsRejectingHandler extends ByteToMessageDecoder {
+    /** Whether Netty has isEncrypted(ByteBuf, boolean), from 4.1.113. Platforms bring their own Netty. */
+    private static final boolean SSLV2_PROBE_OPTIONAL = hasOverload();
 
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
@@ -35,11 +37,26 @@ public class TlsRejectingHandler extends ByteToMessageDecoder {
             return;
         }
 
-        if (SslHandler.isEncrypted(in, false)) {
+        if (isTls(in)) {
             ctx.close();
             return;
         }
 
         ctx.pipeline().remove(this);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static boolean isTls(ByteBuf in) {
+        // Older Netty also probes for SSLv2, which no HTTP request resembles
+        return SSLV2_PROBE_OPTIONAL ? SslHandler.isEncrypted(in, false) : SslHandler.isEncrypted(in);
+    }
+
+    private static boolean hasOverload() {
+        try {
+            SslHandler.class.getMethod("isEncrypted", ByteBuf.class, boolean.class);
+            return true;
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
     }
 }

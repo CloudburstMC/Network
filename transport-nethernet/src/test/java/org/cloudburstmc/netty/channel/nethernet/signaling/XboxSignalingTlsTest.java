@@ -17,7 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import io.netty.buffer.ByteBufAllocator;
-import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
 import org.junit.jupiter.api.Test;
 
 import javax.net.ssl.SSLEngine;
@@ -33,10 +33,8 @@ public class XboxSignalingTlsTest {
      */
     @Test
     public void verifiesTheSignalingHostname() throws Exception {
-        SslContext context = AbstractNetherNetXboxSignaling.signalingSslContext();
-        SSLEngine engine = context
-                .newHandler(ByteBufAllocator.DEFAULT, "signal.franchise.minecraft-services.net", 443)
-                .engine();
+        SSLEngine engine = AbstractNetherNetXboxSignaling.signalingSslHandler(SslContextBuilder.forClient().build(),
+                ByteBufAllocator.DEFAULT, "signal.franchise.minecraft-services.net").engine();
 
         assertEquals("HTTPS", engine.getSSLParameters().getEndpointIdentificationAlgorithm(),
                 "hostname verification is off, the token would go to whoever answers");
