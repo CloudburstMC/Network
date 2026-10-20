@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class NetherNetServerChannel extends AbstractServerChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetServerChannel.class);
@@ -284,19 +285,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                                       PendingSignals remoteSignals) throws Exception {
         int handshakeTimeoutSeconds =
                 this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
-        ScheduledFuture<?> timeout = child.eventLoop().schedule(() -> {
-            if (!child.isActive()) {
-                child.connectionFailed(NetherConnectionFailure.HANDSHAKE_TIMEOUT);
-                child.close();
-                log.warn("Connection {} timed out during handshake ({}s)", connectionId,
-                        handshakeTimeoutSeconds);
-            }
-        }, handshakeTimeoutSeconds, TimeUnit.SECONDS);
-        child.closeFuture().addListener(future -> timeout.cancel(false));
-
         RemoteCandidates candidates = RemoteCandidates.server(pc, connectionId);
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId,
-                offerSdp, clientAddress, child, pc, candidates, timeout);
+                offerSdp, clientAddress, child, pc, candidates, handshakeTimeoutSeconds);
         observer.register(pc);
         SignalHandler handler = signal -> {
             NetherNetConstants.Signal parsed = NetherNetConstants.parseSignal(signal);
@@ -364,6 +355,28 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     }
 
     /**
+     * The warning for a join that never carried traffic, which is what a host sees when a player
+     * cannot connect. The player's address goes in a debug line instead, as hosts may keep
+     * addresses out of their logs.
+     *
+     * @param player        The player's name, null when the signaling does not know it
+     * @param reachedServer Whether ICE found a path, so the join failed after that
+     * @param icePort       The UDP port ICE uses, 0 when each connection takes its own
+     * @return The warning
+     */
+    static String joinFailedMessage(@Nullable String player, boolean reachedServer, int icePort) {
+        // Self asserted under TokenTrust.ANY, so it must not be able to forge log lines
+        String name = player == null ? "" : player.replaceAll("\\p{Cntrl}", "").strip();
+        String who = name.isEmpty() ? "A player" : name.length() > 32 ? name.substring(0, 32) : name;
+        if (reachedServer) {
+            return who + " reached this server over NetherNet, but the connection did not finish setting up.";
+        }
+        return who + " could not connect over NetherNet: no network path to this server was found. Their device "
+                + "needs to reach " + (icePort > 0 ? "UDP port " + icePort + " on one of the addresses this server"
+                : "this server over UDP on one of the addresses it") + " advertises.";
+    }
+
+    /**
      * Observer to handle Data Channel creation from the client.
      */
     private class ServerPeerConnectionObserver {
@@ -374,7 +387,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private DataChannel reliable;
         private DataChannel unreliable;
 
+        private final int handshakeTimeoutSeconds;
         private final ScheduledFuture<?> handshakeTimeout;
+        /** Whether ICE found a path, which tells a missing path from a later failure. */
+        private volatile boolean iceConnected;
+        private final AtomicBoolean failureLogged = new AtomicBoolean();
 
         private final PeerConnection peerConnection;
         private final RemoteCandidates remoteCandidates;
@@ -387,15 +404,40 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         public ServerPeerConnectionObserver(String connectionId, String remoteNetworkId, String offerSdp,
                                             @Nullable InetSocketAddress clientAddress,
                                             NetherNetChildChannel child, PeerConnection peerConnection,
-                                            RemoteCandidates remoteCandidates, ScheduledFuture<?> handshakeTimeout) {
+                                            RemoteCandidates remoteCandidates, int handshakeTimeoutSeconds) {
             this.child = child;
             this.peerConnection = peerConnection;
             this.remoteCandidates = remoteCandidates;
-            this.handshakeTimeout = handshakeTimeout;
             this.connectionId = connectionId;
             this.remoteNetworkId = remoteNetworkId;
             this.offerSdp = offerSdp;
             this.clientAddress = clientAddress;
+            this.handshakeTimeoutSeconds = handshakeTimeoutSeconds;
+            // Runs on the child's loop, so never before this constructor and the setup around it finish
+            this.handshakeTimeout = child.eventLoop().schedule(this::handshakeTimedOut, handshakeTimeoutSeconds,
+                    TimeUnit.SECONDS);
+            child.closeFuture().addListener(future -> this.handshakeTimeout.cancel(false));
+        }
+
+        private void handshakeTimedOut() {
+            if (!child.isActive() && child.isOpen()) {
+                child.connectionFailed(NetherConnectionFailure.HANDSHAKE_TIMEOUT);
+                child.close();
+                joinFailed("timed out after " + handshakeTimeoutSeconds + "s");
+            }
+        }
+
+        /** Warns that a player could not connect, once per join. */
+        private void joinFailed(String reason) {
+            if (!failureLogged.compareAndSet(false, true)) {
+                return;
+            }
+            PlayerInfo player = child.attr(NetherNetChildChannel.PLAYER_INFO).get();
+            InetSocketAddress ice = iceAddress();
+            log.warn(joinFailedMessage(player == null ? null : player.displayName(), iceConnected,
+                    ice == null ? 0 : ice.getPort()));
+            log.debug("Join {} from {} failed: {}{}", connectionId, clientAddress, reason,
+                    iceConnected ? ", after ICE connected" : "");
         }
 
         /**
@@ -454,12 +496,16 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             log.debug("Connection {} state changed: {}", this.connectionId, state);
 
             if (state == PeerState.RTC_CONNECTED) {
+                iceConnected = true;
                 // The selected candidate pair is the only place the peer's real address appears
                 InetSocketAddress raw = this.peerConnection.remoteAddress();
                 this.child.setRemoteAddress(new InetSocketAddress(raw.getHostString(), raw.getPort()));
             }
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) {
                 if (child.isOpen()) {
+                    if (state == PeerState.RTC_FAILED && !child.isActive()) {
+                        joinFailed("the peer connection failed");
+                    }
                     log.debug("Closing connection {} due to state change: {}", this.connectionId,
                             state);
                     child.closeFromTransport();
