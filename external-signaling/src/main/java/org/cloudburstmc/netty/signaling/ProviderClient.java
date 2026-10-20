@@ -399,6 +399,16 @@ public final class ProviderClient implements AutoCloseable {
         }
     }
 
+    /**
+     * The HTTP proxy between this host and the provider wants credentials, so the request never
+     * arrived. Warnings name a failure by its type, which says this one.
+     */
+    static final class ProxyAuthenticationRequiredException extends IOException {
+        ProxyAuthenticationRequiredException() {
+            super("The HTTP proxy requires a login (HTTP 407), which is not supported");
+        }
+    }
+
     // Null is meaningful inside opaque extension data (for example, clearing a setting).
     private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
     private final Configuration config;
@@ -2105,11 +2115,17 @@ public final class ProviderClient implements AutoCloseable {
                             http.sendAsync(request, info -> new LimitedBodySubscriber(65536));
                     HttpResponse<byte[]> httpResponse =
                             responseFuture.get(timeoutSeconds + 1, TimeUnit.SECONDS);
+                    byte[] bytes = httpResponse.body();
+                    if (bytes == null && httpResponse.statusCode() == 407) {
+                        // The JDK turns a proxy's 407 to the HTTPS tunnel into a response of its own
+                        // without a body, as this client has no proxy credentials to retry with
+                        throw new ProxyAuthenticationRequiredException();
+                    }
                     response =
                             new ProviderWebSocket.Reply(
                                     httpResponse.statusCode(),
                                     httpResponse.headers(),
-                                    new String(httpResponse.body(), StandardCharsets.UTF_8));
+                                    bytes == null ? "" : new String(bytes, StandardCharsets.UTF_8));
                 }
             } catch (ExecutionException | TimeoutException failure) {
                 if (responseFuture != null) {
