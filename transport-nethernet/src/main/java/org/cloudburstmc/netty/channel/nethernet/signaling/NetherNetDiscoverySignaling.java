@@ -142,6 +142,19 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
         this.discovery.setPongData(pongData);
     }
 
+    /**
+     * Asks {@code provider} for the LAN pong on every discovery request, see
+     * {@link NetherNetDiscovery#setMotdProvider}.
+     */
+    public void setMotdProvider(MotdProvider provider) {
+        this.discovery.setMotdProvider(provider);
+    }
+
+    /** Where discovery is bound, or null before it is. */
+    InetSocketAddress localAddress() {
+        return this.discovery.localAddress();
+    }
+
     @Override
     public void sendSignal(String targetNetworkId, String data) {
         String actualIdStr = targetNetworkId;

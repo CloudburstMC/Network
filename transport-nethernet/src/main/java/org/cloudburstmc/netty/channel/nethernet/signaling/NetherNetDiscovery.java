@@ -38,6 +38,7 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
@@ -52,7 +53,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     private final Map<Long, InetSocketAddress> peerAddresses = new ConcurrentHashMap<>();
     private Channel channel;
     private EventLoopGroup group;
-    private byte[] pongData;
+    private volatile MotdProvider motdProvider = (host, remoteAddress, client) -> null;
     private NetherNetServerSignaling.NewConnectionHandler newConnectionHandler;
     private BiConsumer<Long, ByteBuf> discoveryCallback;
 
@@ -107,8 +108,18 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         sendPacket(buf, target);
     }
 
+    /** Answers every discovery request with {@code data}. */
     public void setPongData(PongData data) {
-        this.pongData = encodePong(data);
+        setMotdProvider((host, remoteAddress, client) -> data);
+    }
+
+    /**
+     * Asks {@code provider} for the pong on every discovery request, so it follows the player count.
+     * It runs on the discovery loop with no host or client info, and a null answer leaves the request
+     * unanswered.
+     */
+    public void setMotdProvider(MotdProvider provider) {
+        this.motdProvider = Objects.requireNonNull(provider);
     }
 
     /** The pong as clients read it: version 4 server data, hex encoded behind its length. */
@@ -238,7 +249,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             switch (packetId) {
                 case NetherNetConstants.ID_DISCOVERY_REQUEST -> {
                     log.trace("Handled discovery request from {}", packet.sender());
-                    handleRequest(senderId, packet.sender());
+                    handleRequest(packet.sender());
                 }
                 case NetherNetConstants.ID_DISCOVERY_MESSAGE -> {
                     log.trace("Handled discovery message from {}", packet.sender());
@@ -264,8 +275,9 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         }
     }
 
-    private void handleRequest(long senderId, InetSocketAddress sender) {
-        if (this.pongData == null) {
+    private void handleRequest(InetSocketAddress sender) {
+        PongData pong = this.motdProvider.getMotd(null, sender, null);
+        if (pong == null) {
             return;
         }
 
@@ -273,7 +285,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
         buf.writeShortLE(NetherNetConstants.ID_DISCOVERY_RESPONSE);
         buf.writeLongLE(this.networkId);
         buf.writeZero(8);
-        buf.writeBytes(this.pongData);
+        buf.writeBytes(encodePong(pong));
 
         sendPacket(buf, sender);
     }
@@ -337,5 +349,10 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
     public boolean isActive() {
         return channel != null && channel.isActive();
+    }
+
+    /** Where the socket is bound, or null before it is. */
+    InetSocketAddress localAddress() {
+        return channel == null ? null : (InetSocketAddress) channel.localAddress();
     }
 }

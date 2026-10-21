@@ -26,9 +26,13 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,6 +60,56 @@ public class NetherNetDiscoveryTest {
 
             assertTrue(discovery.group().terminationFuture().await(10, TimeUnit.SECONDS),
                     "the loop outlived the failed bind");
+        }
+    }
+
+    @Test
+    void everyRequestIsAnsweredFromTheMotdProviderAnew() throws Exception {
+        AtomicInteger players = new AtomicInteger(3);
+        BlockingQueue<Integer> answers = new LinkedBlockingQueue<>();
+        NetherNetDiscovery server = new NetherNetDiscovery(1);
+        NetherNetDiscovery client = new NetherNetDiscovery(2);
+        try {
+            server.setMotdProvider((host, address, info) ->
+                    new PongData.Builder().setPlayerCount(players.getAndIncrement()).build());
+            server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+            client.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+
+            for (int i = 0; i < 2; i++) {
+                client.sendDiscoveryRequest(server.localAddress(), (sender, payload) -> {
+                    try {
+                        answers.add(playerCount(serverData(payload)));
+                    } finally {
+                        payload.release();
+                    }
+                });
+                assertEquals(3 + i, answers.poll(5, TimeUnit.SECONDS));
+            }
+        } finally {
+            server.close();
+            client.close();
+        }
+    }
+
+    @Test
+    void aNullMotdLeavesTheRequestUnanswered() throws Exception {
+        BlockingQueue<Long> answers = new LinkedBlockingQueue<>();
+        NetherNetDiscovery server = new NetherNetDiscovery(1);
+        NetherNetDiscovery client = new NetherNetDiscovery(2);
+        try {
+            server.setMotdProvider((host, address, info) -> null);
+            server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+            client.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+
+            client.sendDiscoveryRequest(server.localAddress(), (sender, payload) -> {
+                payload.release();
+                answers.add(sender);
+            });
+
+            assertNull(answers.poll(500, TimeUnit.MILLISECONDS));
+        } finally {
+            server.close();
+            client.close();
         }
     }
 
@@ -91,12 +145,23 @@ public class NetherNetDiscoveryTest {
         assertEquals(20, data.readIntLE());
     }
 
-    /** The server data inside an encoded pong. */
     private static ByteBuf serverData(PongData pong) {
-        ByteBuf encoded = Unpooled.wrappedBuffer(NetherNetDiscovery.encodePong(pong));
+        return serverData(Unpooled.wrappedBuffer(NetherNetDiscovery.encodePong(pong)));
+    }
+
+    /** The server data inside an encoded pong. */
+    private static ByteBuf serverData(ByteBuf encoded) {
         int length = encoded.readIntLE();
         assertEquals(encoded.readableBytes(), length);
         return Unpooled.wrappedBuffer(
                 ByteBufUtil.decodeHexDump(encoded.readCharSequence(length, StandardCharsets.US_ASCII)));
+    }
+
+    private static int playerCount(ByteBuf data) {
+        data.skipBytes(1); // Version
+        data.skipBytes(data.readUnsignedByte());
+        data.skipBytes(data.readUnsignedByte());
+        data.skipBytes(1); // Game type
+        return data.readIntLE();
     }
 }
