@@ -81,4 +81,30 @@ class ProviderInteropTest {
         assertDoesNotThrow(() -> new ServerStatus("name", "", 1, 0));
         assertThrows(IllegalArgumentException.class, () -> new ProviderClient.Health(true, 1, null, null));
     }
+
+    @Test
+    void exactBedrockProtocolBounds() {
+        List<Integer> most = java.util.stream.IntStream.rangeClosed(1, 512).boxed().toList();
+        assertDoesNotThrow(() -> new ProviderClient.BedrockProtocols(List.of(1), "1"));
+        assertDoesNotThrow(() -> new ProviderClient.BedrockProtocols(most, "1".repeat(64)));
+        assertDoesNotThrow(() -> new ProviderClient.BedrockProtocols(List.of(Integer.MAX_VALUE), "\uD83D\uDE00".repeat(64)));
+        List<Integer> tooMany = java.util.stream.IntStream.rangeClosed(1, 513).boxed().toList();
+        for (List<Integer> accepted : Arrays.<List<Integer>>asList(null, List.of(), tooMany, List.of(0), List.of(-1),
+                List.of(2, 1), List.of(1, 1), Arrays.asList(1, null))) {
+            assertThrows(IllegalArgumentException.class, () -> new ProviderClient.BedrockProtocols(accepted, "26.60"),
+                    String.valueOf(accepted));
+        }
+        for (String version : Arrays.asList(null, "", "1".repeat(65), "26.60\n", "26\u007f", "26\u0085",
+                "26\uD800", "\uDC00")) {
+            assertThrows(IllegalArgumentException.class, () -> new ProviderClient.BedrockProtocols(List.of(1), version),
+                    String.valueOf(version));
+        }
+
+        var source = new ArrayList<>(List.of(818, 2225));
+        var protocols = new ProviderClient.BedrockProtocols(source, "26.60");
+        source.add(3000);
+        assertEquals(List.of(818, 2225), protocols.accepted(), "A defensive copy");
+        assertThrows(UnsupportedOperationException.class, () -> protocols.accepted().add(3000));
+        assertEquals("{\"accepted\":[818,2225],\"version\":\"26.60\"}", protocols.toJson().toString());
+    }
 }

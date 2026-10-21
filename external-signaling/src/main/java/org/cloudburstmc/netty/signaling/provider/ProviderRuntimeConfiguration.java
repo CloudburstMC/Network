@@ -152,6 +152,7 @@ public final class ProviderRuntimeConfiguration {
         private final boolean deregisterOnShutdown;
         private final boolean gameOutcomes;
         private final ProviderClient.Location location;
+        private final ProviderClient.BedrockProtocols bedrockProtocols;
 
         private Settings(Builder builder) {
             endpoint = builder.endpoint;
@@ -164,6 +165,7 @@ public final class ProviderRuntimeConfiguration {
             deregisterOnShutdown = builder.deregisterOnShutdown;
             gameOutcomes = builder.gameOutcomes;
             location = builder.location;
+            bedrockProtocols = builder.bedrockProtocols;
         }
 
         /**
@@ -213,6 +215,10 @@ public final class ProviderRuntimeConfiguration {
             return location;
         }
 
+        public ProviderClient.BedrockProtocols bedrockProtocols() {
+            return bedrockProtocols;
+        }
+
         public static final class Builder {
             private final String endpoint;
             private String token;
@@ -224,6 +230,7 @@ public final class ProviderRuntimeConfiguration {
             private boolean deregisterOnShutdown;
             private boolean gameOutcomes;
             private ProviderClient.Location location;
+            private ProviderClient.BedrockProtocols bedrockProtocols;
 
             private Builder(String endpoint) {
                 this.endpoint = endpoint;
@@ -307,6 +314,14 @@ public final class ProviderRuntimeConfiguration {
                 return this;
             }
 
+            /**
+             * @see ProviderClient.Configuration.Builder#bedrockProtocols
+             */
+            public Builder bedrockProtocols(ProviderClient.BedrockProtocols bedrockProtocols) {
+                this.bedrockProtocols = bedrockProtocols;
+                return this;
+            }
+
             public Settings build() {
                 return new Settings(this);
             }
@@ -379,6 +394,7 @@ public final class ProviderRuntimeConfiguration {
                 .deregisterOnShutdown(settings.deregisterOnShutdown())
                 .gameOutcomes(settings.gameOutcomes())
                 .location(settings.location())
+                .bedrockProtocols(settings.bedrockProtocols())
                 .build();
     }
 

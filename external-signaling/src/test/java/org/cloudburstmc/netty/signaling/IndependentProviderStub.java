@@ -24,6 +24,8 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile boolean operatorActions;
     volatile int operatorActionRequests;
     volatile JsonObject lastHeartbeat, lastHostProfile;
+    /** Every heartbeat body as sent, for pinning bytes. */
+    final List<String> heartbeatBodies = new CopyOnWriteArrayList<>();
     volatile int failHeartbeats;
     volatile boolean failOutcomes;
     /** Outcome batches still to reject permanently. */
@@ -273,6 +275,7 @@ public final class IndependentProviderStub implements AutoCloseable {
         JsonObject ok = new JsonObject();
         switch (path) {
             case "/example/heartbeat" -> {
+                heartbeatBodies.add(raw);
                 lastHeartbeat = body;
                 heartbeats++;
                 if (body.has("installedAdmissionKeyIds")) {

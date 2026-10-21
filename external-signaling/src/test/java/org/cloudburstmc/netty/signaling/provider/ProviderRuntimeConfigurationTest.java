@@ -43,6 +43,19 @@ class ProviderRuntimeConfigurationTest {
         assertEquals(ProviderClient.ControlTransport.HTTP, plain.controlTransport());
     }
 
+    @Test
+    void passesTheBedrockProtocolsToTheClient(@TempDir Path directory) throws Exception {
+        var protocols = new ProviderClient.BedrockProtocols(List.of(818, 2225), "26.60");
+        var settings = ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net")
+                .bedrockProtocols(protocols)
+                .build();
+        assertEquals(protocols, ProviderRuntimeConfiguration.resolve(settings, directory, "0.0.0.0", 19132, 10)
+                .clientConfiguration().bedrockProtocols());
+        var unset = ProviderRuntimeConfiguration.Settings.builder("https://signal.example.net").build();
+        assertNull(ProviderRuntimeConfiguration.resolve(unset, directory, "0.0.0.0", 19132, 10)
+                .clientConfiguration().bedrockProtocols());
+    }
+
     private static final String PROVIDER = "https://signal.example.net";
 
     private static ProviderRuntimeConfiguration.Settings settings(String endpoint, String token,

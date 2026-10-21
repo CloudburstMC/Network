@@ -67,6 +67,7 @@ public final class ProviderClient implements AutoCloseable {
         private final boolean deregisterOnShutdown;
         private final boolean gameOutcomes;
         private final Location location;
+        private final BedrockProtocols bedrockProtocols;
 
         private Configuration(Builder builder) {
             provider = Objects.requireNonNull(builder.provider);
@@ -79,6 +80,7 @@ public final class ProviderClient implements AutoCloseable {
             deregisterOnShutdown = builder.deregisterOnShutdown;
             gameOutcomes = builder.gameOutcomes;
             location = builder.location;
+            bedrockProtocols = builder.bedrockProtocols;
             if (assistedJoins && controlTransport != ControlTransport.AUTO) {
                 throw new IllegalArgumentException("Assisted joins require WebSocket control");
             }
@@ -141,6 +143,10 @@ public final class ProviderClient implements AutoCloseable {
             return location;
         }
 
+        public BedrockProtocols bedrockProtocols() {
+            return bedrockProtocols;
+        }
+
         String authorizationScheme() {
             return authorizationToken == null ? ANONYMOUS_PROOF_OF_WORK : BEARER_TOKEN;
         }
@@ -161,6 +167,7 @@ public final class ProviderClient implements AutoCloseable {
             private boolean deregisterOnShutdown;
             private boolean gameOutcomes;
             private Location location;
+            private BedrockProtocols bedrockProtocols;
 
             private Builder(URI provider) {
                 this.provider = provider;
@@ -224,6 +231,15 @@ public final class ProviderClient implements AutoCloseable {
              */
             public Builder location(Location location) {
                 this.location = location;
+                return this;
+            }
+
+            /**
+             * @param bedrockProtocols The protocols the host accepts, sent with each host profile, or null to
+             *                         never send them, which leaves any value an earlier run reported in place
+             */
+            public Builder bedrockProtocols(BedrockProtocols bedrockProtocols) {
+                this.bedrockProtocols = bedrockProtocols;
                 return this;
             }
 
@@ -320,6 +336,41 @@ public final class ProviderClient implements AutoCloseable {
                 json.addProperty("latitude", latitude);
                 json.addProperty("longitude", longitude);
             }
+            return json;
+        }
+    }
+
+    /**
+     * The Bedrock protocols the host accepts at login, which a provider may advertise from.
+     *
+     * @param accepted Every accepted protocol in strictly ascending order, 1 to 512 of them. Not a range, since
+     *                 protocol numbers have gaps
+     * @param version  The game version of the highest accepted protocol
+     */
+    public record BedrockProtocols(List<Integer> accepted, String version) {
+        public BedrockProtocols {
+            Integer[] protocols = accepted == null ? new Integer[0] : accepted.toArray(Integer[]::new);
+            if (protocols.length == 0 || protocols.length > 512 || version == null || version.isEmpty()
+                    || version.codePointCount(0, version.length()) > 64 || version.codePoints().anyMatch(
+                    c -> Character.getType(c) == Character.CONTROL || Character.getType(c) == Character.SURROGATE)) {
+                throw new IllegalArgumentException("Invalid Bedrock protocols");
+            }
+            int previous = 0;
+            for (Integer protocol : protocols) {
+                if (protocol == null || protocol <= previous) {
+                    throw new IllegalArgumentException("Accepted Bedrock protocols must ascend from 1");
+                }
+                previous = protocol;
+            }
+            accepted = List.of(protocols);
+        }
+
+        JsonObject toJson() {
+            JsonArray array = new JsonArray(accepted.size());
+            accepted.forEach(array::add);
+            JsonObject json = new JsonObject();
+            json.add("accepted", array);
+            json.addProperty("version", version);
             return json;
         }
     }
@@ -453,6 +504,7 @@ public final class ProviderClient implements AutoCloseable {
     private boolean fenced;
     private Boolean lastReportedGameOutcomes;
     private boolean locationReported;
+    private boolean bedrockProtocolsReported;
     private OperatorAction operatorAction;
     private boolean operatorActionAvailable;
     private long nextOutcomes;
@@ -1161,6 +1213,10 @@ public final class ProviderClient implements AutoCloseable {
             if (body.has("hostProfile") || !locationReported) {
                 body.add("location", config.location() == null ? JsonNull.INSTANCE : config.location().toJson());
             }
+            // Unconfigured, it is never sent
+            if (config.bedrockProtocols() != null && (body.has("hostProfile") || !bedrockProtocolsReported)) {
+                body.add("bedrockProtocols", config.bedrockProtocols().toJson());
+            }
             ServerStatus status = null;
             try {
                 status = currentStatus();
@@ -1290,6 +1346,7 @@ public final class ProviderClient implements AutoCloseable {
             lastReportedHealth = health;
             lastReportedGameOutcomes = gameOutcomes;
             locationReported |= body.has("location");
+            bedrockProtocolsReported |= body.has("bedrockProtocols");
             JsonElement available = response.get("operatorActionAvailable");
             operatorActionAvailable = available != null && available.isJsonPrimitive()
                     && available.getAsJsonPrimitive().isBoolean() && available.getAsBoolean();

@@ -59,8 +59,10 @@ players actually connected to this runtime. A changed count can wake a scheduled
 check-in even if the listing is unchanged; a new timestamp alone causes no extra
 network traffic. Listing metadata is `ServerStatus(name, level, maxPlayerCount,
 gameType)`; the provider lists the connected count and owns the advertised game
-protocol and version. Local `drain()` and `close()` manage the
-listener; provider responses do not command it.
+protocol and version. It may take them from `bedrockProtocols`, the
+`BedrockProtocols(accepted, version)` a host configures: exactly the protocols it
+accepts at login, sent with each host profile. Local `drain()` and `close()` manage
+the listener; provider responses do not command it.
 
 With `gameOutcomes`, the application calls `reportGameOutcome` once for each admitted
 player when the game admits or rejects them. It never blocks and returns false when

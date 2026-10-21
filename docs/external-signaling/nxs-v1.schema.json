@@ -633,6 +633,17 @@
             }
           ]
         },
+        "bedrockProtocols": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/bedrockProtocols"
+            }
+          ],
+          "description": "The Bedrock protocols the host accepts at login. Send it with the initial host profile and whenever it changes; null clears an earlier report and omission preserves the value."
+        },
         "serverStatus": {
           "$ref": "#/$defs/serverStatus",
           "description": "The public listing. Send it with every heartbeat while it applies; providers list the sum of connectedPlayers.count."
@@ -1167,6 +1178,36 @@
         }
       ],
       "description": "Where the operator says the host runs; null clears an earlier declaration."
+    },
+    "bedrockProtocols": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "version"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "description": "Exactly the accepted protocols, not a range, in strictly ascending order, which JSON Schema expresses only as uniqueness."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+          },
+          "description": "The game version of the highest accepted protocol."
+        }
+      }
     },
     "operatorAction": {
       "type": "object",

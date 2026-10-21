@@ -291,7 +291,7 @@ registration.
 ## `heartbeat`
 
 Required fields: `acceptingPlayers,capacity,connectedPlayers`.
-Optional observations: `software,location,serverStatus,gameOutcomes,extensions`.
+Optional observations: `software,location,bedrockProtocols,serverStatus,gameOutcomes,extensions`.
 Profile/key exchange: `hostProfile,hostProfileRevision,installedAdmissionKeyIds,admissionKeyRequestId`.
 
 - `acceptingPlayers` is the host's willingness and ability to accept new players.
@@ -316,9 +316,17 @@ Profile/key exchange: `hostProfile,hostProfileRevision,installedAdmissionKeyIds,
   profile and whenever it changes. `null` clears an earlier declaration and
   omission preserves the value. Without one, providers estimate location from the
   connection; they may let operators override either.
+- `bedrockProtocols` is `{accepted,version}` or `null`: the Bedrock protocols the
+  host accepts at login. `accepted` lists 1 to 512 protocol numbers, each 1 to
+  2147483647, in strictly ascending order. It is exact rather than a range, since
+  protocol numbers have gaps and a host may drop one. `version` is the game version
+  of the highest accepted protocol, 1 to 64 Unicode characters without control
+  characters or unpaired surrogates. Send it with the initial profile and whenever
+  it changes. `null` clears an earlier report and omission preserves the value.
 - `serverStatus` carries the public listing: `name,level,maxPlayerCount,gameType`.
   Providers list the sum of `connectedPlayers.count` over the hosts behind a
-  listing, and own its advertised protocol and version. Send `serverStatus` with
+  listing, and own its advertised protocol and version, which they may take from
+  `bedrockProtocols`. Send `serverStatus` with
   every heartbeat while it applies; an omitted listing expires with the previous
   heartbeat's lease. Providers may ignore host listing metadata when several hosts
   share a public endpoint. `name` is 1 to 128 Unicode characters and `level` is 0

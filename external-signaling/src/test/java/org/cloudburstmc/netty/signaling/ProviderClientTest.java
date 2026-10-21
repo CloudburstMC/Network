@@ -829,6 +829,66 @@ class ProviderClientTest {
     }
 
     @Test
+    void bedrockProtocolsGoWithEachProfileOnlyWhenConfigured(@TempDir Path path) throws Exception {
+        String member = "\"bedrockProtocols\":{\"accepted\":[818,819,2225],\"version\":\"26.60\"}";
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example")
+                            .bedrockProtocols(new ProviderClient.BedrockProtocols(List.of(818, 819, 2225), "26.60"))
+                            .build(),
+                    new ProviderStateStore(path.resolve("configured")), new FakeTransport(),
+                    () -> new ServerStatus("Example", "", 40, 0),
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                String initial = lastProfileHeartbeat(stub);
+                assertTrue(initial.contains("\"location\":null," + member + ",\"serverStatus\":"), initial);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertFalse(stub.lastHeartbeat.has("hostProfile"));
+                assertFalse(stub.lastHeartbeat.has("bedrockProtocols"), "Acknowledged protocols are not repeated");
+                int published = stub.profileRevision;
+                long profiles = profileHeartbeats(stub).count();
+                stub.forgetProfile = true;
+                eventually(() -> !stub.forgetProfile && stub.profileRevision == published + 1);
+                assertTrue(profileHeartbeats(stub).count() > profiles);
+                assertTrue(lastProfileHeartbeat(stub).contains(member), "A new profile carries them again");
+                for (String body : stub.heartbeatBodies) {
+                    if (body.contains("\"hostProfile\":")) {
+                        assertTrue(body.contains(member), body);
+                    }
+                }
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path.resolve("unconfigured")), new FakeTransport(),
+                    () -> new ServerStatus("Example", "", 40, 0),
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                // The same bytes as before the member existed
+                String initial = lastProfileHeartbeat(stub);
+                assertTrue(initial.contains("\"location\":null,\"serverStatus\":"), initial);
+                assertTrue(stub.heartbeatBodies.stream().noneMatch(body -> body.contains("bedrockProtocols")));
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static java.util.stream.Stream<String> profileHeartbeats(IndependentProviderStub stub) {
+        return stub.heartbeatBodies.stream().filter(body -> body.contains("\"hostProfile\":"));
+    }
+
+    private static String lastProfileHeartbeat(IndependentProviderStub stub) {
+        return profileHeartbeats(stub).reduce((first, second) -> second).orElseThrow();
+    }
+
+    @Test
     void stopsWithoutDeregisteringWhenAnotherProcessTakesOver(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             FakeTransport host = new FakeTransport();
