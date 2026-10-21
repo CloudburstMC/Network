@@ -34,6 +34,8 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import net.jodah.expiringmap.ExpirationPolicy;
+import net.jodah.expiringmap.ExpiringMap;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -47,10 +49,18 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscovery.class);
     /** Clients read each name behind a one byte length. */
     static final int MAX_NAME_BYTES = 255;
+    /** How long a peer's address is kept after its last packet. Clients ask every 2 seconds. */
+    private static final long PEER_TTL_SECONDS = 30;
+    /** Far more peers than a network holds, so packets anyone can craft cannot grow the table without end. */
+    private static final int MAX_PEERS = 1024;
 
     private final long networkId;
     private final Map<String, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
-    private final Map<Long, InetSocketAddress> peerAddresses = new ConcurrentHashMap<>();
+    private final Map<Long, InetSocketAddress> peerAddresses = ExpiringMap.builder()
+            .maxSize(MAX_PEERS)
+            .expiration(PEER_TTL_SECONDS, TimeUnit.SECONDS)
+            .expirationPolicy(ExpirationPolicy.ACCESSED)
+            .build();
     private Channel channel;
     private EventLoopGroup group;
     private volatile MotdProvider motdProvider = (host, remoteAddress, client) -> null;
