@@ -30,7 +30,6 @@ import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.EventLoop;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jspecify.annotations.Nullable;
@@ -54,8 +53,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.function.Consumer;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.RejectedExecutionException;
 
 public abstract class NetherNetChannel extends AbstractChannel implements TransportChannel {
@@ -87,10 +84,9 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     protected volatile SocketAddress remoteAddress;
     protected volatile SocketAddress localAddress;
 
-    protected DataChannel reliableChannel;
+    /** Read off the loop by {@link #isActive}, so it cannot be plain. */
+    protected volatile DataChannel reliableChannel;
     protected DataChannel unreliableChannel;
-
-    protected final Queue<Object> pendingWrites = new ConcurrentLinkedQueue<>();
 
     private volatile Reader reliableReader;
     private volatile Reader unreliableReader;
@@ -292,11 +288,10 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         this.reliableChannel = reliable;
         this.unreliableChannel = unreliable;
 
-        this.reliableChannel.onOpen.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
-        this.reliableChannel.onClosed.register(channel -> eventLoop().execute(this::onDataChannelStateChange));
-
-        if (reliableChannel.isOpen()) {
-            eventLoop().execute(this::onDataChannelStateChange);
+        reliable.onClosed.register(channel -> closeFromTransport());
+        if (reliable.isClosed()) {
+            // Closed before the listener could hear it; queued, as the caller may be about to fire channelActive
+            eventLoop().execute(this::closeFromTransport);
         }
     }
 
@@ -359,17 +354,6 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         } catch (RuntimeException | Error e) {
             packet.release();
             throw e;
-        }
-    }
-
-    private void onDataChannelStateChange() {
-        if (isActive()) {
-            if (!pendingWrites.isEmpty()) {
-                pipeline().fireChannelWritabilityChanged();
-                unsafe().flush();
-            }
-        } else if (reliableChannel != null && reliableChannel.isClosed()) {
-            closeFromTransport();
         }
     }
 
@@ -451,27 +435,8 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
     @Override
     protected void doWrite(ChannelOutboundBuffer in) throws Exception {
-        if (!isActive()) {
-            Object msg;
-            while ((msg = in.current()) != null) {
-                ReferenceCountUtil.retain(msg);
-                pendingWrites.add(msg);
-                in.remove();
-            }
-            return;
-        }
-
         Object msg = null;
         try {
-            while (!pendingWrites.isEmpty()) {
-                Object pending = pendingWrites.poll();
-                try {
-                    writeInternal(pending);
-                } finally {
-                    ReferenceCountUtil.release(pending);
-                }
-            }
-
             while ((msg = in.current()) != null) {
                 writeInternal(msg);
                 in.remove();
@@ -499,6 +464,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         }
 
         if (reliableChannel.isClosed()) {
+            // Gone underneath this channel, whose close is already on its way
             return;
         }
 
@@ -597,11 +563,6 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     protected void doClose() throws Exception {
         this.open = false;
         closeWebRTC();
-
-        Object msg;
-        while ((msg = pendingWrites.poll()) != null) {
-            ReferenceCountUtil.release(msg);
-        }
     }
 
     /**
@@ -707,7 +668,9 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
     @Override
     public boolean isActive() {
-        return isOpen() && this.reliableChannel != null && this.reliableChannel.isOpen();
+        // Not the data channel's own state, which changes off the loop: a flush would find this channel open but
+        // inactive and fail, and the close that follows would skip channelInactive
+        return isOpen() && this.reliableChannel != null;
     }
 
     @Override

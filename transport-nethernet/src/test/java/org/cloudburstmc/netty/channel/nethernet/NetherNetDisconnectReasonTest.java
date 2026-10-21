@@ -17,7 +17,9 @@
 package org.cloudburstmc.netty.channel.nethernet;
 
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.EventLoopGroup;
@@ -31,8 +33,10 @@ import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.PeerConnection;
 
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -88,6 +92,55 @@ class NetherNetDisconnectReasonTest {
         }
     }
 
+    /** Netty fires channelInactive only for a channel that is still active when it closes. */
+    @Test
+    void aRemoteEndingTheConnectionFiresChannelInactive() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            DataChannel reliable = client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            NetherNetChildChannel child = server.connect(client);
+            CountDownLatch inactive = inactiveLatch(child);
+
+            reliable.close();
+
+            assertEquals(TransportDisconnectReason.CLOSED_BY_REMOTE_PEER, server.eventOnceClosed(child));
+            assertTrue(inactive.await(2, TimeUnit.SECONDS), "closed without channelInactive");
+        }
+    }
+
+    /**
+     * A flush that lands after the remote closed but before that reaches the loop, as a host's batch
+     * flush does when a player quits. It used to fail with NotYetConnectedException.
+     */
+    @Test
+    void aFlushBeforeTheRemoteCloseReachesTheLoopIsDroppedQuietly() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            DataChannel reliable = client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            NetherNetChildChannel child = server.connect(client);
+            AtomicBoolean closedNatively = new AtomicBoolean();
+
+            // Holds the loop, so the close queues behind the flush
+            ChannelFuture write = child.eventLoop().submit(() -> {
+                reliable.close();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (!child.reliableChannel.isClosed() && System.nanoTime() < deadline) {
+                    Thread.onSpinWait();
+                }
+                closedNatively.set(child.reliableChannel.isClosed());
+                return child.writeAndFlush(Unpooled.wrappedBuffer(new byte[]{1}));
+            }).get(10, TimeUnit.SECONDS);
+
+            assertTrue(closedNatively.get(), "the remote close never arrived");
+            assertNull(write.cause());
+            assertEquals(TransportDisconnectReason.CLOSED_BY_REMOTE_PEER, server.eventOnceClosed(child));
+        }
+    }
+
     /** A client channel activates on its own, which used to leave it never reporting a reason. */
     @Test
     void aClientHearsTheServerEndingTheConnection() throws Exception {
@@ -109,6 +162,23 @@ class NetherNetDisconnectReasonTest {
     }
 
     @Test
+    void aClientFiresChannelInactiveWhenTheServerEndsTheConnection() throws Exception {
+        EventLoopGroup group = new NioEventLoopGroup(1);
+        try (var server = new NetherNetTestServer()) {
+            server.bind();
+            Channel client = connectClient(group, server, new LinkedBlockingQueue<>());
+            CountDownLatch inactive = inactiveLatch(client);
+
+            server.active().close().sync();
+
+            assertTrue(client.closeFuture().await(10, TimeUnit.SECONDS), "the client never closed");
+            assertTrue(inactive.await(2, TimeUnit.SECONDS), "closed without channelInactive");
+        } finally {
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
+    @Test
     void aClientClosingItselfTellsItsPipelineNothing() throws Exception {
         EventLoopGroup group = new NioEventLoopGroup(1);
         try (var server = new NetherNetTestServer()) {
@@ -122,6 +192,19 @@ class NetherNetDisconnectReasonTest {
         } finally {
             group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
         }
+    }
+
+    /** Counts down once {@code channel} fires channelInactive. */
+    private static CountDownLatch inactiveLatch(Channel channel) throws InterruptedException {
+        CountDownLatch inactive = new CountDownLatch(1);
+        channel.eventLoop().submit(() -> channel.pipeline().addFirst(new ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelInactive(ChannelHandlerContext ctx) {
+                inactive.countDown();
+                ctx.fireChannelInactive();
+            }
+        })).sync();
+        return inactive;
     }
 
     /** A real client channel joined to the test server, whose user events land in {@code events}. */
