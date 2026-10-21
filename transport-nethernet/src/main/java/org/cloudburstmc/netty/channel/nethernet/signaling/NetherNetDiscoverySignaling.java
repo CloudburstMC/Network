@@ -17,22 +17,29 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
+import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
+import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jose4j.jwt.JwtClaims;
 import org.jspecify.annotations.Nullable;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, NetherNetServerSignaling {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscoverySignaling.class);
+    private static final String IDENTITY_ATTRIBUTE = "a=identity:";
 
     private final NetherNetDiscovery discovery;
     private final InetSocketAddress bindAddress;
@@ -41,6 +48,9 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     // State captured after connect
     private volatile InetSocketAddress remoteAddress;
     private final AtomicReference<String> discoveredServerId = new AtomicReference<>(null);
+
+    private volatile TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
+    private volatile @Nullable OperatorIdentity serverIdentity;
 
     /**
      * Creates a NetherNetDiscoverySignaling with a random local Network ID and binds to an ephemeral port.
@@ -130,11 +140,54 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
                 this.discovery.bind(bindAddress);
             }
         }
+        // Fetches the trust anchor's keys now rather than under the first join
+        CompletableFuture.runAsync(this.tokenTrust::prepare);
+    }
+
+    /**
+     * Sets who must have signed the token in a join's identity assertion, {@link TokenTrust#MINECRAFT_AUTH}
+     * unless set. A join whose assertion does not hold is dropped. One without an assertion is handed over
+     * without a player, leaving whether to admit it to the host.
+     */
+    public void setTokenTrust(TokenTrust tokenTrust) {
+        this.tokenTrust = Objects.requireNonNull(tokenTrust);
+    }
+
+    /**
+     * Sets the identity answers are signed with, which the server channel reads when it is created. Without
+     * one each channel makes its own, see {@link NetherNetServerSignaling#serverIdentity}.
+     */
+    public void setServerIdentity(@Nullable OperatorIdentity identity) {
+        this.serverIdentity = identity;
+    }
+
+    @Override
+    public @Nullable OperatorIdentity serverIdentity() {
+        return this.serverIdentity;
     }
 
     @Override
     public void setNewConnectionHandler(NetherNetServerSignaling.NewConnectionHandler handler) {
-        this.discovery.setNewConnectionHandler(handler);
+        this.discovery.setNewConnectionHandler((connectionId, remoteNetworkId, offer, address, player) ->
+                admit(handler, connectionId, remoteNetworkId, offer, address));
+    }
+
+    /** Hands a join over, with the player its identity assertion names when it carries one that holds. */
+    private void admit(NetherNetServerSignaling.NewConnectionHandler handler, String connectionId,
+                       String remoteNetworkId, String offer, @Nullable InetSocketAddress address) {
+        PlayerInfo player = null;
+        if (offer.lines().anyMatch(line -> line.startsWith(IDENTITY_ATTRIBUTE))) {
+            try {
+                JwtClaims claims = IdentityUtils.validateSdp(offer, this.tokenTrust);
+                player = new PlayerInfo(claims.getClaimValueAsString("xid"), claims.getClaimValueAsString("xname"),
+                        remoteNetworkId, address, null, claims);
+            } catch (Exception e) {
+                log.debug("Dropped LAN join {} from {}, its identity does not hold: {}", connectionId, address,
+                        e.toString());
+                return;
+            }
+        }
+        handler.onConnect(connectionId, remoteNetworkId, offer, address, player);
     }
 
     @Override
