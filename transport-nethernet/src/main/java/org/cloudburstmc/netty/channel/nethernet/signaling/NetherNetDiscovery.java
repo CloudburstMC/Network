@@ -21,6 +21,7 @@ import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.SignalHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -36,7 +37,6 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +44,8 @@ import java.util.function.BiConsumer;
 
 public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPacket> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscovery.class);
+    /** Clients read each name behind a one byte length. */
+    static final int MAX_NAME_BYTES = 255;
 
     private final long networkId;
     private final Map<String, SignalHandler> signalHandlers = new ConcurrentHashMap<>();
@@ -106,31 +108,44 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
     }
 
     public void setPongData(PongData data) {
+        this.pongData = encodePong(data);
+    }
+
+    /** The pong as clients read it: version 4 server data, hex encoded behind its length. */
+    static byte[] encodePong(PongData data) {
         ByteBuf buf = Unpooled.buffer();
-        buf.writeByte(4); // Version
-        writeString(buf, data.serverName());
-        writeString(buf, data.levelName());
-        buf.writeByte(data.gameType() << 1);
-        buf.writeIntLE(data.playerCount());
-        buf.writeIntLE(data.maxPlayerCount());
-        buf.writeBoolean(data.isEditorWorld());
-        buf.writeBoolean(data.isHardcore());
-        buf.writeByte(data.transportLayer() << 1);
-        buf.writeByte(data.connectionType() << 1);
-        byte[] binaryData = new byte[buf.readableBytes()];
-        buf.readBytes(binaryData);
-        buf.release();
+        try {
+            buf.writeByte(4); // Version
+            writeName(buf, data.serverName());
+            writeName(buf, data.levelName());
+            buf.writeByte(data.gameType() << 1);
+            // Clients leave out a world nobody plays on, which a server is until someone joins
+            buf.writeIntLE(Math.max(1, data.playerCount()));
+            buf.writeIntLE(data.maxPlayerCount());
+            buf.writeBoolean(data.isEditorWorld());
+            buf.writeBoolean(data.isHardcore());
+            buf.writeByte(data.transportLayer() << 1);
+            buf.writeByte(data.connectionType() << 1);
+            byte[] hex = ByteBufUtil.hexDump(buf).getBytes(StandardCharsets.US_ASCII);
 
-        String hex = HexFormat.of().formatHex(binaryData);
-        byte[] hexBytes = hex.getBytes(StandardCharsets.UTF_8);
+            byte[] pong = new byte[Integer.BYTES + hex.length];
+            Unpooled.wrappedBuffer(pong).setIntLE(0, hex.length).setBytes(Integer.BYTES, hex);
+            return pong;
+        } finally {
+            buf.release();
+        }
+    }
 
-        ByteBuf response = Unpooled.buffer();
-        response.writeIntLE(hexBytes.length);
-        response.writeBytes(hexBytes);
-
-        this.pongData = new byte[response.readableBytes()];
-        response.readBytes(this.pongData);
-        response.release();
+    /** A name behind its one byte length, cut on a character boundary to fit. */
+    private static void writeName(ByteBuf buf, String name) {
+        byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
+        int length = Math.min(bytes.length, MAX_NAME_BYTES);
+        // Backs off continuation bytes, so a character is dropped whole rather than cut
+        while (length < bytes.length && (bytes[length] & 0xC0) == 0x80) {
+            length--;
+        }
+        buf.writeByte(length);
+        buf.writeBytes(bytes, 0, length);
     }
 
     public void registerSignalHandler(String connectionId, SignalHandler handler) {
@@ -322,19 +337,5 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
     public boolean isActive() {
         return channel != null && channel.isActive();
-    }
-
-    private void writeString(ByteBuf buf, String s) {
-        byte[] b = s.getBytes(StandardCharsets.UTF_8);
-        this.writeUnsignedVarInt(buf, b.length);
-        buf.writeBytes(b);
-    }
-
-    private void writeUnsignedVarInt(ByteBuf buf, int value) {
-        while ((value & 0xFFFFFF80) != 0) {
-            buf.writeByte((byte) ((value & 0x7F) | 0x80));
-            value >>>= 7;
-        }
-        buf.writeByte((byte) value);
     }
 }
