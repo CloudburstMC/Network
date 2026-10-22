@@ -83,6 +83,8 @@ public class NetherNetConstants {
     public static final String UNRELIABLE_CHANNEL_LABEL = "UnreliableDataChannel";
 
     private static final byte[] KEY_BYTES;
+    /** The longest a discovery packet is declared, by clients and BDS alike: a signal's longest, behind its header. */
+    private static final int MAX_DECLARED_DISCOVERY_LENGTH = 1172;
 
     static {
         try {
@@ -109,7 +111,8 @@ public class NetherNetConstants {
     public static byte[] encryptDiscoveryPacket(ByteBuf packet) throws Exception {
         int len = packet.readableBytes() + 2;
         ByteBuf payload = Unpooled.buffer(len);
-        payload.writeShortLE(len);
+        // Capped as clients and BDS declare it, with the whole packet following anyway
+        payload.writeShortLE(Math.min(len, MAX_DECLARED_DISCOVERY_LENGTH));
         payload.writeBytes(packet);
 
         byte[] payloadBytes = new byte[payload.readableBytes()];

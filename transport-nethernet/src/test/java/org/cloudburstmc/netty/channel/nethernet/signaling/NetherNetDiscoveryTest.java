@@ -16,12 +16,17 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.junit.jupiter.api.Test;
 
 import java.net.BindException;
+import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -112,5 +117,59 @@ public class NetherNetDiscoveryTest {
             server.close();
             client.close();
         }
+    }
+
+    /** A 1.26.51 client's offers run to about 2000 bytes, and it declares 1140 of them, as BDS does. */
+    @Test
+    void aSignalLongerThanItsDeclaredLengthArrivesWhole() throws Exception {
+        String offer = longOffer();
+        BlockingQueue<String> offers = new LinkedBlockingQueue<>();
+        NetherNetDiscovery server = new NetherNetDiscovery(1);
+        NetherNetDiscovery client = new NetherNetDiscovery(2);
+        try {
+            server.setNewConnectionHandler((connectionId, remoteNetworkId, sdp, address, player) -> offers.add(sdp));
+            server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+            client.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+
+            client.sendSignal(server.localAddress(), 1, NetherNetConstants.buildSignalConnectRequest("7", offer));
+
+            assertEquals(offer, offers.poll(5, TimeUnit.SECONDS));
+        } finally {
+            server.close();
+            client.close();
+        }
+    }
+
+    @Test
+    void aLongSignalDeclaresTheLengthBdsDoes() throws Exception {
+        String signal = NetherNetConstants.buildSignalConnectRequest("7", longOffer());
+        NetherNetDiscovery client = new NetherNetDiscovery(2);
+        try (DatagramSocket peer = new DatagramSocket(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0))) {
+            peer.setSoTimeout(5000);
+            client.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+
+            client.sendSignal((InetSocketAddress) peer.getLocalSocketAddress(), 1, signal);
+            DatagramPacket packet = new DatagramPacket(new byte[4096], 4096);
+            peer.receive(packet);
+
+            ByteBuf data = NetherNetConstants.decryptDiscoveryPacket(
+                    Unpooled.wrappedBuffer(packet.getData(), 0, packet.getLength()));
+            data.skipBytes(2 + 8 + 8 + 8); // Packet ID, sender, padding, recipient
+            assertEquals(NetherNetDiscovery.MAX_DECLARED_SIGNAL_LENGTH, data.readIntLE());
+            assertEquals(signal, data.toString(StandardCharsets.UTF_8));
+            data.release();
+        } finally {
+            client.close();
+        }
+    }
+
+    /** An offer listing as many candidates as a host with VPNs and container bridges does. */
+    private static String longOffer() {
+        StringBuilder offer = new StringBuilder("v=0\r\ns=-\r\nt=0 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n");
+        for (int i = 0; i < 20; i++) {
+            offer.append("a=candidate:").append(1000000 + i).append(" 1 udp 2122194687 10.0.0.").append(i)
+                    .append(" 40000 typ host generation 0 network-id ").append(i).append("\r\n");
+        }
+        return offer.append("a=setup:actpass\r\na=mid:0\r\na=sctp-port:5000\r\n").toString();
     }
 }

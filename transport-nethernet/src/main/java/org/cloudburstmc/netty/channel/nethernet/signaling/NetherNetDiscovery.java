@@ -47,6 +47,11 @@ import java.util.function.BiConsumer;
 
 public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPacket> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscovery.class);
+    /**
+     * The longest a signal is declared, by clients and BDS alike. A longer one, such as an offer listing many
+     * candidates, runs on to the end of the packet.
+     */
+    static final int MAX_DECLARED_SIGNAL_LENGTH = 1140;
     /** How long a peer's address is kept after its last packet. Clients ask every 2 seconds. */
     private static final long PEER_TTL_SECONDS = 30;
     /** Far more peers than a network holds, so packets anyone can craft cannot grow the table without end. */
@@ -162,7 +167,8 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
         buf.writeLongLE(targetNetworkId); // Recipient ID
         byte[] dataBytes = data.getBytes(StandardCharsets.UTF_8);
-        buf.writeIntLE(dataBytes.length);
+        // Capped as clients and BDS declare it, with the whole signal following anyway
+        buf.writeIntLE(Math.min(dataBytes.length, MAX_DECLARED_SIGNAL_LENGTH));
         buf.writeBytes(dataBytes);
 
         sendPacket(buf, recipient);
@@ -276,7 +282,8 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             return;
         }
 
-        String messageData = data.readCharSequence(len, StandardCharsets.UTF_8).toString();
+        int length = len < MAX_DECLARED_SIGNAL_LENGTH ? len : data.readableBytes();
+        String messageData = data.readCharSequence(length, StandardCharsets.UTF_8).toString();
         if ("Ping".equals(messageData)) {
             return;
         }
