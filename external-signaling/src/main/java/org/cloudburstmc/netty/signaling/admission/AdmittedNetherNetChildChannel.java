@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
@@ -38,7 +39,10 @@ import java.util.function.Consumer;
  * Native admission child with bounded queues and both NetherNet channel semantics.
  */
 public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
-    public static final int WRITE_LIMIT = 1 << 20;
+    /** Past this many bytes waiting to be sent the connection ends with QUEUE_TOO_LONG, RakNet's default limit. */
+    public static final int WRITE_LIMIT = 64 << 20;
+    /** Where writability turns off and back on, so a producer that checks it holds back long before the limit. */
+    private static final WriteBufferWaterMark WATER_MARK = new WriteBufferWaterMark(1 << 18, 1 << 19);
     public static final int NATIVE_WRITE_LIMIT = 1 << 19;
     public static final int INBOUND_FRAMES = 128;
     /** Bounds queued frames by size too, at what {@link #INBOUND_FRAMES} frames of {@code FRAME_LIMIT} bytes hold. */
@@ -56,7 +60,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     private final Consumer<PeerConnection> nativeCloser;
     private ScheduledFuture<?> tick;
     private volatile boolean installed;
-    private boolean activated, readDemand;
+    private boolean activated, readDemand, queueOverflowed;
 
     public AdmittedNetherNetChildChannel(Channel parent, PeerConnection peer, InetSocketAddress remote,
                                          InetSocketAddress local) {
@@ -67,7 +71,7 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                                   InetSocketAddress local, Consumer<PeerConnection> nativeCloser) {
         super(parent, peer, remote, local);
         this.nativeCloser = nativeCloser;
-        config().setWriteBufferWaterMark(new WriteBufferWaterMark(WRITE_LIMIT / 4, WRITE_LIMIT / 2));
+        config().setWriteBufferWaterMark(WATER_MARK);
     }
 
     @Override
@@ -227,8 +231,13 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
         NetherNetConstants.segmentCount(size, SEGMENT_PAYLOAD);
 
         ChannelOutboundBuffer out = unsafe().outboundBuffer();
-        // A message too large to share the queue is taken once at most half of it is used
-        if (out == null || out.totalPendingWriteBytes() + Math.min(size + 128, WRITE_LIMIT / 2) > WRITE_LIMIT) {
+        if (out != null && out.totalPendingWriteBytes() + size > WRITE_LIMIT) {
+            // Refusing one message would leave a gap in the ordered stream, so the connection ends instead
+            if (!queueOverflowed) {
+                queueOverflowed = true;
+                pipeline().fireUserEventTriggered(TransportDisconnectReason.QUEUE_TOO_LONG);
+                close();
+            }
             throw new IllegalStateException("NetherNet outbound queue full");
         }
 

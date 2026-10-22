@@ -2,6 +2,7 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.buffer.*;
 import io.netty.channel.*;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -39,7 +40,7 @@ class NativeAdmissionWriteTest {
     }
 
     @Test
-    void preHandshakeWritesAreBoundedPromisesFailAndBuffersReleaseOnClose() throws Exception {
+    void preHandshakeWritesWaitForTheNativeSendAndReleaseOnClose() throws Exception {
         var group = new DefaultEventLoopGroup(1);
         var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2));
         List<ByteBuf> buffers = new ArrayList<>();
@@ -53,16 +54,8 @@ class NativeAdmissionWriteTest {
             }
             group.next().submit(() -> {
             }).sync();
-            long pending = channel.unsafe().outboundBuffer().totalPendingWriteBytes();
-            assertTrue(pending > 0 && pending <= AdmittedNetherNetChildChannel.WRITE_LIMIT, "pending=" + pending);
-            assertFalse(channel.isWritable());
-            assertTrue(writes.stream().anyMatch(f -> f.isDone() && !f.isSuccess()));
-            assertTrue(writes.stream().anyMatch(f -> !f.isDone())); // acceptance waits for actual native send
-            ByteBuf unrel = Unpooled.buffer(10_000).writeZero(10_000);
-            buffers.add(unrel);
-            ChannelFuture oversized = channel.write(new NetherNetPacket(unrel, false)).await();
-            assertFalse(oversized.isSuccess());
-            assertInstanceOf(IllegalArgumentException.class, oversized.cause());
+            assertFalse(channel.isWritable(), "past the high water mark");
+            assertTrue(writes.stream().noneMatch(ChannelFuture::isDone)); // acceptance waits for actual native send
             channel.close().sync();
             channel.eventLoop().submit(() -> {
             }).sync();
@@ -80,29 +73,59 @@ class NativeAdmissionWriteTest {
     }
 
     @Test
-    @Timeout(15)
-    void aMessageTooLargeToShareTheQueueIsTakenWhileItIsAtMostHalfUsed() throws Exception {
+    void oversizedMessagesAreRefusedWithoutEndingTheConnection() throws Exception {
         var group = new DefaultEventLoopGroup(1);
         var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2));
         int largest = NetherNetConstants.MAX_SEGMENTS * (NetherNetFrameDecoder.FRAME_LIMIT - 1);
-        List<ByteBuf> buffers = List.of(Unpooled.buffer(largest + 1).writerIndex(largest + 1),
-                Unpooled.buffer(largest).writerIndex(largest), Unpooled.buffer(largest).writerIndex(largest),
-                Unpooled.buffer(1).writeByte(1));
+        ByteBuf reliable = Unpooled.buffer(largest + 1).writerIndex(largest + 1);
+        ByteBuf unreliable = Unpooled.buffer(10_000).writeZero(10_000);
         try {
             group.register(channel).sync();
-            // Written from the event loop, as encoded batches are, so no write is still in flight
+            assertInstanceOf(IllegalArgumentException.class, channel.write(reliable).await().cause());
+            assertInstanceOf(IllegalArgumentException.class,
+                    channel.write(new NetherNetPacket(unreliable, false)).await().cause());
+            assertTrue(channel.isOpen());
+            assertEquals(0, reliable.refCnt());
+            assertEquals(0, unreliable.refCnt());
+        } finally {
+            channel.close().awaitUninterruptibly();
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
+    @Test
+    @Timeout(15)
+    void overflowingTheSendQueueEndsTheConnectionAsQueueTooLong() throws Exception {
+        var group = new DefaultEventLoopGroup(1);
+        var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2));
+        List<Object> events = new ArrayList<>();
+        channel.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+            @Override
+            public void userEventTriggered(ChannelHandlerContext ctx, Object event) {
+                events.add(event);
+            }
+        });
+        int largest = NetherNetConstants.MAX_SEGMENTS * (NetherNetFrameDecoder.FRAME_LIMIT - 1);
+        // One array behind every message, so the queue fills without holding its limit in memory
+        byte[] shared = new byte[largest];
+        int count = AdmittedNetherNetChildChannel.WRITE_LIMIT / largest + 4;
+        List<ByteBuf> buffers = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            buffers.add(Unpooled.wrappedBuffer(shared));
+        }
+        try {
+            group.register(channel).sync();
+            // Written from the event loop, as encoded batches are, so the burst outruns any close
             List<ChannelFuture> writes = channel.eventLoop().submit(() -> buffers.stream().map(channel::write).toList())
                     .get(5, TimeUnit.SECONDS);
-            ChannelFuture large = writes.get(1);
 
-            assertInstanceOf(IllegalArgumentException.class, writes.get(0).cause());
-            assertFalse(large.isDone()); // acceptance waits for actual native send
-            assertInstanceOf(IllegalStateException.class, writes.get(2).cause());
-            assertInstanceOf(IllegalStateException.class, writes.get(3).cause());
-
-            channel.close().sync();
-            assertTrue(large.await(5, TimeUnit.SECONDS));
-            assertFalse(large.isSuccess());
+            assertTrue(channel.closeFuture().await(5, TimeUnit.SECONDS));
+            assertEquals(List.of(TransportDisconnectReason.QUEUE_TOO_LONG), events);
+            assertTrue(writes.stream().anyMatch(write -> write.cause() instanceof IllegalStateException));
+            for (ChannelFuture write : writes) {
+                assertTrue(write.await(5, TimeUnit.SECONDS));
+                assertFalse(write.isSuccess());
+            }
             for (ByteBuf buffer : buffers) {
                 assertEquals(0, buffer.refCnt());
             }
