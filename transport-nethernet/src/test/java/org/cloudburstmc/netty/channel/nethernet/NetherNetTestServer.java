@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetServerSignaling;
 import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import tel.schich.libdatachannel.*;
@@ -43,11 +44,22 @@ final class NetherNetTestServer implements AutoCloseable {
     private final CompletableFuture<NetherNetChildChannel> active = new CompletableFuture<>();
     /** User events and errors that reached the end of the child's pipeline. */
     final BlockingQueue<Object> childEvents = new LinkedBlockingQueue<>();
+    private final InetSocketAddress iceAddress;
+
+    NetherNetTestServer() {
+        this(null);
+    }
+
+    /** @param iceAddress A fixed ICE address every peer shares, or null for an ephemeral port each. */
+    NetherNetTestServer(InetSocketAddress iceAddress) {
+        this.iceAddress = iceAddress;
+    }
 
     record Accepted(NetherNetChildChannel child, PeerConnection peer) { }
 
     void bind() throws InterruptedException {
         new ServerBootstrap().group(group).channelFactory(() -> server)
+                .option(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, iceAddress)
                 .handler(new ChannelInboundHandlerAdapter() {
                     @Override
                     public void channelRead(ChannelHandlerContext ctx, Object message) {

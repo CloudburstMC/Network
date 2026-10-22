@@ -154,8 +154,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             return config;
         }
 
+        // Direct, so a pending listener sharing the port, such as NXS in hybrid mode, never holds these peers' checks
         return config
                 .withEnableIceUdpMux(true)
+                .withIceUdpMuxDirect(true)
                 .withPortRangeBegin(port)
                 .withPortRangeEnd(port);
     }
