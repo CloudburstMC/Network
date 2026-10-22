@@ -1,0 +1,343 @@
+/*
+ * Copyright 2026 CloudburstMC
+ *
+ * CloudburstMC licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
+ *
+ *   https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.cloudburstmc.netty.channel.nethernet;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.*;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import tel.schich.libdatachannel.*;
+import tel.schich.libdatachannel.exception.LibDataChannelException;
+
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@Timeout(15)
+class NetherNetServerOwnershipTest {
+    @Test
+    void signalingSetupFailureClosesAllocatedPeer() throws Exception {
+        assertSetupFailureClosesPeer(false);
+    }
+
+    @Test
+    void signalingCleanupFailureCannotSkipPeerDeletion() throws Exception {
+        assertSetupFailureClosesPeer(true);
+    }
+
+    private void assertSetupFailureClosesPeer(boolean failRemoval) throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            server.signaling.failSetup = true;
+            server.signaling.failRemoval = failRemoval;
+            server.bind();
+            assertPeerClosed(server, server.accept("unused"));
+        }
+    }
+
+    @Test
+    void negotiationFailureClosesAllocatedPeer() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            server.bind();
+            assertPeerClosed(server, server.accept("not an SDP offer"));
+        }
+    }
+
+    @Test
+    void handshakeTimeoutClosesRegisteredChildAndItsPeer() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.server.config().setOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS, 1);
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            var accepted = server.accept(NetherNetTestServer.offer(client));
+            assertTrue(accepted.child().isRegistered());
+            assertPeerClosed(server, accepted);
+        }
+    }
+
+    @Test
+    void closingTheServerClosesItsChildrenAndTheirPeers() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            var accepted = server.accept(NetherNetTestServer.offer(client));
+            assertTrue(accepted.child().isRegistered());
+
+            server.server.close().sync();
+            assertPeerClosed(server, accepted);
+        }
+    }
+
+    @Test
+    void joinAfterCloseCreatesNoPeer() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            server.bind();
+            server.server.close().sync();
+            server.offer("1", "unused", new InetSocketAddress("127.0.0.1", 1));
+            server.signaling.removed.get(5, TimeUnit.SECONDS);
+            assertFalse(server.anyAccepted());
+        }
+    }
+
+    @Test
+    void refusedJoinCreatesNoPeerAndAnAcceptedOneIsReleasedOnClose() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            var address = new InetSocketAddress("192.0.2.1", 19132);
+            var released = new CompletableFuture<InetSocketAddress>();
+            boolean[] allow = {false};
+            server.server.config().setOption(NetherChannelOption.NETHER_SERVER_THROTTLE, new NetherServerThrottle() {
+                @Override
+                public boolean accept(InetSocketAddress joining) {
+                    return allow[0];
+                }
+
+                @Override
+                public void closed(InetSocketAddress joined) {
+                    released.complete(joined);
+                }
+            });
+            server.bind();
+
+            server.offer("1", "unused", address);
+            server.signaling.removed.get(5, TimeUnit.SECONDS);
+            assertFalse(server.anyAccepted(), "a refused join must not create a peer");
+
+            // Negotiation fails, and the child it closes releases the address
+            allow[0] = true;
+            server.offer("2", "not an SDP offer", address);
+            assertEquals(address, released.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void joinFromAnUnknownAddressIsNotThrottled() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            server.server.config().setOption(NetherChannelOption.NETHER_SERVER_THROTTLE, new NetherServerThrottle() {
+                @Override
+                public boolean accept(InetSocketAddress joining) {
+                    return false;
+                }
+
+                @Override
+                public void closed(InetSocketAddress joined) {
+                }
+            });
+            server.bind();
+            assertPeerClosed(server, server.accept("not an SDP offer"));
+        }
+    }
+
+    @Test
+    void nonTrickleJoinWithoutIceServersConnects() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            assertTrue(server.server.config().getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG)
+                    .iceServers().isEmpty());
+            assertTrue(server.signaling.getIceServers().isEmpty());
+            DataChannel reliable = client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            assertCarriesMessages(server.connect(client), reliable);
+            assertTrue(server.signaling.sent.isEmpty(), "a non-trickle join must not trickle");
+        }
+    }
+
+    @Test
+    void trickleJoinWithoutIceServersConnects() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.signaling.trickle = true;
+            server.bind();
+            DataChannel reliable = client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            String offer = NetherNetTestServer.offer(client);
+            List<String> candidates = NetherNetTestServer.candidates(offer);
+
+            // The client's candidates all arrive before the child registers
+            var accepted = server.acceptOffLoop(NetherNetTestServer.withoutCandidates(offer), () -> {
+                for (String candidate : candidates) {
+                    server.signaling.handler.onSignal(NetherNetConstants.buildSignalCandidateAdd("1", candidate));
+                }
+            });
+
+            // The answer goes out before any of the server's candidates
+            String first = server.signaling.sent.poll(5, TimeUnit.SECONDS);
+            assertNotNull(first, "nothing trickled");
+            var answer = NetherNetConstants.parseSignal(first);
+            assertEquals(NetherNetConstants.RTC_NEGOTIATION_CONNECT_RESPONSE, answer.type());
+            client.setRemoteDescription(answer.payload(), SessionDescriptionType.ANSWER);
+            for (String sent; (sent = server.signaling.sent.poll(200, TimeUnit.MILLISECONDS)) != null; ) {
+                var candidate = NetherNetConstants.parseSignal(sent);
+                assertEquals(NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD, candidate.type());
+                client.addRemoteCandidate(candidate.payload());
+            }
+
+            NetherNetChildChannel child = server.active();
+            String applied = accepted.peer().remoteDescription();
+            for (String candidate : candidates) {
+                // candidate:<foundation> <component> <transport> <priority> <address> <port> typ ...
+                String[] fields = candidate.split(" ");
+                assertTrue(applied.contains(" " + fields[4] + " " + fields[5] + " typ "),
+                        "early candidate not applied: " + candidate);
+            }
+            assertCarriesMessages(child, reliable);
+        }
+    }
+
+    @Test
+    void pendingSignalsReplayInOrderThenPassStraightThrough() {
+        var pending = new NetherNetServerChannel.PendingSignals();
+        var expected = new ArrayList<String>();
+        for (int i = 0; i < NetherNetServerChannel.PendingSignals.MAX_PENDING; i++) {
+            pending.onSignal("s" + i);
+            expected.add("s" + i);
+        }
+        pending.onSignal("over the cap");
+        expected.add("after");
+
+        var seen = new ArrayList<String>();
+        pending.deliverTo(seen::add);
+        pending.onSignal("after");
+        assertEquals(expected, seen);
+    }
+
+    /** Opens only the reliable channel, which the server holds until the unreliable one arrives. */
+    private static DataChannel connectWithReliableOnly(NetherNetTestServer server, PeerConnection client,
+                                                       NetherNetTestServer.Accepted[] accepted) throws Exception {
+        DataChannel reliable = client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+        var open = new CompletableFuture<Void>();
+        reliable.onOpen.register(channel -> open.complete(null));
+        accepted[0] = server.accept(NetherNetTestServer.offer(client));
+        client.setRemoteDescription(server.signaling.answer.get(5, TimeUnit.SECONDS), SessionDescriptionType.ANSWER);
+        open.get(5, TimeUnit.SECONDS);
+        return reliable;
+    }
+
+    private static ByteBuffer message(int value) {
+        return ByteBuffer.allocateDirect(5).put((byte) 0).putInt(value).flip();
+    }
+
+    @Test
+    void messagesBeforeTheSecondChannelArriveAfterChannelActive() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            var accepted = new NetherNetTestServer.Accepted[1];
+            DataChannel reliable = connectWithReliableOnly(server, client, accepted);
+            var reads = new LinkedBlockingQueue<Integer>();
+            accepted[0].child().pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
+                @Override
+                protected void channelRead0(ChannelHandlerContext ctx, ByteBuf message) {
+                    reads.add(ctx.channel().isActive() ? message.readInt() : -1);
+                }
+            });
+
+            for (int i = 0; i < 3; i++) {
+                reliable.sendMessage(message(i));
+            }
+            Thread.sleep(500);
+            assertTrue(reads.isEmpty(), "delivered before channelActive");
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+
+            server.active();
+            for (int i = 0; i < 3; i++) {
+                assertEquals(i, reads.poll(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void overfillingALoneChannelClosesTheChildAndDeletesItsPeer() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            var accepted = new NetherNetTestServer.Accepted[1];
+            DataChannel reliable = connectWithReliableOnly(server, client, accepted);
+
+            // More than libdatachannel queues for a channel nobody reads
+            for (int i = 0; i < 1100; i++) {
+                try {
+                    reliable.sendMessage(message(i));
+                } catch (LibDataChannelException closedByServer) {
+                    break;
+                }
+            }
+            assertPeerClosed(server, accepted[0]);
+        }
+    }
+
+    private static void assertCarriesMessages(NetherNetChildChannel child, DataChannel reliable) throws Exception {
+        var received = new CompletableFuture<Integer>();
+        child.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
+            @Override
+            protected void channelRead0(ChannelHandlerContext ctx, ByteBuf message) {
+                received.complete(message.readInt());
+            }
+        });
+        reliable.sendMessage(ByteBuffer.allocateDirect(5).put((byte) 0).putInt(1234).flip());
+        assertEquals(1234, received.get(5, TimeUnit.SECONDS));
+        assertTrue(child.isActive());
+    }
+
+    @Test
+    void unknownAndDuplicateChannelsAreClosedAndOriginalChannelStillCarriesMessages() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            DataChannel reliable = client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            NetherNetChildChannel child = server.connect(client);
+            for (String label : new String[]{"unexpected", NetherNetConstants.RELIABLE_CHANNEL_LABEL,
+                    NetherNetConstants.UNRELIABLE_CHANNEL_LABEL}) {
+                var closed = new CompletableFuture<Void>();
+                try (DataChannel extra = client.createDataChannel(label)) {
+                    extra.onClosed.register(channel -> closed.complete(null));
+                    if (extra.isClosed()) closed.complete(null);
+                    closed.get(5, TimeUnit.SECONDS);
+                }
+            }
+            assertCarriesMessages(child, reliable);
+        }
+    }
+
+    private static void assertPeerClosed(NetherNetTestServer server, NetherNetTestServer.Accepted accepted)
+            throws Exception {
+        assertTrue(accepted.child().closeFuture().await(5, TimeUnit.SECONDS));
+        server.signaling.removed.get(5, TimeUnit.SECONDS);
+        assertNull(accepted.child().peerConnection);
+        // The peer is deleted off the event loop once its transport is torn down
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (true) {
+            try {
+                accepted.peer().createDataChannel("must-be-deleted");
+            } catch (LibDataChannelException deleted) {
+                return;
+            }
+            assertTrue(System.nanoTime() < deadline, "peer was not deleted");
+            Thread.sleep(10);
+        }
+    }
+}
