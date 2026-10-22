@@ -82,6 +82,7 @@ import javax.net.ssl.SSLException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -90,6 +91,9 @@ import java.net.UnknownHostException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -1084,10 +1088,27 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * @throws IllegalArgumentException If either file cannot be read
          */
         public Builder setHttpsPem(File certificateChain, File privateKey, @Nullable String keyPassword) {
+            // Netty reports an unreadable file as missing, so each is opened here first to say which and why
+            requireReadable(certificateChain, "certificate chain");
+            requireReadable(privateKey, "private key");
             try {
                 return setSslContext(SslContextBuilder.forServer(certificateChain, privateKey, keyPassword).build());
             } catch (Exception e) {
-                throw new IllegalArgumentException("Cannot read the TLS certificate " + certificateChain, e);
+                throw new IllegalArgumentException("Cannot use the TLS certificate chain " + certificateChain
+                        + " with the private key " + privateKey, e);
+            }
+        }
+
+        private static void requireReadable(File file, String what) {
+            try (InputStream ignored = Files.newInputStream(file.toPath())) {
+                // Readable
+            } catch (NoSuchFileException e) {
+                throw new IllegalArgumentException("The TLS " + what + " " + file + " does not exist");
+            } catch (AccessDeniedException e) {
+                throw new IllegalArgumentException("The TLS " + what + " " + file
+                        + " cannot be read with the permissions this server runs with");
+            } catch (IOException e) {
+                throw new IllegalArgumentException("Cannot read the TLS " + what + " " + file, e);
             }
         }
 

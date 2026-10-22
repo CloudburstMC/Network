@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class NetherNetHTTPServerSignalingBuilderTest {
 
@@ -154,6 +155,24 @@ class NetherNetHTTPServerSignalingBuilderTest {
                 () -> new NetherNetHTTPServerSignaling.Builder().setHttpsPem(missing, missing));
         assertThrows(IllegalArgumentException.class,
                 () -> new NetherNetHTTPServerSignaling.Builder().setHttpsPem(missing, missing, "password"));
+    }
+
+    @Test
+    void namesTheTlsFileThatCannotBeRead(@TempDir Path dir) throws Exception {
+        File chain = Files.writeString(dir.resolve("fullchain.pem"), "chain").toFile();
+        File key = dir.resolve("privkey.pem").toFile();
+
+        String missing = assertThrows(IllegalArgumentException.class,
+                () -> new NetherNetHTTPServerSignaling.Builder().setHttpsPem(chain, key)).getMessage();
+        assertTrue(missing.contains("private key " + key) && missing.contains("does not exist"), missing);
+
+        // As certbot leaves a key, readable only by root
+        Files.writeString(key.toPath(), "key");
+        assertTrue(key.setReadable(false, false));
+        assumeFalse(Files.isReadable(key.toPath()), "running as root, which reads it anyway");
+        String unreadable = assertThrows(IllegalArgumentException.class,
+                () -> new NetherNetHTTPServerSignaling.Builder().setHttpsPem(chain, key)).getMessage();
+        assertTrue(unreadable.contains("private key " + key) && unreadable.contains("cannot be read"), unreadable);
     }
 
     private static final String SDP = "v=0\r\na=candidate:1 1 udp 2130706431 203.0.113.10 19191 typ host\r\n";
