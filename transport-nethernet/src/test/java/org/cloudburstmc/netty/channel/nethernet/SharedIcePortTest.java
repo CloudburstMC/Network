@@ -56,4 +56,28 @@ class SharedIcePortTest {
             assertEquals(0, nxs.statistics().notifications());
         }
     }
+
+    /** On a wildcard ICE address, built-in peers join the listener's socket instead of failing to bind the port. */
+    @Test
+    @Timeout(20)
+    void builtInPeersShareAWildcardListenersSocket() throws Exception {
+        int port;
+        try (var available = new DatagramSocket(new InetSocketAddress(LOOPBACK, 0))) {
+            port = available.getLocalPort();
+        }
+        InetAddress any = InetAddress.getByName("0.0.0.0");
+        try (var nxs = new IceUdpMuxListener(any, port, Runnable::run, request -> CompletableFuture.completedFuture(null));
+             var server = new NetherNetTestServer(new InetSocketAddress(any, port));
+             var client = PeerConnection.createPeer(NetherNetTestServer.CONFIG.withBindAddress(LOOPBACK))) {
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            var accepted = server.accept(NetherNetTestServer.offer(client));
+            // The child sets its peer up on the event loop
+            for (int i = 0; i < 200 && nxs.statistics().agents() == 0; i++) {
+                Thread.sleep(10);
+            }
+            assertEquals(1, nxs.statistics().agents());
+            assertTrue(accepted.child().isOpen());
+        }
+    }
 }
