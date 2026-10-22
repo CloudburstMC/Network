@@ -30,16 +30,26 @@ import org.jspecify.annotations.Nullable;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, NetherNetServerSignaling {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscoverySignaling.class);
     private static final String IDENTITY_ATTRIBUTE = "a=identity:";
+    /** Joins whose identity may wait to be checked; more are dropped, so a flood cannot pile up. */
+    private static final int MAX_PENDING_VALIDATIONS = 16;
+    /** Signals kept for a join while its identity is checked, such as its trickled candidates. */
+    private static final int MAX_HELD_SIGNALS = 64;
 
     private final NetherNetDiscovery discovery;
     private final InetSocketAddress bindAddress;
@@ -51,6 +61,8 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
 
     private volatile TokenTrust tokenTrust = TokenTrust.MINECRAFT_AUTH;
     private volatile @Nullable OperatorIdentity serverIdentity;
+    /** Identity checks run here rather than on the discovery loop, since a trust anchor may fetch keys. */
+    private volatile @Nullable ExecutorService validation;
 
     /**
      * Creates a NetherNetDiscoverySignaling with a random local Network ID and binds to an ephemeral port.
@@ -140,8 +152,31 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
                 this.discovery.bind(bindAddress);
             }
         }
-        // Fetches the trust anchor's keys now rather than under the first join
-        CompletableFuture.runAsync(this.tokenTrust::prepare);
+        startValidation();
+    }
+
+    private synchronized void startValidation() {
+        if (this.validation != null) {
+            return;
+        }
+        // One thread keeps checks as serial as the loop was
+        ThreadPoolExecutor validation = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(MAX_PENDING_VALIDATIONS), task -> {
+                    Thread thread = new Thread(task, "NetherNet LAN identity validation");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        this.validation = validation;
+        prepareTrust(validation);
+    }
+
+    /** Fetches the trust anchor's keys now rather than under the first join. */
+    private void prepareTrust(ExecutorService validation) {
+        try {
+            validation.execute(() -> this.tokenTrust.prepare());
+        } catch (RejectedExecutionException closedOrBusy) {
+            // The first join fetches them instead
+        }
     }
 
     /**
@@ -151,6 +186,10 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
      */
     public void setTokenTrust(TokenTrust tokenTrust) {
         this.tokenTrust = Objects.requireNonNull(tokenTrust);
+        ExecutorService validation = this.validation;
+        if (validation != null) {
+            prepareTrust(validation);
+        }
     }
 
     /**
@@ -172,22 +211,67 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
                 admit(handler, connectionId, remoteNetworkId, offer, address));
     }
 
-    /** Hands a join over, with the player its identity assertion names when it carries one that holds. */
+    /**
+     * Hands a join over, with the player its identity assertion names when it carries one that holds. Runs on
+     * the discovery loop; a join with an assertion is checked off it and handed over back on it.
+     */
     private void admit(NetherNetServerSignaling.NewConnectionHandler handler, String connectionId,
                        String remoteNetworkId, String offer, @Nullable InetSocketAddress address) {
-        PlayerInfo player = null;
-        if (offer.lines().anyMatch(line -> line.startsWith(IDENTITY_ATTRIBUTE))) {
-            try {
-                JwtClaims claims = IdentityUtils.validateSdp(offer, this.tokenTrust);
-                player = new PlayerInfo(claims.getClaimValueAsString("xid"), claims.getClaimValueAsString("xname"),
-                        remoteNetworkId, address, null, claims);
-            } catch (Exception e) {
-                log.debug("Dropped LAN join {} from {}, its identity does not hold: {}", connectionId, address,
-                        e.toString());
-                return;
-            }
+        if (offer.lines().noneMatch(line -> line.startsWith(IDENTITY_ATTRIBUTE))) {
+            handler.onConnect(connectionId, remoteNetworkId, offer, address, null);
+            return;
         }
-        handler.onConnect(connectionId, remoteNetworkId, offer, address, player);
+        ExecutorService validation = this.validation;
+        EventLoop loop = this.discovery.eventLoop();
+        if (validation == null || loop == null) {
+            log.debug("Dropped LAN join {} from {}, signaling is not bound", connectionId, address);
+            return;
+        }
+
+        // Only this loop touches it: signals arrive on it, and the check hands back to it
+        List<String> held = new ArrayList<>();
+        this.discovery.registerSignalHandler(connectionId, signal -> {
+            if (held.size() < MAX_HELD_SIGNALS) {
+                held.add(signal);
+            }
+        });
+        TokenTrust trust = this.tokenTrust;
+        try {
+            validation.execute(() -> {
+                PlayerInfo player;
+                try {
+                    JwtClaims claims = IdentityUtils.validateSdp(offer, trust);
+                    player = new PlayerInfo(claims.getClaimValueAsString("xid"),
+                            claims.getClaimValueAsString("xname"), remoteNetworkId, address, null, claims);
+                } catch (Exception e) {
+                    log.debug("Dropped LAN join {} from {}, its identity does not hold: {}", connectionId, address,
+                            e.toString());
+                    onLoop(loop, () -> this.discovery.unregisterSignalHandler(connectionId));
+                    return;
+                }
+                onLoop(loop, () -> {
+                    this.discovery.unregisterSignalHandler(connectionId);
+                    handler.onConnect(connectionId, remoteNetworkId, offer, address, player);
+                    SignalHandler next = this.discovery.signalHandler(connectionId);
+                    if (next != null) {
+                        held.forEach(next::onSignal);
+                    }
+                });
+            });
+        } catch (RejectedExecutionException e) {
+            this.discovery.unregisterSignalHandler(connectionId);
+            log.debug("Dropped LAN join {} from {}, too many are waiting for their identity to be checked",
+                    connectionId, address);
+        }
+    }
+
+    /** Runs {@code task} on the discovery loop, unless it has shut down with the signaling. */
+    private static void onLoop(EventLoop loop, Runnable task) {
+        try {
+            loop.execute(task);
+        } catch (RejectedExecutionException closed) {
+            // Closed while the identity was checked; the join goes with it
+        }
     }
 
     @Override
@@ -260,5 +344,13 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
     @Override
     public void close() {
         this.discovery.close();
+        ExecutorService validation;
+        synchronized (this) {
+            validation = this.validation;
+            this.validation = null;
+        }
+        if (validation != null) {
+            validation.shutdownNow();
+        }
     }
 }

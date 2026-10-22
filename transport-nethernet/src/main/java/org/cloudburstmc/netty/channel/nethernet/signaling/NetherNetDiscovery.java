@@ -26,6 +26,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -355,6 +356,17 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
 
     EventLoopGroup group() {
         return this.group;
+    }
+
+    /** The loop discovery reads on, or null before it is bound. */
+    EventLoop eventLoop() {
+        Channel channel = this.channel;
+        return channel == null ? null : channel.eventLoop();
+    }
+
+    /** The handler a connection's signals go to, or null without one. */
+    SignalHandler signalHandler(String connectionId) {
+        return this.signalHandlers.get(connectionId);
     }
 
     public boolean isActive() {

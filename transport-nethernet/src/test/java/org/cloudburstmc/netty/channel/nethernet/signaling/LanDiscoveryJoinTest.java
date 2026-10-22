@@ -35,9 +35,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import tel.schich.libdatachannel.PeerConnectionConfiguration;
 
+import io.netty.util.ReferenceCountUtil;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.util.nethernet.Identity;
+import org.jose4j.jwt.JwtClaims;
+
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -109,6 +117,86 @@ class LanDiscoveryJoinTest {
         client = join(null, TokenTrust.pinnedTo(host.publicKey())).sync().channel();
 
         assertNotNull(joined.get(10, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void anIdentityIsCheckedOffTheDiscoveryLoopWhileTheJoinsSignalsWait() throws Exception {
+        CountDownLatch checking = new CountDownLatch(1), release = new CountDownLatch(1);
+        NetherNetDiscoverySignaling host = new NetherNetDiscoverySignaling(1, new InetSocketAddress(LOOPBACK, 0));
+        NetherNetDiscovery peer = new NetherNetDiscovery(2);
+        try {
+            // A trust anchor fetching its keys, which used to stall discovery for every peer
+            host.setTokenTrust(identity -> {
+                checking.countDown();
+                assertTrue(release.await(10, TimeUnit.SECONDS));
+                return TokenTrust.ANY.claims(identity);
+            });
+            host.setAdvertisementData(PongData.DEFAULT);
+            CompletableFuture<PlayerInfo> connected = new CompletableFuture<>();
+            List<String> signals = new CopyOnWriteArrayList<>();
+            host.setNewConnectionHandler((connectionId, remoteNetworkId, offer, address, player) -> {
+                host.setSignalHandler(connectionId, signals::add);
+                connected.complete(player);
+            });
+            host.bind(new InetSocketAddress(LOOPBACK, 0), null, group.next());
+            peer.bind(new InetSocketAddress(LOOPBACK, 0));
+            InetSocketAddress address = host.localAddress();
+
+            String offer = OperatorIdentity.generate("proxy.test").forPlayer("2535000000000001", "Tester")
+                    .withAssertion("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+                            + "a=fingerprint:sha-256 " + "AA:".repeat(31) + "AA\r\n"
+                            + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n");
+            peer.sendSignal(address, 1, NetherNetConstants.buildSignalConnectRequest("7", offer));
+            assertTrue(checking.await(10, TimeUnit.SECONDS), "the identity was never checked");
+            String candidate = NetherNetConstants.buildSignalCandidateAdd("7", "candidate:1 1 udp 1 127.0.0.1 9 typ host");
+            peer.sendSignal(address, 1, candidate);
+
+            // Discovery still answers while the check waits, after handling the candidate sent ahead of it
+            CompletableFuture<Long> pong = new CompletableFuture<>();
+            peer.sendDiscoveryRequest(address, (networkId, payload) -> {
+                ReferenceCountUtil.release(payload);
+                pong.complete(networkId);
+            });
+            assertEquals(1L, pong.get(5, TimeUnit.SECONDS));
+            assertFalse(connected.isDone());
+
+            release.countDown();
+            assertEquals("2535000000000001", connected.get(10, TimeUnit.SECONDS).xuid());
+            // The candidate that came while the identity was checked reaches the connection
+            for (int i = 0; i < 100 && signals.isEmpty(); i++) {
+                Thread.sleep(20);
+            }
+            assertEquals(List.of(candidate), signals);
+        } finally {
+            release.countDown();
+            peer.close();
+            host.close();
+        }
+    }
+
+    @Test
+    void aTrustSetAfterBindingFetchesItsKeysAhead() throws Exception {
+        NetherNetDiscoverySignaling host = new NetherNetDiscoverySignaling(1, new InetSocketAddress(LOOPBACK, 0));
+        try {
+            // Fetches nothing, so the trust set after binding is the only one preparing
+            host.setTokenTrust(TokenTrust.ANY);
+            host.bind(new InetSocketAddress(LOOPBACK, 0), null, group.next());
+            CountDownLatch prepared = new CountDownLatch(1);
+            host.setTokenTrust(new TokenTrust() {
+                @Override
+                public JwtClaims claims(Identity identity) throws Exception {
+                    return TokenTrust.ANY.claims(identity);
+                }
+
+                @Override
+                public void prepare() {
+                    prepared.countDown();
+                }
+            });
+            assertTrue(prepared.await(5, TimeUnit.SECONDS), "the new trust never prepared");
+        } finally {
+            host.close();
+        }
     }
 
     private void startServer(TokenTrust trust, OperatorIdentity identity) throws InterruptedException {
