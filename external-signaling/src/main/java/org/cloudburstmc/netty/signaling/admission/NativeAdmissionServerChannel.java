@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetNative;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
@@ -149,6 +150,8 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             throw new IllegalArgumentException("Resolved explicit interface address and fixed UDP port required");
         }
 
+        // Without this, NXS joins get NetherNet's SCTP settings only when a built-in server channel binds too
+        NetherNetNative.initialize();
         address = inetSocketAddress;
         mux = new IceUdpMuxListener(inetSocketAddress.getAddress(), inetSocketAddress.getPort(), Math.min(limits.pending(), 4096),
                 Duration.ofMillis(Math.min(limits.handshakeMillis(), 30_000)), eventLoop(), this::admit);

@@ -48,6 +48,7 @@ class NativeAdmissionIntegrationTest {
                 new AdmissionKey("K001", TestSignalingProvider.SECRET)));
         var endpoint = new NativeAdmissionServerChannel(id, validator, AdmissionGate.Limits.defaults());
         var results = new LinkedBlockingQueue<Boolean>();
+        var rtos = new LinkedBlockingQueue<Duration>();
         try {
             new ServerBootstrap().group(group).channelFactory(() -> endpoint)
                     .childHandler(new ChannelInitializer<AdmittedNetherNetChildChannel>() {
@@ -55,6 +56,7 @@ class NativeAdmissionIntegrationTest {
                             child.pipeline().addLast(new SimpleChannelInboundHandler<ByteBuf>() {
                                 protected void channelRead0(ChannelHandlerContext ctx, ByteBuf message)
                                         throws Exception {
+                                    rtos.add(child.sctpStats().rto());
                                     var key = java.security.KeyFactory.getInstance("EC").generatePublic(
                                             new java.security.spec.X509EncodedKeySpec(ByteBufUtil.getBytes(message)));
                                     String mismatch = TransportIdentityBinding.mismatch(child, key);
@@ -88,6 +90,8 @@ class NativeAdmissionIntegrationTest {
                 }
             }
             assertEquals(2, endpoint.creationAttempts());
+            assertTrue(rtos.stream().allMatch(rto -> rto.toMillis() >= 400),
+                    "NetherNet's minimum RTO, above the client's SACK delay, applies to admitted joins: " + rtos);
             System.out.println("native-identity-binding PASS matchingKey=true capturedOtherKeyRejected=true");
         } finally {
             endpoint.close().awaitUninterruptibly();

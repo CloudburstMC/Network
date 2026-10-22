@@ -19,8 +19,11 @@ package org.cloudburstmc.netty.channel.nethernet;
 import tel.schich.libdatachannel.LibDataChannel;
 import tel.schich.libdatachannel.SctpSettings;
 
-/** Loads libdatachannel with the SCTP settings NetherNet needs, before the first peer exists. */
-final class NetherNetNative {
+/**
+ * Loads libdatachannel with the SCTP settings NetherNet needs, before the first peer exists. Every channel that
+ * creates NetherNet peers calls {@link #initialize()} when it binds.
+ */
+public final class NetherNetNative {
 
     /**
      * Bedrock clients hold a SACK up to 200 ms, which is also libdatachannel's minimum RTO, so in-flight data was
@@ -39,7 +42,7 @@ final class NetherNetNative {
     /**
      * @throws LinkageError if the native library is not available
      */
-    static synchronized void initialize() {
+    public static synchronized void initialize() {
         if (initialized) {
             return;
         }
