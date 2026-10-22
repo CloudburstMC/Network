@@ -285,6 +285,66 @@ class NativeAdmissionIntegrationTest {
         }
     }
 
+    /** A provider host drops requests no installed key signed natively, before any admission work. */
+    @Test
+    @Timeout(30)
+    void unsignedRequestsAreDroppedBeforeAdmission() throws Exception {
+        var id = identity();
+        var group = new DefaultEventLoopGroup(1);
+        int port;
+        try (var available = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
+            port = available.getLocalPort();
+        }
+        var bind = new InetSocketAddress("127.0.0.1", port);
+        NativeProviderTransport host = null;
+        try {
+            var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
+                @Override
+                protected void initChannel(Channel channel) {
+                }
+            });
+            host = NativeProviderTransport.open(bootstrap, bind, () -> List.of(bind), id.certificate(),
+                    id.privateKey(), AdmissionGate.Limits.defaults()).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            host.installAdmissionKeys(List.of(new AdmissionKey("K001", TestSignalingProvider.SECRET)))
+                    .toCompletableFuture().get();
+            String incarnation = host.hostProfile().toCompletableFuture().get().getAsJsonObject("statelessAdmission")
+                    .get("incarnation").getAsString();
+            String offer = "a=ice-ufrag:droppedClient\r\na=ice-pwd:" + "p".repeat(32) + "\r\na=fingerprint:"
+                    + id.fingerprint() + "\r\n";
+            var answer = TestSignalingProvider.answer(offer, id.fingerprint(), port,
+                    System.currentTimeMillis() + 30_000, NativeProviderTransport.audience(incarnation), false);
+            String otherKey = "NXS1K002" + answer.token().substring(8);
+            var channel = host.channel();
+            try (var socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
+                socket.setSoTimeout(250);
+                for (byte[] junk : List.of(
+                        nominatedBinding(answer.token() + ":droppedClient", "q".repeat(32)),
+                        nominatedBinding(otherKey + ":droppedClient", answer.password()),
+                        nominatedBinding("unknownHostUfrag:droppedClient", answer.password()))) {
+                    socket.send(new DatagramPacket(junk, junk.length, bind));
+                    assertThrows(SocketTimeoutException.class,
+                            () -> socket.receive(new DatagramPacket(new byte[2048], 2048)));
+                }
+                var mux = channel.stats().mux();
+                assertEquals(3, mux.rejected());
+                assertEquals(0, mux.notifications());
+                assertEquals(0, channel.admissionStats().invalid());
+
+                byte[] valid = nominatedBinding(answer.token() + ":droppedClient", answer.password());
+                socket.setSoTimeout(2_000);
+                socket.send(new DatagramPacket(valid, valid.length, bind));
+                var response = new DatagramPacket(new byte[2048], 2048);
+                socket.receive(response);
+                assertEquals(0x0101, Short.toUnsignedInt(ByteBuffer.wrap(response.getData()).getShort()));
+            }
+        } finally {
+            if (host != null) {
+                host.close().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+        }
+    }
+
     @Test
     @Timeout(40)
     void clientsOfEitherFamilyOpenBothDataChannelsFromTheSameCandidateList() throws Exception {

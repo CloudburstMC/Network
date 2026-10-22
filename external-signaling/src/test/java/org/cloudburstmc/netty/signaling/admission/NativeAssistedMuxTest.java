@@ -54,6 +54,8 @@ class NativeAssistedMuxTest {
                                             .withBindAddress(bind)
                                             .withDisableAutoNegotiation(true),
                                     Runnable::run)) {
+                // Without keys, only requests the pre-created peer authenticates pass natively.
+                listener.setAdmission(new byte[0], java.util.Map.of());
                 existing.set(host);
                 CountDownLatch clientGathered = new CountDownLatch(1),
                         hostGathered = new CountDownLatch(1);

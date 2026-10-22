@@ -942,6 +942,19 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         }
     }
 
+    /** Drops native requests that neither these keys nor a live peer authenticate. See {@link StatelessAdmissionValidator#mirrorKeys}. */
+    public void admitOnly(byte[] context, Map<String, byte[]> secretsByTokenPrefix) {
+        IceUdpMuxListener listener = mux;
+        if (listener == null) {
+            return;
+        }
+        try {
+            listener.setAdmission(context, secretsByTokenPrefix);
+        } catch (IllegalStateException closed) {
+            // A closed listener holds nothing
+        }
+    }
+
     public Stats stats() {
         IceUdpMuxListener listener = mux;
         Stats.Mux counters = null;

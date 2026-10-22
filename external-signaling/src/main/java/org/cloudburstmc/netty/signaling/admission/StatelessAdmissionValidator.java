@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.signaling.admission;
 
 
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
+import java.util.function.BiConsumer;
 import java.util.function.LongSupplier;
 
 import javax.crypto.Mac;
@@ -129,6 +130,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
     private final LongSupplier nanoTime;
     private final Set<Material> epochs = new HashSet<>();
     private volatile Map<String, Material> keys = Map.of();
+    private BiConsumer<byte[], Map<String, byte[]>> mirror = (context, secrets) -> {};
 
     public StatelessAdmissionValidator(String audience, long maxTtlMs) {
         this(audience, maxTtlMs, System::nanoTime);
@@ -189,6 +191,27 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         keys = Map.copyOf(next);
         epochs.addAll(next.values());
         epochs.removeIf(Material::unused);
+        publish();
+    }
+
+    /**
+     * Hands {@code sink} the ICE password context and each installed key's secret by token prefix, now and after
+     * every change, under this validator's lock. Secrets are wiped after the call. Lets native code drop requests
+     * no installed key signed.
+     */
+    public synchronized void mirrorKeys(BiConsumer<byte[], Map<String, byte[]>> sink) {
+        mirror = Objects.requireNonNull(sink);
+        publish();
+    }
+
+    private void publish() {
+        Map<String, byte[]> secrets = new HashMap<>();
+        keys.forEach((id, key) -> secrets.put(TOKEN_PREFIX + id, key.secret.clone()));
+        try {
+            mirror.accept(StatelessAdmissionCodec.icePasswordContext(audience), secrets);
+        } finally {
+            secrets.values().forEach(secret -> Arrays.fill(secret, (byte) 0));
+        }
     }
 
     /** Routine rotation stops new admissions; admitted logins retain their original epoch until completion/expiry. */
@@ -202,8 +225,11 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
             }
         }
 
-        keys = Map.copyOf(retained);
         epochs.removeIf(Material::unused);
+        if (retained.size() != keys.size()) {
+            keys = Map.copyOf(retained);
+            publish();
+        }
     }
 
     public boolean ready() {
@@ -219,6 +245,7 @@ public final class StatelessAdmissionValidator implements AdmissionValidator {
         epochs.forEach(Material::revoke);
         epochs.clear();
         keys = Map.of();
+        publish();
     }
 
     @Override

@@ -48,6 +48,8 @@ class NativeAssistedAdmissionTest {
                             })
                     .bind(bind, NativeDiagnosticHostTest.port(bind))
                     .sync();
+            // Production filters natively; without keys only live peers pass.
+            endpoint.admitOnly(StatelessAdmissionCodec.icePasswordContext("assisted"), java.util.Map.of());
             try (var client =
                     PeerConnection.createPeer(
                             PeerConnectionConfiguration.DEFAULT
@@ -173,6 +175,8 @@ class NativeAssistedAdmissionTest {
                                 })
                         .bind(bind, port)
                         .sync();
+                // Production filters natively; without keys only live peers pass.
+                endpoint.admitOnly(StatelessAdmissionCodec.icePasswordContext("assisted"), java.util.Map.of());
                 try (var client =
                         PeerConnection.createPeer(
                                 PeerConnectionConfiguration.DEFAULT

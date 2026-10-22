@@ -78,11 +78,16 @@ public final class StatelessAdmissionCodec {
         return hmac(secret, utf8("nxs-stateless-aead-v1\0" + audience));
     }
 
+    /** HMAC input before the token: a token's ICE password is BASE64(HMAC(secret, context || token)[0..24]). */
+    public static byte[] icePasswordContext(String audience) {
+        return utf8("nxs-stateless-ice-v1\0" + audience + "\0");
+    }
+
     public static String icePassword(byte[] secret, String audience, String token) {
-        return BASE64.encodeToString(
-                Arrays.copyOf(
-                        hmac(secret, utf8("nxs-stateless-ice-v1\0" + audience + "\0" + token)),
-                        24));
+        byte[] context = icePasswordContext(audience), suffix = utf8(token),
+                input = Arrays.copyOf(context, context.length + suffix.length);
+        System.arraycopy(suffix, 0, input, context.length, suffix.length);
+        return BASE64.encodeToString(Arrays.copyOf(hmac(secret, input), 24));
     }
 
     public static Credentials issue(

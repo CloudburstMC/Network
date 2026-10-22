@@ -165,4 +165,44 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
         assertNull(v.validate(request(), now + 20_000));
     }
 
+    /** Native code derives a token's password from the mirrored material, so it must match the validator's. */
+    @Test
+    void mirroredKeysDeriveTheFixturePasswordAndFollowEveryChange() throws Exception {
+        var v = validator();
+        List<Map<String, String>> mirrored = new ArrayList<>();
+        v.mirrorKeys((context, secrets) -> {
+            Map<String, String> passwords = new HashMap<>();
+            secrets.forEach((prefix, secret) -> {
+                if (token.startsWith(prefix)) {
+                    passwords.put(prefix, derive(context, secret));
+                } else {
+                    passwords.put(prefix, "");
+                }
+            });
+            mirrored.add(passwords);
+        });
+        assertEquals(List.of(Map.of("NXS1K001", password)), mirrored);
+        String secret = f.getAsJsonObject("context").get("secret").getAsString();
+        v.installKeys(List.of(new AdmissionKey("K001", secret, now + 20_000),
+                new AdmissionKey("K002", "OXyFGxR_CkTZ6Klea0O17wQPSCtckSIM3ALR12_b3Wc")));
+        assertEquals(Map.of("NXS1K001", password, "NXS1K002", ""), mirrored.get(1));
+        v.retireKeys(now);
+        assertEquals(2, mirrored.size(), "an unchanged key set is not pushed again");
+        v.retireKeys(now + 20_000);
+        assertEquals(Map.of("NXS1K002", ""), mirrored.get(2));
+        v.clear();
+        assertEquals(Map.of(), mirrored.get(3));
+    }
+
+    private String derive(byte[] context, byte[] secret) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret, "HmacSHA256"));
+            mac.update(context);
+            byte[] digest = mac.doFinal(token.getBytes(StandardCharsets.US_ASCII));
+            return Base64.getEncoder().encodeToString(Arrays.copyOf(digest, 24));
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
 }

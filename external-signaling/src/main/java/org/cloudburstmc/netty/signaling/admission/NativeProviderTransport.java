@@ -93,6 +93,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         this.advertisedAddresses = advertisedAddresses;
         this.fixedCandidates = candidates != null;
         this.candidateSnapshot = candidates;
+        validator.mirrorKeys(channel::admitOnly);
         retireTask = channel.eventLoop()
                 .scheduleWithFixedDelay(() -> validator.retireKeys(System.currentTimeMillis()), 1, 1, TimeUnit.SECONDS);
     }

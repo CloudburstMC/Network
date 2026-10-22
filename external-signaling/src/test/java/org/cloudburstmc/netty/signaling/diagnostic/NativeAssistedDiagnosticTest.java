@@ -95,6 +95,7 @@ class NativeAssistedDiagnosticTest {
                             })
                     .bind(bind, hostPort)
                     .sync();
+            validator.mirrorKeys(host::admitOnly);
             gate = host.enableDiagnostics(policy).toCompletableFuture().get(3, TimeUnit.SECONDS);
             // Keep auxiliary NAT/STUN sockets from taking the probe port before native gathering.
             probeReservation = new DatagramSocket(new InetSocketAddress(bind, 0));
