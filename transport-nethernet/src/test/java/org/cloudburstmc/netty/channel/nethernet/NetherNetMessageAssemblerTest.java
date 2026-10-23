@@ -19,10 +19,17 @@ package org.cloudburstmc.netty.channel.nethernet;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.CompositeByteBuf;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HexFormat;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -60,7 +67,7 @@ class NetherNetMessageAssemblerTest {
 
     @Test
     void completedMessagesSurviveNativeBufferReuseAndAssemblerClose() {
-        try (var assembler = new NetherNetMessageAssembler("reliable")) {
+        try (var assembler = new NetherNetMessageAssembler(true)) {
             ByteBuffer nativeBuffer = frame(0, 1, 2, 3);
             ByteBuf first = assembler.decode(nativeBuffer, allocator, metrics);
             nativeBuffer.clear().put(new byte[]{0, 4, 5, 6}).flip();
@@ -84,7 +91,7 @@ class NetherNetMessageAssemblerTest {
 
     @Test
     void allCountdownFragmentsRetainTheirOriginalNettyAllocation() {
-        try (var assembler = new NetherNetMessageAssembler("reliable")) {
+        try (var assembler = new NetherNetMessageAssembler(true)) {
             ByteBuffer nativeBuffer = frame(255, 0);
             ByteBuf message = null;
             byte[] expected = new byte[256];
@@ -119,25 +126,102 @@ class NetherNetMessageAssemblerTest {
     }
 
     @Test
-    void badCountdownReleasesPartialMessageAndAllowsTheNextMessage() {
-        try (var assembler = new NetherNetMessageAssembler("reliable")) {
-            assertNull(assembler.decode(frame(2, 1), allocator, metrics));
-            assertNull(assembler.decode(frame(0, 2), allocator, metrics));
-            allocator.assertReleased();
-            ByteBuf next = assembler.decode(frame(0, 3), allocator, metrics);
-            try {
-                assertArrayEquals(new byte[]{3}, ByteBufUtil.getBytes(next));
-            } finally {
-                next.release();
-            }
-        }
+    void aBadCountdownEndsTheReliableStreamAndReleasesWhatWasAssembled() {
+        var assembler = new NetherNetMessageAssembler(true);
+        assertNull(assembler.decode(frame(2, 1), allocator, metrics));
+        assertBroken(TransportDisconnectReason.BAD_PACKET, assembler, frame(0, 2));
         allocator.assertReleased();
+        assertNull(assembler.decode(frame(0, 3), allocator, metrics), "nothing is delivered after");
+        assertEquals(1, allocator.buffers.size());
         assertCounted(1, 1);
     }
 
     @Test
+    void framesOfAByteOrLessEndTheReliableStream() {
+        for (ByteBuffer frame : new ByteBuffer[]{frame(), frame(0), frame(2)}) {
+            var assembler = new NetherNetMessageAssembler(true);
+            assertNull(assembler.decode(frame(1, 7), allocator, metrics));
+            assertBroken(TransportDisconnectReason.BAD_PACKET, assembler, frame);
+        }
+        allocator.assertReleased();
+        assertCounted(3, 3);
+    }
+
+    @Test
+    void aReliableFrameMayFillTheAdvertisedSizeButNoMore() {
+        ByteBuffer frame = ByteBuffer.allocateDirect(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE + 1);
+        var assembler = new NetherNetMessageAssembler(true);
+        ByteBuf message = assembler.decode(frame.limit(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE), allocator,
+                metrics);
+        try {
+            assertEquals(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE - 1, message.readableBytes());
+        } finally {
+            message.release();
+        }
+        assertBroken(TransportDisconnectReason.BAD_PACKET, assembler, frame.clear());
+        allocator.assertReleased();
+        assertCounted(0, 1);
+    }
+
+    @Test
+    void aLargeFragmentedMessageReassemblesByteForByte() {
+        int fragments = 4;
+        int payload = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
+        byte[] expected = new byte[fragments * payload];
+        ByteBuffer frame = ByteBuffer.allocateDirect(1 + payload);
+        ByteBuf message = null;
+        try (var assembler = new NetherNetMessageAssembler(true)) {
+            for (int i = 0; i < fragments; i++) {
+                frame.clear().put((byte) (fragments - 1 - i));
+                for (int b = 0; b < payload; b++) {
+                    byte value = (byte) ((i * 31 + b) % 251);
+                    expected[i * payload + b] = value;
+                    frame.put(value);
+                }
+                message = assembler.decode(frame.flip(), allocator, metrics);
+                if (i < fragments - 1) {
+                    assertNull(message, "completed early");
+                }
+            }
+            assertArrayEquals(expected, ByteBufUtil.getBytes(message));
+        } finally {
+            if (message != null) {
+                message.release();
+            }
+        }
+        allocator.assertReleased();
+        assertCounted(fragments - 1, 0);
+    }
+
+    @Test
+    void theProtocolVectorsDecode() throws Exception {
+        // The NXS fixtures, which external-signaling checks the hashes of
+        JsonObject vectors = JsonParser.parseString(Files.readString(
+                Path.of("../docs/external-signaling/fixtures/cloudburst-protocol-vectors.v1.json"))).getAsJsonObject();
+        for (JsonElement entry : vectors.getAsJsonArray("nethernetFrames")) {
+            JsonObject vector = entry.getAsJsonObject();
+            byte[] bytes = HexFormat.of().parseHex(vector.get("frameHex").getAsString());
+            try (var assembler = new NetherNetMessageAssembler(true)) {
+                ByteBuf decoded = assembler.decode(ByteBuffer.allocateDirect(bytes.length).put(bytes).flip(),
+                        allocator, metrics);
+                if (vector.getAsJsonObject("decoded").get("complete").getAsBoolean()) {
+                    try {
+                        assertArrayEquals(HexFormat.of().parseHex(vector.get("payloadHex").getAsString()),
+                                ByteBufUtil.getBytes(decoded));
+                    } finally {
+                        decoded.release();
+                    }
+                } else {
+                    assertNull(decoded);
+                }
+            }
+        }
+        allocator.assertReleased();
+    }
+
+    @Test
     void closingPartialMessageReleasesItAndIgnoresLateCallbacks() {
-        var assembler = new NetherNetMessageAssembler("reliable");
+        var assembler = new NetherNetMessageAssembler(true);
         assertNull(assembler.decode(frame(1, 42), allocator, metrics));
         assembler.close();
         assembler.close();
@@ -148,8 +232,8 @@ class NetherNetMessageAssemblerTest {
     }
 
     @Test
-    void emptyFramesAndHeaderOnlyFragmentsPreserveCountdownBehaviour() {
-        try (var assembler = new NetherNetMessageAssembler("reliable")) {
+    void emptyFramesAndHeaderOnlyFragmentsPreserveCountdownBehaviourOnTheUnreliableChannel() {
+        try (var assembler = new NetherNetMessageAssembler(false)) {
             assertNull(assembler.decode(frame(), allocator, metrics));
             assertNull(assembler.decode(frame(0), allocator, metrics));
             assertNull(assembler.decode(frame(2), allocator, metrics));
@@ -168,7 +252,7 @@ class NetherNetMessageAssemblerTest {
 
     @Test
     void allocationFailureReleasesEarlierFragments() {
-        try (var assembler = new NetherNetMessageAssembler("reliable")) {
+        try (var assembler = new NetherNetMessageAssembler(true)) {
             assertNull(assembler.decode(frame(1, 7), allocator, metrics));
             allocator.fail = true;
             assertThrows(IllegalStateException.class, () -> assembler.decode(frame(0, 8), allocator, metrics));
@@ -187,7 +271,7 @@ class NetherNetMessageAssemblerTest {
 
     @Test
     void aMessageThatLosesItsTailDoesNotEatTheNextOne() {
-        try (var assembler = new NetherNetMessageAssembler("unreliable")) {
+        try (var assembler = new NetherNetMessageAssembler(false)) {
             assertNull(assembler.decode(frame(2, 1), allocator, metrics));
             assertNull(assembler.decode(frame(1, 2), allocator, metrics));
             // The last fragment never arrives and the next message opens instead
@@ -208,7 +292,7 @@ class NetherNetMessageAssemblerTest {
 
     @Test
     void aMessageWithAGapIsDroppedWithoutTakingTheNextWithIt() {
-        try (var assembler = new NetherNetMessageAssembler("unreliable")) {
+        try (var assembler = new NetherNetMessageAssembler(false)) {
             assertNull(assembler.decode(frame(2, 1), allocator, metrics));
             // The middle fragment never arrives, so the message cannot be completed
             assertNull(assembler.decode(frame(0, 3), allocator, metrics));
@@ -227,7 +311,7 @@ class NetherNetMessageAssemblerTest {
 
     @Test
     void aGappedMessageIsFollowedOutToItsLastFragment() {
-        try (var assembler = new NetherNetMessageAssembler("unreliable")) {
+        try (var assembler = new NetherNetMessageAssembler(false)) {
             assertNull(assembler.decode(frame(4, 1), allocator, metrics));
             // Two fragments go missing, so the rest of this message is followed out and dropped
             assertNull(assembler.decode(frame(1, 4), allocator, metrics));
@@ -246,10 +330,26 @@ class NetherNetMessageAssemblerTest {
     }
 
     @Test
-    void anOversizedMessageIsDroppedWithoutTakingTheNextWithIt() {
+    void aReliableMessageOverTheBudgetEndsTheStream() {
         int payload = NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE - 1;
         ByteBuffer segment = ByteBuffer.allocateDirect(1 + payload);
-        try (var assembler = new NetherNetMessageAssembler("reliable")) {
+        var assembler = new NetherNetMessageAssembler(true);
+        int remaining = 255;
+        for (int i = 0; i < NetherNetChannel.MAX_RECEIVED_MESSAGE_SIZE / payload; i++, remaining--) {
+            segment.clear().put(0, (byte) remaining);
+            assertNull(assembler.decode(segment, allocator, metrics));
+        }
+        segment.clear().put(0, (byte) remaining);
+        assertBroken(TransportDisconnectReason.SPLIT_QUEUE_TOO_LONG, assembler, segment);
+        allocator.assertReleased();
+        assertCounted(NetherNetChannel.MAX_RECEIVED_MESSAGE_SIZE / payload, 1);
+    }
+
+    @Test
+    void anUnreliableMessageOverTheBudgetIsDroppedWithoutTakingTheNextWithIt() {
+        int payload = NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE - 1;
+        ByteBuffer segment = ByteBuffer.allocateDirect(1 + payload);
+        try (var assembler = new NetherNetMessageAssembler(false)) {
             // 256 segments of the advertised size come to 64 MiB
             for (int remaining = 255; remaining >= 0; remaining--) {
                 segment.clear().put(0, (byte) remaining);
@@ -266,6 +366,12 @@ class NetherNetMessageAssemblerTest {
         }
         allocator.assertReleased();
         // Fragments are kept until the next would pass the cap
-        assertCounted(NetherNetChannel.MAX_MESSAGE_SIZE / payload, 1);
+        assertCounted(NetherNetChannel.MAX_RECEIVED_MESSAGE_SIZE / payload, 1);
+    }
+
+    private void assertBroken(TransportDisconnectReason reason, NetherNetMessageAssembler assembler,
+                              ByteBuffer frame) {
+        assertEquals(reason, assertThrows(NetherNetFramingException.class,
+                () -> assembler.decode(frame, allocator, metrics)).reason());
     }
 }

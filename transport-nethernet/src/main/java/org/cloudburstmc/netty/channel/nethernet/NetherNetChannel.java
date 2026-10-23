@@ -55,12 +55,20 @@ import java.nio.ByteBuffer;
 import java.util.function.Consumer;
 import java.util.concurrent.RejectedExecutionException;
 
+/**
+ * A NetherNet connection, carrying each message whole over a reliable and an unreliable data channel.
+ * <p>
+ * Broken framing on the reliable channel ends the connection with {@link TransportDisconnectReason#BAD_PACKET},
+ * a message over 8 MiB, RakNet's split budget, with {@link TransportDisconnectReason#SPLIT_QUEUE_TOO_LONG}.
+ */
 public abstract class NetherNetChannel extends AbstractChannel implements TransportChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
     protected static final ChannelMetadata METADATA = new ChannelMetadata(false);
     private static final int MAX_SEGMENT_PAYLOAD = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
     /** As many segments as the countdown numbers, each the size a retail client sends. */
     static final int MAX_MESSAGE_SIZE = NetherNetConstants.MAX_SEGMENTS * MAX_SEGMENT_PAYLOAD;
+    /** RakNet's split budget, as a retail client splits at the advertised size and may send more than this side. */
+    static final int MAX_RECEIVED_MESSAGE_SIZE = 8 << 20;
 
     /**
      * One side of the selected pair carries the address the socket uses and the candidate type it
@@ -93,7 +101,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
     /** Messages read before the data channels were bound, delivered after channelActive. Event loop only. */
     private final PendingMessages<ByteBuf> earlyMessages =
-            new PendingMessages<>(MAX_EARLY_MESSAGES, MAX_MESSAGE_SIZE, ByteBuf::readableBytes);
+            new PendingMessages<>(MAX_EARLY_MESSAGES, MAX_RECEIVED_MESSAGE_SIZE, ByteBuf::readableBytes);
 
     protected volatile boolean open = true;
 
@@ -309,7 +317,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
      * @param reliable Whether it is the reliable one
      */
     protected void readDataChannel(DataChannel channel, boolean reliable) {
-        Reader reader = new Reader(channel, new NetherNetMessageAssembler(reliable ? "reliable" : "unreliable"));
+        Reader reader = new Reader(channel, new NetherNetMessageAssembler(reliable));
         synchronized (this) {
             if (!open) {
                 throw new IllegalStateException("Channel closed");
@@ -330,8 +338,15 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     private void onMessage(Reader reader, ByteBuffer data) {
         NetherChannelMetrics metrics = config.getMetrics();
 
-        // The native ByteBuffer expires when this callback returns.
-        ByteBuf packet = reader.assembler().decode(data, alloc(), metrics);
+        ByteBuf packet;
+        try {
+            // The native ByteBuffer expires when this callback returns.
+            packet = reader.assembler().decode(data, alloc(), metrics);
+        } catch (NetherNetFramingException broken) {
+            log.debug("Closing {}: {}", this, broken.getMessage());
+            closeFromCallback(broken.reason());
+            return;
+        }
         if (packet == null) {
             return;
         }
@@ -355,6 +370,26 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
             packet.release();
             throw e;
         }
+    }
+
+    /** Closes for {@code reason} from a libdatachannel callback. */
+    private void closeFromCallback(TransportDisconnectReason reason) {
+        try {
+            eventLoop().execute(() -> closeWithReason(reason));
+        } catch (RejectedExecutionException shutDown) {
+            closeWithoutLoop();
+        }
+    }
+
+    /** Closes for a reason this side found, telling the pipeline once it is active. Event loop only. */
+    private void closeWithReason(TransportDisconnectReason reason) {
+        if (!isOpen()) {
+            return;
+        }
+        if (activeFired) {
+            pipeline().fireUserEventTriggered(reason);
+        }
+        close();
     }
 
     /**

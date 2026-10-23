@@ -82,7 +82,7 @@ class NetherNetChannelSegmentTest {
         assertEquals(9, sent.size());
 
         ByteBuf assembled = null;
-        try (var assembler = new NetherNetMessageAssembler("reliable")) {
+        try (var assembler = new NetherNetMessageAssembler(true)) {
             for (byte[] segment : sent) {
                 assembled = assembler.decode(wire(segment), allocator, null);
             }
