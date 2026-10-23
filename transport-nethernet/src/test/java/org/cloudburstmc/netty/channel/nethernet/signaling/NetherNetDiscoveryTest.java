@@ -16,16 +16,12 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
-import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
 import java.net.BindException;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -63,10 +59,11 @@ public class NetherNetDiscoveryTest {
         }
     }
 
+    /** A request does not say which version a client reads, so it is answered in each, newest last. */
     @Test
-    void everyRequestIsAnsweredFromTheMotdProviderAnew() throws Exception {
+    void everyRequestIsAnsweredFromTheMotdProviderAnewInEveryVersion() throws Exception {
         AtomicInteger players = new AtomicInteger(3);
-        BlockingQueue<Integer> answers = new LinkedBlockingQueue<>();
+        BlockingQueue<PongData> answers = new LinkedBlockingQueue<>();
         NetherNetDiscovery server = new NetherNetDiscovery(1);
         NetherNetDiscovery client = new NetherNetDiscovery(2);
         try {
@@ -78,12 +75,16 @@ public class NetherNetDiscoveryTest {
             for (int i = 0; i < 2; i++) {
                 client.sendDiscoveryRequest(server.localAddress(), (sender, payload) -> {
                     try {
-                        answers.add(playerCount(serverData(payload)));
+                        answers.add(ServerData.decode(payload));
                     } finally {
                         payload.release();
                     }
                 });
-                assertEquals(3 + i, answers.poll(5, TimeUnit.SECONDS));
+                for (int version : ServerData.VERSIONS) {
+                    PongData answer = answers.poll(5, TimeUnit.SECONDS);
+                    assertEquals(version, answer.dataVersion());
+                    assertEquals(3 + i, answer.playerCount());
+                }
             }
         } finally {
             server.close();
@@ -111,57 +112,5 @@ public class NetherNetDiscoveryTest {
             server.close();
             client.close();
         }
-    }
-
-    /** A varint length, which this used to write, takes two bytes from 128 on. */
-    @Test
-    void aNameOver127BytesKeepsItsOneByteLength() {
-        String name = "a".repeat(200);
-        ByteBuf data = serverData(new PongData.Builder().setServerName(name).build());
-
-        assertEquals(4, data.readUnsignedByte());
-        assertEquals(200, data.readUnsignedByte());
-        assertEquals(name, data.readCharSequence(200, StandardCharsets.UTF_8).toString());
-    }
-
-    @Test
-    void aNamePast255BytesIsCutBetweenCharacters() {
-        // Two bytes each, so a cut at 255 would split the 128th
-        ByteBuf data = serverData(new PongData.Builder().setServerName("\u00e9".repeat(150)).build());
-
-        data.skipBytes(1);
-        int length = data.readUnsignedByte();
-        assertEquals(254, length);
-        assertEquals("\u00e9".repeat(127), data.readCharSequence(length, StandardCharsets.UTF_8).toString());
-    }
-
-    @Test
-    void noPlayersOnlineIsReportedAsOne() {
-        ByteBuf data = serverData(new PongData.Builder().setServerName("s").setLevelName("l")
-                .setPlayerCount(0).setMaxPlayerCount(20).build());
-
-        data.skipBytes(1 + 2 + 2 + 1); // Version, both names, game type
-        assertEquals(1, data.readIntLE());
-        assertEquals(20, data.readIntLE());
-    }
-
-    private static ByteBuf serverData(PongData pong) {
-        return serverData(Unpooled.wrappedBuffer(NetherNetDiscovery.encodePong(pong)));
-    }
-
-    /** The server data inside an encoded pong. */
-    private static ByteBuf serverData(ByteBuf encoded) {
-        int length = encoded.readIntLE();
-        assertEquals(encoded.readableBytes(), length);
-        return Unpooled.wrappedBuffer(
-                ByteBufUtil.decodeHexDump(encoded.readCharSequence(length, StandardCharsets.US_ASCII)));
-    }
-
-    private static int playerCount(ByteBuf data) {
-        data.skipBytes(1); // Version
-        data.skipBytes(data.readUnsignedByte());
-        data.skipBytes(data.readUnsignedByte());
-        data.skipBytes(1); // Game type
-        return data.readIntLE();
     }
 }

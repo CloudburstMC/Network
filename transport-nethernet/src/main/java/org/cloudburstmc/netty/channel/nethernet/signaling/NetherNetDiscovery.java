@@ -21,7 +21,6 @@ import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.SignalHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -48,8 +47,6 @@ import java.util.function.BiConsumer;
 
 public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPacket> {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetDiscovery.class);
-    /** Clients read each name behind a one byte length. */
-    static final int MAX_NAME_BYTES = 255;
     /** How long a peer's address is kept after its last packet. Clients ask every 2 seconds. */
     private static final long PEER_TTL_SECONDS = 30;
     /** Far more peers than a network holds, so packets anyone can craft cannot grow the table without end. */
@@ -131,43 +128,6 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
      */
     public void setMotdProvider(MotdProvider provider) {
         this.motdProvider = Objects.requireNonNull(provider);
-    }
-
-    /** The pong as clients read it: version 4 server data, hex encoded behind its length. */
-    static byte[] encodePong(PongData data) {
-        ByteBuf buf = Unpooled.buffer();
-        try {
-            buf.writeByte(4); // Version
-            writeName(buf, data.serverName());
-            writeName(buf, data.levelName());
-            buf.writeByte(data.gameType() << 1);
-            // Clients leave out a world nobody plays on, which a server is until someone joins
-            buf.writeIntLE(Math.max(1, data.playerCount()));
-            buf.writeIntLE(data.maxPlayerCount());
-            buf.writeBoolean(data.isEditorWorld());
-            buf.writeBoolean(data.isHardcore());
-            buf.writeByte(data.transportLayer() << 1);
-            buf.writeByte(data.connectionType() << 1);
-            byte[] hex = ByteBufUtil.hexDump(buf).getBytes(StandardCharsets.US_ASCII);
-
-            byte[] pong = new byte[Integer.BYTES + hex.length];
-            Unpooled.wrappedBuffer(pong).setIntLE(0, hex.length).setBytes(Integer.BYTES, hex);
-            return pong;
-        } finally {
-            buf.release();
-        }
-    }
-
-    /** A name behind its one byte length, cut on a character boundary to fit. */
-    private static void writeName(ByteBuf buf, String name) {
-        byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
-        int length = Math.min(bytes.length, MAX_NAME_BYTES);
-        // Backs off continuation bytes, so a character is dropped whole rather than cut
-        while (length < bytes.length && (bytes[length] & 0xC0) == 0x80) {
-            length--;
-        }
-        buf.writeByte(length);
-        buf.writeBytes(bytes, 0, length);
     }
 
     public void registerSignalHandler(String connectionId, SignalHandler handler) {
@@ -292,13 +252,14 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
             return;
         }
 
-        ByteBuf buf = Unpooled.buffer();
-        buf.writeShortLE(NetherNetConstants.ID_DISCOVERY_RESPONSE);
-        buf.writeLongLE(this.networkId);
-        buf.writeZero(8);
-        buf.writeBytes(encodePong(pong));
-
-        sendPacket(buf, sender);
+        for (int version : ServerData.VERSIONS) {
+            ByteBuf buf = Unpooled.buffer();
+            buf.writeShortLE(NetherNetConstants.ID_DISCOVERY_RESPONSE);
+            buf.writeLongLE(this.networkId);
+            buf.writeZero(8);
+            buf.writeBytes(ServerData.encode(pong, version));
+            sendPacket(buf, sender);
+        }
     }
 
     private void handleMessage(ByteBuf data, long senderId, InetSocketAddress sender) {
