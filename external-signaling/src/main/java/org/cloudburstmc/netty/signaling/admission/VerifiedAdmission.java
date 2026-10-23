@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.util.nethernet.IdentityKeyVerifier;
 
 import java.util.Objects;
@@ -106,7 +107,7 @@ public record VerifiedAdmission(
         }
 
         if (remoteSctpPort < 1 || remoteSctpPort > 65535 || remoteMaxMessageSize < 1
-                || remoteMaxMessageSize > NetherNetFrameDecoder.MESSAGE_LIMIT) {
+                || remoteMaxMessageSize > NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE) {
             throw new IllegalArgumentException("SCTP parameters");
         }
     }

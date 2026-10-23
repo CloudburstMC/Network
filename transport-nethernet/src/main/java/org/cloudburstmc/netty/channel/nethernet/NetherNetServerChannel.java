@@ -416,9 +416,6 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         private final String remoteNetworkId;
         private final NetherNetChildChannel child;
 
-        private DataChannel reliable;
-        private DataChannel unreliable;
-
         private final int handshakeTimeoutSeconds;
         private final ScheduledFuture<?> handshakeTimeout;
         /** Whether ICE found a path, which tells a missing path from a later failure. */
@@ -547,30 +544,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         }
 
         private void onDataChannel(DataChannel dataChannel) {
-            String label = dataChannel.label();
-            log.debug("Received Data Channel: {}", label);
-
-            boolean isReliable = NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label);
-            if (isReliable && reliable == null) {
-                reliable = dataChannel;
-            } else if (NetherNetConstants.UNRELIABLE_CHANNEL_LABEL.equals(label) && unreliable == null) {
-                unreliable = dataChannel;
-            } else {
-                dataChannel.close();
-                return;
-            }
-
-            try {
-                child.readDataChannel(dataChannel, isReliable);
-            } catch (IllegalStateException closed) {
-                dataChannel.close();
-                return;
-            }
-
-            if (reliable != null && unreliable != null) {
+            log.debug("Received Data Channel: {}", dataChannel.label());
+            if (child.acceptDataChannel(dataChannel)) {
                 handshakeTimeout.cancel(false);
                 log.debug("Data Channels established for {}", this.connectionId);
-                child.activate(reliable, unreliable);
             }
         }
 

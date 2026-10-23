@@ -20,13 +20,17 @@ import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfi
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.AttributeKey;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
+import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.PeerConnection;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 
 public class NetherNetChildChannel extends NetherNetChannel {
+    private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChildChannel.class);
 
     /**
      * The signaling connection ID this channel was accepted for.
@@ -55,6 +59,57 @@ public class NetherNetChildChannel extends NetherNetChannel {
         this.peerConnection = peerConnection;
         this.config = new DefaultNetherChannelConfig(this);
         registerMetrics(peerConnection);
+    }
+
+    /** The data channels the remote opened so far. Guarded by this. */
+    private DataChannel acceptedReliable;
+    private DataChannel acceptedUnreliable;
+
+    /**
+     * Takes a data channel the remote opened, reading it from now on and activating this channel once both are
+     * in. An unknown or duplicate one is closed, and the connection carries on without it. Safe to call from a
+     * libdatachannel callback, also before this channel is registered.
+     *
+     * @param channel The data channel the remote opened
+     * @return Whether this completed the pair
+     */
+    public boolean acceptDataChannel(DataChannel channel) {
+        String label = channel.label();
+        boolean reliable = NetherNetConstants.RELIABLE_CHANNEL_LABEL.equals(label);
+        boolean taken = false;
+        DataChannel pairedReliable = null;
+        DataChannel pairedUnreliable = null;
+        synchronized (this) {
+            if (reliable ? acceptedReliable == null
+                    : NetherNetConstants.UNRELIABLE_CHANNEL_LABEL.equals(label) && acceptedUnreliable == null) {
+                try {
+                    readDataChannel(channel, reliable);
+                    taken = true;
+                } catch (IllegalStateException closed) {
+                    // This channel closed meanwhile
+                }
+            }
+            if (taken) {
+                if (reliable) {
+                    acceptedReliable = channel;
+                } else {
+                    acceptedUnreliable = channel;
+                }
+                pairedReliable = acceptedReliable;
+                pairedUnreliable = acceptedUnreliable;
+            }
+        }
+        if (!taken) {
+            // Outside the monitor, as a native close can wait for callbacks that take it
+            log.debug("Closing data channel {} on {}, which it cannot take", label, this);
+            channel.close();
+            return false;
+        }
+        if (pairedReliable == null || pairedUnreliable == null) {
+            return false;
+        }
+        activate(pairedReliable, pairedUnreliable);
+        return true;
     }
 
     @Override

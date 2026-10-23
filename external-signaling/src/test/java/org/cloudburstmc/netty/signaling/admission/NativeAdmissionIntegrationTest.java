@@ -1005,8 +1005,6 @@ class NativeAdmissionIntegrationTest {
                 assertTrue(endpoint.pollEvents().stream().allMatch(e -> e.validationToCreationNanos() > 0));
                 child.get().close().sync();
                 await(() -> endpoint.admissionStats().sessions() == 0);
-                assertEquals(0, child.get().queuedFrames());
-                assertEquals(0, child.get().retainedAssemblyBytes());
             }
             endpoint.close().sync();
             endpoint.termination().toCompletableFuture().get(5, TimeUnit.SECONDS);

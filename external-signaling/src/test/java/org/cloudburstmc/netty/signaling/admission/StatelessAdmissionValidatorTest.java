@@ -1,9 +1,6 @@
 package org.cloudburstmc.netty.signaling.admission;
 
 import com.google.gson.*;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
-import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
 import java.security.MessageDigest;
@@ -128,7 +125,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
     }
 
     @Test
-    void fixturesHavePinnedHashesAndCanonicalFrames() throws Exception {
+    void fixturesHavePinnedHashes() throws Exception {
         var provenance = fixture("provenance.json");
         assertEquals("urn:nethernet:external-signaling:v1", provenance.get("specification").getAsString());
         for (var entry : provenance.getAsJsonObject("files").entrySet()) {
@@ -137,23 +134,7 @@ class StatelessAdmissionValidatorTest extends AdmissionFixture {
                         .formatHex(MessageDigest.getInstance("SHA-256").digest(in.readAllBytes())));
             }
         }
-        for (var entry : fixture("cloudburst-protocol-vectors.v1.json").getAsJsonArray("nethernetFrames")) {
-            var frame = entry.getAsJsonObject();
-            var decoder = new NetherNetFrameDecoder();
-            ByteBuf decoded = decoder.decode(Unpooled.wrappedBuffer(
-                    HexFormat.of().parseHex(frame.get("frameHex").getAsString())), true);
-            byte[] actual = decoded == null ? null : ByteBufUtil.getBytes(decoded);
-            if (decoded != null) {
-                decoded.release();
-            }
-            if (frame.getAsJsonObject("decoded").get("complete").getAsBoolean()) {
-                assertArrayEquals(HexFormat.of().parseHex(frame.get("payloadHex").getAsString()), actual);
-            } else {
-                assertNull(actual);
-                decoder.clear();
-                assertEquals(0, decoder.retainedBytes());
-            }
-        }
+        // The frame vectors decode in transport-nethernet's NetherNetMessageAssemblerTest
     }
 
     @Test

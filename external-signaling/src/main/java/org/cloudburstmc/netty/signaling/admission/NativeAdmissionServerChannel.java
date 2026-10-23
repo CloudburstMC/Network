@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetNative;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherServerChannelConfig;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
@@ -259,7 +260,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         return CompletableFuture.completedFuture(IceUdpMuxListener.Acceptance
                 .builder(a.remoteDescription(), a.localPassword())
                 .configuration(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
-                        .withMaxMessageSize(NetherNetFrameDecoder.MESSAGE_LIMIT))
+                        .withMaxMessageSize(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE))
                 .identity(new DtlsIdentity(identity.certificate(), identity.privateKey()))
                 .initialize(peer -> initialize(reservation, a, peer))
                 .expiresAt(Instant.ofEpochMilli(a.expiresAt()))
@@ -448,8 +449,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                                                         .withPortRangeEnd(address.getPort())
                                                         .withDisableAutoNegotiation(true)
                                                         .withMaxMessageSize(
-                                                                NetherNetFrameDecoder
-                                                                        .MESSAGE_LIMIT),
+                                                                NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE),
                                                 Runnable::run,
                                                 new tel.schich.libdatachannel.DtlsIdentity(
                                                         identity.certificate(),
@@ -740,7 +740,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
             }
             try {
                 child.acceptDataChannel(dc);
-            } catch (Exception invalidChannel) {
+            } catch (RuntimeException deleted) {
                 session.failed = true;
             }
         });

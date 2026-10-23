@@ -118,10 +118,14 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     private volatile Reader reliableReader;
     private volatile Reader unreliableReader;
 
-    /** Messages read before the data channels were bound, delivered after channelActive. Event loop only. */
+    /** Messages read before the data channels were bound, delivered after channelActive. Guarded by this. */
     private final PendingMessages<NetherNetPacket> earlyMessages =
             new PendingMessages<>(MAX_EARLY_MESSAGES, MAX_RECEIVED_MESSAGE_SIZE,
                     early -> early.content().readableBytes());
+    /** Whether reads can go to the loop yet, rather than wait in {@link #earlyMessages}. Guarded by this. */
+    private boolean readsRegistered;
+    /** Whether reads failed before there was a loop to close on, which closes once there is. Guarded by this. */
+    private boolean failedBeforeRegistration;
     /** The send queue limit, which only tests lower. Event loop only. */
     int maxQueuedBytes = MAX_QUEUED_BYTES;
 
@@ -286,13 +290,17 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
         NetherNetPacket early;
         boolean read = false;
-        while ((early = earlyMessages.poll()) != null) {
+        while ((early = pollEarly()) != null) {
             fireRead(early.reliable(), early.content());
             read = true;
         }
         if (read) {
             pipeline().fireChannelReadComplete();
         }
+    }
+
+    private synchronized NetherNetPacket pollEarly() {
+        return earlyMessages.poll();
     }
 
     /**
@@ -353,7 +361,8 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
      * Reads a data channel from the moment the peer opens it, since libdatachannel queues what
      * nobody reads and blocks a native worker once 1024 messages wait. Messages read before
      * {@link #setDataChannels} binds it are delivered after channelActive, and past
-     * {@link #MAX_EARLY_MESSAGES} the channel closes. Safe to call from a libdatachannel callback.
+     * {@link #MAX_EARLY_MESSAGES} the channel closes. Safe to call from a libdatachannel callback,
+     * also before this channel is registered.
      *
      * @param channel  The data channel to read
      * @param reliable Whether it is the reliable one
@@ -395,11 +404,29 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
         try {
             countReceived(packet.readableBytes());
-            eventLoop().execute(() -> deliver(reader, packet));
+            if (!holdBeforeRegistration(reader, packet)) {
+                eventLoop().execute(() -> deliver(reader, packet));
+            }
         } catch (RuntimeException | Error e) {
             packet.release();
             throw e;
         }
+    }
+
+    /**
+     * Holds a message that arrived before this channel had a loop, which an accepted channel can be without while
+     * its peer already carries messages.
+     *
+     * @return Whether the message was taken
+     */
+    private synchronized boolean holdBeforeRegistration(Reader reader, ByteBuf packet) {
+        if (readsRegistered) {
+            return false;
+        }
+        if (!earlyMessages.offer(new NetherNetPacket(packet, reader.reliable()))) {
+            failedBeforeRegistration = true;
+        }
+        return true;
     }
 
     /** Event loop only. */
@@ -407,7 +434,11 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         if (!isOpen() || (reader != reliableReader && reader != unreliableReader)) {
             packet.release();
         } else if (reliableChannel == null) {
-            if (!earlyMessages.offer(new NetherNetPacket(packet, reader.reliable()))) {
+            boolean held;
+            synchronized (this) {
+                held = earlyMessages.offer(new NetherNetPacket(packet, reader.reliable()));
+            }
+            if (!held) {
                 log.debug("Closing {}, too much arrived before its data channels were bound", this);
                 close();
             }
@@ -422,8 +453,14 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         pipeline().fireChannelRead(message);
     }
 
-    /** Closes for {@code reason} from a libdatachannel callback. */
+    /** Closes for {@code reason} from a libdatachannel callback, or once registered if this channel is not yet. */
     private void closeFromCallback(TransportDisconnectReason reason) {
+        synchronized (this) {
+            if (!readsRegistered) {
+                failedBeforeRegistration = true;
+                return;
+            }
+        }
         try {
             eventLoop().execute(() -> closeWithReason(reason));
         } catch (RejectedExecutionException shutDown) {
@@ -669,7 +706,12 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
     @Override
     protected void doRegister() throws Exception {
-        eventLoop().execute(this::activate0);
+        boolean failed;
+        synchronized (this) {
+            readsRegistered = true;
+            failed = failedBeforeRegistration;
+        }
+        eventLoop().execute(failed ? this::close : this::activate0);
     }
 
     @Override
@@ -693,8 +735,8 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     }
 
     /**
-     * Closes the data channels and peer connection, dropping their listeners first. The peer is
-     * torn down in the background, as deleting it waits for native workers.
+     * Closes the data channels and peer connection, dropping their listeners first. The peer goes
+     * last, through {@link #closePeer}, so a failing teardown cannot skip the rest.
      */
     protected void closeWebRTC() {
         Reader reliable;
@@ -704,6 +746,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
             unreliable = unreliableReader;
             reliableReader = null;
             unreliableReader = null;
+            earlyMessages.clear();
         }
         closeReader(reliable);
         closeReader(unreliable);
@@ -711,12 +754,22 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         unreliableChannel = null;
         this.pending = null;
 
-        earlyMessages.clear();
+        PeerConnection peer = peerConnection;
+        peerConnection = null;
+        if (peer != null) {
+            deregisterAll(peer);
+        }
+        closePeer(peer);
+    }
 
-        if (peerConnection != null) {
-            deregisterAll(peerConnection);
-            peerConnection.closeAsync();
-            peerConnection = null;
+    /**
+     * Tears the peer down, in the background, as deleting it waits for native workers.
+     *
+     * @param peer The peer, or null when there is none
+     */
+    protected void closePeer(@Nullable PeerConnection peer) {
+        if (peer != null) {
+            peer.closeAsync();
         }
     }
 

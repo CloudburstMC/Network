@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
 import com.google.gson.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -783,7 +784,7 @@ public final class NativeProviderTransport implements ProviderTransport {
         profile.add("statelessAdmission", capability);
         profile.addProperty("admissionKeyId", keyId);
         profile.addProperty("dtlsFingerprint", channel.identity().fingerprint());
-        profile.addProperty("maxMessageSize", NetherNetFrameDecoder.MESSAGE_LIMIT);
+        profile.addProperty("maxMessageSize", NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE);
         profile.addProperty("sctpPort", 5000);
 
         long capturedGeneration = candidateGeneration;
