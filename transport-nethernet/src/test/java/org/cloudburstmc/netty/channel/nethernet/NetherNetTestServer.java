@@ -81,7 +81,12 @@ final class NetherNetTestServer implements AutoCloseable {
 
                     @Override
                     public void userEventTriggered(ChannelHandlerContext ctx, Object event) {
-                        childEvents.add(event);
+                        if (event instanceof NetherNetPacket.Delivery) {
+                            // Every read has one, so it goes on to the handlers a test adds
+                            ctx.fireUserEventTriggered(event);
+                        } else {
+                            childEvents.add(event);
+                        }
                     }
 
                     @Override

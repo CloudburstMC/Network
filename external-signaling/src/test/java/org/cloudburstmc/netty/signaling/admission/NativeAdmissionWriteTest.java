@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetPacket;
 import io.netty.buffer.*;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.TransportDisconnectReason;

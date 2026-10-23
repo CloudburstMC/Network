@@ -14,13 +14,14 @@
  * under the License.
  */
 
-package org.cloudburstmc.netty.signaling.admission;
+package org.cloudburstmc.netty.channel.nethernet;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.DefaultByteBufHolder;
 
 /**
- * Explicit outbound channel selection. Plain ByteBuf writes use the reliable channel.
+ * A message written to the data channel it names. Plain {@link ByteBuf} writes go on the reliable one. An
+ * unreliable message has to fit one segment, as Bedrock never splits those.
  */
 public final class NetherNetPacket extends DefaultByteBufHolder {
     private final boolean reliable;
@@ -40,8 +41,14 @@ public final class NetherNetPacket extends DefaultByteBufHolder {
     }
 
     /**
-     * Fired immediately before the corresponding inbound ByteBuf, on the same event loop.
+     * Fired right before each inbound message, on the same event loop, naming the data channel it came on.
      */
     public record Delivery(boolean reliable) {
+        public static final Delivery RELIABLE = new Delivery(true);
+        public static final Delivery UNRELIABLE = new Delivery(false);
+
+        static Delivery of(boolean reliable) {
+            return reliable ? RELIABLE : UNRELIABLE;
+        }
     }
 }

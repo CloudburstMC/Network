@@ -3,6 +3,7 @@
 // The original file license is preserved; see LICENSES/MPL-2.0.txt.
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetPacket;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;

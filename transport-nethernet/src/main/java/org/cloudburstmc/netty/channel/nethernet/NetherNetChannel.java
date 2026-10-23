@@ -30,6 +30,7 @@ import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.EventLoop;
+import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jspecify.annotations.Nullable;
@@ -58,17 +59,35 @@ import java.util.concurrent.RejectedExecutionException;
 /**
  * A NetherNet connection, carrying each message whole over a reliable and an unreliable data channel.
  * <p>
- * Broken framing on the reliable channel ends the connection with {@link TransportDisconnectReason#BAD_PACKET},
- * a message over 8 MiB, RakNet's split budget, with {@link TransportDisconnectReason#SPLIT_QUEUE_TOO_LONG}.
+ * Writes work as on RakNet: a flushed message goes to native at once and its future completes when it is
+ * handed over, and once more than {@link #MAX_QUEUED_BYTES} wait to be sent the connection ends with
+ * {@link TransportDisconnectReason#QUEUE_TOO_LONG}. Unlike RakNet, {@link #isWritable()} also turns off while
+ * either data channel holds more than 512 KiB. A plain {@link ByteBuf} goes on the reliable channel, a
+ * {@link NetherNetPacket} on the one it names.
+ * <p>
+ * Reads ignore {@code autoRead}, as on RakNet, and each message follows a {@link NetherNetPacket.Delivery}
+ * naming its data channel. Broken framing on the reliable channel ends the connection with
+ * {@link TransportDisconnectReason#BAD_PACKET}, a message over 8 MiB, RakNet's split budget, with
+ * {@link TransportDisconnectReason#SPLIT_QUEUE_TOO_LONG}.
  */
 public abstract class NetherNetChannel extends AbstractChannel implements TransportChannel {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(NetherNetChannel.class);
     protected static final ChannelMetadata METADATA = new ChannelMetadata(false);
-    private static final int MAX_SEGMENT_PAYLOAD = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
+    static final int MAX_SEGMENT_PAYLOAD = NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1;
     /** As many segments as the countdown numbers, each the size a retail client sends. */
     static final int MAX_MESSAGE_SIZE = NetherNetConstants.MAX_SEGMENTS * MAX_SEGMENT_PAYLOAD;
     /** RakNet's split budget, as a retail client splits at the advertised size and may send more than this side. */
     static final int MAX_RECEIVED_MESSAGE_SIZE = 8 << 20;
+    /**
+     * Past this many bytes waiting in the data channels the connection ends, RakNet's default limit. What the SCTP
+     * association buffers below them does not count, so only a remote that stopped reading gets here.
+     */
+    public static final int MAX_QUEUED_BYTES = 64 << 20;
+    /** Writability turns off past this many bytes waiting in either data channel. */
+    static final int WRITABILITY_HIGH = 512 << 10;
+    /** And back on once both are down to this many. */
+    static final int WRITABILITY_LOW = 256 << 10;
+    private static final int NATIVE_WRITABILITY = 1;
 
     /**
      * One side of the selected pair carries the address the socket uses and the candidate type it
@@ -81,7 +100,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     private record DataChannels(DataChannel reliable, DataChannel unreliable) {
     }
 
-    private record Reader(DataChannel channel, NetherNetMessageAssembler assembler) {
+    private record Reader(DataChannel channel, NetherNetMessageAssembler assembler, boolean reliable) {
     }
 
     /** How many messages may arrive before the data channels are bound, far more than a join sends. */
@@ -100,8 +119,11 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     private volatile Reader unreliableReader;
 
     /** Messages read before the data channels were bound, delivered after channelActive. Event loop only. */
-    private final PendingMessages<ByteBuf> earlyMessages =
-            new PendingMessages<>(MAX_EARLY_MESSAGES, MAX_RECEIVED_MESSAGE_SIZE, ByteBuf::readableBytes);
+    private final PendingMessages<NetherNetPacket> earlyMessages =
+            new PendingMessages<>(MAX_EARLY_MESSAGES, MAX_RECEIVED_MESSAGE_SIZE,
+                    early -> early.content().readableBytes());
+    /** The send queue limit, which only tests lower. Event loop only. */
+    int maxQueuedBytes = MAX_QUEUED_BYTES;
 
     protected volatile boolean open = true;
 
@@ -262,10 +284,10 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         setDataChannels(channels.reliable(), channels.unreliable());
         pipeline().fireChannelActive();
 
-        ByteBuf early;
+        NetherNetPacket early;
         boolean read = false;
         while ((early = earlyMessages.poll()) != null) {
-            pipeline().fireChannelRead(early);
+            fireRead(early.reliable(), early.content());
             read = true;
         }
         if (read) {
@@ -295,6 +317,10 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         }
         this.reliableChannel = reliable;
         this.unreliableChannel = unreliable;
+        watchBufferedAmount(reliable);
+        if (unreliable != null) {
+            watchBufferedAmount(unreliable);
+        }
 
         reliable.onClosed.register(channel -> closeFromTransport());
         if (reliable.isClosed()) {
@@ -307,6 +333,22 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         return reader != null && reader.channel() == channel;
     }
 
+    /** Lets writability come back once a data channel drains, see {@link #updateWritability}. */
+    private void watchBufferedAmount(DataChannel channel) {
+        try {
+            channel.bufferedAmountLowThreshold(WRITABILITY_LOW);
+        } catch (RuntimeException closed) {
+            return;
+        }
+        channel.onBufferedAmountLow.register(dc -> {
+            try {
+                eventLoop().execute(this::updateWritability);
+            } catch (RejectedExecutionException shutDown) {
+                // Nothing will be written anymore
+            }
+        });
+    }
+
     /**
      * Reads a data channel from the moment the peer opens it, since libdatachannel queues what
      * nobody reads and blocks a native worker once 1024 messages wait. Messages read before
@@ -317,7 +359,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
      * @param reliable Whether it is the reliable one
      */
     protected void readDataChannel(DataChannel channel, boolean reliable) {
-        Reader reader = new Reader(channel, new NetherNetMessageAssembler(reliable));
+        Reader reader = new Reader(channel, new NetherNetMessageAssembler(reliable), reliable);
         synchronized (this) {
             if (!open) {
                 throw new IllegalStateException("Channel closed");
@@ -353,23 +395,31 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
         try {
             countReceived(packet.readableBytes());
-            eventLoop().execute(() -> {
-                if (!isOpen() || (reader != reliableReader && reader != unreliableReader)) {
-                    packet.release();
-                } else if (reliableChannel == null) {
-                    if (!earlyMessages.offer(packet)) {
-                        log.debug("Closing {}, too much arrived before its data channels were bound", this);
-                        close();
-                    }
-                } else {
-                    pipeline().fireChannelRead(packet);
-                    pipeline().fireChannelReadComplete();
-                }
-            });
+            eventLoop().execute(() -> deliver(reader, packet));
         } catch (RuntimeException | Error e) {
             packet.release();
             throw e;
         }
+    }
+
+    /** Event loop only. */
+    private void deliver(Reader reader, ByteBuf packet) {
+        if (!isOpen() || (reader != reliableReader && reader != unreliableReader)) {
+            packet.release();
+        } else if (reliableChannel == null) {
+            if (!earlyMessages.offer(new NetherNetPacket(packet, reader.reliable()))) {
+                log.debug("Closing {}, too much arrived before its data channels were bound", this);
+                close();
+            }
+        } else {
+            fireRead(reader.reliable(), packet);
+            pipeline().fireChannelReadComplete();
+        }
+    }
+
+    private void fireRead(boolean reliable, ByteBuf message) {
+        pipeline().fireUserEventTriggered(NetherNetPacket.Delivery.of(reliable));
+        pipeline().fireChannelRead(message);
     }
 
     /** Closes for {@code reason} from a libdatachannel callback. */
@@ -461,63 +511,105 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
     @Override
     protected Object filterOutboundMessage(Object msg) {
+        // Refused before it is queued, so the write's promise fails and nothing is sent
         if (msg instanceof ByteBuf payload) {
-            // Refused before it is queued, so the write's promise fails and nothing is sent
             NetherNetConstants.segmentCount(payload.readableBytes(), MAX_SEGMENT_PAYLOAD);
+        } else if (msg instanceof NetherNetPacket packet) {
+            int length = packet.content().readableBytes();
+            if (packet.reliable()) {
+                NetherNetConstants.segmentCount(length, MAX_SEGMENT_PAYLOAD);
+            } else if (length > MAX_SEGMENT_PAYLOAD) {
+                throw new IllegalArgumentException("An unreliable message of " + length
+                        + " bytes is more than the one segment of " + MAX_SEGMENT_PAYLOAD + " it may take");
+            }
+        } else {
+            throw new UnsupportedOperationException("Unsupported message type: " + StringUtil.simpleClassName(msg));
         }
         return msg;
     }
 
     @Override
     protected void doWrite(ChannelOutboundBuffer in) throws Exception {
-        Object msg = null;
-        try {
-            while ((msg = in.current()) != null) {
-                writeInternal(msg);
+        Object msg;
+        while ((msg = in.current()) != null) {
+            boolean reliable = !(msg instanceof NetherNetPacket packet) || packet.reliable();
+            ByteBuf payload = msg instanceof NetherNetPacket packet ? packet.content() : (ByteBuf) msg;
+            DataChannel channel = reliable ? reliableChannel : unreliableChannel;
+            if (channel == null) {
+                in.remove(new IllegalStateException("The peer opened no unreliable data channel"));
+                continue;
+            }
+            if (channel.isClosed()) {
+                // Gone underneath this channel, whose close is already on its way. Dropped quietly, as a host's
+                // batch flush lands here when a player quits
                 in.remove();
+                continue;
             }
-        } catch (IOException sendFailed) {
-            // Closed here whatever AUTO_CLOSE says: without it Netty only shuts the output down,
-            // which leaves a channel that never reports closing
-            log.debug("Sending on {} failed: {}", this, sendFailed.getCause().toString());
-            if (msg != null) {
-                in.remove(sendFailed);
+
+            int length = payload.readableBytes();
+            if (queuedBytes() + length > maxQueuedBytes) {
+                log.debug("Closing {}, more than {} bytes are waiting to be sent", this, maxQueuedBytes);
+                pipeline().fireUserEventTriggered(TransportDisconnectReason.QUEUE_TOO_LONG);
+                close();
+                return;
             }
-            fireDisconnectReason();
-            close();
+
+            try {
+                int segments = segment(payload, alloc(), MAX_SEGMENT_PAYLOAD, channel::sendMessage);
+                if (segments == 0) {
+                    log.debug("Nothing sent for an empty outbound message");
+                } else {
+                    log.trace("Wrote {} bytes to the {} channel in {} segments", length,
+                            reliable ? "reliable" : "unreliable", segments);
+                    countSent(length, segments);
+                }
+                in.remove();
+            } catch (RuntimeException e) {
+                // Closed here whatever AUTO_CLOSE says: without it Netty only shuts the output down,
+                // which leaves a channel that never reports closing
+                log.debug("Sending on {} failed: {}", this, e.toString());
+                in.remove(new IOException("Sending on the " + (reliable ? "reliable" : "unreliable")
+                        + " data channel failed", e));
+                fireDisconnectReason();
+                close();
+                return;
+            }
+        }
+        updateWritability();
+    }
+
+    /** What the data channels hold that native has yet to send. */
+    private long queuedBytes() {
+        return (long) buffered(reliableChannel) + buffered(unreliableChannel);
+    }
+
+    private static int buffered(@Nullable DataChannel channel) {
+        if (channel == null) {
+            return 0;
+        }
+        try {
+            return channel.bufferedAmount();
+        } catch (RuntimeException closed) {
+            return 0;
         }
     }
 
     /**
-     * @throws IOException if the send failed, after which the message stream cannot go on
+     * Turns writability off while either data channel holds more than {@link #WRITABILITY_HIGH} and back on once
+     * both are down to {@link #WRITABILITY_LOW}. Read afresh each time, as the native callback that lowers it can
+     * run before the write that raised it gets here. Event loop only.
      */
-    private void writeInternal(Object msg) throws IOException {
-        if (!(msg instanceof ByteBuf payload)) {
-            log.debug("Dropping an outbound {}, which this channel cannot frame",
-                    msg == null ? null : msg.getClass().getName());
+    private void updateWritability() {
+        ChannelOutboundBuffer out = unsafe().outboundBuffer();
+        if (out == null || reliableChannel == null) {
             return;
         }
-
-        if (reliableChannel.isClosed()) {
-            // Gone underneath this channel, whose close is already on its way
-            return;
-        }
-
-        ByteBuf framed = payload.retainedDuplicate();
-        int totalLength = framed.readableBytes();
-
-        try {
-            int segments = segment(framed, alloc(), MAX_SEGMENT_PAYLOAD, reliableChannel::sendMessage);
-            if (segments == 0) {
-                log.debug("Nothing sent for an empty outbound message");
-            } else {
-                log.trace("Wrote {} bytes to the reliable channel in {} segments", totalLength, segments);
-                countSent(totalLength, segments);
-            }
-        } catch (RuntimeException e) {
-            throw new IOException("Sending on the reliable data channel failed", e);
-        } finally {
-            framed.release();
+        int reliable = buffered(reliableChannel);
+        int unreliable = buffered(unreliableChannel);
+        if (reliable > WRITABILITY_HIGH || unreliable > WRITABILITY_HIGH) {
+            out.setUserDefinedWritability(NATIVE_WRITABILITY, false);
+        } else if (reliable <= WRITABILITY_LOW && unreliable <= WRITABILITY_LOW) {
+            out.setUserDefinedWritability(NATIVE_WRITABILITY, true);
         }
     }
 

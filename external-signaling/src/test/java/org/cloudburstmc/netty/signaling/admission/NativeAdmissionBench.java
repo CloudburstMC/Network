@@ -1,5 +1,6 @@
 package org.cloudburstmc.netty.signaling.admission;
 
+import org.cloudburstmc.netty.channel.nethernet.NetherNetPacket;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.ByteBufUtil;
 import com.google.gson.*;
