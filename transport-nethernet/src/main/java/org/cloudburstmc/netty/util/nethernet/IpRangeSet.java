@@ -32,7 +32,8 @@ import java.util.List;
 
 /**
  * A set of addresses written as single hosts or CIDR ranges, such as {@code 10.0.0.0/8} or
- * {@code 2001:db8::/32}. An address with no prefix matches only itself.
+ * {@code 2001:db8::/32}. An address with no prefix matches only itself, and a host name every
+ * address it resolves to.
  */
 public final class IpRangeSet {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(IpRangeSet.class);
@@ -72,17 +73,25 @@ public final class IpRangeSet {
             }
             try {
                 int slash = trimmed.lastIndexOf('/');
-                InetAddress address = InetAddress.getByName(slash < 0 ? trimmed : trimmed.substring(0, slash));
-                // A bare address covers itself only, so the prefix is the whole address
-                int prefix = slash < 0 ? (address instanceof Inet6Address ? 128 : 32)
-                        : Integer.parseInt(trimmed.substring(slash + 1).trim());
-                rules.add(new IpSubnetFilterRule(address, prefix, IpFilterRuleType.ACCEPT));
-                kept.add(NetUtil.toAddressString(address) + "/" + prefix);
+                if (slash < 0) {
+                    // A bare address covers itself only, so the prefix is the whole address
+                    for (InetAddress address : InetAddress.getAllByName(trimmed)) {
+                        add(rules, kept, address, address instanceof Inet6Address ? 128 : 32);
+                    }
+                } else {
+                    add(rules, kept, InetAddress.getByName(trimmed.substring(0, slash)),
+                            Integer.parseInt(trimmed.substring(slash + 1).trim()));
+                }
             } catch (IllegalArgumentException | UnknownHostException e) {
                 log.warn("Ignoring {}, which is not an address or CIDR range: {}", trimmed, e.getMessage());
             }
         }
         return rules.isEmpty() ? EMPTY : new IpRangeSet(rules, List.copyOf(kept));
+    }
+
+    private static void add(List<IpSubnetFilterRule> rules, List<String> entries, InetAddress address, int prefix) {
+        rules.add(new IpSubnetFilterRule(address, prefix, IpFilterRuleType.ACCEPT));
+        entries.add(NetUtil.toAddressString(address) + "/" + prefix);
     }
 
     public boolean isEmpty() {

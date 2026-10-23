@@ -55,6 +55,14 @@ class IpRangeSetTest {
     }
 
     @Test
+    void trustsEveryAddressANameResolvesTo() throws Exception {
+        IpRangeSet set = IpRangeSet.parse(List.of("localhost"));
+        for (InetAddress address : InetAddress.getAllByName("localhost")) {
+            assertTrue(set.contains(address), address.toString());
+        }
+    }
+
+    @Test
     void matchesInsideAnIpv4Range() throws Exception {
         IpRangeSet set = IpRangeSet.parse(List.of("10.0.0.0/8"));
 
