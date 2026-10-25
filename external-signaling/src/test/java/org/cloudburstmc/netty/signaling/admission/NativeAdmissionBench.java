@@ -176,7 +176,8 @@ public final class NativeAdmissionBench {
                             }
                         });
             }
-            peer.setLocalDescription("offer", "nativeBenchClient", "p".repeat(assisted ? 128 : 32));
+            // An assisted join's NXS1 token carries the password, and holds at most 91 characters
+            peer.setLocalDescription("offer", "nativeBenchClient", "p".repeat(assisted ? 91 : 32));
             if (assisted && !gathered.await(5, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("Client ICE gather timeout");
             }
