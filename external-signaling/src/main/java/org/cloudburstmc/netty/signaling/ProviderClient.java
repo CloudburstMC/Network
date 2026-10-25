@@ -51,6 +51,11 @@ public final class ProviderClient implements AutoCloseable {
 
     private static final String CONNECTIVITY_EXTENSION = "dev.opencollab.nxs.connectivity";
     private static final long DIAGNOSTIC_VALIDITY_MILLIS = 300000;
+    /** A provider cannot hold a host back for longer than this at a time. */
+    private static final long MAX_RETRY_AFTER_SECONDS = 86400;
+    /** Failed check-ins and reports wait this long, doubling with each further failure up to the cap. */
+    private static final long RETRY_NANOS = TimeUnit.SECONDS.toNanos(10);
+    private static final long MAX_BACKOFF_NANOS = TimeUnit.MINUTES.toNanos(2);
 
     /**
      * What the client registers and runs with. The bearer token alone decides what the provider
@@ -433,11 +438,25 @@ public final class ProviderClient implements AutoCloseable {
     public static final class ProviderException extends IOException {
         private final int status;
         private final String code;
+        private final String providerMessage;
+        private final URI actionUrl;
+        private final Duration retryAfter;
 
-        ProviderException(int status, String code) {
-            super("Provider request failed: " + status + " " + code);
+        ProviderException(int status, String code, String providerMessage, URI actionUrl, Duration retryAfter) {
+            super(describe(status, code, providerMessage, actionUrl));
             this.status = status;
             this.code = code;
+            this.providerMessage = providerMessage;
+            this.actionUrl = actionUrl;
+            this.retryAfter = retryAfter;
+        }
+
+        /** Such as "Add a token. (403 capacity_reached) https://provider.example/tokens" */
+        private static String describe(int status, String code, String providerMessage, URI actionUrl) {
+            String description = providerMessage == null
+                    ? "Provider request failed: " + status + " " + code
+                    : providerMessage + " (" + status + " " + code + ")";
+            return actionUrl == null ? description : description + " " + actionUrl;
         }
 
         public int status() {
@@ -447,6 +466,21 @@ public final class ProviderClient implements AutoCloseable {
         /** The provider's machine code; see the wire reference for the codes clients act on. */
         public String code() {
             return code;
+        }
+
+        /** The provider's explanation for the host's operator, to show as its words and never parse. */
+        public Optional<String> providerMessage() {
+            return Optional.ofNullable(providerMessage);
+        }
+
+        /** A page where the operator can act. It carries no credential, so it may be logged, but is never opened. */
+        public Optional<URI> actionUrl() {
+            return Optional.ofNullable(actionUrl);
+        }
+
+        /** How long the provider asked the client to wait before repeating the request, at most a day. */
+        public Optional<Duration> retryAfter() {
+            return Optional.ofNullable(retryAfter);
         }
     }
 
@@ -509,6 +543,8 @@ public final class ProviderClient implements AutoCloseable {
     private boolean operatorActionAvailable;
     private long nextOutcomes;
     private long nextStatusUpdate;
+    /** Consecutive failures, which lengthen the wait before the next attempt. */
+    private int heartbeatFailures, outcomeFailures;
     private long minUpdateIntervalMs = 1000;
     private URI websocketEndpoint;
     private ProviderWebSocket websocket;
@@ -639,19 +675,16 @@ public final class ProviderClient implements AutoCloseable {
                                                 heartbeat();
                                             }
                                         } catch (Exception e) {
-                                            nextHeartbeat =
-                                                    System.nanoTime()
-                                                            + TimeUnit.SECONDS.toNanos(10);
-                                            nextStatusUpdate = nextHeartbeat;
-                                            diagnostics.failed(ProviderLog.Operation.STATUS, safeFailure(e));
+                                            heartbeatFailed(e);
                                         }
                                         if (started && System.nanoTime() >= nextOutcomes) {
                                             try {
                                                 flushEvents();
                                             } catch (Exception e) {
+                                                outcomeFailures++;
                                                 nextOutcomes =
                                                         System.nanoTime()
-                                                                + TimeUnit.SECONDS.toNanos(10);
+                                                                + retryDelayNanos(e, outcomeFailures);
                                                 diagnostics.failed(ProviderLog.Operation.EVENTS, safeFailure(e));
                                             }
                                         }
@@ -1033,12 +1066,34 @@ public final class ProviderClient implements AutoCloseable {
                                     heartbeat();
                                 }
                             } catch (Exception e) {
-                                nextStatusUpdate = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                                diagnostics.failed(ProviderLog.Operation.STATUS, safeFailure(e));
+                                heartbeatFailed(e);
                             }
                         }
                     });
         }
+    }
+
+    /** Neither the schedule nor a status change sends another heartbeat until the backoff has passed. */
+    private void heartbeatFailed(Exception failure) {
+        heartbeatFailures++;
+        nextHeartbeat = System.nanoTime() + retryDelayNanos(failure, heartbeatFailures);
+        nextStatusUpdate = nextHeartbeat;
+        diagnostics.failed(ProviderLog.Operation.STATUS, safeFailure(failure));
+    }
+
+    /**
+     * How long to wait after the given number of consecutive failures: at least 10 seconds and no sooner than the
+     * provider's Retry-After when it sent one, otherwise 10 seconds doubling to 2 minutes, plus up to a tenth as
+     * jitter.
+     */
+    static long retryDelayNanos(Throwable failure, int failures) {
+        long delay;
+        if (unwrapped(failure) instanceof ProviderException refused && refused.retryAfter().isPresent()) {
+            delay = Math.max(RETRY_NANOS, refused.retryAfter().get().toNanos());
+        } else {
+            delay = Math.min(RETRY_NANOS << Math.min(Math.max(failures - 1, 0), 4), MAX_BACKOFF_NANOS);
+        }
+        return delay + ThreadLocalRandom.current().nextLong(delay / 10 + 1);
     }
 
     private ServerStatus currentStatus() {
@@ -1236,6 +1291,7 @@ public final class ProviderClient implements AutoCloseable {
                                 body,
                                 UUID.randomUUID().toString(),
                                 captured == null ? () -> {} : captured::requireCurrent);
+                heartbeatFailures = 0;
                 long diagnosticSuccessNanos = System.nanoTime(),
                         diagnosticSuccessMillis = System.currentTimeMillis();
             ProtocolExtensions.validate(response);
@@ -1766,6 +1822,7 @@ public final class ProviderClient implements AutoCloseable {
         // Dropped by position, and only once the exchange is done, so no view spans the request
         pending.asList().subList(0, sent).clear();
         save();
+        outcomeFailures = 0;
         diagnostics.recovered(ProviderLog.Operation.EVENTS);
     }
 
@@ -1851,20 +1908,58 @@ public final class ProviderClient implements AutoCloseable {
     private static OperatorAction operatorAction(JsonElement value) {
         try {
             JsonObject json = value.getAsJsonObject();
-            String link = json.get("url").getAsString(), text = json.get("text").getAsString();
+            URI url = operatorUrl(json.get("url"));
+            String text = operatorText(json.get("text"));
             long expiresAt = json.get("expiresAt").getAsLong();
-            URI url = new URI(link);
-            boolean loopback = "http".equals(url.getScheme()) && Set.of("localhost", "127.0.0.1", "[::1]").contains(url.getHost());
-            if (link.length() > 2048 || url.getRawUserInfo() != null || url.getHost() == null
-                    || !("https".equals(url.getScheme()) || loopback) || text.isEmpty()
-                    || text.codePointCount(0, text.length()) > 256 || text.chars().anyMatch(c -> c < 0x20 || c == 0x7f)
-                    || expiresAt < 0) {
+            if (url == null || text == null || expiresAt < 0) {
                 return null;
             }
             return new OperatorAction(url, text, expiresAt);
-        } catch (RuntimeException | URISyntaxException invalid) {
+        } catch (RuntimeException invalid) {
             return null;
         }
+    }
+
+    /** Text for the operator, as in an operator action or an error: 1 to 256 characters without control characters. */
+    private static String operatorText(JsonElement value) {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+        String text = value.getAsString();
+        if (text.isEmpty() || text.codePointCount(0, text.length()) > 256
+                || text.chars().anyMatch(Character::isISOControl)) {
+            return null;
+        }
+        return text;
+    }
+
+    /** A link for the operator, as in an operator action or an error: HTTPS, or HTTP on loopback, without userinfo. */
+    private static URI operatorUrl(JsonElement value) {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+        String link = value.getAsString();
+        try {
+            URI url = new URI(link);
+            boolean loopback = "http".equals(url.getScheme())
+                    && Set.of("localhost", "127.0.0.1", "[::1]").contains(url.getHost());
+            if (link.length() > 2048 || url.getRawUserInfo() != null || url.getHost() == null
+                    || !("https".equals(url.getScheme()) || loopback)) {
+                return null;
+            }
+            return url;
+        } catch (URISyntaxException invalid) {
+            return null;
+        }
+    }
+
+    /** Retry-After in delta-seconds, the only form NXS gives a meaning, capped at a day; null otherwise. */
+    private static Duration retryAfterHeader(HttpHeaders headers) {
+        String value = headers.firstValue("retry-after").orElse("").trim();
+        if (!value.matches("[0-9]{1,18}")) {
+            return null;
+        }
+        return Duration.ofSeconds(Math.min(Long.parseLong(value), MAX_RETRY_AFTER_SECONDS));
     }
 
     /** Opaque registration metadata; the application decides what it means. */
@@ -2198,9 +2293,16 @@ public final class ProviderClient implements AutoCloseable {
             String text = response.body();
             int status = response.status();
             String code = "request_rejected";
+            String message = null;
+            URI actionUrl = null;
+            Duration retryAfter = null;
             if (status / 100 != 2) {
+                retryAfter = retryAfterHeader(response.headers());
                 try {
                     JsonObject error = JsonParser.parseString(text).getAsJsonObject();
+                    // Each optional member is checked alone, so an invalid one is dropped and the code kept
+                    message = operatorText(error.get("message"));
+                    actionUrl = operatorUrl(error.get("actionUrl"));
                     if (error.has("code")
                             && error.get("code").getAsString().matches("[a-z0-9_]{1,80}")) {
                         code = error.get("code").getAsString();
@@ -2218,21 +2320,20 @@ public final class ProviderClient implements AutoCloseable {
             if ((status == 429 || status == 503 || status == 502 || status == 504)
                     && attempt < attempts - 1) {
                 long delay = 250L << attempt;
-                try {
-                    delay = Math.max(delay, response.headers().firstValueAsLong("retry-after").orElse(0) * 1000);
-                } catch (NumberFormatException ignored) {
+                if (retryAfter != null) {
+                    delay = Math.max(delay, retryAfter.toMillis());
                 }
-                if (delay > 10000) {
-                    throw new ProviderException(status, "retry_later");
+                // A longer wait fails at once below, keeping the provider's code and hint for the caller
+                if (delay <= 10000) {
+                    Thread.sleep(delay + ThreadLocalRandom.current().nextLong(100));
+                    continue;
                 }
-                Thread.sleep(delay + ThreadLocalRandom.current().nextLong(100));
-                continue;
             }
             if (status / 100 != 2) {
                 if (signed && GENERATION_FENCED.equals(code)) {
                     fenced();
                 }
-                throw new ProviderException(status, code);
+                throw new ProviderException(status, code, message, actionUrl, retryAfter);
             }
             JsonObject result = JsonParser.parseString(text).getAsJsonObject();
             if (signed) {
@@ -2416,11 +2517,16 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private static String safeFailure(Throwable e) {
-        // A future's wrapper says nothing about what failed
+        e = unwrapped(e);
+        return e instanceof ProviderException ? e.getMessage() : e.getClass().getSimpleName();
+    }
+
+    /** A future's wrapper says nothing about what failed. */
+    private static Throwable unwrapped(Throwable e) {
         while ((e instanceof ExecutionException || e instanceof CompletionException) && e.getCause() != null) {
             e = e.getCause();
         }
-        return e instanceof ProviderException ? e.getMessage() : e.getClass().getSimpleName();
+        return e;
     }
 
     private <T> CompletableFuture<T> submit(Callable<T> fn) {

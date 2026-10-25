@@ -99,9 +99,13 @@ transport sends.
 
 On a transient transport failure or HTTP 429, 502, 503 or 504, the client makes
 at most three attempts in total, with capped exponential delays and jitter. A
-`Retry-After` value over ten seconds returns a retry-later result. Outcome uploads
-use one attempt with a three-second timeout and a ten-second failure backoff so
-they cannot starve heartbeat renewal. The outcome queue retains at most 1000
+`Retry-After` value over ten seconds fails the request at once with the provider's
+code. A failed heartbeat or outcome upload waits ten seconds, doubling with each
+further failure up to two minutes, or as long as the provider's `Retry-After` when
+it sent one. Outcome uploads use one attempt with a three-second timeout so they
+cannot starve heartbeat renewal. `ProviderException` carries the provider's
+`message`, `actionUrl` and `Retry-After` when present, and its message includes
+the text and link for the operator. The outcome queue retains at most 1000
 pending entries and flushes at most 100 per tick, independently of idle heartbeat
 timing.
 

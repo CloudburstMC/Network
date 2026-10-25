@@ -27,6 +27,8 @@ public final class IndependentProviderStub implements AutoCloseable {
     /** Every heartbeat body as sent, for pinning bytes. */
     final List<String> heartbeatBodies = new CopyOnWriteArrayList<>();
     volatile int failHeartbeats;
+    /** Answers every enrollment register instead of a challenge, and every heartbeat, while set. */
+    volatile Refusal registrationRefusal, heartbeatRefusal;
     volatile boolean failOutcomes;
     /** Outcome batches still to reject permanently. */
     volatile int rejectOutcomes;
@@ -81,6 +83,13 @@ public final class IndependentProviderStub implements AutoCloseable {
             if (e.getRequestURI().getPath().endsWith("/heartbeat")) {
                 heartbeatResponseHook.run();
             }
+        } catch (Refusal r) {
+            r.answered.incrementAndGet();
+            status = r.status;
+            response = r.body;
+            if (r.retryAfter != null) {
+                e.getResponseHeaders().add("retry-after", r.retryAfter);
+            }
         } catch (Failure f) {
             status = f.status;
             response = new JsonObject();
@@ -129,6 +138,10 @@ public final class IndependentProviderStub implements AutoCloseable {
             boolean recovery = body.has("registrationId");
             if (!ProviderCrypto.PROTOCOL.equals(body.get("protocol").getAsString())) {
                 throw new Failure(400, "unsupported_protocol");
+            }
+            Refusal refusal = registrationRefusal;
+            if (!recovery && refusal != null) {
+                throw refusal;
             }
             // A lost completion recovers by the challenge that created the registration
             if (recovery && (registration == null || !registration.get("registrationId").equals(body.get(
@@ -265,6 +278,10 @@ public final class IndependentProviderStub implements AutoCloseable {
             heartbeatAttemptHook.run();
         }
         if (path.equals("/example/heartbeat")) {
+            Refusal refusal = heartbeatRefusal;
+            if (refusal != null) {
+                throw refusal;
+            }
             int remainingFailures = failHeartbeats;
             failHeartbeats--;
             if (remainingFailures > 0) {
@@ -428,6 +445,23 @@ public final class IndependentProviderStub implements AutoCloseable {
         key.addProperty("keyId", "T001");
         key.addProperty("secret", "LYDph--S9dykiRFwmo5VAzY5GO_QGapcKQ4luEgrCRM");
         return key;
+    }
+
+    /** An error response a test sets: its status, JSON body and optional Retry-After header. */
+    static final class Refusal extends Exception {
+        final int status;
+        final JsonObject body;
+        final String retryAfter;
+        /** How many requests it has answered. */
+        final java.util.concurrent.atomic.AtomicInteger answered = new java.util.concurrent.atomic.AtomicInteger();
+
+        Refusal(int status, String body, String retryAfter) {
+            // One instance answers many requests, so it keeps no stack trace
+            super(null, null, false, false);
+            this.status = status;
+            this.body = JsonParser.parseString(body).getAsJsonObject();
+            this.retryAfter = retryAfter;
+        }
     }
 
     private static final class Failure extends Exception {

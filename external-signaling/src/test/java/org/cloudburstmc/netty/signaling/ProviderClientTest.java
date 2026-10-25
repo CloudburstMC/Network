@@ -5,9 +5,11 @@ import com.google.gson.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -751,6 +753,121 @@ class ProviderClientTest {
             assertEquals("2001:db8::1234", stub.events.get(0).get("remoteAddress").getAsString());
             assertEquals(54321, stub.events.get(0).get("remotePort").getAsInt());
             assertFalse(stub.events.get(0).has("sdp"));
+        }
+    }
+
+    @Test
+    void aRefusalCarriesTheProvidersMessageLinkAndRetryAfter(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.registrationRefusal = new IndependentProviderStub.Refusal(403, """
+                    {"code":"capacity_reached","message":"Add a token, or start the server again later.",
+                     "actionUrl":"https://provider.example/tokens"}
+                    """, "3600");
+            ProviderClient.ProviderException refused = refusedStart(stub, path);
+            assertEquals(403, refused.status());
+            assertEquals("capacity_reached", refused.code());
+            assertEquals(Optional.of("Add a token, or start the server again later."), refused.providerMessage());
+            assertEquals(Optional.of(URI.create("https://provider.example/tokens")), refused.actionUrl());
+            assertEquals(Optional.of(Duration.ofHours(1)), refused.retryAfter());
+            assertEquals(
+                    "Add a token, or start the server again later. (403 capacity_reached) https://provider.example/tokens",
+                    refused.getMessage());
+        }
+    }
+
+    @Test
+    void anInvalidActionUrlIsDroppedAndTheCodeKept(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            // Error links never carry credentials, so one with userinfo is not shown
+            stub.registrationRefusal = new IndependentProviderStub.Refusal(403, """
+                    {"code":"registration_disabled","message":"Registration is closed.",
+                     "actionUrl":"https://operator:secret@provider.example/tokens"}
+                    """, null);
+            ProviderClient.ProviderException refused = refusedStart(stub, path);
+            assertEquals("registration_disabled", refused.code());
+            assertEquals(Optional.of("Registration is closed."), refused.providerMessage());
+            assertEquals(Optional.empty(), refused.actionUrl());
+            assertEquals(Optional.empty(), refused.retryAfter());
+            assertEquals("Registration is closed. (403 registration_disabled)", refused.getMessage());
+        }
+    }
+
+    @Test
+    void aRetryAfterBeyondTheInPlaceBudgetKeepsTheProvidersCode(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.registrationRefusal = new IndependentProviderStub.Refusal(429, """
+                    {"code":"rate_limited"}
+                    """, "60");
+            ProviderClient.ProviderException refused = refusedStart(stub, path);
+            assertEquals("rate_limited", refused.code());
+            assertEquals(Optional.of(Duration.ofSeconds(60)), refused.retryAfter());
+            assertEquals("Provider request failed: 429 rate_limited", refused.getMessage());
+            // Failed at once instead of waiting out the hint in place
+            assertEquals(1, stub.registrationRefusal.answered.get());
+        }
+    }
+
+    private static ProviderClient.ProviderException refusedStart(IndependentProviderStub stub, Path path)
+            throws Exception {
+        var client = new ProviderClient(
+                ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                new ProviderStateStore(path), new FakeTransport(), () -> null,
+                () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+        try {
+            var failure = assertThrows(ExecutionException.class, () -> client.start().get(20, TimeUnit.SECONDS));
+            return assertInstanceOf(ProviderClient.ProviderException.class, failure.getCause());
+        } finally {
+            client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void failedCheckInsBackOffFromTenSecondsToTwoMinutes() {
+        var unreachable = new IOException("unreachable");
+        long[] seconds = {10, 20, 40, 80, 120, 120};
+        for (int failures = 1; failures <= seconds.length; failures++) {
+            assertWithinJitter(seconds[failures - 1], ProviderClient.retryDelayNanos(unreachable, failures));
+        }
+        // A hint replaces the streak's backoff, though never below 10 seconds
+        assertWithinJitter(60, ProviderClient.retryDelayNanos(new CompletionException(rateLimited(60)), 1));
+        assertWithinJitter(10, ProviderClient.retryDelayNanos(rateLimited(3), 5));
+    }
+
+    private static ProviderClient.ProviderException rateLimited(long retryAfterSeconds) {
+        return new ProviderClient.ProviderException(
+                429, "rate_limited", null, null, Duration.ofSeconds(retryAfterSeconds));
+    }
+
+    /** The base delay plus at most a tenth of it as jitter. */
+    private static void assertWithinJitter(long seconds, long nanos) {
+        long base = TimeUnit.SECONDS.toNanos(seconds);
+        assertTrue(nanos >= base && nanos <= base + base / 10, nanos + " ns is not " + seconds + " s plus jitter");
+    }
+
+    @Test
+    void aRefusedHeartbeatWaitsForItsRetryAfterInsteadOfTenSeconds(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path), new FakeTransport(), () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), logs::add);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                var refusal = new IndependentProviderStub.Refusal(429, """
+                        {"code":"rate_limited","message":"Slow down."}
+                        """, "30");
+                stub.heartbeatRefusal = refusal;
+                eventually(() -> refusal.answered.get() == 1);
+                // The old fixed 10 second retry would have sent another by now
+                Thread.sleep(12000);
+                assertEquals(1, refusal.answered.get());
+                assertTrue(logs.stream().anyMatch(e -> e.level() == ProviderDiagnostic.Level.WARN
+                        && e.message().contains("Slow down. (429 rate_limited)")));
+            } finally {
+                stub.heartbeatRefusal = null;
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
         }
     }
 
