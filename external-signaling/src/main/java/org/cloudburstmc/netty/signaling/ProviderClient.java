@@ -56,6 +56,10 @@ public final class ProviderClient implements AutoCloseable {
     /** Failed check-ins and reports wait this long, doubling with each further failure up to the cap. */
     private static final long RETRY_NANOS = TimeUnit.SECONDS.toNanos(10);
     private static final long MAX_BACKOFF_NANOS = TimeUnit.MINUTES.toNanos(2);
+    /** An outcome waits this long for others to share its request, unless a full batch is ready first. */
+    private static final long OUTCOME_BATCH_NANOS = TimeUnit.SECONDS.toNanos(10);
+    private static final int OUTCOME_BATCH_EVENTS = 100;
+    private static final int MAX_PENDING_EVENTS = 1000;
 
     /**
      * What the client registers and runs with. The bearer token alone decides what the provider
@@ -545,6 +549,10 @@ public final class ProviderClient implements AutoCloseable {
     private long nextStatusUpdate;
     /** Consecutive failures, which lengthen the wait before the next attempt. */
     private int heartbeatFailures, outcomeFailures;
+    /** When the oldest unsent outcome is due to be sent, or 0 while none waits. */
+    private long outcomesDue;
+    /** Collected outcomes not yet written to durable state. */
+    private boolean unsavedEvents;
     private long minUpdateIntervalMs = 1000;
     private URI websocketEndpoint;
     private ProviderWebSocket websocket;
@@ -679,7 +687,7 @@ public final class ProviderClient implements AutoCloseable {
                                         }
                                         if (started && System.nanoTime() >= nextOutcomes) {
                                             try {
-                                                flushEvents();
+                                                flushEvents(false);
                                             } catch (Exception e) {
                                                 outcomeFailures++;
                                                 nextOutcomes =
@@ -1754,12 +1762,19 @@ public final class ProviderClient implements AutoCloseable {
         }
     }
 
-    private void flushEvents() throws Exception {
+    /**
+     * Collects new outcomes into durable state, then sends a batch once the oldest unsent one has waited
+     * {@link #OUTCOME_BATCH_NANOS} or a full batch is ready.
+     *
+     * @param immediately Send what is pending without waiting, as drain and shutdown do
+     * @return Whether outcomes are still pending
+     */
+    private boolean flushEvents(boolean immediately) throws Exception {
         if (!state.has("pendingEvents")) {
             state.add("pendingEvents", new JsonArray());
         }
         JsonArray pending = state.getAsJsonArray("pendingEvents");
-        int room = Math.min(100, 1000 - pending.size());
+        int room = Math.min(OUTCOME_BATCH_EVENTS, MAX_PENDING_EVENTS - pending.size());
         List<JsonObject> fresh = new ArrayList<>(room > 0 ? transport.pollEvents(room) : List.of());
         if (fresh.size() > room) {
             throw new IOException("Transport returned more events than requested");
@@ -1789,12 +1804,25 @@ public final class ProviderClient implements AutoCloseable {
                 diagnostics.playerConnectionFailed();
             }
             pending.add(safe);
+            unsavedEvents = true;
         }
         if (pending.isEmpty()) {
-            return;
+            outcomesDue = 0;
+            return false;
         }
-        save();
-        int sent = Math.min(100, pending.size());
+        // Saved in the tick that collects them; only the send waits for the batch
+        if (unsavedEvents) {
+            save();
+            unsavedEvents = false;
+        }
+        long now = System.nanoTime();
+        if (outcomesDue == 0) {
+            outcomesDue = now + OUTCOME_BATCH_NANOS;
+        }
+        if (!immediately && pending.size() < OUTCOME_BATCH_EVENTS && now < outcomesDue) {
+            return true;
+        }
+        int sent = Math.min(OUTCOME_BATCH_EVENTS, pending.size());
         JsonArray batch = new JsonArray();
         var connectivity =
                 ProtocolExtensions.copy(discovery).getAsJsonObject(CONNECTIVITY_EXTENSION);
@@ -1822,8 +1850,20 @@ public final class ProviderClient implements AutoCloseable {
         // Dropped by position, and only once the exchange is done, so no view spans the request
         pending.asList().subList(0, sent).clear();
         save();
+        // Any left over start the next batch
+        outcomesDue = 0;
         outcomeFailures = 0;
         diagnostics.recovered(ProviderLog.Operation.EVENTS);
+        return !pending.isEmpty();
+    }
+
+    /** Sends everything pending at once, a batch at a time, up to the outcomes durable state keeps. */
+    private void flushAllEvents() throws Exception {
+        for (int batch = 0; batch < MAX_PENDING_EVENTS / OUTCOME_BATCH_EVENTS; batch++) {
+            if (!flushEvents(true)) {
+                return;
+            }
+        }
     }
 
     /**
@@ -2114,6 +2154,12 @@ public final class ProviderClient implements AutoCloseable {
             hostState = "draining";
         }
         heartbeat();
+        // The host may stop next, so outcomes do not wait for their batch
+        try {
+            flushAllEvents();
+        } catch (Exception e) {
+            diagnostics.failed(ProviderLog.Operation.EVENTS, safeFailure(e));
+        }
     }
 
     private JsonObject unsigned(String op, JsonObject body) throws Exception {
@@ -2563,11 +2609,6 @@ public final class ProviderClient implements AutoCloseable {
                     try {
                         if (started) {
                             drainAndReport();
-                            try {
-                                flushEvents();
-                            } catch (Exception e) {
-                                diagnostics.failed(ProviderLog.Operation.EVENTS, safeFailure(e));
-                            }
                             if (config.deregisterOnShutdown()) {
                                 deregisterOnShutdown();
                             }

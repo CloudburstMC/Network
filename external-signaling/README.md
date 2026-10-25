@@ -105,9 +105,10 @@ further failure up to two minutes, or as long as the provider's `Retry-After` wh
 it sent one. Outcome uploads use one attempt with a three-second timeout so they
 cannot starve heartbeat renewal. `ProviderException` carries the provider's
 `message`, `actionUrl` and `Retry-After` when present, and its message includes
-the text and link for the operator. The outcome queue retains at most 1000
-pending entries and flushes at most 100 per tick, independently of idle heartbeat
-timing.
+the text and link for the operator. Outcomes are collected and saved every second,
+independently of heartbeat timing, and sent in batches of at most 100: a batch goes
+ten seconds after its first outcome, or at once when it is full or the host drains
+or stops. The outcome queue retains at most 1000 pending entries.
 
 ### Endpoint publication
 

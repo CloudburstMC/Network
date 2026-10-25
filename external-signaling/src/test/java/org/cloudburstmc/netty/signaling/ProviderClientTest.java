@@ -664,7 +664,16 @@ class ProviderClientTest {
     }
 
     private static void eventually(BooleanSupplier condition) throws Exception {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+        eventually(condition, 8);
+    }
+
+    /** Waits past the 10 second window an outcome waits in for its batch. */
+    private static void eventuallyBatched(BooleanSupplier condition) throws Exception {
+        eventually(condition, 15);
+    }
+
+    private static void eventually(BooleanSupplier condition, long seconds) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(40);
         }
@@ -732,7 +741,7 @@ class ProviderClientTest {
                         """)
                                 .getAsJsonObject();
                 host.events.add(observed);
-                eventually(() -> stub.outcomeAttempts == 1);
+                eventuallyBatched(() -> stub.outcomeAttempts == 1);
                 int before = stub.heartbeats;
                 eventually(() -> stub.heartbeats >= before + 2);
                 assertEquals(1, stub.outcomeAttempts, "Outcome failure must back off independently of heartbeat");
@@ -883,9 +892,9 @@ class ProviderClientTest {
             try {
                 client.start().get(20, TimeUnit.SECONDS);
                 host.events.add(outcome("rejected"));
-                eventually(() -> stub.outcomeAttempts == 1);
+                eventuallyBatched(() -> stub.outcomeAttempts == 1);
                 host.events.add(outcome("accepted"));
-                eventually(() -> stub.events.size() == 1);
+                eventuallyBatched(() -> stub.events.size() == 1);
                 assertEquals("accepted", stub.events.get(0).get("ticketId").getAsString());
             } finally {
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
@@ -896,6 +905,85 @@ class ProviderClientTest {
     private static JsonObject outcome(String ticketId) {
         return JsonParser.parseString("{\"ticketId\":\"" + ticketId
                 + "\",\"stage\":\"ticket.data_channels_open\",\"occurredAt\":1788739200000}").getAsJsonObject();
+    }
+
+    private static ProviderClient outcomeClient(IndependentProviderStub stub, Path path, FakeTransport host)
+            throws IOException {
+        return new ProviderClient(
+                ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                new ProviderStateStore(path), host, () -> null,
+                () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
+    }
+
+    @Test
+    void outcomesWithinTenSecondsGoOutAsOneBatch(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            var client = outcomeClient(stub, path, host);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                host.events.add(outcome("first"));
+                Thread.sleep(2000);
+                host.events.add(outcome("second"));
+                Thread.sleep(2000);
+                host.events.add(outcome("third"));
+                assertEquals(0, stub.outcomeAttempts, "The batch waits for later outcomes");
+                eventuallyBatched(() -> stub.events.size() == 3);
+                assertEquals(1, stub.outcomeAttempts);
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void aFullBatchIsSentWithoutWaiting(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            var client = outcomeClient(stub, path, host);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                long started = System.nanoTime();
+                for (int i = 0; i < 100; i++) {
+                    host.events.add(outcome("full-" + i));
+                }
+                eventually(() -> stub.events.size() == 100);
+                assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(10), "A full batch must not wait");
+                assertEquals(1, stub.outcomeAttempts);
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void drainSendsWaitingOutcomesAtOnce(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            FakeTransport host = new FakeTransport();
+            var client = outcomeClient(stub, path, host);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                host.events.add(outcome("waiting"));
+                // Saved as soon as it is collected, then held for its batch
+                eventually(() -> savedOutcomes(path) == 1);
+                assertEquals(0, stub.outcomeAttempts);
+                client.drain().get(10, TimeUnit.SECONDS);
+                assertEquals(1, stub.events.size());
+                assertEquals(0, savedOutcomes(path));
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static int savedOutcomes(Path path) {
+        try {
+            JsonObject state = JsonParser.parseString(Files.readString(path.resolve("provider-state.json")))
+                    .getAsJsonObject();
+            return state.has("pendingEvents") ? state.getAsJsonArray("pendingEvents").size() : 0;
+        } catch (IOException | RuntimeException unreadable) {
+            return -1;
+        }
     }
 
     @Test
@@ -1074,7 +1162,7 @@ class ProviderClientTest {
                 long before = System.currentTimeMillis();
                 assertTrue(client.reportGameOutcome("fixture-ticket", ProviderClient.GameOutcome.REJECTED,
                         "unsupported_version"));
-                eventually(() -> !stub.events.isEmpty());
+                eventuallyBatched(() -> !stub.events.isEmpty());
                 JsonObject event = stub.events.get(0);
                 assertEquals("ticket.game_rejected", event.get("stage").getAsString());
                 assertEquals("fixture-ticket", event.get("ticketId").getAsString());
@@ -1111,7 +1199,7 @@ class ProviderClientTest {
                          "occurredAt":1788739200000,"remoteAddress":"8.8.8.8","remotePort":54321}
                         """)
                                 .getAsJsonObject());
-                eventually(() -> !stub.events.isEmpty());
+                eventuallyBatched(() -> !stub.events.isEmpty());
                 assertEquals(
                         Set.of("ticketId", "stage", "occurredAt"), stub.events.get(0).keySet());
             } finally {
@@ -1138,7 +1226,7 @@ class ProviderClientTest {
                             + "\",\"stage\":\"ticket.data_channels_open\",\"occurredAt\":1788739200000}")
                             .getAsJsonObject());
                 }
-                eventually(() -> stub.events.size() == 250);
+                eventuallyBatched(() -> stub.events.size() == 250);
             } finally {
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }

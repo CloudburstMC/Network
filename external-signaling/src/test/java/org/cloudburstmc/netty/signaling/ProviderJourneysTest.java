@@ -53,7 +53,7 @@ class ProviderJourneysTest {
                     event.addProperty("reason", "connected");
                     event.addProperty("privatePayload", "must-not-be-persisted");
                     transport.events.add(event);
-                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
                     while (stub.events.isEmpty() && System.nanoTime() < deadline) {
                         Thread.sleep(25);
                     }
@@ -289,7 +289,7 @@ class ProviderJourneysTest {
                     event.addProperty("reason", reason);
                     transport.events.add(event);
                 }
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
                 while (stub.events.size() < 2 && System.nanoTime() < deadline) {
                     Thread.sleep(25);
                 }
