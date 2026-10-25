@@ -116,6 +116,25 @@
       },
       "description": "Clients ignore unknown list entries and fail only when none they support is listed."
     },
+    "error": {
+      "type": "object",
+      "required": [
+        "code"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,80}$"
+        },
+        "message": {
+          "$ref": "#/$defs/operatorAction/properties/text"
+        },
+        "actionUrl": {
+          "$ref": "#/$defs/operatorAction/properties/url"
+        }
+      },
+      "description": "Error response body. message is for the host's operator; actionUrl never carries a credential. Retry timing is the Retry-After header."
+    },
     "challenge": {
       "type": "object",
       "required": [

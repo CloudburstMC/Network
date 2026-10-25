@@ -122,6 +122,11 @@
         "version": "1.0.0"
       },
       "acceptingPlayers": true
+    },
+    "error": {
+      "code": "capacity_reached",
+      "message": "This provider is not accepting more servers without a token. Add a token, or start the server again later.",
+      "actionUrl": "https://provider.example/tokens"
     }
   }
 }

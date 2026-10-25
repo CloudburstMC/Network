@@ -119,4 +119,17 @@ assert.deepEqual(schema.$defs.heartbeat.required, ['acceptingPlayers', 'capacity
 for (const field of Object.keys(f.fleetExamples.heartbeat)) {
   assert(field in schema.$defs.heartbeat.properties);
 }
+
+// The error example contains only specified members, within an operator action's limits.
+const error = f.fleetExamples.error, errorMembers = schema.$defs.error.properties;
+const operatorAction = schema.$defs.operatorAction.properties;
+assert.equal(errorMembers.message.$ref, '#/$defs/operatorAction/properties/text');
+assert.equal(errorMembers.actionUrl.$ref, '#/$defs/operatorAction/properties/url');
+for (const field of Object.keys(error)) {
+  assert(field in errorMembers);
+}
+assert.match(error.code, new RegExp(errorMembers.code.pattern));
+assert.match(error.message, new RegExp(operatorAction.text.pattern));
+assert(error.message.length <= operatorAction.text.maxLength);
+assert.match(error.actionUrl, new RegExp(operatorAction.url.pattern));
 console.log('NXS canonical signing, stateless encryption, fleet examples, and fixture hashes verified.');

@@ -103,6 +103,26 @@ any other code as a failure of that request:
 | `recovery_unavailable` | 403 | Nothing to recover: the registration is unknown, deregistered, or its challenge was never completed | Complete a saved challenge if there is one, otherwise register again |
 | `generation_fenced` | 409 | A newer generation owns this registration | Stop; another process replaced this one |
 
+Providers may also refuse with the codes below. Clients that predate them treat
+them as any other code; clients that recognize them should act as follows:
+
+| Code | Status | Meaning | Client action |
+| --- | --- | --- | --- |
+| `rate_limited` | 429 | Too many requests in a short window | Retry no sooner than `Retry-After` |
+| `capacity_reached` | 403 | A provider limit stops new registrations with this authorization for now | Stop registering; do not retry before `Retry-After` |
+| `registration_disabled` | 403 | The provider does not accept new registrations with this authorization | Stop registering |
+
+An error may carry `message`, text for the host's operator, and `actionUrl`, a page
+where the operator can act, such as one that issues tokens. They follow the limits
+of an [operator action's](#operator-actions) `text` and `url`, but `actionUrl` never
+carries a credential, so hosts may log it. Hosts show both as the provider's words,
+never parse them and never open the link automatically. The
+[schema](nxs-v1.schema.json) defines the body as `$defs.error`.
+
+On any error, a `Retry-After` header in delta-seconds is the earliest time the
+provider expects to accept the request again. Clients should not repeat the
+request before then; other forms of the header carry no hint.
+
 Transport failures and HTTP 429, 502, 503 and 504 are transient. Clients may
 retry them a bounded number of times with capped, jittered exponential backoff.
 Retrying never extends a lease or challenge expiry.
