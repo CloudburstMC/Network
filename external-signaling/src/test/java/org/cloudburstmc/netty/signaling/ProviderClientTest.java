@@ -1337,4 +1337,63 @@ class ProviderClientTest {
         }
     }
 
+    /** A host with a wrong clock, as the stub's clock is shifted instead. */
+    private static ProviderClient skewable(IndependentProviderStub stub, Path path, List<ProviderDiagnostic> logs)
+            throws IOException {
+        return new ProviderClient(
+                ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                new ProviderStateStore(path),
+                new FakeTransport(),
+                () -> new ServerStatus("Example", "", 40, 0),
+                () -> new ProviderClient.Health(true, 100, SOFTWARE, connected(0)),
+                logs::add);
+    }
+
+    @Test
+    void namesTheClockDifferenceWhenRegistrationIsRefusedAsStale(@TempDir Path path) throws Exception {
+        try (var stub = new IndependentProviderStub()) {
+            stub.clockOffsetMillis = 300_000;
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            var client = skewable(stub, path, logs);
+            try {
+                var failure = assertThrows(ExecutionException.class, () -> client.start().get(20, TimeUnit.SECONDS));
+                assertEquals("stale_provider_signature", ((ProviderClient.ProviderException) failure.getCause()).code());
+                assertEquals(1, stub.staleSignatures);
+                assertTrue(Math.abs(client.clockOffsetMillis() - 300_000) < 5_000, "offset " + client.clockOffsetMillis());
+                // The registration challenge already said what time it is, so the warning precedes the refusal
+                assertEquals(1, logs.stream().filter(d -> d.level() == ProviderDiagnostic.Level.WARN
+                        && d.message().startsWith("This machine's clock is 5 minutes behind the signaling service,")).count());
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void warnsWhenTheClockDriftsAndSaysWhenItIsBackInStep(@TempDir Path path) throws Exception {
+        try (var stub = new IndependentProviderStub()) {
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            var client = skewable(stub, path, logs);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertEquals(0, client.clockOffsetMillis());
+
+                stub.clockOffsetMillis = -300_000; // This machine is now ahead
+                assertThrows(ExecutionException.class, () -> client.readiness().get(10, TimeUnit.SECONDS));
+                assertEquals(1, stub.staleSignatures);
+                assertTrue(Math.abs(client.clockOffsetMillis() + 300_000) < 5_000, "offset " + client.clockOffsetMillis());
+                assertTrue(logs.stream().anyMatch(d -> d.level() == ProviderDiagnostic.Level.WARN
+                        && d.message().startsWith("This machine's clock is 5 minutes ahead of the signaling service,")));
+
+                stub.clockOffsetMillis = 0;
+                assertNotNull(client.readiness().get(10, TimeUnit.SECONDS));
+                assertEquals(1, stub.staleSignatures);
+                assertEquals(0, client.clockOffsetMillis());
+                assertTrue(logs.stream().anyMatch(d -> d.level() == ProviderDiagnostic.Level.INFO
+                        && d.message().equals("This machine's clock is in step with the signaling service again.")));
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
 }

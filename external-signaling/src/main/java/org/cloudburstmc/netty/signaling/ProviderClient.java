@@ -46,6 +46,8 @@ public final class ProviderClient implements AutoCloseable {
     private static final String REGISTRATION_GONE = "registration_gone";
     private static final String RATE_LIMITED = "rate_limited";
     private static final String CAPACITY_REACHED = "capacity_reached";
+    /** A clock difference under the tolerance is left alone; one past the warning threshold is reported. */
+    private static final long CLOCK_TOLERANCE_MILLIS = 2000, CLOCK_WARNING_MILLIS = 10000;
 
     public enum ControlTransport {
         HTTP,
@@ -561,6 +563,9 @@ public final class ProviderClient implements AutoCloseable {
     private URI websocketEndpoint;
     private ProviderWebSocket websocket;
     private volatile String lastControlCarrier = "none";
+    /** The provider's clock minus this machine's, learned from its replies; positive when this machine is behind. */
+    private volatile long clockOffsetMillis;
+    private long warnedClockOffsetMillis;
 
     private record AssistedAuthority(
             String instance,
@@ -607,6 +612,58 @@ public final class ProviderClient implements AutoCloseable {
     /** Carrier of the last successful signed operation, independent of advertised configuration. */
     public String lastControlCarrier() {
         return lastControlCarrier;
+    }
+
+    /**
+     * How far this machine's clock is from the provider's, as its replies tell it: positive when this machine is
+     * behind. Zero until a reply says otherwise, or while the difference is within tolerance. Requests are still
+     * signed with this machine's clock, so one too far off has them refused; the difference is only measured and
+     * warned about, for the operator to set the clock right.
+     */
+    public long clockOffsetMillis() {
+        return clockOffsetMillis;
+    }
+
+    /** Measures the provider's clock against this machine's from a reply. Runs on the executor. */
+    private void observeProviderTime(long providerMillis, long receivedMillis) {
+        if (providerMillis <= 0 || providerMillis > 9007199254740991L) {
+            return;
+        }
+        long offset = providerMillis - receivedMillis;
+        if (Math.abs(offset) < CLOCK_TOLERANCE_MILLIS) {
+            offset = 0;
+        }
+        if (Math.abs(offset - clockOffsetMillis) < CLOCK_TOLERANCE_MILLIS) {
+            return;
+        }
+        clockOffsetMillis = offset;
+        if (Math.abs(offset) >= CLOCK_WARNING_MILLIS) {
+            // Said again only when the difference itself moves, not on every jittery reply
+            if (Math.abs(offset - warnedClockOffsetMillis) >= CLOCK_WARNING_MILLIS) {
+                warnedClockOffsetMillis = offset;
+                diagnostics.clockSkew(offset);
+            }
+        } else if (warnedClockOffsetMillis != 0) {
+            warnedClockOffsetMillis = 0;
+            diagnostics.clockInStep();
+        }
+    }
+
+    private void observeProviderTime(HttpHeaders headers, long receivedMillis) {
+        try {
+            headers.firstValue("x-provider-time")
+                    .ifPresent(value -> observeProviderTime(Long.parseLong(value.trim()), receivedMillis));
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
+    private void observeServerTime(JsonObject reply, long receivedMillis) {
+        try {
+            if (reply.has("serverTime")) {
+                observeProviderTime(reply.get("serverTime").getAsLong(), receivedMillis);
+            }
+        } catch (RuntimeException ignored) {
+        }
     }
 
     /**
@@ -2399,6 +2456,8 @@ public final class ProviderClient implements AutoCloseable {
                 Thread.sleep((250L << attempt) + ThreadLocalRandom.current().nextLong(100));
                 continue;
             }
+            long received = System.currentTimeMillis();
+            observeProviderTime(response.headers(), received);
             String text = response.body();
             int status = response.status();
             String code = "request_rejected";
@@ -2448,6 +2507,7 @@ public final class ProviderClient implements AutoCloseable {
                 throw refused;
             }
             JsonObject result = JsonParser.parseString(text).getAsJsonObject();
+            observeServerTime(result, received);
             if (signed) {
                 lastControlCarrier = usedWebSocket ? "websocket" : "http";
             }

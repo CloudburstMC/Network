@@ -115,7 +115,10 @@ A registration refused with `rate_limited` or `capacity_reached` and a
 seconds; `start()` completes when it succeeds. `registration_gone` on a signed
 operation stops the client without draining or deregistering, until the host
 restarts. A failure warns when it starts and again every 30 minutes while it lasts;
-network and file errors name what failed, such as the host or the TLS problem.
+network and file errors name what failed, such as the host or the TLS problem. Replies carry the provider's clock, as `serverTime` and the
+`x-provider-time` header; when this machine's clock is more than ten seconds off, the client
+warns, naming the difference, and `clockOffsetMillis()` exposes it. Requests stay signed with
+this machine's clock, so one too far off has them refused as `stale_provider_signature`.
 
 ### Endpoint publication
 

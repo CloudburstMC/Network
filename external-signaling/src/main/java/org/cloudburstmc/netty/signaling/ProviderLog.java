@@ -128,6 +128,18 @@ final class ProviderLog {
                 + "server yet: " + reason + ". Trying again in " + described(wait) + "."));
     }
 
+    void clockSkew(long offsetMillis) {
+        sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, "This machine's clock is "
+                + described(Duration.ofMillis(Math.abs(offsetMillis))) + (offsetMillis > 0 ? " behind" : " ahead of")
+                + " the signaling service, which refuses requests signed too far from its own time. Set the clock "
+                + "right, with NTP where possible."));
+    }
+
+    void clockInStep() {
+        sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.INFO,
+                "This machine's clock is in step with the signaling service again."));
+    }
+
     /** Such as "45 seconds", "20 minutes" or "3 hours". */
     static String described(Duration wait) {
         long seconds = wait.toSeconds();

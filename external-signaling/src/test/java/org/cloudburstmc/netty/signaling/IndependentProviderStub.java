@@ -21,6 +21,9 @@ public final class IndependentProviderStub implements AutoCloseable {
     JsonObject registration;
     String initialChallengeId;
     volatile long challengeLifetimeMillis = 60000;
+    /** The stub's clock minus the real one, as a host whose clock is wrong sees the provider. */
+    volatile long clockOffsetMillis;
+    volatile int staleSignatures;
     volatile boolean operatorActions;
     volatile int operatorActionRequests;
     volatile JsonObject lastHeartbeat, lastHostProfile;
@@ -94,6 +97,9 @@ public final class IndependentProviderStub implements AutoCloseable {
             status = f.status;
             response = new JsonObject();
             response.addProperty("code", f.getMessage());
+            if ("stale_provider_signature".equals(f.getMessage())) {
+                e.getResponseHeaders().add("x-provider-time", Long.toString(now()));
+            }
         } catch (Exception f) {
             status = 400;
             response = new JsonObject();
@@ -171,8 +177,8 @@ public final class IndependentProviderStub implements AutoCloseable {
             c.addProperty("audience", origin);
             c.addProperty("nonce", UUID.randomUUID().toString());
             c.addProperty("thumbprint", ProviderCrypto.thumbprint(key));
-            c.addProperty("expiresAt", System.currentTimeMillis() + challengeLifetimeMillis);
-            c.addProperty("serverTime", System.currentTimeMillis());
+            c.addProperty("expiresAt", now() + challengeLifetimeMillis);
+            c.addProperty("serverTime", now());
             JsonObject context = new JsonObject();
             for (String f : List.of("label", "authorizationId", "serviceId", "registrationId")) {
                 context.addProperty(f, "");
@@ -295,6 +301,7 @@ public final class IndependentProviderStub implements AutoCloseable {
                 heartbeatBodies.add(raw);
                 lastHeartbeat = body;
                 heartbeats++;
+                ok.addProperty("serverTime", now());
                 if (body.has("installedAdmissionKeyIds")) {
                     keyAcknowledgements++;
                 }
@@ -399,11 +406,11 @@ public final class IndependentProviderStub implements AutoCloseable {
         return ok;
     }
 
-    private static JsonObject operatorAction(String url) {
+    private JsonObject operatorAction(String url) {
         JsonObject action = new JsonObject();
         action.addProperty("url", url);
         action.addProperty("text", "Claim this server.");
-        action.addProperty("expiresAt", System.currentTimeMillis() + 60000);
+        action.addProperty("expiresAt", now() + 60000);
         return action;
     }
 
@@ -416,9 +423,12 @@ public final class IndependentProviderStub implements AutoCloseable {
             if (gen < generation) {
                 throw new Failure(409, "generation_fenced");
             }
+            if (Math.abs(now() - timestamp) > 60000) {
+                staleSignatures++;
+                throw new Failure(401, "stale_provider_signature");
+            }
             if (!ProviderCrypto.SIGNATURE.equals(h.getFirst("nxs-signature-version")) || !"example-machine-1".equals(
-                    instance) || Math.abs(System.currentTimeMillis() - timestamp) > 60000 || gen != generation
-                    || seq <= sequence) {
+                    instance) || gen != generation || seq <= sequence) {
                 throw new Failure(401, "auth_invalid");
             }
             if (!ProviderCrypto.verify(keys.get(key), h.getFirst("nxs-signature"),
@@ -430,6 +440,10 @@ public final class IndependentProviderStub implements AutoCloseable {
         } catch (RuntimeException f) {
             throw new Failure(401, "auth_invalid");
         }
+    }
+
+    private long now() {
+        return System.currentTimeMillis() + clockOffsetMillis;
     }
 
     private static JsonArray strings(String... strings) {
