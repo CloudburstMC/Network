@@ -111,6 +111,7 @@ them as any other code; clients that recognize them should act as follows:
 | `rate_limited` | 429 | Too many requests in a short window | Retry no sooner than `Retry-After` |
 | `capacity_reached` | 403 | A provider limit stops new registrations with this authorization for now | Stop registering; do not retry before `Retry-After` |
 | `registration_disabled` | 403 | The provider does not accept new registrations with this authorization | Stop registering |
+| `registration_gone` | 403 | A signed operation named a registration the provider no longer has, such as one its owner removed | Stop without draining or deregistering, and show `message`. Register again only on the next start: a new registration can change public endpoints and would undo a removal the owner chose |
 
 An error may carry `message`, text for the host's operator, and `actionUrl`, a page
 where the operator can act, such as one that issues tokens. They follow the limits
