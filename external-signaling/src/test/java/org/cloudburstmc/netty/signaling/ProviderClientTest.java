@@ -811,7 +811,7 @@ class ProviderClientTest {
             assertEquals("rate_limited", refused.code());
             assertEquals(Optional.of(Duration.ofSeconds(60)), refused.retryAfter());
             assertEquals("Provider request failed: 429 rate_limited", refused.getMessage());
-            // Failed at once instead of waiting out the hint in place
+            // Not repeated in place: the start waits out the hint instead
             assertEquals(1, stub.registrationRefusal.answered.get());
         }
     }
@@ -823,10 +823,45 @@ class ProviderClientTest {
                 new ProviderStateStore(path), new FakeTransport(), () -> null,
                 () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), ignored -> {});
         try {
-            var failure = assertThrows(ExecutionException.class, () -> client.start().get(20, TimeUnit.SECONDS));
+            var started = client.start();
+            eventually(() -> stub.registrationRefusal.answered.get() > 0);
+            // A refusal for now waits out its Retry-After, which stopping ends with that refusal
+            client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            var failure = assertThrows(ExecutionException.class, () -> started.get(10, TimeUnit.SECONDS));
             return assertInstanceOf(ProviderClient.ProviderException.class, failure.getCause());
         } finally {
             client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void aRegistrationRefusedForNowIsTriedAgainAfterItsRetryAfter(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            var refusal = new IndependentProviderStub.Refusal(403, """
+                    {"code":"capacity_reached","message":"Full for now."}
+                    """, "1");
+            stub.registrationRefusal = refusal;
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path), new FakeTransport(), () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), logs::add);
+            try {
+                var started = client.start();
+                // Never sooner than ten seconds. The stub counts the refusal before the client logs it.
+                String warning = "The signaling service cannot register this server yet: Full for now. "
+                        + "(403 capacity_reached). Trying again in 10 seconds.";
+                eventually(() -> logs.stream().anyMatch(
+                        e -> e.level() == ProviderDiagnostic.Level.WARN && e.message().equals(warning)));
+                assertEquals(1, refusal.answered.get());
+                assertFalse(started.isDone());
+                stub.registrationRefusal = null;
+                started.get(30, TimeUnit.SECONDS);
+                assertEquals(1, refusal.answered.get());
+            } finally {
+                stub.registrationRefusal = null;
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
         }
     }
 
@@ -873,6 +908,38 @@ class ProviderClientTest {
                 assertEquals(1, refusal.answered.get());
                 assertTrue(logs.stream().anyMatch(e -> e.level() == ProviderDiagnostic.Level.WARN
                         && e.message().contains("Slow down. (429 rate_limited)")));
+            } finally {
+                stub.heartbeatRefusal = null;
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void aGoneRegistrationStopsSignalingUntilARestart(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            var logs = new CopyOnWriteArrayList<ProviderDiagnostic>();
+            var client = new ProviderClient(
+                    ProviderClient.Configuration.builder(URI.create(stub.origin)).label("Example").build(),
+                    new ProviderStateStore(path), new FakeTransport(), () -> null,
+                    () -> new ProviderClient.Health(true, 10, SOFTWARE, connected(0)), logs::add);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                eventually(() -> client.publishedEndpoints().isPresent());
+                var refusal = new IndependentProviderStub.Refusal(403, """
+                        {"code":"registration_gone","message":"Its owner removed it."}
+                        """, null);
+                stub.heartbeatRefusal = refusal;
+                eventually(() -> client.publishedEndpoints().isEmpty());
+                assertEquals(1, refusal.answered.get());
+                // Neither drained nor deregistered, as the registration is no longer this process's
+                assertFalse(stub.operationsSeen.contains("/example/deregister"));
+                var warnings = logs.stream().filter(e -> e.level() == ProviderDiagnostic.Level.WARN)
+                        .map(ProviderDiagnostic::message).toList();
+                assertTrue(warnings.contains("The signaling service no longer has this server's registration: Its "
+                        + "owner removed it. (403 registration_gone). Signaling is stopping until the server restarts."),
+                        warnings.toString());
+                assertTrue(warnings.stream().noneMatch(m -> m.contains("Retrying automatically")), warnings.toString());
             } finally {
                 stub.heartbeatRefusal = null;
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);

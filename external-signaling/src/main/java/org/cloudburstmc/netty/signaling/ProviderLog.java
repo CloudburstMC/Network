@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.signaling;
 
+import java.time.Duration;
 import java.util.EnumSet;
 import java.util.function.Consumer;
 
@@ -98,6 +99,25 @@ final class ProviderLog {
     void registrationLost(String instanceId) {
         sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, "The signaling service no longer knows "
                 + "server " + instanceId + ". Registering it again as a new server."));
+    }
+
+    void registrationDeferred(String reason, Duration wait) {
+        sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, "The signaling service cannot register this "
+                + "server yet: " + reason + ". Trying again in " + described(wait) + "."));
+    }
+
+    /** Such as "45 seconds", "20 minutes" or "3 hours". */
+    static String described(Duration wait) {
+        long seconds = wait.toSeconds();
+        if (seconds < 120) {
+            return seconds + " seconds";
+        }
+        return seconds < 7200 ? Math.round(seconds / 60.0) + " minutes" : Math.round(seconds / 3600.0) + " hours";
+    }
+
+    void registrationGone(String reason) {
+        sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, "The signaling service no longer has this "
+                + "server's registration: " + reason + ". Signaling is stopping until the server restarts."));
     }
 
     void replaced() {

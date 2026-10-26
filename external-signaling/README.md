@@ -110,6 +110,12 @@ independently of heartbeat timing, and sent in batches of at most 100: a batch g
 ten seconds after its first outcome, or at once when it is full or the host drains
 or stops. The outcome queue retains at most 1000 pending entries.
 
+A registration refused with `rate_limited` or `capacity_reached` and a
+`Retry-After` warns and tries again once that has passed, never sooner than ten
+seconds; `start()` completes when it succeeds. `registration_gone` on a signed
+operation stops the client without draining or deregistering, until the host
+restarts.
+
 ### Endpoint publication
 
 `NativeProviderTransport` publishes its UDP endpoints and certificate fingerprint

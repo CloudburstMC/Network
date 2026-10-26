@@ -43,6 +43,9 @@ public final class ProviderClient implements AutoCloseable {
     private static final String BEARER_TOKEN = "bearer-token";
     private static final String RECOVERY_REQUIRED = "recovery_required";
     private static final String GENERATION_FENCED = "generation_fenced";
+    private static final String REGISTRATION_GONE = "registration_gone";
+    private static final String RATE_LIMITED = "rate_limited";
+    private static final String CAPACITY_REACHED = "capacity_reached";
 
     public enum ControlTransport {
         HTTP,
@@ -539,6 +542,7 @@ public final class ProviderClient implements AutoCloseable {
     private boolean started;
     private boolean closed;
     private boolean scheduledCheckIns;
+    /** The registration is no longer this process's, so it stops without draining or deregistering. */
     private boolean fenced;
     private Boolean lastReportedGameOutcomes;
     private boolean locationReported;
@@ -580,6 +584,8 @@ public final class ProviderClient implements AutoCloseable {
     private final AtomicBoolean closing = new AtomicBoolean();
     private final CompletableFuture<Void> stopped = new CompletableFuture<>();
     private ScheduledFuture<?> timer;
+    /** Ends a start that is waiting out a refusal, failing it with that refusal. */
+    private Runnable abandonStart;
 
     public ProviderClient(
             Configuration config,
@@ -614,94 +620,147 @@ public final class ProviderClient implements AutoCloseable {
         return Optional.ofNullable(published);
     }
 
+    /**
+     * Registers, or recovers the saved registration, and starts checking in. When the provider refuses a registration
+     * only for now, with {@code rate_limited} or {@code capacity_reached} and a {@code Retry-After}, it warns and tries
+     * again once that has passed. Stopping ends the wait, failing the returned future with that refusal.
+     */
     public CompletableFuture<Registration> start() {
-        return submit(
-                () -> {
-                    if (started) {
-                        throw new IllegalStateException("Already started");
-                    }
-                    discovery =
-                            exchange(
-                                    URI.create(
-                                            origin + "/.well-known/nethernet-external-signaling"),
-                                    "GET",
-                                    null,
-                                    false,
-                                    null,
-                                    null);
-                    validateDiscovery();
-                    transport
-                            .configureStunServers(discoveryStunServers())
-                            .toCompletableFuture()
-                            .get(10, TimeUnit.SECONDS);
-                    configureWebSocket();
-                    state = store.read();
-                    if (state.has("provider")
-                            && !origin.equals(state.get("provider").getAsString())) {
-                        throw new IOException(
-                                "State belongs to another provider; use a separate directory");
-                    }
-                    loadMachineKey();
-                    if (state.has("registration") && !recoverExisting()) {
-                        diagnostics.registrationLost(registration("instanceId"));
-                        state = new JsonObject();
-                        gameOutcomeQueue.clear();
-                        loadMachineKey();
-                    }
-                    if (!state.has("registration")) {
-                        enroll();
-                    }
-                    JsonObject registration = state.getAsJsonObject("registration");
-                    if (!registration.get("provider").getAsString().equals(origin)) {
-                        throw new IOException("Registration audience changed");
-                    }
-                    state.addProperty("protocol", ProviderCrypto.PROTOCOL);
-                    state.addProperty(
-                            "generation", registration.get("leaseGeneration").getAsLong());
-                    state.addProperty("sequence", 0);
-                    state.remove("cursor");
-                    state.remove("pendingAdmissions");
-                    state.remove("pendingWebSocketOperation");
-                    save();
-                    installKeys();
-                    started = true;
-                    heartbeat();
-                    if (timer != null) {
-                        timer.cancel(false);
-                    }
-                    timer =
-                            executor.scheduleWithFixedDelay(
-                                    () -> {
-                                        if (closed) {
-                                            return;
-                                        }
-                                        try {
-                                            if (started
-                                                    && (System.nanoTime() >= nextHeartbeat
-                                                            || candidatesChanged()
-                                                            || statusChanged())) {
-                                                heartbeat();
-                                            }
-                                        } catch (Exception e) {
-                                            heartbeatFailed(e);
-                                        }
-                                        if (started && System.nanoTime() >= nextOutcomes) {
-                                            try {
-                                                flushEvents(false);
-                                            } catch (Exception e) {
-                                                outcomeFailures++;
-                                                nextOutcomes =
-                                                        System.nanoTime()
-                                                                + retryDelayNanos(e, outcomeFailures);
-                                                diagnostics.failed(ProviderLog.Operation.EVENTS, safeFailure(e));
-                                            }
-                                        }
-                                    },
-                                    1000,
-                                    1000,
-                                    TimeUnit.MILLISECONDS);
-                    return registrationView();
-                });
+        CompletableFuture<Registration> registered = new CompletableFuture<>();
+        executor.execute(() -> attemptStart(registered));
+        return registered;
+    }
+
+    /** Runs on the executor, as do the retry it schedules and the stop that abandons it. */
+    private void attemptStart(CompletableFuture<Registration> registered) {
+        abandonStart = null;
+        try {
+            if (closed) {
+                throw new IOException("Provider is closed");
+            }
+            registered.complete(startOnce());
+        } catch (Throwable failure) {
+            Optional<Duration> wait = closing.get() ? Optional.empty() : registrationRetry(failure);
+            if (wait.isEmpty()) {
+                registered.completeExceptionally(failure);
+                return;
+            }
+            diagnostics.registrationDeferred(safeFailure(failure), wait.get());
+            ScheduledFuture<?> retry = executor.schedule(
+                    () -> attemptStart(registered), wait.get().toNanos(), TimeUnit.NANOSECONDS);
+            abandonStart = () -> {
+                retry.cancel(false);
+                registered.completeExceptionally(failure);
+            };
+        }
+    }
+
+    /** How long to wait before registering again, when the provider refused only for now and said for how long. */
+    static Optional<Duration> registrationRetry(Throwable failure) {
+        if (unwrapped(failure) instanceof ProviderException refused
+                && (RATE_LIMITED.equals(refused.code()) || CAPACITY_REACHED.equals(refused.code()))) {
+            return refused.retryAfter().map(wait -> wait.compareTo(Duration.ofNanos(RETRY_NANOS)) < 0
+                    ? Duration.ofNanos(RETRY_NANOS)
+                    : wait);
+        }
+        return Optional.empty();
+    }
+
+    /** One attempt: read the provider's discovery, recover or register, then start checking in. */
+    private Registration startOnce() throws Exception {
+        if (started) {
+            throw new IllegalStateException("Already started");
+        }
+        discover();
+        loadState();
+        register();
+        beginGeneration();
+        startCheckIns();
+        return registrationView();
+    }
+
+    /** Reads the provider's discovery document, and sets up STUN and the WebSocket carrier from it. */
+    private void discover() throws Exception {
+        URI document = URI.create(origin + "/.well-known/nethernet-external-signaling");
+        discovery = exchange(document, "GET", null, false, null, null);
+        validateDiscovery();
+        transport.configureStunServers(discoveryStunServers()).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        configureWebSocket();
+    }
+
+    private void loadState() throws Exception {
+        state = store.read();
+        if (state.has("provider") && !origin.equals(state.get("provider").getAsString())) {
+            throw new IOException("State belongs to another provider; use a separate directory");
+        }
+        loadMachineKey();
+    }
+
+    /** Recovers the saved registration, or registers anew when the provider has nothing to recover. */
+    private void register() throws Exception {
+        if (state.has("registration") && !recoverExisting()) {
+            diagnostics.registrationLost(registration("instanceId"));
+            state = new JsonObject();
+            gameOutcomeQueue.clear();
+            loadMachineKey();
+        }
+        if (!state.has("registration")) {
+            enroll();
+        }
+        if (!registration("provider").equals(origin)) {
+            throw new IOException("Registration audience changed");
+        }
+    }
+
+    /** Each recovery or registration starts a new generation, whose operations count from zero. */
+    private void beginGeneration() throws Exception {
+        state.addProperty("protocol", ProviderCrypto.PROTOCOL);
+        state.addProperty("generation", state.getAsJsonObject("registration").get("leaseGeneration").getAsLong());
+        state.addProperty("sequence", 0);
+        state.remove("cursor");
+        state.remove("pendingAdmissions");
+        state.remove("pendingWebSocketOperation");
+        save();
+        installKeys();
+    }
+
+    /** Sends the first heartbeat, then looks every second for a heartbeat or outcome batch that is due. */
+    private void startCheckIns() throws Exception {
+        started = true;
+        heartbeat();
+        if (timer != null) {
+            timer.cancel(false);
+        }
+        timer = executor.scheduleWithFixedDelay(this::tick, 1, 1, TimeUnit.SECONDS);
+    }
+
+    private void tick() {
+        if (closed || !started) {
+            return;
+        }
+        try {
+            if (System.nanoTime() >= nextHeartbeat || candidatesChanged() || statusChanged()) {
+                heartbeat();
+            }
+        } catch (Exception e) {
+            heartbeatFailed(e);
+        }
+        // A heartbeat can stop the client, for example when its registration is gone
+        if (started && System.nanoTime() >= nextOutcomes) {
+            try {
+                flushEvents(false);
+            } catch (Exception e) {
+                outcomesFailed(e);
+            }
+        }
+    }
+
+    private void outcomesFailed(Exception failure) {
+        outcomeFailures++;
+        nextOutcomes = System.nanoTime() + retryDelayNanos(failure, outcomeFailures);
+        if (!fenced) {
+            diagnostics.failed(ProviderLog.Operation.EVENTS, safeFailure(failure));
+        }
     }
 
     private List<ProviderTransport.StunServer> discoveryStunServers() throws IOException {
@@ -1083,6 +1142,10 @@ public final class ProviderClient implements AutoCloseable {
 
     /** Neither the schedule nor a status change sends another heartbeat until the backoff has passed. */
     private void heartbeatFailed(Exception failure) {
+        if (fenced) {
+            // Stopping, and why is already logged
+            return;
+        }
         heartbeatFailures++;
         nextHeartbeat = System.nanoTime() + retryDelayNanos(failure, heartbeatFailures);
         nextStatusUpdate = nextHeartbeat;
@@ -2376,10 +2439,13 @@ public final class ProviderClient implements AutoCloseable {
                 }
             }
             if (status / 100 != 2) {
+                ProviderException refused = new ProviderException(status, code, message, actionUrl, retryAfter);
                 if (signed && GENERATION_FENCED.equals(code)) {
                     fenced();
+                } else if (signed && REGISTRATION_GONE.equals(code)) {
+                    registrationGone(refused);
                 }
-                throw new ProviderException(status, code, message, actionUrl, retryAfter);
+                throw refused;
             }
             JsonObject result = JsonParser.parseString(text).getAsJsonObject();
             if (signed) {
@@ -2592,10 +2658,22 @@ public final class ProviderClient implements AutoCloseable {
 
     /** Another process now owns this registration, so stop without draining or deregistering it. */
     private void fenced() {
+        relinquish(diagnostics::replaced);
+    }
+
+    /**
+     * The provider no longer has this registration. Registering again waits for a restart, as its owner may have
+     * removed it and a new registration can change the public endpoints.
+     */
+    private void registrationGone(ProviderException refused) {
+        relinquish(() -> diagnostics.registrationGone(refused.getMessage()));
+    }
+
+    private void relinquish(Runnable announce) {
         if (!fenced) {
             fenced = true;
             started = false;
-            diagnostics.replaced();
+            announce.run();
             stop();
         }
     }
@@ -2634,6 +2712,10 @@ public final class ProviderClient implements AutoCloseable {
                             store.close();
                         } catch (Exception e) {
                             diagnostics.failed(ProviderLog.Operation.STATE_CLOSE, safeFailure(e));
+                        }
+                        if (abandonStart != null) {
+                            abandonStart.run();
+                            abandonStart = null;
                         }
                         executor.shutdown();
                         stopped.complete(null);
