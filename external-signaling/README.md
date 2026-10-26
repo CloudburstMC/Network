@@ -114,7 +114,8 @@ A registration refused with `rate_limited` or `capacity_reached` and a
 `Retry-After` warns and tries again once that has passed, never sooner than ten
 seconds; `start()` completes when it succeeds. `registration_gone` on a signed
 operation stops the client without draining or deregistering, until the host
-restarts.
+restarts. A failure warns when it starts and again every 30 minutes while it lasts;
+network and file errors name what failed, such as the host or the TLS problem.
 
 ### Endpoint publication
 

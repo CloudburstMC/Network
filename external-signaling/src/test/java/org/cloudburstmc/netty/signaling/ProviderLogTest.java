@@ -38,6 +38,23 @@ class ProviderLogTest {
     }
 
     @Test
+    void aLongFailureWarnsAgainEveryHalfHour() {
+        var messages = new ArrayList<ProviderDiagnostic>();
+        long[] now = {0};
+        var log = new ProviderLog(messages::add, () -> now[0]);
+        log.failed(STATUS, "ConnectException");
+        now[0] = ProviderLog.REMINDER_NANOS - 1;
+        log.failed(STATUS, "ConnectException");
+        now[0] = ProviderLog.REMINDER_NANOS + java.util.concurrent.TimeUnit.MINUTES.toNanos(5);
+        log.failed(STATUS, "ConnectException");
+        log.failed(STATUS, "ConnectException");
+        log.recovered(STATUS);
+        assertEquals(
+                List.of(WARN, DEBUG, WARN, DEBUG, INFO), messages.stream().map(ProviderDiagnostic::level).toList());
+        assertEquals(STATUS.message("ConnectException") + " Failing for 35 minutes.", messages.get(2).message());
+    }
+
+    @Test
     void newClientsDoNotInheritSuppressedWarnings() {
         var messages = new ArrayList<ProviderDiagnostic>();
         new ProviderLog(messages::add).failed(STATUS, "ConnectException");

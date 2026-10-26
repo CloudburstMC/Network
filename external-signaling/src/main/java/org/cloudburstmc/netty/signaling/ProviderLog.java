@@ -17,8 +17,10 @@
 package org.cloudburstmc.netty.signaling;
 
 import java.time.Duration;
-import java.util.EnumSet;
+import java.util.EnumMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 /** Tracks independent failures for one provider client. Successful unrelated operations do not reset them. */
 final class ProviderLog {
@@ -57,25 +59,45 @@ final class ProviderLog {
         }
     }
 
+    /** A failure that lasts this long warns again, so a long outage is not one line in an old log. */
+    static final long REMINDER_NANOS = TimeUnit.MINUTES.toNanos(30);
+
     private final Consumer<ProviderDiagnostic> sink;
-    private final EnumSet<Operation> failures = EnumSet.noneOf(Operation.class);
+    private final LongSupplier nanoTime;
+    /** For each failing operation, when its streak started and when it last warned. */
+    private final EnumMap<Operation, long[]> failures = new EnumMap<>(Operation.class);
 
     ProviderLog(Consumer<ProviderDiagnostic> sink) {
-        this.sink = sink;
+        this(sink, System::nanoTime);
     }
 
-    /** The first failure of a streak warns and later ones go to debug, each with its reason. */
+    ProviderLog(Consumer<ProviderDiagnostic> sink, LongSupplier nanoTime) {
+        this.sink = sink;
+        this.nanoTime = nanoTime;
+    }
+
+    /**
+     * The first failure of a streak warns, and so does the first after each further {@link #REMINDER_NANOS}. The rest
+     * go to debug, each with its reason.
+     */
     void failed(Operation operation, String reason) {
-        sink.accept(
-                new ProviderDiagnostic(
-                        failures.add(operation)
-                                ? ProviderDiagnostic.Level.WARN
-                                : ProviderDiagnostic.Level.DEBUG,
-                        operation.message(reason)));
+        long now = nanoTime.getAsLong();
+        long[] streak = failures.get(operation);
+        if (streak == null) {
+            failures.put(operation, new long[] {now, now});
+            sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN, operation.message(reason)));
+        } else if (now - streak[1] >= REMINDER_NANOS) {
+            streak[1] = now;
+            long minutes = TimeUnit.NANOSECONDS.toMinutes(now - streak[0]);
+            sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.WARN,
+                    operation.message(reason) + " Failing for " + minutes + " minutes."));
+        } else {
+            sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.DEBUG, operation.message(reason)));
+        }
     }
 
     void recovered(Operation operation) {
-        if (failures.remove(operation)) {
+        if (failures.remove(operation) != null) {
             sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.INFO, operation.recovery));
         }
     }

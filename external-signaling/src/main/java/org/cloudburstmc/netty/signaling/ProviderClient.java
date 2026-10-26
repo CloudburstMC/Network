@@ -2628,9 +2628,30 @@ public final class ProviderClient implements AutoCloseable {
         }
     }
 
-    private static String safeFailure(Throwable e) {
+    /**
+     * The provider's words, or the failure's type. Network and file errors add their message, such as the host that
+     * did not resolve or why TLS failed, and their cause's; other messages can quote a response, so they are left out.
+     */
+    static String safeFailure(Throwable e) {
         e = unwrapped(e);
-        return e instanceof ProviderException ? e.getMessage() : e.getClass().getSimpleName();
+        if (e instanceof ProviderException) {
+            return e.getMessage();
+        }
+        String failure = described(e);
+        return e.getCause() instanceof IOException cause && cause != e
+                ? failure + " (" + described(cause) + ")"
+                : failure;
+    }
+
+    /** The type, and for an IOException its message on one line of at most 200 characters. */
+    private static String described(Throwable e) {
+        String type = e.getClass().getSimpleName();
+        String message = e instanceof IOException ? e.getMessage() : null;
+        if (message == null || message.isBlank()) {
+            return type;
+        }
+        String line = message.replaceAll("[\\p{Cntrl}\\s]+", " ").strip();
+        return type + ": " + (line.length() > 200 ? line.substring(0, 197) + "..." : line);
     }
 
     /** A future's wrapper says nothing about what failed. */

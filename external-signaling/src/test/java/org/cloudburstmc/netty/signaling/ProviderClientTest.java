@@ -866,6 +866,23 @@ class ProviderClientTest {
     }
 
     @Test
+    void warningsNameWhatFailedWithoutQuotingResponses() {
+        assertEquals("ConnectException: Connection refused",
+                ProviderClient.safeFailure(new java.net.ConnectException("Connection refused")));
+        assertEquals("IOException: Provider transport unavailable (UnknownHostException: agent.example)",
+                ProviderClient.safeFailure(new CompletionException(new IOException("Provider transport unavailable",
+                        new java.net.UnknownHostException("agent.example")))));
+        assertEquals("SSLHandshakeException: PKIX path building failed",
+                ProviderClient.safeFailure(new javax.net.ssl.SSLHandshakeException("PKIX path\nbuilding failed")));
+        assertEquals("HttpConnectTimeoutException",
+                ProviderClient.safeFailure(new java.net.http.HttpConnectTimeoutException("")));
+        // A parser's message can quote the response, which may carry a claim link
+        assertEquals("IllegalStateException",
+                ProviderClient.safeFailure(new IllegalStateException("Not a JSON Object: {\"url\":\"secret\"}")));
+        assertEquals(200, ProviderClient.safeFailure(new IOException("x".repeat(300))).length() - "IOException: ".length());
+    }
+
+    @Test
     void failedCheckInsBackOffFromTenSecondsToTwoMinutes() {
         var unreachable = new IOException("unreachable");
         long[] seconds = {10, 20, 40, 80, 120, 120};
