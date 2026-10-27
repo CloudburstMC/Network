@@ -496,13 +496,14 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
                                                  @Nullable InetSocketAddress clientAddress,
                                                  @Nullable String host, @Nullable ClientInfo client) {
-        return acceptOffer(networkId, sdpOffer, clientAddress, host, client, null);
+        return acceptOffer(networkId, sdpOffer, clientAddress, false, host, client, null);
     }
 
     /** As the public one, with the endpoint the player typed in when its answer should carry it. */
     private CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
-                                                  @Nullable InetSocketAddress clientAddress, @Nullable String host,
-                                                  @Nullable ClientInfo client, @Nullable InetSocketAddress typed) {
+                                                  @Nullable InetSocketAddress clientAddress, boolean proxied,
+                                                  @Nullable String host, @Nullable ClientInfo client,
+                                                  @Nullable InetSocketAddress typed) {
         // Validation needs the thread that bind starts. Whether a channel is listening is checked
         // once the offer has earned it, so a bad offer is refused for what it is
         EventLoop loop = this.eventLoop;
@@ -540,7 +541,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 log.debug("Refused the offer from {}: {} ({})", clientAddress, reason, failure.toString());
                 throw new CompletionException(new OfferRejected(JoinRefusal.INVALID_IDENTITY, reason, failure));
             }
-            return admit(networkId, sdpOffer, clientAddress, host, client, claims, typed);
+            return admit(networkId, sdpOffer, clientAddress, proxied, host, client, claims, typed);
         }, loop).thenCompose(Function.identity());
     }
 
@@ -595,9 +596,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * The second half of a join, on the loop, once the identity is known to be good.
      */
     private CompletableFuture<String> admit(String networkId, String sdpOffer,
-                                            @Nullable InetSocketAddress clientAddress, @Nullable String host,
-                                            @Nullable ClientInfo client, JwtClaims claims,
-                                            @Nullable InetSocketAddress typed) {
+                                            @Nullable InetSocketAddress clientAddress, boolean proxied,
+                                            @Nullable String host, @Nullable ClientInfo client,
+                                            JwtClaims claims, @Nullable InetSocketAddress typed) {
         PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
                 claims.getClaimValueAsString("xname"), networkId, clientAddress, client, claims);
         log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
@@ -666,7 +667,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                     future.cause()));
         });
 
-        handler.onConnect(connectionId, networkId, sdpOffer, clientAddress, player);
+        handler.onConnect(connectionId, networkId, sdpOffer, clientAddress, proxied, player);
         return result;
     }
 
@@ -813,6 +814,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             HttpMethod method = req.method();
             String host = req.headers().get(HttpHeaderNames.HOST);
             InetSocketAddress remoteAddress = clientAddress(ctx, req);
+            // Anything but the peer itself was declared by a trusted proxy
+            boolean proxied = !remoteAddress.equals(ctx.channel().remoteAddress());
 
             if (requiresTls && sslContext != null && ctx.pipeline().get(SslHandler.class) == null) {
                 log.debug("Refused a plaintext request from {}", remoteAddress);
@@ -876,7 +879,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
             ClientInfo client = ClientInfo.fromQuery(parameters(uri));
             InetSocketAddress typed = typedEndpoint(ctx, host);
-            acceptOffer(networkId, sdpOffer, remoteAddress, host, client, typed).whenComplete((sdpAnswer, failure) -> {
+            acceptOffer(networkId, sdpOffer, remoteAddress, proxied, host, client, typed).whenComplete((sdpAnswer, failure) -> {
                 if (!ctx.channel().isActive()) {
                     return; // The peer left while the join was in flight
                 }

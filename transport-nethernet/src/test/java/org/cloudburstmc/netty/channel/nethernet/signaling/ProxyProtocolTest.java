@@ -19,6 +19,8 @@ package org.cloudburstmc.netty.channel.nethernet.signaling;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
+import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -34,12 +36,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.UnaryOperator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProxyProtocolTest {
 
     private final EventLoopGroup group = new NioEventLoopGroup(1);
     private final BlockingQueue<InetSocketAddress> seen = new ArrayBlockingQueue<>(4);
+    private final BlockingQueue<Join> joins = new ArrayBlockingQueue<>(4);
     private NetherNetHTTPServerSignaling signaling;
 
     @AfterEach
@@ -143,5 +148,55 @@ class ProxyProtocolTest {
     @Test
     void readsNoProxyHeaderByDefault() throws Exception {
         assertProxyHeaderIgnored(start(List.of()));
+    }
+
+    private record Join(InetSocketAddress clientAddress, boolean proxied) { }
+
+    @Test
+    void tellsTheChannelWhichJoinAddressesAProxyDeclared() throws Exception {
+        int port = start(builder -> builder.setProxyProtocolProxies(List.of("127.0.0.0/8"))
+                .setTokenTrust(TokenTrust.ANY));
+        signaling.setNewConnectionHandler(new NetherNetServerSignaling.NewConnectionHandler() {
+            @Override
+            public void onConnect(String connectionId, String remoteNetworkId, String payload,
+                                  InetSocketAddress clientAddress, PlayerInfo player) {
+                throw new AssertionError("HTTP signaling says whether the address was proxied");
+            }
+
+            @Override
+            public void onConnect(String connectionId, String remoteNetworkId, String payload,
+                                  InetSocketAddress clientAddress, boolean proxied, PlayerInfo player) {
+                joins.offer(new Join(clientAddress, proxied));
+            }
+        });
+
+        try (Socket proxied = offer(port, "42", TestHttp.proxyV2Header("203.0.113.7", 5555))) {
+            Join join = joins.poll(10, TimeUnit.SECONDS);
+            assertNotNull(join, "the proxied join never reached the channel");
+            assertEquals("203.0.113.7", join.clientAddress().getAddress().getHostAddress());
+            assertTrue(join.proxied());
+        }
+        try (Socket direct = offer(port, "43", null)) {
+            Join join = joins.poll(10, TimeUnit.SECONDS);
+            assertNotNull(join, "the direct join never reached the channel");
+            assertEquals("127.0.0.1", join.clientAddress().getAddress().getHostAddress());
+            assertFalse(join.proxied());
+        }
+    }
+
+    /** Posts a join and leaves the socket open, as nothing here answers it. */
+    private Socket offer(int port, String networkId, byte[] prefix) throws Exception {
+        byte[] body = TestOffers.selfSigned().getBytes(StandardCharsets.UTF_8);
+        Socket socket = new Socket("127.0.0.1", port);
+        OutputStream out = socket.getOutputStream();
+        if (prefix != null) {
+            out.write(prefix);
+        }
+        out.write(("POST /v1/join/" + networkId + " HTTP/1.1\r\nHost: localhost\r\n"
+                + "Content-Type: application/sdp\r\nContent-Length: " + body.length + "\r\n\r\n")
+                .getBytes(StandardCharsets.UTF_8));
+        out.write(body);
+        out.flush();
+        return socket;
     }
 }

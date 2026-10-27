@@ -139,6 +139,25 @@ final class NetherNetTestServer implements AutoCloseable {
         return active();
     }
 
+    /**
+     * Connects {@code client} as a join signaled from {@code address}, declared by a proxy if
+     * {@code proxied}, and returns once ICE has connected, so the child has settled its address.
+     */
+    NetherNetChildChannel connect(PeerConnection client, InetSocketAddress address, boolean proxied) throws Exception {
+        String offer = offer(client);
+        server.eventLoop().submit(() -> server.acceptConnection("1", offer, "client", address, proxied, null)).sync();
+        // After the server's own listener, which settles the address on the same callback
+        var connected = new CountDownLatch(1);
+        accepted.get(5, TimeUnit.SECONDS).peer().onStateChange.register((peer, state) -> {
+            if (state == PeerState.RTC_CONNECTED) connected.countDown();
+        });
+        client.setRemoteDescription(signaling.answer.get(5, TimeUnit.SECONDS), SessionDescriptionType.ANSWER);
+        if (!connected.await(10, TimeUnit.SECONDS)) {
+            throw new AssertionError("ICE never connected");
+        }
+        return active();
+    }
+
     /** Binds, then connects {@code client} with the two data channels a Bedrock client opens. */
     NetherNetChildChannel bindAndConnect(PeerConnection client) throws Exception {
         bind();
