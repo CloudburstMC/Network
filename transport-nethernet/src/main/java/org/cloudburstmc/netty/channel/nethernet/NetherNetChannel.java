@@ -837,6 +837,13 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     }
 
     @Override
+    public SocketAddress remoteAddress() {
+        // Not AbstractChannel's, which keeps the first address read: an initializer reads the signaled
+        // address before ICE connects, and setRemoteAddress replaces it with the selected pair later
+        return this.remoteAddress;
+    }
+
+    @Override
     public ChannelConfig config() {
         return this.config;
     }
