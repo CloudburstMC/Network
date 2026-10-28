@@ -71,6 +71,8 @@ class RelayedJoinTest {
         join(LOOPBACK, offer -> offer, signaled, (relay, child) -> {
             assertEquals(Set.copyOf(relay.flows.keySet()), Set.of(child.remoteAddress()), "the client, not the relay");
             assertEquals(AddressSource.ICE_PROXY_PROTOCOL, child.mediaAddress().source());
+            assertEquals(relay.flows.get(child.remoteAddress()).getLocalSocketAddress(), child.mediaAddress().via(),
+                    "the relay's own socket");
             assertEquals(child.mediaAddress(), child.reportedAddress());
             assertEquals(new SourcedAddress(signaled, AddressSource.SIGNALING, null), child.signaledAddress());
         });
@@ -91,6 +93,8 @@ class RelayedJoinTest {
                     assertEquals("prflx", child.selectedPath().remoteType());
                     assertEquals(signaled, child.remoteAddress());
                     assertEquals(AddressSource.TURN, child.mediaAddress().source());
+                    assertEquals(relay.flows.get(child.mediaAddress().address()).getLocalSocketAddress(),
+                            child.mediaAddress().via(), "the PROXY protocol relay that brought the TURN server");
                     assertEquals(AddressSource.SIGNALING, child.reportedAddress().source());
                 });
     }

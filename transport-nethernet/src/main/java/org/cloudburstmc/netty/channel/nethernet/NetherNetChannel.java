@@ -328,14 +328,30 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         if (remote == null || remote.isUnresolved()) {
             return path;
         }
+        // Taken now, while the relay's flow is fresh, as libjuice forgets a quiet one
+        InetSocketAddress via = relayOf(remote);
         AddressSource source = isRelay(path) ? AddressSource.TURN
-                : this.iceRelays != null ? AddressSource.ICE_PROXY_PROTOCOL : AddressSource.ICE;
-        this.mediaAddress = new SourcedAddress(remote, source, null);
+                : via != null ? AddressSource.ICE_PROXY_PROTOCOL : AddressSource.ICE;
+        this.mediaAddress = new SourcedAddress(remote, source, via);
         // A network id names the peer rather than a place, so it stays
         if (this.remoteAddress instanceof InetSocketAddress) {
             this.remoteAddress = reportedAddress().address();
         }
         return path;
+    }
+
+    /** The PROXY protocol relay that brought the peer, or null when none did or the lookup failed. */
+    private @Nullable InetSocketAddress relayOf(InetSocketAddress peer) {
+        IceProxyProtocol relays = this.iceRelays;
+        if (relays == null) {
+            return null;
+        }
+        try {
+            return relays.relayOf(peer);
+        } catch (RuntimeException e) {
+            log.debug("Could not look up the relay of {}: {}", peer, e.toString());
+            return null;
+        }
     }
 
     /**

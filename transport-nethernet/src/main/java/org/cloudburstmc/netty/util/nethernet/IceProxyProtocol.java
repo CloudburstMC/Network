@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 import tel.schich.libdatachannel.IceUdpMuxListener;
 
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -71,6 +72,15 @@ public final class IceProxyProtocol implements AutoCloseable {
             }
         }
         return handle;
+    }
+
+    /**
+     * The relay a client comes through on this port, by the address its header declared.
+     *
+     * @return The relay, or null when none speaks for the client
+     */
+    public @Nullable InetSocketAddress relayOf(InetSocketAddress client) {
+        return IceUdpMuxListener.proxyRelay(this.port.bindAddress(), this.port.port(), client);
     }
 
     @Override
