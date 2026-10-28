@@ -404,17 +404,24 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * addresses out of their logs.
      *
      * @param player        The player's name, null when the signaling does not know it
-     * @param reachedServer Whether ICE found a path, so the join failed after that
+     * @param progress      How far the join got
      * @param icePort       The UDP port ICE uses, 0 when each connection takes its own
      * @param relayed       Whether players only reach that port through PROXY protocol relays
      * @return The warning
      */
-    static String joinFailedMessage(@Nullable String player, boolean reachedServer, int icePort, boolean relayed) {
+    static String joinFailedMessage(@Nullable String player, JoinProgress progress, int icePort, boolean relayed) {
         // Self asserted under TokenTrust.ANY, so it must not be able to forge log lines
         String name = player == null ? "" : player.replaceAll("\\p{Cntrl}", "").strip();
         String who = name.isEmpty() ? "A player" : name.length() > 32 ? name.substring(0, 32) : name;
-        if (reachedServer) {
+        if (progress == JoinProgress.PEER_CONNECTED) {
             return who + " reached this server over NetherNet, but the connection did not finish setting up.";
+        }
+        if (progress == JoinProgress.ICE_CONNECTED) {
+            // This side's checks came back, yet a client goes on only once its own checks do
+            return who + " could not connect over NetherNet: their device answered this server, but the connection "
+                    + "stalled after that. A firewall or a hosting provider's DDoS filter may be dropping other "
+                    + "packets their device sends " + (relayed ? "through the PROXY protocol relays."
+                    : icePort > 0 ? "to UDP port " + icePort + "." : "to this server over UDP.");
         }
         if (relayed) {
             return who + " could not connect over NetherNet: nothing arrived through the PROXY protocol relays this "
@@ -423,6 +430,16 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         return who + " could not connect over NetherNet: no network path to this server was found. Their device "
                 + "needs to reach " + (icePort > 0 ? "UDP port " + icePort + " on one of the addresses this server"
                 : "this server over UDP on one of the addresses it") + " advertises.";
+    }
+
+    /** How far a join got before it failed. */
+    enum JoinProgress {
+        /** ICE found no path. */
+        NONE,
+        /** This side's ICE checks came back, but the peer connection never came up. */
+        ICE_CONNECTED,
+        /** The peer connection came up, but the channel never went active. */
+        PEER_CONNECTED
     }
 
     /**
@@ -435,8 +452,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         private final int handshakeTimeoutSeconds;
         private final ScheduledFuture<?> handshakeTimeout;
-        /** Whether ICE found a path, which tells a missing path from a later failure. */
+        /** Whether this side's ICE checks came back, which tells a missing path from a later failure. */
         private volatile boolean iceConnected;
+        /** Whether the peer connection came up, which ICE alone does not mean. */
+        private volatile boolean peerConnected;
         private final AtomicBoolean failureLogged = new AtomicBoolean();
 
         private final PeerConnection peerConnection;
@@ -480,10 +499,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             }
             PlayerInfo player = child.attr(NetherNetChildChannel.PLAYER_INFO).get();
             InetSocketAddress ice = iceAddress();
-            log.warn(joinFailedMessage(player == null ? null : player.displayName(), iceConnected,
+            JoinProgress progress = peerConnected ? JoinProgress.PEER_CONNECTED
+                    : iceConnected ? JoinProgress.ICE_CONNECTED : JoinProgress.NONE;
+            log.warn(joinFailedMessage(player == null ? null : player.displayName(), progress,
                     ice == null ? 0 : ice.getPort(), proxyProtocol != null));
             log.debug("Join {} from {} failed: {}{}", connectionId, clientAddress, reason,
-                    iceConnected ? ", after ICE connected" : "");
+                    peerConnected ? ", after the peer connected" : iceConnected ? ", after ICE connected" : "");
         }
 
         /**
@@ -507,6 +528,11 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             pc.onDataChannel.register((peer, dataChannel) -> onDataChannel(dataChannel));
             pc.onLocalCandidate.register((peer, candidate, mediaId) -> onLocalCandidate(candidate));
             pc.onStateChange.register((peer, state) -> onConnectionChange(state));
+            pc.onIceStateChange.register((peer, state) -> {
+                if (state == IceState.RTC_ICE_CONNECTED || state == IceState.RTC_ICE_COMPLETED) {
+                    iceConnected = true;
+                }
+            });
             pc.onGatheringStateChange.register((peer, state) -> onGatheringStateChange(state));
         }
 
@@ -542,7 +568,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             log.debug("Connection {} state changed: {}", this.connectionId, state);
 
             if (state == PeerState.RTC_CONNECTED) {
-                iceConnected = true;
+                peerConnected = true;
             }
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) {
                 if (child.isOpen()) {
