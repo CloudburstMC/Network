@@ -234,8 +234,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         IdentityKeyVerifier identityVerifier = player == null ? null
                 : TransportIdentityBinding.forPlayer(player);
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);
-        NetherNetChildChannel child = new NetherNetChildChannel(this,
-                pc, signaled == null ? SourcedAddress.unknown() : signaled, localAddress);
+        NetherNetChildChannel child = new NetherNetChildChannel(this, pc, signaled, localAddress);
         child.iceRelays = this.proxyProtocol;
         child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
         if (player != null) {

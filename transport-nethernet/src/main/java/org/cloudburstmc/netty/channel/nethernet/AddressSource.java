@@ -30,7 +30,10 @@ public enum AddressSource {
     SIGNALING_LAN,
     /** Handed in by the host along with an offer, which says nothing of where it got it. */
     HOST,
-    /** The source of the first STUN check an NXS admission accepted. */
+    /**
+     * The source of the first STUN check an NXS admission accepted. An assisted NXS join sees only the candidates the
+     * client claims, so it has none.
+     */
     NXS_ADMISSION,
     /** The remote side of the selected ICE pair, when no PROXY protocol relay is known to have brought it. */
     ICE,
@@ -38,6 +41,6 @@ public enum AddressSource {
     ICE_PROXY_PROTOCOL,
     /** The selected ICE pair runs through what the peer says is one of its TURN relays, so this is that relay. */
     TURN,
-    /** Nothing said where the peer is, as with Xbox signaling, so this is the wildcard. */
+    /** Nothing said where the peer is, as with Xbox signaling or an assisted NXS join, so this is the wildcard. */
     UNKNOWN
 }

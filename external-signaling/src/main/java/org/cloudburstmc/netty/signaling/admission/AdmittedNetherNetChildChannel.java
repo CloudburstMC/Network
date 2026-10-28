@@ -38,7 +38,8 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     private final Consumer<PeerConnection> nativeCloser;
 
     /**
-     * @param admittedFrom The source of the first STUN check the admission accepted
+     * @param admittedFrom The source of the first STUN check the admission accepted, or null for an assisted join,
+     *                     which knows only the candidates the client claims until ICE settles
      * @param relays       The PROXY protocol relays on the listener's port, or null when none are set
      */
     public AdmittedNetherNetChildChannel(Channel parent, PeerConnection peer, InetSocketAddress admittedFrom,
@@ -49,7 +50,8 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     AdmittedNetherNetChildChannel(Channel parent, PeerConnection peer, InetSocketAddress admittedFrom,
                                   InetSocketAddress local, IceProxyProtocol relays,
                                   Consumer<PeerConnection> nativeCloser) {
-        super(parent, peer, new SourcedAddress(admittedFrom, AddressSource.NXS_ADMISSION, null), local);
+        super(parent, peer, admittedFrom == null ? null
+                : new SourcedAddress(admittedFrom, AddressSource.NXS_ADMISSION, null), local);
         this.iceRelays = relays;
         this.nativeCloser = nativeCloser;
     }

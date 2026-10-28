@@ -262,7 +262,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                 .configuration(PeerConnectionConfiguration.DEFAULT.withDisableAutoNegotiation(true)
                         .withMaxMessageSize(NetherNetConstants.MAX_ADVERTISED_MESSAGE_SIZE))
                 .identity(new DtlsIdentity(identity.certificate(), identity.privateKey()))
-                .initialize(peer -> initialize(reservation, a, peer))
+                .initialize(peer -> initialize(reservation, a, peer, reservation.tuple()))
                 .expiresAt(Instant.ofEpochMilli(a.expiresAt()))
                 .build());
     }
@@ -463,7 +463,9 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
                                         tel.schich.libdatachannel.SessionDescriptionType.OFFER);
                                 peer.setLocalDescription(
                                         "answer", join.localUfrag(), join.localPassword());
-                                initialize(reservation, admission, peer);
+                                // The reserved candidate is only the client's claim, so the child knows no
+                                // address until ICE settles
+                                initialize(reservation, admission, peer, null);
                                 requireCurrent.run();
                                 if (System.nanoTime() >= deadline
                                         || System.currentTimeMillis() >= join.expiresAt()) {
@@ -689,9 +691,10 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
         }
     }
 
-    private void initialize(
-            AdmissionGate.Reservation reservation, AdmissionContext a, PeerConnection peer) {
-        var child = new AdmittedNetherNetChildChannel(this, peer, reservation.tuple(), address, proxyProtocol);
+    /** @param admittedFrom Where the admission saw the peer, null when it saw nothing but the offer */
+    private void initialize(AdmissionGate.Reservation reservation, AdmissionContext a, PeerConnection peer,
+                            InetSocketAddress admittedFrom) {
+        var child = new AdmittedNetherNetChildChannel(this, peer, admittedFrom, address, proxyProtocol);
         var session = new Session(reservation, child, peer);
         creations.incrementAndGet();
         liveNativePeers.incrementAndGet();

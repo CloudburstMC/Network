@@ -23,6 +23,7 @@ import io.netty.util.AttributeKey;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
+import org.jspecify.annotations.Nullable;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.PeerConnection;
 
@@ -54,11 +55,12 @@ public class NetherNetChildChannel extends NetherNetChannel {
             AttributeKey.valueOf(NetherNetChildChannel.class, "playerInfo");
 
     /**
-     * @param signaled Where signaling met the peer, see {@link #signaledAddress()}
+     * @param signaled Where signaling met the peer, see {@link #signaledAddress()}, or null when it never did
      */
-    public NetherNetChildChannel(Channel parent, PeerConnection peerConnection, SourcedAddress signaled,
+    public NetherNetChildChannel(Channel parent, PeerConnection peerConnection, @Nullable SourcedAddress signaled,
                                  InetSocketAddress local) {
-        super(parent, signaled, local);
+        // The wildcard stands in until ICE names the peer
+        super(parent, signaled == null ? SourcedAddress.unknown() : signaled, local);
         this.peerConnection = peerConnection;
         this.config = new DefaultNetherChannelConfig(this);
         registerMetrics(peerConnection);
