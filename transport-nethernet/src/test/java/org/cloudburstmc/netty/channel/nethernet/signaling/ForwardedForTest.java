@@ -119,12 +119,45 @@ class ForwardedForTest {
         assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
     }
 
+    /** A proxy appends to the header the client sent, so entries left of its own are the client's to choose. */
     @Test
-    void takesTheLeftmostEntryOfAChain() throws Exception {
+    void takesTheEntryTheTrustedProxyAppended() throws Exception {
         int port = start(List.of("127.0.0.0/8"));
         get(port, "203.0.113.7, 198.51.100.2");
 
-        assertEquals("203.0.113.7", observed().getAddress().getHostAddress());
+        assertEquals("198.51.100.2", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void readsNothingLeftOfTheClient() throws Exception {
+        int port = start(List.of("127.0.0.0/8"));
+        get(port, "not an address, 198.51.100.2");
+
+        assertEquals("198.51.100.2", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void walksPastTrustedProxiesInAChain() throws Exception {
+        int port = start(List.of("127.0.0.0/8", "10.0.0.0/8"));
+        get(port, "203.0.113.7, 198.51.100.2, 10.1.2.3");
+
+        assertEquals("198.51.100.2", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void takesTheLeftmostWhenEveryEntryIsTrusted() throws Exception {
+        int port = start(List.of("127.0.0.0/8", "10.0.0.0/8"));
+        get(port, "10.0.0.9, 10.1.2.3");
+
+        assertEquals("10.0.0.9", observed().getAddress().getHostAddress());
+    }
+
+    @Test
+    void anEntryAProxyAppendedThatIsNoAddressLeavesThePeer() throws Exception {
+        int port = start(List.of("127.0.0.0/8"));
+        get(port, "203.0.113.7, unknown");
+
+        assertEquals("127.0.0.1", observed().getAddress().getHostAddress());
     }
 
     @Test

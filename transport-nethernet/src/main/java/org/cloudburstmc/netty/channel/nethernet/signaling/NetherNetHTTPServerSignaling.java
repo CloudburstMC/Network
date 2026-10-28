@@ -926,17 +926,33 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 return direct;
             }
 
-            // Leftmost entry is the originating client
-            String first = forwarded.split(",")[0].trim();
-            if (first.startsWith("[") && first.endsWith("]")) {
-                first = first.substring(1, first.length() - 1);
+            // Each trusted proxy appends where it took the request from, and anything left of that is
+            // whatever the client sent, so the client is the rightmost entry no trusted proxy accounts for
+            String[] entries = forwarded.split(",");
+            InetAddress client = null;
+            for (int i = entries.length - 1; i >= 0; i--) {
+                client = literal(entries[i]);
+                if (client == null) {
+                    return direct;
+                }
+                if (!forwardedForProxies.contains(client)) {
+                    break;
+                }
             }
-
-            // An address literal only. Resolving a name here would block this event loop on DNS and
-            // let the header stand for whatever the answer happened to be
-            InetAddress literal = NetUtil.createInetAddressFromIpAddressString(first);
-            return literal == null ? direct : new SourcedAddress(new InetSocketAddress(literal, remote.getPort()),
+            return new SourcedAddress(new InetSocketAddress(client, remote.getPort()),
                     AddressSource.SIGNALING_FORWARDED_FOR, remote);
+        }
+
+        /**
+         * An address literal only. Resolving a name here would block this event loop on DNS and let
+         * the header stand for whatever the answer happened to be.
+         */
+        private static @Nullable InetAddress literal(String entry) {
+            String trimmed = entry.trim();
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                trimmed = trimmed.substring(1, trimmed.length() - 1);
+            }
+            return NetUtil.createInetAddressFromIpAddressString(trimmed);
         }
 
         /**
@@ -1198,6 +1214,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         /**
          * Sets the reverse proxies whose {@code X-Forwarded-For} header is honored, such as an HTTP
          * load balancer. Requests from anywhere else keep their peer address. Empty by default.
+         * <p>
+         * The client is the rightmost entry that none of these proxies accounts for, as entries left
+         * of it are whatever the client sent. Behind a chain of proxies, list every one of them.
          *
          * @param proxies Addresses or CIDR ranges, such as {@code 10.0.0.0/8}
          * @return This builder
