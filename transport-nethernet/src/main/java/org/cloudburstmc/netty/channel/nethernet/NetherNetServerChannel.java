@@ -45,6 +45,7 @@ import tel.schich.libdatachannel.*;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -62,6 +63,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
     private InetSocketAddress localAddress;
     /** Null unless PROXY protocol relays are read on the ICE port. */
     private volatile @Nullable IceProxyProtocol proxyProtocol;
+    /** Whether a signaling's TURN servers were left out behind the relays, which is said once. */
+    private volatile boolean turnLeftOut;
     private volatile boolean open = true;
     /**
      * Open connections, each holding a native peer, closed with this channel.
@@ -131,6 +134,12 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         InetSocketAddress ice = iceAddress();
         if (ice == null || ice.getPort() <= 0) {
             throw new IOException("PROXY protocol relays need a fixed ICE port");
+        }
+        // libjuice sends nothing but STUN lookups past the relays, so each join would wait out its TURN allocations
+        if (this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG).iceServers().stream()
+                .anyMatch(NetherNetChannel::isTurn)) {
+            throw new IOException("TURN servers in NETHER_PEER_CONNECTION_CONFIG cannot work behind the "
+                    + "NETHER_SERVER_PROXY_PROTOCOL relays, which pass nothing but STUN lookups");
         }
         return IceProxyProtocol.set(iceBindAddress(ice), ice.getPort(), relays);
     }
@@ -228,9 +237,16 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
         PeerConnectionConfiguration configured =
                 this.config.getOption(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG);
+        List<URI> iceServers = NetherNetChannel.withIceServers(configured, this.signaling.getIceServers());
+        // A peer's TURN allocations never pass the relays and would hold its gathering up
+        if (this.proxyProtocol != null && iceServers.removeIf(NetherNetChannel::isTurn) && !this.turnLeftOut) {
+            this.turnLeftOut = true;
+            log.info("Leaving out TURN servers, as nothing but STUN lookups passes the PROXY protocol relays "
+                    + "on the ICE port");
+        }
         PeerConnectionConfiguration rtcConfig = bindIce(configured)
                 .withDisableAutoNegotiation(true)
-                .withIceServers(NetherNetChannel.withIceServers(configured, this.signaling.getIceServers()));
+                .withIceServers(iceServers);
         IdentityKeyVerifier identityVerifier = player == null ? null
                 : TransportIdentityBinding.forPlayer(player);
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);

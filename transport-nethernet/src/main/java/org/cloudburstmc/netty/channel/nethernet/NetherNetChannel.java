@@ -906,6 +906,12 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         return servers;
     }
 
+    /** Whether an ICE server is a TURN relay rather than a STUN server. */
+    static boolean isTurn(URI server) {
+        String scheme = server.getScheme();
+        return "turn".equalsIgnoreCase(scheme) || "turns".equalsIgnoreCase(scheme);
+    }
+
     static void deregisterAll(PeerConnection peer) {
         peer.onLocalDescription.deregisterAll();
         peer.onLocalCandidate.deregisterAll();

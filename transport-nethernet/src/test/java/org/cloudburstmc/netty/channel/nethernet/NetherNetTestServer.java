@@ -48,6 +48,8 @@ final class NetherNetTestServer implements AutoCloseable {
     private final InetSocketAddress iceAddress;
     /** PROXY protocol relays in front of the ICE port. */
     IpRangeSet relays = IpRangeSet.empty();
+    /** The server's peer configuration, or null for the default. */
+    PeerConnectionConfiguration peerConfig;
 
     NetherNetTestServer() {
         this(null);
@@ -64,6 +66,7 @@ final class NetherNetTestServer implements AutoCloseable {
         new ServerBootstrap().group(group).channelFactory(() -> server)
                 .option(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, iceAddress)
                 .option(NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL, relays)
+                .option(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG, peerConfig)
                 .handler(new ChannelInboundHandlerAdapter() {
                     @Override
                     public void channelRead(ChannelHandlerContext ctx, Object message) {
