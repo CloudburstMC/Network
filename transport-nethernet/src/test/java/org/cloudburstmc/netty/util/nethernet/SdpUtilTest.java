@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.util.nethernet;
 
 import org.junit.jupiter.api.Test;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.stream.Stream;
@@ -36,6 +37,23 @@ class SdpUtilTest {
             + "a=candidate:2 1 udp 2130706431 172.17.0.2 19191 typ host\r\n"
             + "a=candidate:3 1 udp 2130706431 10.88.0.4 19191 typ host\r\n"
             + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+
+    @Test
+    void readsTheAddressATurnServerAllocated() throws Exception {
+        assertEquals(InetAddress.getByName("20.202.1.91"), SdpUtil.relayAddress(
+                "a=candidate:4 1 udp 41885439 20.202.1.91 50123 typ relay raddr 198.51.100.7 rport 54321"));
+        // As trickled, without the attribute prefix
+        assertEquals(InetAddress.getByName("2001:db8::1"), SdpUtil.relayAddress(
+                "candidate:5 1 udp 41885439 2001:db8::1 50124 typ relay raddr :: rport 0"));
+    }
+
+    @Test
+    void readsNoRelayAddressFromAnyOtherCandidate() {
+        assertNull(SdpUtil.relayAddress("a=candidate:1 1 udp 2130706431 203.0.113.10 19191 typ host"));
+        assertNull(SdpUtil.relayAddress("a=candidate:2 1 udp 1694498815 203.0.113.10 19191 typ srflx raddr 0.0.0.0 rport 0"));
+        assertNull(SdpUtil.relayAddress("a=candidate:3 1 udp 41885439 turn.example.com 50123 typ relay"));
+        assertNull(SdpUtil.relayAddress("not a candidate"));
+    }
 
     @Test
     void readsTheAddressOutOfACandidate() {

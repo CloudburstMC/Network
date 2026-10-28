@@ -22,6 +22,9 @@ import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.SessionDescriptionType;
 
+import java.net.InetAddress;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -37,6 +40,8 @@ final class RemoteCandidates {
     private final boolean ipOnly;
     private final int limit;
     private final AtomicInteger trickled = new AtomicInteger();
+    /** Where TURN servers relay for the peer, from every relay candidate it named, applied or not. */
+    private final Set<InetAddress> relays = ConcurrentHashMap.newKeySet();
 
     private RemoteCandidates(PeerConnection peer, String connectionId, boolean ipOnly, int limit) {
         this.peer = peer;
@@ -73,6 +78,9 @@ final class RemoteCandidates {
      * Applies the remote description, keeping the candidates {@link #trickle} would take.
      */
     void setDescription(String sdp, SessionDescriptionType type) {
+        for (String line : sdp.split("\r\n|\n")) {
+            this.noteRelay(line);
+        }
         this.peer.setRemoteDescription(this.ipOnly ? SdpUtil.withIpCandidates(sdp, this.limit) : sdp, type);
     }
 
@@ -80,11 +88,27 @@ final class RemoteCandidates {
      * Applies a candidate the remote side trickled.
      */
     void trickle(String candidate) {
+        this.noteRelay(candidate);
         if (this.ipOnly && (!SdpUtil.hasIpAddress(candidate) || this.trickled.incrementAndGet() > this.limit)) {
             log.debug("Ignoring remote candidate for {}: {}", this.connectionId, candidate);
             return;
         }
         this.add(candidate);
+    }
+
+    /**
+     * Whether a TURN server relays for the peer from this address, which then names that server
+     * rather than the peer.
+     */
+    boolean isRelay(InetAddress address) {
+        return this.relays.contains(address);
+    }
+
+    private void noteRelay(String candidate) {
+        InetAddress relay = SdpUtil.relayAddress(candidate);
+        if (relay != null && this.relays.size() < MAX_CANDIDATES) {
+            this.relays.add(relay);
+        }
     }
 
     /**

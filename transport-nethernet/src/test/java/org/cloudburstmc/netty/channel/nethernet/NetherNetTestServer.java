@@ -32,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 /** A real Netty acceptor and native peer pair, with in-process SDP signaling. */
@@ -144,7 +145,13 @@ final class NetherNetTestServer implements AutoCloseable {
      * {@code proxied}, and returns once ICE has connected, so the child has settled its address.
      */
     NetherNetChildChannel connect(PeerConnection client, InetSocketAddress address, boolean proxied) throws Exception {
-        String offer = offer(client);
+        return connect(client, address, proxied, offer -> offer);
+    }
+
+    /** As {@link #connect(PeerConnection, InetSocketAddress, boolean)}, with the offer rewritten on the way. */
+    NetherNetChildChannel connect(PeerConnection client, InetSocketAddress address, boolean proxied,
+                                  UnaryOperator<String> rewrite) throws Exception {
+        String offer = rewrite.apply(offer(client));
         server.eventLoop().submit(() -> server.acceptConnection("1", offer, "client", address, proxied, null)).sync();
         // After the server's own listener, which settles the address on the same callback
         var connected = new CountDownLatch(1);

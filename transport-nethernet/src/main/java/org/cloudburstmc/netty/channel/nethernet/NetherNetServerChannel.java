@@ -538,12 +538,21 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
             if (state == PeerState.RTC_CONNECTED) {
                 iceConnected = true;
-                // The selected candidate pair is where the peer's real address appears, unless a
-                // trusted proxy declared it while signaling: that proxy may relay the media as well,
-                // and without a PROXY header on the ICE port the pair would only name the proxy
-                if (!this.proxied || proxyProtocol != null) {
-                    InetSocketAddress raw = this.peerConnection.remoteAddress();
-                    this.child.setRemoteAddress(new InetSocketAddress(raw.getHostString(), raw.getPort()));
+                // The selected candidate pair is where the peer's real address appears, except when
+                // a trusted proxy declared it while signaling and relays the media without a PROXY
+                // header on the ICE port, or when the pair goes through a TURN server: either way the
+                // pair only names whoever relays for the peer
+                InetSocketAddress raw = this.peerConnection.remoteAddress();
+                // Comes back unresolved, so it is made into an address before anything compares it
+                InetSocketAddress selected = new InetSocketAddress(raw.getHostString(), raw.getPort());
+                boolean declared = this.proxied && proxyProtocol == null;
+                boolean turn = selected.getAddress() != null && knownAddress(this.clientAddress) != null
+                        && this.remoteCandidates.isRelay(selected.getAddress());
+                if (turn) {
+                    log.debug("Keeping the signaled address of {}, its selected pair goes through TURN server {}",
+                            this.connectionId, selected);
+                } else if (!declared) {
+                    this.child.setRemoteAddress(selected);
                 }
             }
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) {

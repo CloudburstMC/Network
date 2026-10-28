@@ -46,6 +46,23 @@ class SignaledAddressTest {
     }
 
     @Test
+    void aSignaledAddressIsKeptWhenThePairGoesThroughTurn() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            // As a client behind a TURN server announces the address the server allocated, which is where
+            // its traffic then comes from: here loopback, the path these peers connect over
+            NetherNetChildChannel child = server.connect(client, SIGNALED, false, offer -> offer.replaceAll(
+                    "(?<pre>a=candidate:\\S+ \\d+ \\S+ \\d+ )\\S+(?<port> \\d+ typ )host",
+                    "${pre}127.0.0.1${port}relay raddr 0.0.0.0 rport 0"));
+
+            assertEquals(SIGNALED, child.remoteAddress());
+        }
+    }
+
+    @Test
     void anAddressAProxyDeclaredIsKept() throws Exception {
         try (var server = new NetherNetTestServer();
              PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG)) {

@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.util.nethernet;
 import io.netty.util.NetUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jspecify.annotations.Nullable;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -62,6 +63,25 @@ public final class SdpUtil {
     public static String candidateAddress(String candidate) {
         String[] parts = candidate.split(" ");
         return parts.length < 5 ? null : parts[4];
+    }
+
+    /**
+     * The address a TURN server allocated for the peer, from a relay candidate.
+     *
+     * @param candidate The candidate line
+     * @return Its address, or null for any other type of candidate or one that names no IP literal
+     */
+    public static @Nullable InetAddress relayAddress(String candidate) {
+        if (!"relay".equals(candidateType(candidate))) {
+            return null;
+        }
+        String address = candidateAddress(candidate);
+        byte[] bytes = address == null ? null : NetUtil.createByteArrayFromIpAddressString(address);
+        try {
+            return bytes == null ? null : InetAddress.getByAddress(bytes);
+        } catch (UnknownHostException e) {
+            return null;
+        }
     }
 
     /**
