@@ -691,7 +691,7 @@ public final class NativeAdmissionServerChannel extends AbstractServerChannel {
 
     private void initialize(
             AdmissionGate.Reservation reservation, AdmissionContext a, PeerConnection peer) {
-        var child = new AdmittedNetherNetChildChannel(this, peer, reservation.tuple(), address);
+        var child = new AdmittedNetherNetChildChannel(this, peer, reservation.tuple(), address, proxyProtocol);
         var session = new Session(reservation, child, peer);
         creations.incrementAndGet();
         liveNativePeers.incrementAndGet();

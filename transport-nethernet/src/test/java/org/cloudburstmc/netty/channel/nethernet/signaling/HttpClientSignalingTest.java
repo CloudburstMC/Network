@@ -25,8 +25,11 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import org.cloudburstmc.netty.channel.nethernet.AddressSource;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChannelFactory;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetClientChannel;
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import org.cloudburstmc.netty.channel.nethernet.signaling.HttpSignalingSettings.Scheme;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
@@ -70,6 +73,7 @@ class HttpClientSignalingTest {
 
     private final EventLoopGroup group = new NioEventLoopGroup(2);
     private final CompletableFuture<PlayerInfo> admitted = new CompletableFuture<>();
+    private final CompletableFuture<NetherNetChildChannel> child = new CompletableFuture<>();
     private NetherNetHTTPServerSignaling signaling;
     private Channel server;
     private Channel client;
@@ -106,6 +110,7 @@ class HttpClientSignalingTest {
                     @Override
                     public void channelActive(ChannelHandlerContext ctx) {
                         admitted.complete(ctx.channel().attr(NetherNetChildChannel.PLAYER_INFO).get());
+                        child.complete((NetherNetChildChannel) ctx.channel());
                         ctx.fireChannelActive();
                     }
                 })
@@ -228,6 +233,26 @@ class HttpClientSignalingTest {
         assertEquals("2535000000000001", info.xuid());
         assertEquals("Tester", info.displayName());
         assertEquals("proxy.test", info.claims().getIssuer());
+    }
+
+    /** A client keeps where it dialed as the signaled address and takes the pair, both sides of it, once active. */
+    @Test
+    void aClientTakesThePairAndKeepsWhereItDialed() throws Exception {
+        InetSocketAddress endpoint = this.serve(this.plaintextServer());
+
+        NetherNetClientChannel connected =
+                (NetherNetClientChannel) this.client(player()).connect(endpoint).sync().channel();
+        this.client = connected;
+
+        assertEquals(new SourcedAddress(endpoint, AddressSource.SIGNALING, null), connected.signaledAddress());
+        assertEquals(AddressSource.ICE, connected.mediaAddress().source());
+        assertEquals(connected.selectedPath().remote(), connected.remoteAddress());
+        assertEquals(connected.selectedPath().local(), connected.localAddress());
+        NetherNetChildChannel accepted = this.child.get(10, TimeUnit.SECONDS);
+        assertEquals(AddressSource.SIGNALING, accepted.signaledAddress().source());
+        assertEquals(AddressSource.ICE, accepted.reportedAddress().source());
+        assertEquals(connected.selectedPath().local().getPort(),
+                ((InetSocketAddress) accepted.remoteAddress()).getPort(), "the client's media socket");
     }
 
     @Test

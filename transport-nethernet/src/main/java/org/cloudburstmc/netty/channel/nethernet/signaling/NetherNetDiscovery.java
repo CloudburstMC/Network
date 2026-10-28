@@ -16,7 +16,9 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.AddressSource;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
 import org.cloudburstmc.netty.channel.nethernet.signaling.PongData;
 import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetSignaling.SignalHandler;
 import io.netty.bootstrap.Bootstrap;
@@ -304,7 +306,7 @@ public class NetherNetDiscovery extends SimpleChannelInboundHandler<DatagramPack
                 log.trace("Dispatching New Connection: ID={} Sender={}", connectionId,
                         Long.toUnsignedString(senderId));
                 newConnectionHandler.onConnect(connectionId, Long.toUnsignedString(senderId), signal.payload(),
-                        sender, null);
+                        new SourcedAddress(sender, AddressSource.SIGNALING_LAN, null), null);
             } else {
                 log.debug("Received CONNECT_REQUEST but no NewConnectionHandler is set!");
             }

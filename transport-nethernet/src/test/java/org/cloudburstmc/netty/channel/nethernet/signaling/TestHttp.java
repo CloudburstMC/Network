@@ -15,11 +15,18 @@
  */
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
+
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /** Speaks HTTP over a socket by hand, for tests that need control of the connection itself. */
 final class TestHttp {
@@ -62,6 +69,28 @@ final class TestHttp {
             read += n;
         }
         return new String(body);
+    }
+
+    /**
+     * Posts a self-signed join on a connection of its own, after {@code prefix} unless it is null, and
+     * keeps the connection open until the join reaches the handler feeding {@code joined}.
+     *
+     * @return Where signaling said the join came from, or null if it never arrived
+     */
+    static SourcedAddress join(int port, byte[] prefix, String headers, BlockingQueue<SourcedAddress> joined)
+            throws Exception {
+        byte[] body = TestOffers.selfSigned().getBytes(StandardCharsets.UTF_8);
+        try (Socket socket = new Socket("127.0.0.1", port)) {
+            OutputStream out = socket.getOutputStream();
+            if (prefix != null) {
+                out.write(prefix);
+            }
+            out.write(("POST /v1/join/42 HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + body.length + "\r\n"
+                    + headers + "\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write(body);
+            out.flush();
+            return joined.poll(10, TimeUnit.SECONDS);
+        }
     }
 
     /** A PROXY v2 header declaring an IPv4 source. */

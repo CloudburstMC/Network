@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
 import org.cloudburstmc.netty.channel.nethernet.NetherNetConstants;
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
 import org.cloudburstmc.netty.util.nethernet.IdentityUtils;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
@@ -216,11 +217,12 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
      * the discovery loop; a join with an assertion is checked off it and handed over back on it.
      */
     private void admit(NetherNetServerSignaling.NewConnectionHandler handler, String connectionId,
-                       String remoteNetworkId, String offer, @Nullable InetSocketAddress address) {
+                       String remoteNetworkId, String offer, @Nullable SourcedAddress sourced) {
         if (offer.lines().noneMatch(line -> line.startsWith(IDENTITY_ATTRIBUTE))) {
-            handler.onConnect(connectionId, remoteNetworkId, offer, address, null);
+            handler.onConnect(connectionId, remoteNetworkId, offer, sourced, null);
             return;
         }
+        InetSocketAddress address = sourced == null ? null : sourced.address();
         ExecutorService validation = this.validation;
         EventLoop loop = this.discovery.eventLoop();
         if (validation == null || loop == null) {
@@ -251,7 +253,7 @@ public class NetherNetDiscoverySignaling implements NetherNetClientSignaling, Ne
                 }
                 onLoop(loop, () -> {
                     this.discovery.unregisterSignalHandler(connectionId);
-                    handler.onConnect(connectionId, remoteNetworkId, offer, address, player);
+                    handler.onConnect(connectionId, remoteNetworkId, offer, sourced, player);
                     SignalHandler next = this.discovery.signalHandler(connectionId);
                     if (next != null) {
                         held.forEach(next::onSignal);

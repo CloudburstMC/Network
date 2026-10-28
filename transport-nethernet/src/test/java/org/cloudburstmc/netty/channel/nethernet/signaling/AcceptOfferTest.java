@@ -16,6 +16,10 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.AddressSource;
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
@@ -39,6 +43,7 @@ class AcceptOfferTest {
 
     private final EventLoopGroup group = new NioEventLoopGroup(1);
     private NetherNetHTTPServerSignaling signaling;
+    private final BlockingQueue<SourcedAddress> joined = new LinkedBlockingQueue<>();
 
     @AfterEach
     void tearDown() {
@@ -55,7 +60,7 @@ class AcceptOfferTest {
                 .setServeHttp(serveHttp)
                 .setPlayerFilter((host, player) -> allow ? null : JoinRefusal.REJECTED)
                 .build();
-        signaling.setNewConnectionHandler((id, networkId, payload, address, player) -> { });
+        signaling.setNewConnectionHandler((id, networkId, payload, address, player) -> joined.add(address));
         return signaling;
     }
 
@@ -90,6 +95,8 @@ class AcceptOfferTest {
         }
         // Nothing produced an answer yet, so it is still pending rather than failed
         assertEquals(1, s.pendingJoins());
+        assertEquals(new SourcedAddress(new InetSocketAddress("203.0.113.7", 1234), AddressSource.HOST, null),
+                joined.poll(5, TimeUnit.SECONDS), "the host's own address, said to be the host's");
         assertFalse(answer.isDone());
 
         s.sendDescription("42", "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n");

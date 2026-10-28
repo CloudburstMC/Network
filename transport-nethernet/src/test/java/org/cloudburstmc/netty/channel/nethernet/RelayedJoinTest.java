@@ -21,6 +21,7 @@ import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import tel.schich.libdatachannel.PeerConnection;
+import tel.schich.libdatachannel.PeerState;
 import tel.schich.libdatachannel.SessionDescriptionType;
 
 import java.io.IOException;
@@ -33,13 +34,16 @@ import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.UnaryOperator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RelayedJoinTest {
@@ -55,6 +59,20 @@ class RelayedJoinTest {
         join(InetAddress.getByName("0.0.0.0"), offer -> offer, null, (relay, child) -> {
             assertTrue(relay.down.get() > 0, "the server answers through the relay");
             assertEquals(Set.copyOf(relay.flows.keySet()), Set.of(child.remoteAddress()), "the client, not the relay");
+            assertEquals(AddressSource.ICE_PROXY_PROTOCOL, child.reportedAddress().source());
+        });
+    }
+
+    /** The client a relay declares wins over where signaling met it, and says it came through a relay. */
+    @Test
+    @Timeout(30)
+    void reportsTheRelayedClientOverTheSignaledAddress() throws Exception {
+        InetSocketAddress signaled = new InetSocketAddress("198.51.100.1", 19132);
+        join(LOOPBACK, offer -> offer, signaled, (relay, child) -> {
+            assertEquals(Set.copyOf(relay.flows.keySet()), Set.of(child.remoteAddress()), "the client, not the relay");
+            assertEquals(AddressSource.ICE_PROXY_PROTOCOL, child.mediaAddress().source());
+            assertEquals(child.mediaAddress(), child.reportedAddress());
+            assertEquals(new SourcedAddress(signaled, AddressSource.SIGNALING, null), child.signaledAddress());
         });
     }
 
@@ -72,7 +90,129 @@ class RelayedJoinTest {
                 (relay, child) -> {
                     assertEquals("prflx", child.selectedPath().remoteType());
                     assertEquals(signaled, child.remoteAddress());
+                    assertEquals(AddressSource.TURN, child.mediaAddress().source());
+                    assertEquals(AddressSource.SIGNALING, child.reportedAddress().source());
                 });
+    }
+
+    /**
+     * A relay candidate that only arrives trickled, as over Xbox or LAN signaling, which the
+     * server notes without applying it.
+     */
+    @Test
+    @Timeout(30)
+    void aTrickledRelayIsRecognized() throws Exception {
+        InetSocketAddress signaled = new InetSocketAddress("198.51.100.1", 19132);
+        relayedJoin((server, client) -> {
+            String offer = NetherNetTestServer.offer(client);
+            server.offer("1", NetherNetTestServer.withoutCandidates(offer), signaled);
+            for (String candidate : NetherNetTestServer.candidates(offer)) {
+                trickle(server, candidate.replace(" typ host", " typ relay raddr 0.0.0.0 rport 0"));
+            }
+        }, (relay, child) -> {
+            assertEquals(AddressSource.TURN, child.mediaAddress().source());
+            assertEquals(signaled, child.remoteAddress());
+        });
+    }
+
+    /**
+     * A relay trickled after ICE connects but before the channel goes active still counts, as
+     * the pair is only taken at channelActive. #106 decides at RTC_CONNECTED, before this. The
+     * child's loop is held meanwhile, as loopback would otherwise open the channels at once.
+     */
+    @Test
+    @Timeout(30)
+    void aRelayTrickledBeforeChannelActiveCounts() throws Exception {
+        InetSocketAddress signaled = new InetSocketAddress("198.51.100.1", 19132);
+        relayedJoin((server, client) -> server.offer("1", NetherNetTestServer.offer(client), signaled),
+                (server, client, answer) -> {
+                    var connected = new CompletableFuture<InetSocketAddress>();
+                    // After the server's own listener, so a decision made at RTC_CONNECTED is already made
+                    server.accepted().peer().onStateChange.register((peer, state) -> {
+                        if (state == PeerState.RTC_CONNECTED) {
+                            connected.complete(peer.selectedCandidatePair().remote());
+                        }
+                    });
+                    var hold = new CountDownLatch(1);
+                    server.server.eventLoop().execute(() -> {
+                        try {
+                            hold.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+                    try {
+                        client.setRemoteDescription(answer, SessionDescriptionType.ANSWER);
+                        InetSocketAddress declared = connected.get(10, TimeUnit.SECONDS);
+                        assertFalse(server.accepted().child().isActive());
+                        trickle(server, relayCandidate(declared));
+                    } finally {
+                        hold.countDown();
+                    }
+                }, (relay, child) -> {
+                    assertEquals(AddressSource.TURN, child.mediaAddress().source());
+                    assertEquals(signaled, child.remoteAddress());
+                });
+    }
+
+    /** A relay trickled once the channel is active comes too late: the pair is taken once. */
+    @Test
+    @Timeout(30)
+    void aRelayTrickledOnceActiveChangesNothing() throws Exception {
+        InetSocketAddress signaled = new InetSocketAddress("198.51.100.1", 19132);
+        relayedJoin((server, client) -> server.offer("1", NetherNetTestServer.offer(client), signaled),
+                (relay, child) -> {
+                    SourcedAddress media = child.mediaAddress();
+                    assertEquals(AddressSource.ICE_PROXY_PROTOCOL, media.source());
+                    child.remoteCandidates.trickle(relayCandidate(media.address()));
+                    assertTrue(child.remoteCandidates.isRelay(media.address()), "noted");
+                    assertEquals(media, child.mediaAddress());
+                    assertEquals(media.address(), child.remoteAddress());
+                });
+    }
+
+    private static String relayCandidate(InetSocketAddress at) {
+        return "candidate:9 1 UDP 16777215 " + at.getAddress().getHostAddress() + " " + at.getPort()
+                + " typ relay raddr 0.0.0.0 rport 0";
+    }
+
+    private static void trickle(NetherNetTestServer server, String candidate) {
+        server.signaling.handler.onSignal(NetherNetConstants.RTC_NEGOTIATION_CANDIDATE_ADD + " 1 " + candidate);
+    }
+
+    private interface Offer {
+        void send(NetherNetTestServer server, PeerConnection client) throws Exception;
+    }
+
+    private interface Answer {
+        void apply(NetherNetTestServer server, PeerConnection client, String answer) throws Exception;
+    }
+
+    private static void relayedJoin(Offer offer, BiConsumer<Relay, NetherNetChildChannel> check) throws Exception {
+        relayedJoin(offer, (server, client, answer) -> client.setRemoteDescription(answer,
+                SessionDescriptionType.ANSWER), check);
+    }
+
+    /** As {@link #join}, on loopback, with the offer sent and the answer applied however the hooks do it. */
+    private static void relayedJoin(Offer offer, Answer apply, BiConsumer<Relay, NetherNetChildChannel> check)
+            throws Exception {
+        int port;
+        try (var available = new DatagramSocket(new InetSocketAddress(LOOPBACK, 0))) {
+            port = available.getLocalPort();
+        }
+        try (var relay = new Relay(new InetSocketAddress(LOOPBACK, port));
+             var server = new NetherNetTestServer(new InetSocketAddress(LOOPBACK, port));
+             var client = PeerConnection.createPeer(NetherNetTestServer.CONFIG.withBindAddress(LOOPBACK))) {
+            server.relays = IpRangeSet.parse(List.of(LOOPBACK.getHostAddress()));
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            offer.send(server, client);
+            String answer = SdpUtil.withRelayedCandidates(server.signaling.answer.get(5, TimeUnit.SECONDS),
+                    List.of(new InetSocketAddress(LOOPBACK, relay.port())));
+            apply.apply(server, client, answer);
+            check.accept(relay, server.active());
+        }
     }
 
     /**

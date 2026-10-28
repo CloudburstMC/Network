@@ -17,7 +17,10 @@
 package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.channel.Channel;
+import org.cloudburstmc.netty.channel.nethernet.AddressSource;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
+import org.cloudburstmc.netty.util.nethernet.IceProxyProtocol;
 import tel.schich.libdatachannel.PeerConnection;
 
 import java.net.InetSocketAddress;
@@ -34,14 +37,20 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
     private final CompletableFuture<Void> nativeTermination = new CompletableFuture<>();
     private final Consumer<PeerConnection> nativeCloser;
 
-    public AdmittedNetherNetChildChannel(Channel parent, PeerConnection peer, InetSocketAddress remote,
-                                         InetSocketAddress local) {
-        this(parent, peer, remote, local, AdmittedNetherNetChildChannel::closeNativePeer);
+    /**
+     * @param admittedFrom The source of the first STUN check the admission accepted
+     * @param relays       The PROXY protocol relays on the listener's port, or null when none are set
+     */
+    public AdmittedNetherNetChildChannel(Channel parent, PeerConnection peer, InetSocketAddress admittedFrom,
+                                         InetSocketAddress local, IceProxyProtocol relays) {
+        this(parent, peer, admittedFrom, local, relays, AdmittedNetherNetChildChannel::closeNativePeer);
     }
 
-    AdmittedNetherNetChildChannel(Channel parent, PeerConnection peer, InetSocketAddress remote,
-                                  InetSocketAddress local, Consumer<PeerConnection> nativeCloser) {
-        super(parent, peer, remote, local);
+    AdmittedNetherNetChildChannel(Channel parent, PeerConnection peer, InetSocketAddress admittedFrom,
+                                  InetSocketAddress local, IceProxyProtocol relays,
+                                  Consumer<PeerConnection> nativeCloser) {
+        super(parent, peer, new SourcedAddress(admittedFrom, AddressSource.NXS_ADMISSION, null), local);
+        this.iceRelays = relays;
         this.nativeCloser = nativeCloser;
     }
 

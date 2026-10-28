@@ -53,9 +53,12 @@ public class NetherNetChildChannel extends NetherNetChannel {
     public static final AttributeKey<PlayerInfo> PLAYER_INFO =
             AttributeKey.valueOf(NetherNetChildChannel.class, "playerInfo");
 
-    public NetherNetChildChannel(Channel parent, PeerConnection peerConnection, InetSocketAddress remote,
+    /**
+     * @param signaled Where signaling met the peer, see {@link #signaledAddress()}
+     */
+    public NetherNetChildChannel(Channel parent, PeerConnection peerConnection, SourcedAddress signaled,
                                  InetSocketAddress local) {
-        super(parent, remote, local);
+        super(parent, signaled, local);
         this.peerConnection = peerConnection;
         this.config = new DefaultNetherChannelConfig(this);
         registerMetrics(peerConnection);

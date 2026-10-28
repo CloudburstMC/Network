@@ -111,7 +111,8 @@ class NetherNetUnregisteredReadTest {
 
     /** A child that takes the data channels its peer opens, with nothing to run on yet. */
     private static NetherNetChildChannel accepting(PeerConnection server, Counts counts) {
-        NetherNetChildChannel child = new NetherNetChildChannel(null, server, ADDRESS, ADDRESS);
+        NetherNetChildChannel child = new NetherNetChildChannel(null, server,
+                new SourcedAddress(ADDRESS, AddressSource.SIGNALING, null), ADDRESS);
         child.config().setOption(NetherChannelOption.NETHER_METRICS, counts);
         server.onDataChannel.register((peer, channel) -> child.acceptDataChannel(channel));
         return child;

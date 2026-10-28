@@ -22,6 +22,7 @@ import org.cloudburstmc.netty.channel.TransportChannel;
 import org.cloudburstmc.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.netty.channel.nethernet.signaling.IceServerInfo;
 import org.cloudburstmc.netty.channel.nethernet.config.DefaultNetherChannelConfig;
+import org.cloudburstmc.netty.util.nethernet.IceProxyProtocol;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.AbstractChannel;
@@ -48,6 +49,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.ArrayList;
 import java.net.URI;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -110,6 +112,12 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     protected volatile PeerConnection peerConnection;
     protected volatile SocketAddress remoteAddress;
     protected volatile SocketAddress localAddress;
+    /** See {@link #signaledAddress()}. */
+    protected volatile SourcedAddress signaledAddress;
+    /** See {@link #mediaAddress()}. */
+    private volatile SourcedAddress mediaAddress = SourcedAddress.unknown();
+    /** The PROXY protocol relays on the ICE port, which every peer there comes through, or null when none are set. */
+    protected volatile @Nullable IceProxyProtocol iceRelays;
     /** The current attempt's remote candidates, which know the peer's TURN relays. */
     volatile RemoteCandidates remoteCandidates;
 
@@ -138,9 +146,11 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     private volatile boolean activeFired;
     private final AtomicBoolean failureReported = new AtomicBoolean();
 
-    protected NetherNetChannel(Channel parent, InetSocketAddress remote, InetSocketAddress local) {
+    protected NetherNetChannel(Channel parent, @Nullable SourcedAddress signaled, InetSocketAddress local) {
         super(parent);
-        this.remoteAddress = remote;
+        // A client only learns where it signals to when it connects
+        this.signaledAddress = signaled == null ? SourcedAddress.unknown() : signaled;
+        this.remoteAddress = signaled == null ? null : signaled.address();
         this.localAddress = local;
     }
 
@@ -307,15 +317,23 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     }
 
     /**
-     * Moves the remote address onto the selected pair, see {@link #remoteAddress()}. Event loop only, right
-     * before the channel goes active.
+     * Takes the selected pair as {@link #mediaAddress()} and moves the remote address onto what
+     * {@link #reportedAddress()} makes of it. Event loop only, right before the channel goes active.
      *
-     * @return The selected pair, or null when there is none and the address stays as it was
+     * @return The selected pair, or null when there is none and the addresses stay as they were
      */
     protected @Nullable Path adoptSelectedPath() {
         Path path = selectedPath();
-        if (path != null) {
-            this.remoteAddress = connectedAddress(this.remoteAddress, path.remote(), isRelay(path));
+        InetSocketAddress remote = path == null ? null : path.remote();
+        if (remote == null || remote.isUnresolved()) {
+            return path;
+        }
+        AddressSource source = isRelay(path) ? AddressSource.TURN
+                : this.iceRelays != null ? AddressSource.ICE_PROXY_PROTOCOL : AddressSource.ICE;
+        this.mediaAddress = new SourcedAddress(remote, source, null);
+        // A network id names the peer rather than a place, so it stays
+        if (this.remoteAddress instanceof InetSocketAddress) {
+            this.remoteAddress = reportedAddress().address();
         }
         return path;
     }
@@ -331,20 +349,49 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     }
 
     /**
-     * The address a channel reports once active, see {@link #remoteAddress()}.
-     *
-     * @param signaled Where signaling met the peer
-     * @param remote   The selected pair's remote side
-     * @param relay    Whether that is a TURN relay
+     * Where signaling met the peer, kept for the channel's life: how a child's join arrived, or the
+     * address a client dialed. {@link AddressSource#UNKNOWN} when signaling did not say, as for a
+     * client dialing a network id.
      */
-    static SocketAddress connectedAddress(SocketAddress signaled, @Nullable InetSocketAddress remote, boolean relay) {
-        // A network id names the peer rather than a place
-        if (!(signaled instanceof InetSocketAddress known) || remote == null || remote.isUnresolved()) {
+    public SourcedAddress signaledAddress() {
+        return this.signaledAddress;
+    }
+
+    /**
+     * The selected pair's remote side, as taken when the channel went active.
+     * {@link AddressSource#UNKNOWN} before then, or when ICE reported none.
+     */
+    public SourcedAddress mediaAddress() {
+        return this.mediaAddress;
+    }
+
+    /**
+     * What {@link #remoteAddress()} reports, with where it came from. A client dialing a network id
+     * keeps that as its remote address, and this says where the peer turned out to be.
+     */
+    public SourcedAddress reportedAddress() {
+        return reported(this.signaledAddress, this.mediaAddress);
+    }
+
+    /** See {@link #remoteAddress()}. */
+    static SourcedAddress reported(SourcedAddress signaled, SourcedAddress media) {
+        if (media.source() == AddressSource.UNKNOWN) {
             return signaled;
         }
-        // A TURN server only stands in for the peer
-        boolean signalingKnew = known.getAddress() != null && !known.getAddress().isAnyLocalAddress();
-        return relay && signalingKnew ? signaled : remote;
+        // A TURN server only stands in for the peer, but only the peer says it is one
+        return media.source() == AddressSource.TURN && unforged(signaled) ? signaled : media;
+    }
+
+    /** Whether the signaled address is known and came from somewhere a forged datagram cannot plant it. */
+    private static boolean unforged(SourcedAddress signaled) {
+        InetAddress known = signaled.address().getAddress();
+        if (known == null || known.isAnyLocalAddress()) {
+            return false;
+        }
+        return switch (signaled.source()) {
+            case SIGNALING, SIGNALING_PROXY_PROTOCOL, SIGNALING_FORWARDED_FOR, HOST -> true;
+            default -> false;
+        };
     }
 
     /**
@@ -881,16 +928,14 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     }
 
     /**
-     * Where the peer is. Before {@code channelActive}, where signaling met it: the address an offer
-     * came from, the first check of an NXS admission, the address a client dialed, or the wildcard
-     * when the signaling does not know. From {@code channelActive} on, the remote side of the pair ICE
-     * selected, where the media flows, which PROXY protocol relays on the ICE port already resolve to
-     * the client they declare. A pair through one of the peer's TURN relays, behind those relays too,
-     * keeps the signaled address instead, unless the signaling did not know one. Which candidates are
-     * relays is the peer's own claim, so a peer can always choose the signaled address. It is taken
-     * once, so a later renomination does not move it.
-     * {@link #selectedPath()} names the pair either way, and a child's
-     * {@link org.cloudburstmc.netty.util.nethernet.PlayerInfo#remoteAddress()} keeps the signaled one.
+     * Where the peer is. Before {@code channelActive}, the {@linkplain #signaledAddress() signaled
+     * address}. From {@code channelActive} on, the {@linkplain #mediaAddress() selected pair}, where the
+     * media flows, which PROXY protocol relays on the ICE port already resolve to the client they
+     * declare. A pair through one of the peer's TURN relays, behind those relays too, keeps the
+     * signaled address instead when the signaling learned it from a connection, a trusted proxy or
+     * the host. Which candidates are relays is the peer's own claim, so a peer can always choose that
+     * address, and a LAN datagram's source, which anyone can forge, is never kept. The pair is taken
+     * once, so a later renomination does not move it. {@link #reportedAddress()} says which this is.
      */
     @Override
     public SocketAddress remoteAddress() {

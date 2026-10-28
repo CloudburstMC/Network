@@ -208,16 +208,16 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * Where a join arrives from the signaling. A host hands offers in through the signaling's own
      * entry, such as {@code NetherNetHTTPServerSignaling.acceptOffer}, which answers them.
      *
-     * @param clientAddress The address the peer signaled from, or null if it is not known. The
-     *                      child reports it until it goes active, see
-     *                      {@link NetherNetChannel#remoteAddress()}.
+     * @param signaled Where the peer signaled from, or null if it is not known, see
+     *                 {@link NetherNetChannel#signaledAddress()}
      */
     void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
-                          @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
+                          @Nullable SourcedAddress signaled, @Nullable PlayerInfo player) {
         if (!this.open) {
             refuse(connectionId);
             return;
         }
+        InetSocketAddress clientAddress = signaled == null ? null : signaled.address();
         NetherServerThrottle throttle = this.config.getOption(NetherChannelOption.NETHER_SERVER_THROTTLE);
         InetSocketAddress throttled = throttle == null ? null : knownAddress(clientAddress);
         if (throttled != null && !throttle.accept(throttled)) {
@@ -235,7 +235,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 : TransportIdentityBinding.forPlayer(player);
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);
         NetherNetChildChannel child = new NetherNetChildChannel(this,
-                pc, clientAddress == null ? new InetSocketAddress(0) : clientAddress, localAddress);
+                pc, signaled == null ? SourcedAddress.unknown() : signaled, localAddress);
+        child.iceRelays = this.proxyProtocol;
         child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
         if (player != null) {
             child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);

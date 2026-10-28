@@ -121,8 +121,9 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 String targetId = ((NetherNetAddress) remote).getNetworkId();
                 NetherNetClientChannel.this.setTargetNetworkId(targetId);
                 NetherNetClientChannel.this.remoteAddress = remote;
-            } else if (remote instanceof InetSocketAddress) {
-                NetherNetClientChannel.this.remoteAddress = (InetSocketAddress) remote;
+            } else if (remote instanceof InetSocketAddress dialed) {
+                NetherNetClientChannel.this.signaledAddress = new SourcedAddress(dialed, AddressSource.SIGNALING, null);
+                NetherNetClientChannel.this.remoteAddress = dialed;
                 NetherNetClientChannel.this.setTargetNetworkId(NetherNetConstants.DISCOVER_TARGET);
             } else {
                 promise.setFailure(new IllegalArgumentException("Unsupported address: " + remote.getClass()));

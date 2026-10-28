@@ -19,7 +19,7 @@ class NativeAdmissionWriteTest {
         var group = new DefaultEventLoopGroup(1);
         var failure = new IllegalStateException("deterministically stalled native teardown");
         var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2),
-                peer -> {
+                null, peer -> {
                     throw failure;
                 });
         try {
@@ -39,7 +39,8 @@ class NativeAdmissionWriteTest {
     @Test
     void writesBeforeActivationWaitUnflushedAndReleaseOnClose() throws Exception {
         var group = new DefaultEventLoopGroup(1);
-        var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2));
+        var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2),
+                null);
         List<ByteBuf> buffers = new ArrayList<>();
         List<ChannelFuture> writes = new ArrayList<>();
         try {
@@ -72,7 +73,8 @@ class NativeAdmissionWriteTest {
     @Test
     void oversizedMessagesAreRefusedWithoutEndingTheConnection() throws Exception {
         var group = new DefaultEventLoopGroup(1);
-        var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2));
+        var channel = new AdmittedNetherNetChildChannel(null, null, new InetSocketAddress(1), new InetSocketAddress(2),
+                null);
         int largest = NetherNetConstants.MAX_SEGMENTS * (NetherNetConstants.MAX_SCTP_MESSAGE_SIZE - 1);
         ByteBuf reliable = Unpooled.buffer(largest + 1).writerIndex(largest + 1);
         ByteBuf unreliable = Unpooled.buffer(10_000).writeZero(10_000);

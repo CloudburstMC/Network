@@ -16,7 +16,6 @@
 
 package org.cloudburstmc.netty.channel.nethernet;
 
-import org.cloudburstmc.netty.channel.nethernet.config.NetherNetAddress;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import tel.schich.libdatachannel.PeerConnection;
@@ -24,11 +23,13 @@ import tel.schich.libdatachannel.SessionDescriptionType;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -40,6 +41,7 @@ class RemoteAddressTest {
     private static final InetSocketAddress SIGNALED = new InetSocketAddress("198.51.100.1", 19132);
     private static final InetSocketAddress PLAYER = new InetSocketAddress("203.0.113.7", 54321);
     private static final InetSocketAddress TURN = new InetSocketAddress("192.0.2.9", 3478);
+    private static final SourcedAddress SIGNALING = new SourcedAddress(SIGNALED, AddressSource.SIGNALING, null);
 
     @Test
     @Timeout(30)
@@ -52,7 +54,10 @@ class RemoteAddressTest {
             server.offer("1", NetherNetTestServer.offer(client), SIGNALED);
 
             // The client has no answer yet, so ICE cannot have connected; AbstractChannel would keep this read
-            assertEquals(SIGNALED, server.accepted().child().remoteAddress());
+            NetherNetChildChannel accepted = server.accepted().child();
+            assertEquals(SIGNALED, accepted.remoteAddress());
+            assertEquals(SIGNALING, accepted.reportedAddress());
+            assertEquals(AddressSource.UNKNOWN, accepted.mediaAddress().source());
 
             client.setRemoteDescription(server.signaling.answer.get(5, TimeUnit.SECONDS),
                     SessionDescriptionType.ANSWER);
@@ -62,24 +67,55 @@ class RemoteAddressTest {
             assertEquals(new InetSocketAddress(LOOPBACK, client.selectedCandidatePair().local().getPort()),
                     child.remoteAddress());
             assertEquals(path.remote(), child.remoteAddress());
+            assertEquals(new SourcedAddress(path.remote(), AddressSource.ICE, null), child.mediaAddress());
+            assertEquals(child.mediaAddress(), child.reportedAddress());
+            assertEquals(SIGNALING, child.signaledAddress());
         }
     }
 
     @Test
+    void theSignaledAddressStandsUntilActive() {
+        assertEquals(SIGNALING, NetherNetChannel.reported(SIGNALING, SourcedAddress.unknown()));
+    }
+
+    @Test
     void thePairWinsUnlessItIsTurn() {
-        assertEquals(PLAYER, NetherNetChannel.connectedAddress(SIGNALED, PLAYER, false));
+        SourcedAddress media = new SourcedAddress(PLAYER, AddressSource.ICE, null);
+        assertEquals(media, NetherNetChannel.reported(SIGNALING, media));
     }
 
     @Test
     void turnKeepsTheSignaledAddressWhenThereIsOne() {
-        assertEquals(SIGNALED, NetherNetChannel.connectedAddress(SIGNALED, TURN, true));
-        assertEquals(TURN, NetherNetChannel.connectedAddress(new InetSocketAddress(0), TURN, true));
+        SourcedAddress turn = new SourcedAddress(TURN, AddressSource.TURN, null);
+        assertEquals(SIGNALING, NetherNetChannel.reported(SIGNALING, turn));
+        assertEquals(turn, NetherNetChannel.reported(SourcedAddress.unknown(), turn));
+    }
+
+    /** Only the peer says a pair is TURN, so it gives way to nothing a forged datagram could plant. */
+    @Test
+    void turnKeepsOnlyAnUnforgedSignaledAddress() {
+        SourcedAddress turn = new SourcedAddress(TURN, AddressSource.TURN, null);
+        for (AddressSource source : List.of(AddressSource.SIGNALING, AddressSource.SIGNALING_PROXY_PROTOCOL,
+                AddressSource.SIGNALING_FORWARDED_FOR, AddressSource.HOST)) {
+            SourcedAddress signaled = new SourcedAddress(SIGNALED, source, null);
+            assertEquals(signaled, NetherNetChannel.reported(signaled, turn), source.name());
+        }
+        for (AddressSource source : List.of(AddressSource.SIGNALING_LAN, AddressSource.NXS_ADMISSION)) {
+            SourcedAddress signaled = new SourcedAddress(SIGNALED, source, null);
+            assertEquals(turn, NetherNetChannel.reported(signaled, turn), source.name());
+        }
     }
 
     @Test
-    void aNetworkIdStays() {
-        NetherNetAddress target = new NetherNetAddress("1234");
-        assertEquals(target, NetherNetChannel.connectedAddress(target, PLAYER, false));
+    void withNothingSignaledThePairStands() {
+        // As for a client dialing a network id, which keeps that as its remote address
+        SourcedAddress media = new SourcedAddress(PLAYER, AddressSource.ICE, null);
+        assertEquals(media, NetherNetChannel.reported(SourcedAddress.unknown(), media));
+    }
+
+    @Test
+    void neverHoldsANullAddress() {
+        assertThrows(NullPointerException.class, () -> new SourcedAddress(null, AddressSource.ICE, null));
     }
 
     @Test

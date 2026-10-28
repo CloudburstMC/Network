@@ -16,6 +16,9 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.AddressSource;
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
+import org.cloudburstmc.netty.util.nethernet.TokenTrust;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
@@ -33,6 +36,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -41,6 +45,7 @@ class ForwardedForTest {
 
     private final EventLoopGroup group = new NioEventLoopGroup(1);
     private final BlockingQueue<InetSocketAddress> seen = new ArrayBlockingQueue<>(4);
+    private final BlockingQueue<SourcedAddress> joined = new ArrayBlockingQueue<>(4);
     private NetherNetHTTPServerSignaling signaling;
 
     @AfterEach
@@ -60,11 +65,13 @@ class ForwardedForTest {
         signaling = new NetherNetHTTPServerSignaling.Builder()
                 .setIdentity(OperatorIdentity.generate("example.test"))
                 .setForwardedForProxies(proxies)
+                .setTokenTrust(TokenTrust.ANY)
                 .setMotdProvider((host, remoteAddress, client) -> {
                     seen.offer(remoteAddress);
                     return PongData.DEFAULT;
                 })
                 .build();
+        signaling.setNewConnectionHandler((id, networkId, offer, address, player) -> joined.offer(address));
 
         signaling.bind(new InetSocketAddress("127.0.0.1", port), null, group.next());
         return port;
@@ -82,6 +89,26 @@ class ForwardedForTest {
         InetSocketAddress address = seen.poll(10, TimeUnit.SECONDS);
         assertNotNull(address, "the signaling server never reported a client address");
         return address;
+    }
+
+    @Test
+    void namesTheForwarderAJoinCameThrough() throws Exception {
+        int port = start(List.of("127.0.0.0/8"));
+        SourcedAddress address = TestHttp.join(port, null, "X-Forwarded-For: 203.0.113.7\r\n", joined);
+        assertNotNull(address, "the join never arrived");
+        assertEquals("203.0.113.7", address.address().getAddress().getHostAddress());
+        assertEquals(AddressSource.SIGNALING_FORWARDED_FOR, address.source());
+        assertEquals("127.0.0.1", address.via().getAddress().getHostAddress());
+    }
+
+    @Test
+    void anUntrustedForwardedForLeavesTheJoinItsOwn() throws Exception {
+        int port = start(List.of("10.0.0.0/8"));
+        SourcedAddress address = TestHttp.join(port, null, "X-Forwarded-For: 203.0.113.7\r\n", joined);
+        assertNotNull(address, "the join never arrived");
+        assertEquals(AddressSource.SIGNALING, address.source());
+        assertEquals("127.0.0.1", address.address().getAddress().getHostAddress());
+        assertNull(address.via());
     }
 
     @Test

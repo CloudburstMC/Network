@@ -16,6 +16,7 @@
 
 package org.cloudburstmc.netty.channel.nethernet.signaling;
 
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.util.nethernet.PlayerInfo;
 import org.jspecify.annotations.Nullable;
@@ -78,13 +79,13 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
          * @param connectionId    The connection ID the peer chose, an opaque token echoed back to it.
          * @param remoteNetworkId The Network ID of the remote peer.
          * @param payload         The initial signaling payload from the remote peer.
-         * @param clientAddress   The address the peer signaled from, seeding the child channel
-         *                        before ICE settles, or null if the signaling cannot tell.
+         * @param clientAddress   Where the peer signaled from, seeding the child channel before ICE
+         *                        settles, or null if the signaling cannot tell.
          * @param player          The peer's validated identity, or null if this signaling does
          *                        not validate one.
          */
         void onConnect(String connectionId, String remoteNetworkId, String payload,
-                       @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player);
+                       @Nullable SourcedAddress clientAddress, @Nullable PlayerInfo player);
     }
 
     /**

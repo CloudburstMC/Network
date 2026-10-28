@@ -62,6 +62,8 @@ import io.netty.util.concurrent.Promise;
 import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.cloudburstmc.netty.channel.nethernet.AddressSource;
+import org.cloudburstmc.netty.channel.nethernet.SourcedAddress;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.util.http.HttpLoggingHandler;
 import org.cloudburstmc.netty.util.http.TlsRejectingHandler;
@@ -487,7 +489,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * @param networkId     The peer's network ID
      * @param sdpOffer      The raw SDP offer
      * @param clientAddress The address the offer came from, used for the peer's identity and to
-     *                      seed the child channel, or null if it is not known
+     *                      seed the child channel as {@link AddressSource#HOST}, or null if it is
+     *                      not known
      * @param host          The host the peer asked for, passed to the player filter
      * @param client        What the peer said about itself alongside the offer, or null if it said
      *                      nothing usable
@@ -496,13 +499,16 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     public CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
                                                  @Nullable InetSocketAddress clientAddress,
                                                  @Nullable String host, @Nullable ClientInfo client) {
-        return acceptOffer(networkId, sdpOffer, clientAddress, host, client, null);
+        SourcedAddress sourced = clientAddress == null ? null
+                : new SourcedAddress(clientAddress, AddressSource.HOST, null);
+        return acceptOffer(networkId, sdpOffer, sourced, host, client, null);
     }
 
     /** As the public one, with the endpoint the player typed in when its answer should carry it. */
     private CompletableFuture<String> acceptOffer(String networkId, String sdpOffer,
-                                                  @Nullable InetSocketAddress clientAddress, @Nullable String host,
+                                                  @Nullable SourcedAddress sourced, @Nullable String host,
                                                   @Nullable ClientInfo client, @Nullable InetSocketAddress typed) {
+        InetSocketAddress clientAddress = sourced == null ? null : sourced.address();
         // Validation needs the thread that bind starts. Whether a channel is listening is checked
         // once the offer has earned it, so a bad offer is refused for what it is
         EventLoop loop = this.eventLoop;
@@ -540,7 +546,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 log.debug("Refused the offer from {}: {} ({})", clientAddress, reason, failure.toString());
                 throw new CompletionException(new OfferRejected(JoinRefusal.INVALID_IDENTITY, reason, failure));
             }
-            return admit(networkId, sdpOffer, clientAddress, host, client, claims, typed);
+            return admit(networkId, sdpOffer, sourced, host, client, claims, typed);
         }, loop).thenCompose(Function.identity());
     }
 
@@ -595,9 +601,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * The second half of a join, on the loop, once the identity is known to be good.
      */
     private CompletableFuture<String> admit(String networkId, String sdpOffer,
-                                            @Nullable InetSocketAddress clientAddress, @Nullable String host,
+                                            @Nullable SourcedAddress sourced, @Nullable String host,
                                             @Nullable ClientInfo client, JwtClaims claims,
                                             @Nullable InetSocketAddress typed) {
+        InetSocketAddress clientAddress = sourced == null ? null : sourced.address();
         PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
                 claims.getClaimValueAsString("xname"), networkId, clientAddress, client, claims);
         log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
@@ -666,7 +673,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                     future.cause()));
         });
 
-        handler.onConnect(connectionId, networkId, sdpOffer, clientAddress, player);
+        handler.onConnect(connectionId, networkId, sdpOffer, sourced, player);
         return result;
     }
 
@@ -812,7 +819,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             String path = uri.path();
             HttpMethod method = req.method();
             String host = req.headers().get(HttpHeaderNames.HOST);
-            InetSocketAddress remoteAddress = clientAddress(ctx, req);
+            SourcedAddress sourced = clientAddress(ctx, req);
+            InetSocketAddress remoteAddress = sourced.address();
 
             if (requiresTls && sslContext != null && ctx.pipeline().get(SslHandler.class) == null) {
                 log.debug("Refused a plaintext request from {}", remoteAddress);
@@ -876,7 +884,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
 
             ClientInfo client = ClientInfo.fromQuery(parameters(uri));
             InetSocketAddress typed = typedEndpoint(ctx, host);
-            acceptOffer(networkId, sdpOffer, remoteAddress, host, client, typed).whenComplete((sdpAnswer, failure) -> {
+            acceptOffer(networkId, sdpOffer, sourced, host, client, typed).whenComplete((sdpAnswer, failure) -> {
                 if (!ctx.channel().isActive()) {
                     return; // The peer left while the join was in flight
                 }
@@ -900,21 +908,22 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         /**
          * The peer address, or the address a trusted proxy declared or forwarded on its behalf.
          */
-        private InetSocketAddress clientAddress(ChannelHandlerContext ctx, FullHttpRequest req) {
+        private SourcedAddress clientAddress(ChannelHandlerContext ctx, FullHttpRequest req) {
+            InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
             // Only ever set for a PROXY header proxy, and the more trustworthy of the two, so it wins
             InetSocketAddress proxied = ctx.channel().attr(OptionalProxyProtocol.PROXIED_SOURCE).get();
             if (proxied != null) {
-                return proxied;
+                return new SourcedAddress(proxied, AddressSource.SIGNALING_PROXY_PROTOCOL, remote);
             }
 
-            InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+            SourcedAddress direct = new SourcedAddress(remote, AddressSource.SIGNALING, null);
             if (!forwardedForProxies.contains(remote)) {
-                return remote;
+                return direct;
             }
 
             String forwarded = req.headers().get(FORWARDED_FOR);
             if (forwarded == null || forwarded.isBlank()) {
-                return remote;
+                return direct;
             }
 
             // Leftmost entry is the originating client
@@ -926,7 +935,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             // An address literal only. Resolving a name here would block this event loop on DNS and
             // let the header stand for whatever the answer happened to be
             InetAddress literal = NetUtil.createInetAddressFromIpAddressString(first);
-            return literal == null ? remote : new InetSocketAddress(literal, remote.getPort());
+            return literal == null ? direct : new SourcedAddress(new InetSocketAddress(literal, remote.getPort()),
+                    AddressSource.SIGNALING_FORWARDED_FOR, remote);
         }
 
         /**

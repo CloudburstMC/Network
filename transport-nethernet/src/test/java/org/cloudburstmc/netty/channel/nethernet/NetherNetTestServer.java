@@ -108,7 +108,8 @@ final class NetherNetTestServer implements AutoCloseable {
 
     /** Hands a join signaled from {@code address} to the server, without waiting for a child. */
     void offer(String connectionId, String offer, InetSocketAddress address) throws Exception {
-        server.eventLoop().submit(() -> server.acceptConnection(connectionId, offer, "client", address, null)).sync();
+        SourcedAddress signaled = address == null ? null : new SourcedAddress(address, AddressSource.SIGNALING, null);
+        server.eventLoop().submit(() -> server.acceptConnection(connectionId, offer, "client", signaled, null)).sync();
     }
 
     /** Whether the server created a child for any join so far. */
