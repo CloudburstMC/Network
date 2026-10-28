@@ -357,10 +357,20 @@ class NativeAdmissionIntegrationTest {
         var group = new DefaultEventLoopGroup(1);
         int port = 49187;
         NativeProviderTransport host = null;
+        var activeAddresses = new LinkedBlockingQueue<SocketAddress>();
         try {
             var bootstrap = new ServerBootstrap().group(group).childHandler(new ChannelInitializer<Channel>() {
                 @Override
                 protected void initChannel(Channel channel) {
+                    // Read before the pair is selected, as an initializer does
+                    channel.remoteAddress();
+                    channel.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                        @Override
+                        public void channelActive(ChannelHandlerContext ctx) {
+                            activeAddresses.add(ctx.channel().remoteAddress());
+                            ctx.fireChannelActive();
+                        }
+                    });
                 }
             });
             host = NativeProviderTransport.open(bootstrap, new InetSocketAddress("::", port),
@@ -390,6 +400,9 @@ class NativeAdmissionIntegrationTest {
                                     "a=candidate:1 1 UDP 2130706431 ::1 " + port + " typ host\r\na=end-of-candidates");
                     client.setRemoteDescription(sdp, SessionDescriptionType.ANSWER);
                     await(() -> opened.get() == 2);
+                    assertEquals(new InetSocketAddress(InetAddress.getByName(ip),
+                                    client.selectedCandidatePair().local().getPort()),
+                            activeAddresses.poll(5, TimeUnit.SECONDS), "the selected pair, at channelActive");
                     var events = new ArrayList<JsonObject>();
                     var ownedHost = host;
                     await(

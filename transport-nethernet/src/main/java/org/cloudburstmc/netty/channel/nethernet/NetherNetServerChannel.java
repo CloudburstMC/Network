@@ -208,9 +208,9 @@ public class NetherNetServerChannel extends AbstractServerChannel {
      * Where a join arrives from the signaling. A host hands offers in through the signaling's own
      * entry, such as {@code NetherNetHTTPServerSignaling.acceptOffer}, which answers them.
      *
-     * @param clientAddress The address the peer signaled from, or null if it is not known. ICE
-     *                      replaces it with the negotiated pair once the connection is up, but
-     *                      until then it is all the child channel has to report.
+     * @param clientAddress The address the peer signaled from, or null if it is not known. The
+     *                      child reports it until it goes active, see
+     *                      {@link NetherNetChannel#remoteAddress()}.
      */
     void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
                           @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
@@ -526,9 +526,6 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
             if (state == PeerState.RTC_CONNECTED) {
                 iceConnected = true;
-                // The selected candidate pair is the only place the peer's real address appears
-                InetSocketAddress raw = this.peerConnection.remoteAddress();
-                this.child.setRemoteAddress(new InetSocketAddress(raw.getHostString(), raw.getPort()));
             }
             if (state == PeerState.RTC_FAILED || state == PeerState.RTC_CLOSED) {
                 if (child.isOpen()) {

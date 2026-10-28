@@ -18,8 +18,6 @@ package org.cloudburstmc.netty.signaling.admission;
 
 import io.netty.channel.Channel;
 import org.cloudburstmc.netty.channel.nethernet.NetherNetChildChannel;
-import org.cloudburstmc.netty.util.nethernet.EndpointAddress;
-import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.PeerConnection;
 
 import java.net.InetSocketAddress;
@@ -45,22 +43,6 @@ public final class AdmittedNetherNetChildChannel extends NetherNetChildChannel {
                                   InetSocketAddress local, Consumer<PeerConnection> nativeCloser) {
         super(parent, peer, remote, local);
         this.nativeCloser = nativeCloser;
-    }
-
-    @Override
-    protected void activate(DataChannel reliable, DataChannel unreliable) {
-        // The selected pair is where the player really is, the admission only saw its first check
-        PeerConnection peer = peerConnection;
-        if (peer != null) {
-            try {
-                InetSocketAddress selected = peer.remoteAddress();
-                setRemoteAddress(new InetSocketAddress(EndpointAddress.parse(selected.getHostString()),
-                        selected.getPort()));
-            } catch (Exception unavailable) {
-                // Keeps the address it was admitted from
-            }
-        }
-        super.activate(reliable, unreliable);
     }
 
     @Override

@@ -30,7 +30,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.jose4j.lang.JoseException;
-import tel.schich.libdatachannel.CandidatePair;
+import org.jspecify.annotations.Nullable;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelInitSettings;
 import tel.schich.libdatachannel.DataChannelReliability;
@@ -287,9 +287,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
         });
 
         peerConnection.onStateChange.register((peer, state) -> {
-            if (state == PeerState.RTC_CONNECTED) {
-                adoptSelectedPair(peer);
-            } else if (state == PeerState.RTC_FAILED) {
+            if (state == PeerState.RTC_FAILED) {
                 // Fast fail trigger: retry immediately instead of waiting for timeout
                 log.warn("PeerConnection entered FAILED state, resetting and retrying handshake.");
                 eventLoop().execute(() -> resetAndRetryHandshake());
@@ -355,21 +353,14 @@ public class NetherNetClientChannel extends NetherNetChannel {
         });
     }
 
-    /**
-     * The selected pair is where the media flows, which is rarely the signaling endpoint. A
-     * network id address stays, since it names the peer rather than a place.
-     */
-    private void adoptSelectedPair(PeerConnection peer) {
-        if (!(remoteAddress instanceof InetSocketAddress)) {
-            return;
+    /** A client also takes the pair's local side, which is where it ended up sending from. */
+    @Override
+    protected @Nullable Path adoptSelectedPath() {
+        Path path = super.adoptSelectedPath();
+        if (path != null && path.local() != null) {
+            this.localAddress = path.local();
         }
-        try {
-            CandidatePair pair = peer.selectedCandidatePair();
-            this.localAddress = pair.local();
-            this.remoteAddress = pair.remote();
-        } catch (Exception e) {
-            log.debug("Selected pair unavailable for {}: {}", connectionId, e.toString());
-        }
+        return path;
     }
 
     /** The offer with this side's identity assertion when one is configured, unsigned otherwise. */
@@ -452,6 +443,7 @@ public class NetherNetClientChannel extends NetherNetChannel {
                 handshakeTimeoutTask.cancel(false);
             }
 
+            adoptSelectedPath();
             setDataChannels(reliable, unreliable);
             if (connectPromise != null && !connectPromise.isDone()) {
                 connectPromise.trySuccess();

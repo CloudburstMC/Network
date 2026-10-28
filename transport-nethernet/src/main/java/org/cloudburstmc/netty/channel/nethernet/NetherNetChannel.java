@@ -221,7 +221,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     /**
      * The candidate pair ICE settled on, which is where the media really flows: the signaling
      * endpoint a client dialed and the address a server saw a join from are only where the
-     * conversation started. Once connected, a channel's remote address is the pair's remote side.
+     * conversation started. {@link #remoteAddress()} takes the pair's remote side once active.
      *
      * @return The selected pair, or null while there is none
      */
@@ -285,6 +285,7 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         }
         activeFired = true;
 
+        adoptSelectedPath();
         setDataChannels(channels.reliable(), channels.unreliable());
         pipeline().fireChannelActive();
 
@@ -301,6 +302,35 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
 
     private synchronized NetherNetPacket pollEarly() {
         return earlyMessages.poll();
+    }
+
+    /**
+     * Moves the remote address onto the selected pair, see {@link #remoteAddress()}. Event loop only, right
+     * before the channel goes active.
+     *
+     * @return The selected pair, or null when there is none and the address stays as it was
+     */
+    protected @Nullable Path adoptSelectedPath() {
+        Path path = selectedPath();
+        if (path != null) {
+            this.remoteAddress = connectedAddress(this.remoteAddress, path);
+        }
+        return path;
+    }
+
+    /**
+     * The address a channel reports once active, see {@link #remoteAddress()}.
+     *
+     * @param signaled Where signaling met the peer
+     * @param path     The selected pair
+     */
+    static SocketAddress connectedAddress(SocketAddress signaled, Path path) {
+        InetSocketAddress remote = path.remote();
+        // A network id names the peer rather than a place
+        if (!(signaled instanceof InetSocketAddress) || remote == null || remote.isUnresolved()) {
+            return signaled;
+        }
+        return remote;
     }
 
     /**
@@ -836,11 +866,23 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
         return this.remoteAddress;
     }
 
+    /**
+     * Where the peer is. Before {@code channelActive}, where signaling met it: the address an offer
+     * came from, the first check of an NXS admission, the address a client dialed, or the wildcard
+     * when the signaling does not know. From {@code channelActive} on, the remote side of the pair ICE
+     * selected, where the media flows, which PROXY protocol relays on the ICE port already resolve to
+     * the client they declare. It is taken once, so a later renomination does not move it. A child's
+     * {@link org.cloudburstmc.netty.util.nethernet.PlayerInfo#remoteAddress()} keeps the signaled one.
+     */
     @Override
     public SocketAddress remoteAddress() {
-        // Not AbstractChannel's, which keeps the first address read: an initializer reads the signaled
-        // address before ICE connects, and setRemoteAddress replaces it with the selected pair later
+        // AbstractChannel caches the first read, which an initializer makes before ICE connects
         return this.remoteAddress;
+    }
+
+    @Override
+    public SocketAddress localAddress() {
+        return this.localAddress;
     }
 
     @Override
@@ -863,9 +905,5 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     @Override
     public ChannelMetadata metadata() {
         return METADATA;
-    }
-
-    protected void setRemoteAddress(SocketAddress remoteAddress) {
-        this.remoteAddress = remoteAddress;
     }
 }

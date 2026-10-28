@@ -98,6 +98,11 @@ final class NetherNetTestServer implements AutoCloseable {
 
     Accepted accept(String offer) throws Exception {
         server.eventLoop().submit(() -> server.acceptConnection("1", offer, "client")).sync();
+        return accepted();
+    }
+
+    /** The first child the server created. */
+    Accepted accepted() throws Exception {
         return accepted.get(5, TimeUnit.SECONDS);
     }
 
@@ -130,7 +135,7 @@ final class NetherNetTestServer implements AutoCloseable {
         } finally {
             release.countDown();
         }
-        return accepted.get(5, TimeUnit.SECONDS);
+        return accepted();
     }
 
     NetherNetChildChannel connect(PeerConnection client) throws Exception {
