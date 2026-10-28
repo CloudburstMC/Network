@@ -67,8 +67,6 @@ public class NetherNetClientChannel extends NetherNetChannel {
     private int retryCount = 0;
     /** Whether this attempt's complete offer went out, for signaling that takes it in one piece. */
     private boolean descriptionSent;
-    /** This attempt's peer, as the server's answer and candidates apply to it. Event loop only. */
-    private RemoteCandidates remoteCandidates;
 
     /**
      * Creates a NetherNetClientChannel, which closes the signaling when it closes.

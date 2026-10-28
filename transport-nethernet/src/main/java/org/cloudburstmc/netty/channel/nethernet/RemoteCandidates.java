@@ -22,10 +22,13 @@ import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import tel.schich.libdatachannel.PeerConnection;
 import tel.schich.libdatachannel.SessionDescriptionType;
 
+import java.net.InetSocketAddress;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Applies the remote side's candidates to one peer connection.
+ * Applies the remote side's candidates to one peer connection, and remembers which of them are TURN relays.
  */
 final class RemoteCandidates {
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RemoteCandidates.class);
@@ -37,6 +40,8 @@ final class RemoteCandidates {
     private final boolean ipOnly;
     private final int limit;
     private final AtomicInteger trickled = new AtomicInteger();
+    /** Kept whether applied or not, as one arriving through a PROXY protocol relay is only ever peer reflexive. */
+    private final Set<InetSocketAddress> relays = ConcurrentHashMap.newKeySet();
 
     private RemoteCandidates(PeerConnection peer, String connectionId, boolean ipOnly, int limit) {
         this.peer = peer;
@@ -73,6 +78,7 @@ final class RemoteCandidates {
      * Applies the remote description, keeping the candidates {@link #trickle} would take.
      */
     void setDescription(String sdp, SessionDescriptionType type) {
+        sdp.lines().forEach(this::noteRelay);
         this.peer.setRemoteDescription(this.ipOnly ? SdpUtil.withIpCandidates(sdp, this.limit) : sdp, type);
     }
 
@@ -80,11 +86,26 @@ final class RemoteCandidates {
      * Applies a candidate the remote side trickled.
      */
     void trickle(String candidate) {
+        noteRelay(candidate);
         if (this.ipOnly && (!SdpUtil.hasIpAddress(candidate) || this.trickled.incrementAndGet() > this.limit)) {
             log.debug("Ignoring remote candidate for {}: {}", this.connectionId, candidate);
             return;
         }
         this.add(candidate);
+    }
+
+    /**
+     * Whether the remote side named this endpoint as one of its TURN relays.
+     */
+    boolean isRelay(InetSocketAddress endpoint) {
+        return this.relays.contains(endpoint);
+    }
+
+    private void noteRelay(String candidate) {
+        InetSocketAddress relay = SdpUtil.relayEndpoint(candidate);
+        if (relay != null && this.relays.size() < MAX_CANDIDATES) {
+            this.relays.add(relay);
+        }
     }
 
     /**

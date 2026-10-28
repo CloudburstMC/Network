@@ -36,6 +36,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
+import java.util.function.UnaryOperator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -50,24 +52,53 @@ class RelayedJoinTest {
     @Test
     @Timeout(30)
     void joinsThroughTheRelay() throws Exception {
+        join(InetAddress.getByName("0.0.0.0"), offer -> offer, null, (relay, child) -> {
+            assertTrue(relay.down.get() > 0, "the server answers through the relay");
+            assertEquals(Set.copyOf(relay.flows.keySet()), Set.of(child.remoteAddress()), "the client, not the relay");
+        });
+    }
+
+    /**
+     * A client whose checks reach the relay through its TURN server. The server applies no remote candidate
+     * behind relays, so the pair comes out peer reflexive, and only the relay the client signaled tells.
+     */
+    @Test
+    @Timeout(30)
+    void aClientBehindTurnKeepsTheSignaledAddress() throws Exception {
+        InetSocketAddress signaled = new InetSocketAddress("198.51.100.1", 19132);
+        // The client's own socket stands in for its TURN allocation. Loopback gathers a candidate to
+        // translate even on a host with nothing else.
+        join(LOOPBACK, offer -> offer.replace(" typ host", " typ relay raddr 0.0.0.0 rport 0"), signaled,
+                (relay, child) -> {
+                    assertEquals("prflx", child.selectedPath().remoteType());
+                    assertEquals(signaled, child.remoteAddress());
+                });
+    }
+
+    /**
+     * Joins through a relay to a server bound to {@code bind}, checking the child once active.
+     *
+     * @param asSent   What the client's offer looks like by the time it reaches the server
+     * @param signaled Where signaling met the client, or null when it does not know
+     */
+    private static void join(InetAddress bind, UnaryOperator<String> asSent, InetSocketAddress signaled,
+                             BiConsumer<Relay, NetherNetChildChannel> check) throws Exception {
         int port;
         try (var available = new DatagramSocket(new InetSocketAddress(LOOPBACK, 0))) {
             port = available.getLocalPort();
         }
         try (var relay = new Relay(new InetSocketAddress(LOOPBACK, port));
-             var server = new NetherNetTestServer(new InetSocketAddress(InetAddress.getByName("0.0.0.0"), port));
+             var server = new NetherNetTestServer(new InetSocketAddress(bind, port));
              var client = PeerConnection.createPeer(NetherNetTestServer.CONFIG.withBindAddress(LOOPBACK))) {
             server.relays = IpRangeSet.parse(List.of(LOOPBACK.getHostAddress()));
             server.bind();
             client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
             client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
-            server.accept(NetherNetTestServer.offer(client));
+            server.offer("1", asSent.apply(NetherNetTestServer.offer(client)), signaled);
             String answer = SdpUtil.withRelayedCandidates(server.signaling.answer.get(5, TimeUnit.SECONDS),
                     List.of(new InetSocketAddress(LOOPBACK, relay.port())));
             client.setRemoteDescription(answer, SessionDescriptionType.ANSWER);
-            NetherNetChildChannel child = server.active();
-            assertTrue(relay.down.get() > 0, "the server answers through the relay");
-            assertEquals(Set.copyOf(relay.flows.keySet()), Set.of(child.remoteAddress()), "the client, not the relay");
+            check.accept(relay, server.active());
         }
     }
 

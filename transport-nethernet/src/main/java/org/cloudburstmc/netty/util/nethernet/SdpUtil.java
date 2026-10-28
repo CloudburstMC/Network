@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.util.nethernet;
 import io.netty.util.NetUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jspecify.annotations.Nullable;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -73,6 +74,26 @@ public final class SdpUtil {
     public static boolean hasIpAddress(String candidate) {
         String address = candidateAddress(candidate);
         return address != null && NetUtil.createByteArrayFromIpAddressString(address) != null;
+    }
+
+    /**
+     * Where a TURN relay candidate points, the relayed address its checks come from.
+     *
+     * @param candidate The candidate line, with or without {@code a=}
+     * @return The endpoint, or null for any other type or one without an IP literal and port
+     */
+    public static @Nullable InetSocketAddress relayEndpoint(String candidate) {
+        String[] parts = candidate.split(" ");
+        boolean line = candidate.startsWith(CANDIDATE_PREFIX) || candidate.startsWith("candidate:");
+        if (!line || !"relay".equals(candidateType(candidate))) {
+            return null;
+        }
+        try {
+            int port = Integer.parseInt(parts[5]);
+            return port < 1 || port > 65535 ? null : new InetSocketAddress(EndpointAddress.parse(parts[4]), port);
+        } catch (NumberFormatException | UnknownHostException notAnEndpoint) {
+            return null;
+        }
     }
 
     /**

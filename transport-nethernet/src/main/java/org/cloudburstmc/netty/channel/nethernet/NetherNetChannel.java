@@ -110,6 +110,8 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     protected volatile PeerConnection peerConnection;
     protected volatile SocketAddress remoteAddress;
     protected volatile SocketAddress localAddress;
+    /** The current attempt's remote candidates, which know the peer's TURN relays. */
+    volatile RemoteCandidates remoteCandidates;
 
     /** Read off the loop by {@link #isActive}, so it cannot be plain. */
     protected volatile DataChannel reliableChannel;
@@ -313,24 +315,36 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     protected @Nullable Path adoptSelectedPath() {
         Path path = selectedPath();
         if (path != null) {
-            this.remoteAddress = connectedAddress(this.remoteAddress, path);
+            this.remoteAddress = connectedAddress(this.remoteAddress, path.remote(), isRelay(path));
         }
         return path;
+    }
+
+    /**
+     * Whether the pair's remote side is one of the peer's TURN relays: typed so, or a relay the peer signaled,
+     * which is how one arrives through a PROXY protocol relay, as peer reflexive.
+     */
+    private boolean isRelay(Path path) {
+        RemoteCandidates candidates = this.remoteCandidates;
+        return "relay".equals(path.remoteType())
+                || (candidates != null && path.remote() != null && candidates.isRelay(path.remote()));
     }
 
     /**
      * The address a channel reports once active, see {@link #remoteAddress()}.
      *
      * @param signaled Where signaling met the peer
-     * @param path     The selected pair
+     * @param remote   The selected pair's remote side
+     * @param relay    Whether that is a TURN relay
      */
-    static SocketAddress connectedAddress(SocketAddress signaled, Path path) {
-        InetSocketAddress remote = path.remote();
+    static SocketAddress connectedAddress(SocketAddress signaled, @Nullable InetSocketAddress remote, boolean relay) {
         // A network id names the peer rather than a place
-        if (!(signaled instanceof InetSocketAddress) || remote == null || remote.isUnresolved()) {
+        if (!(signaled instanceof InetSocketAddress known) || remote == null || remote.isUnresolved()) {
             return signaled;
         }
-        return remote;
+        // A TURN server only stands in for the peer
+        boolean signalingKnew = known.getAddress() != null && !known.getAddress().isAnyLocalAddress();
+        return relay && signalingKnew ? signaled : remote;
     }
 
     /**
@@ -871,7 +885,11 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
      * came from, the first check of an NXS admission, the address a client dialed, or the wildcard
      * when the signaling does not know. From {@code channelActive} on, the remote side of the pair ICE
      * selected, where the media flows, which PROXY protocol relays on the ICE port already resolve to
-     * the client they declare. It is taken once, so a later renomination does not move it. A child's
+     * the client they declare. A pair through one of the peer's TURN relays, behind those relays too,
+     * keeps the signaled address instead, unless the signaling did not know one. Which candidates are
+     * relays is the peer's own claim, so a peer can always choose the signaled address. It is taken
+     * once, so a later renomination does not move it.
+     * {@link #selectedPath()} names the pair either way, and a child's
      * {@link org.cloudburstmc.netty.util.nethernet.PlayerInfo#remoteAddress()} keeps the signaled one.
      */
     @Override

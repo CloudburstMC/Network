@@ -313,6 +313,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
                 this.config.getOption(NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS);
         RemoteCandidates candidates = this.proxyProtocol != null
                 ? RemoteCandidates.relayed(pc, connectionId) : RemoteCandidates.server(pc, connectionId);
+        child.remoteCandidates = candidates;
         ServerPeerConnectionObserver observer = new ServerPeerConnectionObserver(connectionId, remoteNetworkId,
                 offerSdp, clientAddress, child, pc, candidates, handshakeTimeoutSeconds);
         observer.register(pc);

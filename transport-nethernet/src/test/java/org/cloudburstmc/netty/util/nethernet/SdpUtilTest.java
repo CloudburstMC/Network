@@ -49,6 +49,17 @@ class SdpUtilTest {
     }
 
     @Test
+    void readsWhereARelayCandidatePoints() {
+        InetSocketAddress turn = new InetSocketAddress("192.0.2.9", 3478);
+        assertEquals(turn,
+                SdpUtil.relayEndpoint("a=candidate:1 1 udp 16777215 192.0.2.9 3478 typ relay raddr 0.0.0.0 rport 0"));
+        assertEquals(turn, SdpUtil.relayEndpoint("candidate:1 1 udp 16777215 192.0.2.9 3478 typ relay"));
+        assertNull(SdpUtil.relayEndpoint("candidate:1 1 udp 1694498815 192.0.2.9 3478 typ srflx"));
+        assertNull(SdpUtil.relayEndpoint("candidate:1 1 udp 16777215 turn.example 3478 typ relay"));
+        assertNull(SdpUtil.relayEndpoint("candidate:1 1 udp 16777215 192.0.2.9 0 typ relay"));
+    }
+
+    @Test
     void keepsOnlyTheAdvertisedCandidates() {
         String filtered = SdpUtil.withAdvertisedCandidates(SDP, endpoints("203.0.113.10"));
 
