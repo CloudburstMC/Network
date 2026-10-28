@@ -49,4 +49,20 @@ class NetherNetSendFailureTest {
                     server.eventOnceClosed(child));
         }
     }
+
+    /** Protocol writes on void promises, so the failure arrives as an exception, after the reason. */
+    @Test
+    void theReasonArrivesBeforeAVoidWriteFails() throws Exception {
+        try (var server = new NetherNetTestServer();
+             PeerConnection client = PeerConnection.createPeer(NetherNetTestServer.CONFIG.withMaxMessageSize(1024))) {
+            NetherNetChildChannel child = server.bindAndConnect(client);
+            child.config().setAutoClose(false);
+
+            child.writeAndFlush(Unpooled.wrappedBuffer(new byte[4096]), child.voidPromise());
+
+            assertTrue(child.closeFuture().await(10, TimeUnit.SECONDS), "the channel closes");
+            assertEquals(TransportDisconnectReason.TRANSPORT_FAILED, server.childEvents.poll(1, TimeUnit.SECONDS));
+            assertInstanceOf(IOException.class, server.childEvents.poll(1, TimeUnit.SECONDS));
+        }
+    }
 }

@@ -712,9 +712,11 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
                 // Closed here whatever AUTO_CLOSE says: without it Netty only shuts the output down,
                 // which leaves a channel that never reports closing
                 log.debug("Sending on {} failed: {}", this, e.toString());
+                // The reason first: a write on a void promise reports its failure as an exception, and a
+                // handler that closes on it would otherwise never learn why the connection ended
+                fireDisconnectReason();
                 in.remove(new IOException("Sending on the " + (reliable ? "reliable" : "unreliable")
                         + " data channel failed", e));
-                fireDisconnectReason();
                 close();
                 return;
             }
