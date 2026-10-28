@@ -46,7 +46,19 @@ public abstract class ProxyChannel<T extends Channel> implements Channel {
     }
 
     public void onCloseTriggered(ChannelPromise promise) {
-        this.channel.close(this.correctPromise(promise));
+        ChannelPromise parentPromise = this.correctPromise(promise);
+        if (!this.channel.isRegistered() || !this.channel.eventLoop().inEventLoop()) {
+            // Off the loop, Netty already runs the close as a task of its own
+            this.channel.close(parentPromise);
+            return;
+        }
+        // The close may come from a handler in the middle of the parent's read loop. Netty's native datagram loops
+        // read the fd once more after a close, and by then another socket may have its number, so let the loop end first.
+        try {
+            this.channel.eventLoop().execute(() -> this.channel.close(parentPromise));
+        } catch (RejectedExecutionException e) {
+            this.channel.close(parentPromise);
+        }
     }
 
     public ChannelPromise correctPromise(ChannelPromise remotePromise) {
