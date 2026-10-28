@@ -40,12 +40,23 @@ import java.util.Base64;
  * @param displayName   The Xbox gamertag of the player, self asserted under {@link TokenTrust#ANY}
  * @param networkId     The Network ID the player is joining with
  * @param remoteAddress The address the join request came from
+ * @param remoteAddressDeclared Whether a trusted proxy declared {@code remoteAddress} on the player's
+ *                      behalf, through a PROXY header or {@code X-Forwarded-For}, rather than it being
+ *                      the address the signaling saw
  * @param client        What the client said about itself in the join request, or null if it said
  *                      nothing usable
  * @param claims        The full set of validated JWT claims, for anything not surfaced above
  */
 public record PlayerInfo(String xuid, String displayName, String networkId, InetSocketAddress remoteAddress,
-                         @Nullable ClientInfo client, JwtClaims claims) {
+                         boolean remoteAddressDeclared, @Nullable ClientInfo client, JwtClaims claims) {
+
+    /**
+     * For a join whose address no proxy declared.
+     */
+    public PlayerInfo(String xuid, String displayName, String networkId, InetSocketAddress remoteAddress,
+                      @Nullable ClientInfo client, JwtClaims claims) {
+        this(xuid, displayName, networkId, remoteAddress, false, client, claims);
+    }
 
     /**
      * The key the peer proved it holds, from the token's {@code cpk} claim.

@@ -105,19 +105,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
             throw new IOException("The libdatachannel native library is not available", e);
         }
 
-        this.signaling.setNewConnectionHandler(new NetherNetServerSignaling.NewConnectionHandler() {
-            @Override
-            public void onConnect(String connectionId, String remoteNetworkId, String offerSdp,
-                                  @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
-                acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, false, player);
-            }
-
-            @Override
-            public void onConnect(String connectionId, String remoteNetworkId, String offerSdp,
-                                  @Nullable InetSocketAddress clientAddress, boolean proxied,
-                                  @Nullable PlayerInfo player) {
-                acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, proxied, player);
-            }
+        this.signaling.setNewConnectionHandler((connectionId, remoteNetworkId, offerSdp, clientAddress, player) -> {
+            acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, player);
         });
         this.signaling.setMetrics(serverMetrics());
 
@@ -217,7 +206,8 @@ public class NetherNetServerChannel extends AbstractServerChannel {
 
     void acceptConnection(String connectionId, String offerSdp, String remoteNetworkId,
                           @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player) {
-        acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress, false, player);
+        acceptConnection(connectionId, offerSdp, remoteNetworkId, clientAddress,
+                player != null && player.remoteAddressDeclared(), player);
     }
 
     /**

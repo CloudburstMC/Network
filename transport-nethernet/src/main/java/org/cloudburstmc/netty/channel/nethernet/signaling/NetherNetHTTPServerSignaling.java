@@ -600,7 +600,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                                             @Nullable String host, @Nullable ClientInfo client,
                                             JwtClaims claims, @Nullable InetSocketAddress typed) {
         PlayerInfo player = new PlayerInfo(claims.getClaimValueAsString("xid"),
-                claims.getClaimValueAsString("xname"), networkId, clientAddress, client, claims);
+                claims.getClaimValueAsString("xname"), networkId, clientAddress, proxied, client, claims);
         log.debug("Identity is valid: " + player.displayName() + " (" + player.xuid() + ")");
 
         // Let the user reject the player before we start a connection for them
@@ -667,7 +667,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                     future.cause()));
         });
 
-        handler.onConnect(connectionId, networkId, sdpOffer, clientAddress, proxied, player);
+        handler.onConnect(connectionId, networkId, sdpOffer, clientAddress, player);
         return result;
     }
 

@@ -85,21 +85,6 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
          */
         void onConnect(String connectionId, String remoteNetworkId, String payload,
                        @Nullable InetSocketAddress clientAddress, @Nullable PlayerInfo player);
-
-        /**
-         * As {@link #onConnect(String, String, String, InetSocketAddress, PlayerInfo)}, for signaling
-         * that can tell whether a trusted proxy declared the client address.
-         *
-         * @param proxied Whether a trusted proxy declared {@code clientAddress} on the peer's behalf,
-         *                through a PROXY header or {@code X-Forwarded-For}, rather than it being the
-         *                address the signaling saw. Such a proxy may relay the media too, without
-         *                saying who it relays for, so the address it declared is kept.
-         */
-        default void onConnect(String connectionId, String remoteNetworkId, String payload,
-                               @Nullable InetSocketAddress clientAddress, boolean proxied,
-                               @Nullable PlayerInfo player) {
-            onConnect(connectionId, remoteNetworkId, payload, clientAddress, player);
-        }
     }
 
     /**
