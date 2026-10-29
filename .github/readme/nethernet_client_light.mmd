@@ -7,7 +7,7 @@ flowchart LR
  subgraph TransportLayer["<b>NetherNet Transport</b>"]
     direction TB
     Native["<b>WebRTC Native</b><br><i>libdatachannel</i>"]
-    DataChannel["<b>RTCDataChannel</b><br><i>Reliability & Ordering</i>"]
+    DataChannel["<b>DataChannel</b><br><i>Reliability & Ordering</i>"]
     ClientChannel["<b>NetherNetClientChannel</b><br><i>Netty Adapter</i>"]
  end
  subgraph UserPipeline["<b>User ChannelPipeline</b>"]
@@ -17,10 +17,10 @@ flowchart LR
     Network(("Network (DTLS/UDP)"))
     Network == Encrypted Frame ==> Native
     Native == Reassembled Message ==> DataChannel
-    DataChannel == <i>RTCDataChannelBuffer</i> ==> ClientChannel
+    DataChannel == <i>ByteBuffer</i> ==> ClientChannel
     ClientChannel == <i>ByteBuf</i> ==> UserLogic
     UserLogic == <i>ByteBuf</i> ==> ClientChannel
-    ClientChannel == <i>RTCDataChannelBuffer</i> ==> DataChannel
+    ClientChannel == <i>ByteBuffer</i> ==> DataChannel
     DataChannel == Message ==> Native
     Native == Encrypted Frame ==> Network
     Native:::shared
