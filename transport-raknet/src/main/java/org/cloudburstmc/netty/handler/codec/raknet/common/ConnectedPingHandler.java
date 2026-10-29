@@ -23,6 +23,7 @@ import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.handler.codec.raknet.AdvancedChannelInboundHandler;
+import org.cloudburstmc.netty.util.RakUtils; 
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_CONNECTED_PING;
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_CONNECTED_PONG;
@@ -49,7 +50,7 @@ public class ConnectedPingHandler extends AdvancedChannelInboundHandler<Encapsul
         ByteBuf replyBuffer = ctx.alloc().ioBuffer(17);
         replyBuffer.writeByte(ID_CONNECTED_PONG);
         replyBuffer.writeLong(pingTime);
-        replyBuffer.writeLong(System.currentTimeMillis());
+        replyBuffer.writeLong(RakUtils.timestamp());
         ctx.writeAndFlush(new RakMessage(replyBuffer, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE));
     }
 }
