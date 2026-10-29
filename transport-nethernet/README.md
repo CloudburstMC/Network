@@ -30,16 +30,16 @@ The [libc-aware binding](https://github.com/opencollab-incubator/libdatachannel-
 `windows-x86_64`, `windows-aarch64`, `macos-x86_64`, and `macos-arm64`.
 Android ships from its own `libdatachannel-java-android` module.
 
-Use binding version `0.24.6.0-20260930.214316-2` (the version pinned by this
+Use binding version `0.24.6.0-20261029.091642-10` (the version pinned by this
 checkout) for both the Java binding and its native artifacts. When upgrading
 from an older binding, replace `linux-x86_64` and `linux-aarch64` with the
 matching libc-specific classifiers, or use `libdatachannel-java-arch-detect`
 to select them automatically.
 
-For Alpine, install `libssl3` and `libstdc++`; `gcompat` is not required by the
-musl build. The binding detects the libc loaded by the JVM through
-`/proc/self/maps`. If procfs is unavailable, supply `-Dlibdatachannel.libc=musl`
-or `-Dlibdatachannel.libc=glibc` to match the JVM.
+Linux needs OpenSSL 3, `libssl3` on Alpine. The C++ runtime is linked in, and
+`gcompat` is not required by the musl build. The binding detects the libc
+loaded by the JVM through `/proc/self/maps`. If procfs is unavailable, supply
+`-Dlibdatachannel.libc=musl` or `-Dlibdatachannel.libc=glibc` to match the JVM.
 
 > [!WARNING]
 > Every classifier of one operating system carries its native under the same path, so putting several of them on one classpath resolves to whichever comes first. Use `arch-detect` instead of listing them.
@@ -66,7 +66,11 @@ new ServerBootstrap()
 
 The identity file is created on first start and pinned by clients, so keep it. `NetherNetChildChannel.PLAYER_INFO` on an accepted channel carries the validated player, and `TransportIdentityBinding` ties the login chain to it.
 
-Behind a NAT or UDP tunnel, pass its public endpoint to `setAdvertisedAddresses`, such as `203.0.113.10:56789`. It is announced as a server reflexive candidate of the media port, so ICE needs a fixed port (the signaling port by default, or `NETHER_SERVER_ICE_ADDRESS`), and the forward has to answer from that same public endpoint, as a stateful port forward does.
+Behind a NAT or UDP tunnel, pass its public endpoint to `setAdvertisedAddresses`, such as `203.0.113.10:56789`. It is announced as a server reflexive candidate of the media port, so ICE needs a fixed port (the signaling port by default, or `NETHER_SERVER_ICE_ADDRESS`), and the forward has to answer from that same public endpoint, as a stateful port forward does. `setStunServers` finds that endpoint through STUN on the same fixed port instead, and cannot be combined with advertised addresses.
+
+Behind a reverse proxy, signaling takes the client's address from the proxies listed in `setProxyProtocolProxies`, which may send a PROXY v1 or v2 header or none, or in `setForwardedForProxies`, as the rightmost `X-Forwarded-For` entry that is not one of them. An entry at or right of that one that is not an IP literal keeps the connection's own address, and a PROXY header wins over `X-Forwarded-For`.
+
+UDP relays in front of the ICE port go in `NETHER_SERVER_PROXY_PROTOCOL`, so their PROXY v2 headers name the client. It needs HTTP signaling, a fixed ICE port and advertised addresses that name the relays rather than this host. Besides relay traffic the port then takes only STUN responses to its own lookups, so TURN servers in `NETHER_PEER_CONNECTION_CONFIG` fail the bind, and those a signaling hands out are left out.
 
 ### Client
 
@@ -88,6 +92,12 @@ new Bootstrap()
 The server has to trust an operator signed identity, which is `TokenTrust.ANY`; the default refuses it with 401. The client does what the retail client does: it probes over HTTPS, falls back to plaintext when there is no TLS, and posts the offer over whichever answered. `HttpSignalingSettings` fixes the scheme instead, `HTTPS` for a hop that must stay private, and carries the trust for a private CA and the ICE servers. A server serving TLS refuses plaintext by default.
 
 A client that knows the server can pin it: the connect then fails unless the answer is signed by the identity behind `serverKey`. The server side reads that key as `identity.publicKey()`, and `IdentityUtils.encodePublicKey` and `decodePublicKey` carry it through a config as text. Without the option the answer's identity is not checked.
+
+### Addresses and stats
+
+`remoteAddress()` is where signaling met the peer until `channelActive`, and the remote side of the selected ICE pair from then on, taken once. A client that dialed a network id keeps that instead. `signaledAddress()`, `mediaAddress()` and `reportedAddress()` on `NetherNetChannel` give each address as a `SourcedAddress`, whose `AddressSource` says where it came from. See the `remoteAddress()` Javadoc for when a TURN pair keeps the signaled address.
+
+`getPing()` is the round trip time on both transports, and `NetherNetChannel.sctpStats()` reports the SCTP association's RTT, RTO, congestion window and cumulative counters such as data timeouts.
 
 ### Examples
 

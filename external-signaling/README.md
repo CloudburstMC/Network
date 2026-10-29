@@ -31,6 +31,8 @@ var settings = ProviderRuntimeConfiguration.Settings.builder(endpoint)
         .deregisterOnShutdown(ephemeral)    // for state directories that do not persist
         .gameOutcomes(true)                 // if the game reports joins and rejections
         .location(Location.of(location))    // country, city, latitude, longitude; null to let the provider estimate
+        .bedrockProtocols(protocols)        // the protocols accepted at login, see below
+        .proxyProtocolRelays(relays)        // PROXY protocol v2 relays in front of the UDP port, empty for none
         .build();
 var runtime = ProviderRuntimeConfiguration.resolve(settings, dataDirectory, bindAddress, udpPort, maxPlayers);
 var store = new ProviderStateStore(runtime.stateDirectory());
@@ -141,6 +143,11 @@ keys and the native identity survive. Fresh mappings are published immediately.
 Completed connectivity checks can withhold failed public endpoints from player offers while preserving recovery probes
 and STUN warming. Configured endpoints suppress automatic discovery; see the
 [publication policy](../docs/external-signaling/connectivity-v1.md).
+
+With `proxyProtocolRelays`, the gameplay port reads those relays' PROXY v2 headers,
+as `NETHER_SERVER_PROXY_PROTOCOL` does for built-in signaling. Only the advertised
+addresses are published, and they have to name the relays rather than this host.
+STUN discovery and assisted joins stay off whatever their setting.
 
 `captureHostProfile` returns immutable profile bytes and a nonblocking ownership guard.
 The client retains that guard through persistence and the HTTPS or WebSocket send queue,
