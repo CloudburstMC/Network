@@ -44,7 +44,23 @@ public interface RakServerMetrics {
 
     default void invalidCookie(InetSocketAddress address) {
     }
- 
+
+    /** A client asked for a RakNet protocol version the server does not support, and was told the server's. */
+    default void incompatibleVersion(InetSocketAddress address, int protocolVersion) {
+    }
+
+    /** A client asked for an MTU outside the server's range, and was refused as already connected. */
+    default void invalidMtu(InetSocketAddress address, int mtu) {
+    }
+
+    /** A connection already exists for the address and could not be replaced, so the request was refused. */
+    default void alreadyConnected(InetSocketAddress address) {
+    }
+
+    /** The server's throttle turned the client away, which is refused as already connected. */
+    default void connectionThrottled(InetSocketAddress address) {
+    }
+
     default void bytesIn(RakChildChannel channel, int count) {
     }
 
