@@ -231,6 +231,10 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         InetSocketAddress throttled = throttle == null ? null : knownAddress(clientAddress);
         if (throttled != null && !throttle.accept(throttled)) {
             log.debug("Refused join {} from {}: throttled", connectionId, throttled);
+            NetherServerMetrics serverMetrics = serverMetrics();
+            if (serverMetrics != null) {
+                serverMetrics.joinThrottled(throttled);
+            }
             refuse(connectionId);
             return;
         }

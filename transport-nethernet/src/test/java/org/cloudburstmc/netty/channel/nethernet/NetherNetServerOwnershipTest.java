@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.channel.nethernet;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherServerMetrics;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherServerThrottle;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -129,6 +130,35 @@ class NetherNetServerOwnershipTest {
             allow[0] = true;
             server.offer("2", "not an SDP offer", address);
             assertEquals(address, released.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void throttledJoinIsReported() throws Exception {
+        try (var server = new NetherNetTestServer()) {
+            var address = new InetSocketAddress("192.0.2.1", 19132);
+            var throttled = new CompletableFuture<InetSocketAddress>();
+            server.server.config().setOption(NetherChannelOption.NETHER_SERVER_THROTTLE, new NetherServerThrottle() {
+                @Override
+                public boolean accept(InetSocketAddress joining) {
+                    return false;
+                }
+
+                @Override
+                public void closed(InetSocketAddress joined) {
+                }
+            });
+            server.server.config().setOption(NetherChannelOption.NETHER_SERVER_METRICS, new NetherServerMetrics() {
+                @Override
+                public void joinThrottled(InetSocketAddress refused) {
+                    throttled.complete(refused);
+                }
+            });
+            server.bind();
+
+            server.offer("1", "unused", address);
+            assertEquals(address, throttled.get(5, TimeUnit.SECONDS));
+            assertFalse(server.anyAccepted());
         }
     }
 
