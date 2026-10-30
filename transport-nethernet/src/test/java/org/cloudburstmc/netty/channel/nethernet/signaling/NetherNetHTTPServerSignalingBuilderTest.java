@@ -209,6 +209,8 @@ class NetherNetHTTPServerSignalingBuilderTest {
                 "a value cannot start a header of its own");
         assertThrows(IllegalArgumentException.class,
                 () -> builder.setResponseHeaders(Map.of("content-LENGTH", "0")), "nor replace one signaling sets");
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.setResponseHeaders(Map.of("Content-Encoding", "gzip")), "nor say the answer is encoded");
         assertDoesNotThrow(() -> builder.setResponseHeaders(null));
     }
 

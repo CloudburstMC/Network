@@ -23,10 +23,13 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFactory;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -44,6 +47,7 @@ import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpUtil;
@@ -130,7 +134,7 @@ import java.util.function.Function;
 public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
     /** Headers signaling sets or that frame the response, see {@link Builder#setResponseHeaders}. */
-    private static final Set<String> RESERVED_HEADERS = Set.of("content-length", "content-type",
+    private static final Set<String> RESERVED_HEADERS = Set.of("content-length", "content-type", "content-encoding",
             "transfer-encoding", "connection", "keep-alive", "upgrade");
     /** How long a kept connection may sit unused before it is closed. */
     private static final int IDLE_SECONDS = 30;
@@ -159,7 +163,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final boolean requiresTls;
     private final PlayerFilter playerFilter;
     private volatile MotdProvider motdProvider;
-    private final HttpHeaders responseHeaders;
+    /** Null when no headers are configured. */
+    private final @Nullable ResponseHeaders responseHeaders;
 
     private final Random random = new SecureRandom();
     private final Map<String, PendingJoin> pendingAnswers = new ConcurrentHashMap<>();
@@ -210,7 +215,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         this.requiresTls = builder.requiresTls;
         this.playerFilter = builder.playerFilter;
         this.motdProvider = builder.motdProvider;
-        this.responseHeaders = builder.responseHeaders;
+        this.responseHeaders = builder.responseHeaders.isEmpty() ? null : new ResponseHeaders(builder.responseHeaders);
     }
 
     @Override
@@ -749,7 +754,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * never come. Either the connection is kept, or the response says it is not.
      */
     private void respond(ChannelHandlerContext ctx, FullHttpResponse response, boolean keepAlive) {
-        response.headers().add(responseHeaders);
         HttpUtil.setKeepAlive(response, keepAlive);
         ChannelFuture written = ctx.writeAndFlush(response);
         if (!keepAlive) {
@@ -807,6 +811,24 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         return NetUtil.createInetAddressFromIpAddressString(trimmed);
     }
 
+    /** Adds the configured headers to every response, see {@link Builder#setResponseHeaders}. */
+    @ChannelHandler.Sharable
+    private static final class ResponseHeaders extends ChannelOutboundHandlerAdapter {
+        private final HttpHeaders headers;
+
+        ResponseHeaders(HttpHeaders headers) {
+            this.headers = headers;
+        }
+
+        @Override
+        public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+            if (msg instanceof HttpResponse response) {
+                response.headers().add(headers);
+            }
+            ctx.write(msg, promise);
+        }
+    }
+
     /** Builds the pipeline of every connection, accepted here or handed in by a host. */
     private class ConnectionInitializer extends ChannelInitializer<Channel> {
         @Override
@@ -834,6 +856,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             }
 
             p.addLast(new HttpServerCodec());
+            // Next to the codec, so responses the aggregator writes itself carry them as well
+            if (responseHeaders != null) {
+                p.addLast(responseHeaders);
+            }
             p.addLast(new UnreadAnswersGuard());
             p.addLast(new HttpObjectAggregator(8 * 1024));
             p.addLast(new HttpLoggingHandler(log, (ctx, req) -> {
@@ -1445,8 +1471,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         /**
          * Adds headers to every signaling response, refusals included, for example to tell a proxy in
          * front what this host supports. None by default. {@code Content-Type}, {@code Content-Length},
-         * {@code Transfer-Encoding}, {@code Connection}, {@code Keep-Alive} and {@code Upgrade} are
-         * reserved.
+         * {@code Content-Encoding}, {@code Transfer-Encoding}, {@code Connection}, {@code Keep-Alive}
+         * and {@code Upgrade} are reserved.
          *
          * @param headers Header names to values
          * @return This builder

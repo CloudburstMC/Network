@@ -505,6 +505,18 @@ class HttpSignalingRequestTest {
     }
 
     @Test
+    void sendsTheConfiguredHeadersWithResponsesTheAggregatorWrites() throws Exception {
+        this.start(this.builder().setResponseHeaders(Map.of("X-Host-Supports", "proxy-protocol")));
+
+        // Twice, as the aggregator answers from a shared response it copies
+        for (int i = 0; i < 2; i++) {
+            HttpResponse<String> response = this.send("POST", "/v1/join/42", "x".repeat(9000));
+            assertEquals(413, response.statusCode());
+            assertEquals(List.of("proxy-protocol"), response.headers().allValues("x-host-supports"));
+        }
+    }
+
+    @Test
     void sendsTheConfiguredHeadersWithThePlaintextRefusal() throws Exception {
         // A proxy probing whether TLS is served sees the host's headers as well
         this.start(this.tlsBuilder().setResponseHeaders(Map.of("X-Host-Supports", "proxy-protocol")));
