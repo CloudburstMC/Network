@@ -56,6 +56,7 @@ public class RakProxyServerHandler extends SimpleChannelInboundHandler<DatagramP
         if (presentAddress == null && detectedVersion == -1) {
             // We haven't received a header from given address before and we couldn't detect a
             // PROXY header, ignore.
+            log.debug("Dropped a datagram from {} without a PROXY header", packet.sender());
             return;
         }
 

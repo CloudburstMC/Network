@@ -3,9 +3,11 @@ on:
   push:
     branches:
       - 'develop'
+      - 'nethernet'
 
 jobs:
   deploy:
+    if: github.repository == 'CloudburstMC/Network'
     uses: CloudburstMC/Network/.github/workflows/deploy.yml@develop
     with:
       deploy-url: "https://repo.opencollab.dev/maven-snapshots/"
