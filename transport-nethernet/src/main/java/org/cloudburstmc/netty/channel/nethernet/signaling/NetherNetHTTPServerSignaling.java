@@ -233,6 +233,11 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             throw new ConnectException("PROXY protocol relays front the media port, so STUN discovery would "
                     + "announce an address players cannot reach");
         }
+        if (this.mediaRelayed && this.configuredAddresses.isEmpty()) {
+            log.warn("PROXY protocol relays front the media port, but no advertised addresses name them, so answers "
+                    + "carry this host's own addresses. Players can only connect if something in front of signaling "
+                    + "rewrites the answers to name the relays.");
+        }
         try {
             this.advertisedAddresses = AdvertisedAddresses.resolve(this.configuredAddresses);
         } catch (UnknownHostException | IllegalArgumentException e) {
@@ -1333,7 +1338,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * reaches a host behind NAT or in a container nobody configured, but not a player who typed
          * a name or arrived through a trusted proxy. Behind PROXY protocol relays, list the relays.
          * Left empty there, answers carry this host's own addresses, which only works when a front
-         * rewrites them to the relays.
+         * rewrites them to the relays, and binding warns.
          *
          * @param advertisedAddresses Endpoints reachable by connecting peers
          * @return This builder
