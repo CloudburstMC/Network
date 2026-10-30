@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.channel.nethernet.config;
 
 import io.netty.channel.ChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetChannel;
 import org.cloudburstmc.netty.util.nethernet.IpRangeSet;
 import org.cloudburstmc.netty.util.nethernet.OperatorIdentity;
 import org.cloudburstmc.netty.util.nethernet.TokenTrust;
@@ -98,13 +99,10 @@ public class NetherChannelOption<T> extends ChannelOption<T> {
             valueOf(NetherChannelOption.class, "NETHER_SERVER_PROXY_PROTOCOL");
 
     /**
-     * Whether a child keeps reporting the address a trusted signaling proxy declared, by PROXY header
-     * or {@code X-Forwarded-For}, once it goes active, rather than the selected ICE pair, even one
-     * through PROXY protocol relays. The pair stays its
-     * {@link org.cloudburstmc.netty.channel.nethernet.NetherNetChannel#mediaAddress() media address}.
-     * For a host whose media port sits behind a forward that rewrites the source, so every pair
-     * names the forward, while the signaling proxy names the player. A join signaled any other way
-     * is reported as usual. Defaults to false.
+     * Whether children report the address a trusted signaling proxy declared, by PROXY header or
+     * {@code X-Forwarded-For}, instead of the selected ICE pair, which stays their
+     * {@link NetherNetChannel#mediaAddress()}. For a media port behind a forward that rewrites the
+     * source address. Joins that came through no such proxy are unaffected. Defaults to false.
      */
     public static final ChannelOption<Boolean> NETHER_SERVER_PREFER_PROXIED_ADDRESS =
             valueOf(NetherChannelOption.class, "NETHER_SERVER_PREFER_PROXIED_ADDRESS");

@@ -966,8 +966,8 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
      * declare. A pair through one of the peer's TURN relays, behind those relays too, keeps the
      * signaled address instead when the signaling learned it from a connection, a trusted proxy or
      * the host. Which candidates are relays is the peer's own claim, so a peer can always choose that
-     * address, and a LAN datagram's source, which anyone can forge, is never kept. A server can keep the
-     * address a trusted signaling proxy declared over any pair, see
+     * address, and a LAN datagram's source, which anyone can forge, is never kept. A server can report
+     * a trusted signaling proxy's address instead, see
      * {@link NetherChannelOption#NETHER_SERVER_PREFER_PROXIED_ADDRESS}. The pair is taken once, so a
      * later renomination does not move it. {@link #reportedAddress()} says which this is.
      */

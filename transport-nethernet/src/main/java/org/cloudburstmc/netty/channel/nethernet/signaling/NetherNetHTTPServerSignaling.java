@@ -128,7 +128,7 @@ import java.util.function.Function;
  */
 public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
-    /** Set by signaling itself or framing the response, so no operator header may take their place. */
+    /** Headers signaling sets or that frame the response, see {@link Builder#setResponseHeaders}. */
     private static final Set<String> RESERVED_HEADERS = Set.of("content-length", "content-type",
             "transfer-encoding", "connection", "keep-alive", "upgrade");
     /** How long a kept connection may sit unused before it is closed. */
@@ -1438,14 +1438,14 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
 
         /**
-         * Adds these headers to every response signaling sends, refusals included, such as one that
-         * tells a proxy in front what this host supports. None by default. Headers signaling sets
-         * itself or that frame the response, such as {@code Content-Type} or {@code Connection},
-         * cannot be set.
+         * Adds headers to every signaling response, refusals included, for example to tell a proxy in
+         * front what this host supports. None by default. {@code Content-Type}, {@code Content-Length},
+         * {@code Transfer-Encoding}, {@code Connection}, {@code Keep-Alive} and {@code Upgrade} are
+         * reserved.
          *
-         * @param headers Header names and their values
+         * @param headers Header names to values
          * @return This builder
-         * @throws IllegalArgumentException If an entry is not a valid header, or names one signaling sets
+         * @throws IllegalArgumentException If a name or value is invalid, or the name is reserved
          */
         public Builder setResponseHeaders(Map<String, String> headers) {
             HttpHeaders validated = new DefaultHttpHeaders();
