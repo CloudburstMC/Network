@@ -119,8 +119,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
 
     /**
      * Called by the server channel before {@link #bind} when PROXY protocol relays front its media
-     * port, so answers name the relays and none of this host's own addresses. Signaling that cannot
-     * refuses.
+     * port. Signaling that cannot announce the relays refuses.
      *
      * @param relayed Whether the media is only reached through relays
      * @throws UnsupportedOperationException If relayed, by default

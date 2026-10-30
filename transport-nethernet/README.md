@@ -70,7 +70,7 @@ Behind a NAT or UDP tunnel, pass its public endpoint to `setAdvertisedAddresses`
 
 Behind a reverse proxy, signaling takes the client's address from the proxies listed in `setProxyProtocolProxies`, which may send a PROXY v1 or v2 header or none, or in `setForwardedForProxies`, as the rightmost `X-Forwarded-For` entry that is not one of them. An entry at or right of that one that is not an IP literal keeps the connection's own address, and a PROXY header wins over `X-Forwarded-For`. `setResponseHeaders` adds headers to every signaling response, such as one that tells the proxy what the host supports.
 
-UDP relays in front of the ICE port go in `NETHER_SERVER_PROXY_PROTOCOL`, so their PROXY v2 headers name the client. It needs HTTP signaling, a fixed ICE port and advertised addresses that name the relays rather than this host. Besides relay traffic the port then takes only STUN responses to its own lookups, so TURN servers in `NETHER_PEER_CONNECTION_CONFIG` fail the bind, and those a signaling hands out are left out.
+UDP relays in front of the ICE port go in `NETHER_SERVER_PROXY_PROTOCOL`, so their PROXY v2 headers name the client. It needs HTTP signaling and a fixed ICE port, and the advertised addresses should name the relays. Without any, answers carry this host's own addresses, which only works when a front rewrites them. Besides relay traffic the port then takes only STUN responses to its own lookups, so TURN servers in `NETHER_PEER_CONNECTION_CONFIG` fail the bind, and those a signaling hands out are left out.
 
 ### Client
 

@@ -383,12 +383,25 @@ class HttpSignalingRequestTest {
     }
 
     @Test
-    void refusesToBindRelayedMediaWithoutAddressesNamingTheRelays() throws Exception {
+    void relayedMediaWithoutAddressesAnswersWhatItGathered() throws Exception {
+        // For a front that rewrites the answers to name the relays
         this.signaling = this.builder().build();
         this.signaling.setMediaRelayed(true);
+        this.bind(null);
+        String gathered = this.answerGathered(this.port);
 
-        assertThrows(ConnectException.class,
-                () -> this.signaling.bind(new InetSocketAddress("127.0.0.1", 0), null, this.group.next()));
+        assertEquals(gathered, this.answerFor("example.test"));
+    }
+
+    @Test
+    void refusesStunDiscoveryBehindRelays() throws Exception {
+        // Discovery would announce this host's own mapping, which nothing reaches past the relays
+        this.signaling = this.builder().setStunServers(List.of("stun:127.0.0.1:3478")).build();
+        this.signaling.setMediaRelayed(true);
+
+        ConnectException refused = assertThrows(ConnectException.class, () -> this.signaling.bind(
+                new InetSocketAddress("127.0.0.1", 0), new InetSocketAddress("127.0.0.1", 19140), this.group.next()));
+        assertTrue(refused.getMessage().contains("STUN"), refused.getMessage());
     }
 
     @Test

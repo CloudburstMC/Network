@@ -222,10 +222,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         if (!(localAddress instanceof InetSocketAddress)) {
             throw new IllegalArgumentException("Unsupported address type");
         }
-        // Players reach the media only through the relays, which nothing else could name
-        if (this.mediaRelayed && this.configuredAddresses.isEmpty()) {
-            throw new ConnectException("PROXY protocol relays front the media port, so the advertised addresses "
-                    + "have to name them");
+        // Discovery would announce this host, which players only reach through the relays
+        if (this.mediaRelayed && !this.stunServers.isEmpty()) {
+            throw new ConnectException("PROXY protocol relays front the media port, so STUN discovery would "
+                    + "announce an address players cannot reach");
         }
         try {
             this.advertisedAddresses = AdvertisedAddresses.resolve(this.configuredAddresses);
@@ -1300,8 +1300,9 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * Empty, the default, announces everything ICE gathers, plus what {@link #setStunServers}
          * finds and the IP literal a player typed in, when those are not among them. The typed one
          * reaches a host behind NAT or in a container nobody configured, but not a player who typed
-         * a name or arrived through a trusted proxy. While PROXY protocol relays front the media
-         * port, these have to name the relays rather than this host, and binding fails otherwise.
+         * a name or arrived through a trusted proxy. Behind PROXY protocol relays, list the relays.
+         * Left empty there, answers carry this host's own addresses, which only works when a front
+         * rewrites them to the relays.
          *
          * @param advertisedAddresses Endpoints reachable by connecting peers
          * @return This builder
@@ -1330,8 +1331,8 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          * the address announced on the ICE port as well, costing a peer one failed check when there
          * is no such forward.
          * <p>
-         * Binding fails when ICE has no fixed port, see {@link #setIceOnLocalPort}, and building fails
-         * when advertised addresses are set as well.
+         * Binding fails without a fixed ICE port, see {@link #setIceOnLocalPort}, or behind PROXY
+         * protocol relays. Building fails when advertised addresses are set too.
          *
          * @param stunServers The servers to ask, empty for none
          * @return This builder
