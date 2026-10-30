@@ -24,7 +24,10 @@ public enum AddressSource {
     SIGNALING,
     /** Declared in a PROXY protocol header by a trusted proxy in front of signaling. */
     SIGNALING_PROXY_PROTOCOL,
-    /** Taken from X-Forwarded-For, sent by a trusted forwarder in front of signaling. */
+    /**
+     * Taken from X-Forwarded-For, sent by a trusted forwarder in front of signaling. The header names no port, so the
+     * port is the forwarder's connection's.
+     */
     SIGNALING_FORWARDED_FOR,
     /** The source of the LAN discovery datagram an offer came in, which anyone on the network can forge. */
     SIGNALING_LAN,
