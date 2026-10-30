@@ -391,6 +391,7 @@ class HttpSignalingRequestTest {
         String gathered = this.answerGathered(this.port);
 
         assertEquals(gathered, this.answerFor("example.test"));
+        assertEquals(gathered, this.answerFor("192.168.1.2:19132"), "nor what the player typed, which is no relay");
     }
 
     @Test

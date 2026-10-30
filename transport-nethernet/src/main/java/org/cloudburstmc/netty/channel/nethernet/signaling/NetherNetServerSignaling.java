@@ -119,7 +119,7 @@ public interface NetherNetServerSignaling extends NetherNetSignaling {
 
     /**
      * Called by the server channel before {@link #bind} when PROXY protocol relays front its media
-     * port. Signaling that cannot announce the relays refuses.
+     * port. Signaling without relay support refuses.
      *
      * @param relayed Whether the media is only reached through relays
      * @throws UnsupportedOperationException If relayed, by default

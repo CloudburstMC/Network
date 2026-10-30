@@ -972,14 +972,15 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         /**
          * The endpoint the peer typed in, from its Host header, which is what an operator would
          * otherwise advertise. Only when none are configured, never through a proxy, whose Host names
-         * the proxy, and only an IP literal a peer could reach: a name would need a lookup per join.
+         * the proxy, nor behind PROXY protocol relays, which players reach the media through, and only
+         * an IP literal a peer could reach: a name would need a lookup per join.
          * <p>
          * When ICE shares the port the request arrived on, one forward carries both, so the typed
          * port is the outside one for media too. Otherwise the typed port is signaling's alone, and
          * the media port is assumed forwarded as it is.
          */
         private @Nullable InetSocketAddress typedEndpoint(ChannelHandlerContext ctx, @Nullable String host) {
-            if (host == null || !advertisedAddresses.isEmpty()) {
+            if (host == null || !advertisedAddresses.isEmpty() || mediaRelayed) {
                 return null;
             }
             InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
