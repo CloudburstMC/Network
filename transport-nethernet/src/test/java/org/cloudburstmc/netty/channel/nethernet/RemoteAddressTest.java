@@ -34,7 +34,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A channel reports where signaling met the peer, which a relay may stand in for, until it goes
- * active, and the selected pair from then on unless that is a TURN relay.
+ * active, and the selected pair from then on unless that is a TURN relay or the server keeps what a
+ * signaling proxy declared.
  */
 class RemoteAddressTest {
     private static final InetAddress LOOPBACK = InetAddress.getLoopbackAddress();
@@ -74,21 +75,75 @@ class RemoteAddressTest {
     }
 
     @Test
+    @Timeout(30)
+    void keepsTheProxiedAddressOnceActiveWhenTold() throws Exception {
+        SourcedAddress forwarded = new SourcedAddress(SIGNALED, AddressSource.SIGNALING_FORWARDED_FOR, null);
+        try (var server = new NetherNetTestServer();
+             var client = PeerConnection.createPeer(NetherNetTestServer.CONFIG.withBindAddress(LOOPBACK))) {
+            server.preferProxied = true;
+            server.bind();
+            client.createDataChannel(NetherNetConstants.RELIABLE_CHANNEL_LABEL);
+            client.createDataChannel(NetherNetConstants.UNRELIABLE_CHANNEL_LABEL);
+            server.offer("1", NetherNetTestServer.offer(client), forwarded);
+            client.setRemoteDescription(server.signaling.answer.get(5, TimeUnit.SECONDS),
+                    SessionDescriptionType.ANSWER);
+
+            NetherNetChildChannel child = server.active();
+            NetherNetChannel.Path path = child.selectedPath();
+            assertNotNull(path);
+            assertEquals(SIGNALED, child.remoteAddress());
+            assertEquals(forwarded, child.reportedAddress());
+            assertEquals(new SourcedAddress(path.remote(), AddressSource.ICE, null), child.mediaAddress(),
+                    "the pair is still there to read");
+        }
+    }
+
+    @Test
+    void aProxiedAddressWinsOverAnyPairWhenTold() {
+        List<SourcedAddress> pairs = List.of(new SourcedAddress(PLAYER, AddressSource.ICE, null),
+                new SourcedAddress(PLAYER, AddressSource.ICE_PROXY_PROTOCOL, TURN),
+                new SourcedAddress(TURN, AddressSource.TURN, null));
+        for (AddressSource source : List.of(AddressSource.SIGNALING_PROXY_PROTOCOL,
+                AddressSource.SIGNALING_FORWARDED_FOR)) {
+            SourcedAddress signaled = new SourcedAddress(SIGNALED, source, null);
+            for (SourcedAddress media : pairs) {
+                assertEquals(signaled, NetherNetChannel.reported(signaled, media, true), source + " over " + media);
+                if (media.source() != AddressSource.TURN) {
+                    assertEquals(media, NetherNetChannel.reported(signaled, media, false), "only when told");
+                }
+            }
+        }
+    }
+
+    @Test
+    void anAddressNoProxyDeclaredFollowsThePairEvenWhenTold() {
+        SourcedAddress media = new SourcedAddress(PLAYER, AddressSource.ICE, null);
+        SourcedAddress turn = new SourcedAddress(TURN, AddressSource.TURN, null);
+        for (AddressSource source : List.of(AddressSource.SIGNALING, AddressSource.HOST,
+                AddressSource.SIGNALING_LAN, AddressSource.NXS_ADMISSION)) {
+            SourcedAddress signaled = new SourcedAddress(SIGNALED, source, null);
+            assertEquals(media, NetherNetChannel.reported(signaled, media, true), source.name());
+            assertEquals(NetherNetChannel.reported(signaled, turn, false),
+                    NetherNetChannel.reported(signaled, turn, true), source + " behind TURN");
+        }
+    }
+
+    @Test
     void theSignaledAddressStandsUntilActive() {
-        assertEquals(SIGNALING, NetherNetChannel.reported(SIGNALING, SourcedAddress.unknown()));
+        assertEquals(SIGNALING, NetherNetChannel.reported(SIGNALING, SourcedAddress.unknown(), false));
     }
 
     @Test
     void thePairWinsUnlessItIsTurn() {
         SourcedAddress media = new SourcedAddress(PLAYER, AddressSource.ICE, null);
-        assertEquals(media, NetherNetChannel.reported(SIGNALING, media));
+        assertEquals(media, NetherNetChannel.reported(SIGNALING, media, false));
     }
 
     @Test
     void turnKeepsTheSignaledAddressWhenThereIsOne() {
         SourcedAddress turn = new SourcedAddress(TURN, AddressSource.TURN, null);
-        assertEquals(SIGNALING, NetherNetChannel.reported(SIGNALING, turn));
-        assertEquals(turn, NetherNetChannel.reported(SourcedAddress.unknown(), turn));
+        assertEquals(SIGNALING, NetherNetChannel.reported(SIGNALING, turn, false));
+        assertEquals(turn, NetherNetChannel.reported(SourcedAddress.unknown(), turn, false));
     }
 
     /** Only the peer says a pair is TURN, so it gives way to nothing a forged datagram could plant. */
@@ -98,11 +153,11 @@ class RemoteAddressTest {
         for (AddressSource source : List.of(AddressSource.SIGNALING, AddressSource.SIGNALING_PROXY_PROTOCOL,
                 AddressSource.SIGNALING_FORWARDED_FOR, AddressSource.HOST)) {
             SourcedAddress signaled = new SourcedAddress(SIGNALED, source, null);
-            assertEquals(signaled, NetherNetChannel.reported(signaled, turn), source.name());
+            assertEquals(signaled, NetherNetChannel.reported(signaled, turn, false), source.name());
         }
         for (AddressSource source : List.of(AddressSource.SIGNALING_LAN, AddressSource.NXS_ADMISSION)) {
             SourcedAddress signaled = new SourcedAddress(SIGNALED, source, null);
-            assertEquals(turn, NetherNetChannel.reported(signaled, turn), source.name());
+            assertEquals(turn, NetherNetChannel.reported(signaled, turn, false), source.name());
         }
     }
 
@@ -110,7 +165,7 @@ class RemoteAddressTest {
     void withNothingSignaledThePairStands() {
         // As for a client dialing a network id, which keeps that as its remote address
         SourcedAddress media = new SourcedAddress(PLAYER, AddressSource.ICE, null);
-        assertEquals(media, NetherNetChannel.reported(SourcedAddress.unknown(), media));
+        assertEquals(media, NetherNetChannel.reported(SourcedAddress.unknown(), media, false));
     }
 
     @Test

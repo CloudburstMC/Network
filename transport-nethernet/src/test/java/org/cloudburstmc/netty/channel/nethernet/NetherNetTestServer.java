@@ -50,6 +50,8 @@ final class NetherNetTestServer implements AutoCloseable {
     IpRangeSet relays = IpRangeSet.empty();
     /** The server's peer configuration, or null for the default. */
     PeerConnectionConfiguration peerConfig;
+    /** See {@link NetherChannelOption#NETHER_SERVER_PREFER_PROXIED_ADDRESS}. */
+    boolean preferProxied;
 
     NetherNetTestServer() {
         this(null);
@@ -67,6 +69,7 @@ final class NetherNetTestServer implements AutoCloseable {
                 .option(NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, iceAddress)
                 .option(NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL, relays)
                 .option(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG, peerConfig)
+                .option(NetherChannelOption.NETHER_SERVER_PREFER_PROXIED_ADDRESS, preferProxied)
                 .handler(new ChannelInboundHandlerAdapter() {
                     @Override
                     public void channelRead(ChannelHandlerContext ctx, Object message) {
@@ -111,7 +114,11 @@ final class NetherNetTestServer implements AutoCloseable {
 
     /** Hands a join signaled from {@code address} to the server, without waiting for a child. */
     void offer(String connectionId, String offer, InetSocketAddress address) throws Exception {
-        SourcedAddress signaled = address == null ? null : new SourcedAddress(address, AddressSource.SIGNALING, null);
+        offer(connectionId, offer, address == null ? null : new SourcedAddress(address, AddressSource.SIGNALING, null));
+    }
+
+    /** Hands a join signaled as {@code signaled} says to the server, without waiting for a child. */
+    void offer(String connectionId, String offer, SourcedAddress signaled) throws Exception {
         server.eventLoop().submit(() -> server.acceptConnection(connectionId, offer, "client", signaled, null)).sync();
     }
 

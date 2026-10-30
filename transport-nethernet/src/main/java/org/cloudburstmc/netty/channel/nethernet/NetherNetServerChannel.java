@@ -256,6 +256,7 @@ public class NetherNetServerChannel extends AbstractServerChannel {
         PeerConnection pc = PeerConnection.createPeer(rtcConfig);
         NetherNetChildChannel child = new NetherNetChildChannel(this, pc, signaled, localAddress);
         child.iceRelays = this.proxyProtocol;
+        child.preferProxiedAddress = this.config.getOption(NetherChannelOption.NETHER_SERVER_PREFER_PROXIED_ADDRESS);
         child.attr(NetherNetChildChannel.CONNECTION_ID).set(connectionId);
         if (player != null) {
             child.attr(NetherNetChildChannel.PLAYER_INFO).set(player);

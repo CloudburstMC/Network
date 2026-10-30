@@ -27,6 +27,7 @@ import java.util.Map;
 public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig {
     private volatile int serverRtcHandshakeTimeoutSeconds = 30;
     private volatile boolean inferPeerCandidates = true;
+    private volatile boolean preferProxiedAddress;
     private volatile NetherServerMetrics serverMetrics;
     private volatile InetSocketAddress iceAddress;
     private volatile IpRangeSet proxyProtocol = IpRangeSet.empty();
@@ -42,7 +43,8 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
                 super.getOptions(), NetherChannelOption.NETHER_SERVER_RTC_HANDSHAKE_TIMEOUT_SECONDS,
                 NetherChannelOption.NETHER_INFER_PEER_CANDIDATES, NetherChannelOption.NETHER_SERVER_METRICS,
                 NetherChannelOption.NETHER_SERVER_ICE_ADDRESS, NetherChannelOption.NETHER_SERVER_THROTTLE,
-                NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL
+                NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL,
+                NetherChannelOption.NETHER_SERVER_PREFER_PROXIED_ADDRESS
         );
     }
 
@@ -61,6 +63,8 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
             return (T) this.throttle;
         } else if (option == NetherChannelOption.NETHER_SERVER_PROXY_PROTOCOL) {
             return (T) this.proxyProtocol;
+        } else if (option == NetherChannelOption.NETHER_SERVER_PREFER_PROXIED_ADDRESS) {
+            return (T) Boolean.valueOf(this.preferProxiedAddress);
         }
 
         return super.getOption(option);
@@ -89,6 +93,9 @@ public class DefaultNetherServerChannelConfig extends DefaultNetherChannelConfig
             return true;
         } else if (option == NetherChannelOption.NETHER_INFER_PEER_CANDIDATES) {
             this.inferPeerCandidates = (Boolean) value;
+            return true;
+        } else if (option == NetherChannelOption.NETHER_SERVER_PREFER_PROXIED_ADDRESS) {
+            this.preferProxiedAddress = (Boolean) value;
             return true;
         } else if (option == NetherChannelOption.NETHER_SERVER_ICE_ADDRESS) {
             this.iceAddress = (InetSocketAddress) value;

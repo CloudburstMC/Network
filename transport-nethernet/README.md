@@ -95,7 +95,7 @@ A client that knows the server can pin it: the connect then fails unless the ans
 
 ### Addresses and stats
 
-`remoteAddress()` is where signaling met the peer until `channelActive`, and the remote side of the selected ICE pair from then on, taken once. A client that dialed a network id keeps that instead. `signaledAddress()`, `mediaAddress()` and `reportedAddress()` on `NetherNetChannel` give each address as a `SourcedAddress`, whose `AddressSource` says where it came from. See the `remoteAddress()` Javadoc for when a TURN pair keeps the signaled address.
+`remoteAddress()` is where signaling met the peer until `channelActive`, and the remote side of the selected ICE pair from then on, taken once. A client that dialed a network id keeps that instead. `signaledAddress()`, `mediaAddress()` and `reportedAddress()` on `NetherNetChannel` give each address as a `SourcedAddress`, whose `AddressSource` says where it came from. See the `remoteAddress()` Javadoc for when a TURN pair keeps the signaled address. `NETHER_SERVER_PREFER_PROXIED_ADDRESS` keeps what a PROXY header or `X-Forwarded-For` declared over any pair, for a media port behind a forward that rewrites the source.
 
 `getPing()` is the round trip time on both transports, and `NetherNetChannel.sctpStats()` reports the SCTP association's RTT, RTO, congestion window and cumulative counters such as data timeouts.
 

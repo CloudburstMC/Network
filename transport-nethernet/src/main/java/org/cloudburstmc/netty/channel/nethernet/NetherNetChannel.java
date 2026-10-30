@@ -39,6 +39,7 @@ import tel.schich.libdatachannel.CandidatePair;
 import tel.schich.libdatachannel.CloseReason;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelMetrics;
 import org.cloudburstmc.netty.channel.nethernet.config.NetherConnectionFailure;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
 import tel.schich.libdatachannel.DataChannel;
 import tel.schich.libdatachannel.DataChannelCallback;
 import tel.schich.libdatachannel.PeerConnection;
@@ -118,6 +119,8 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
     private volatile SourcedAddress mediaAddress = SourcedAddress.unknown();
     /** The PROXY protocol relays on the ICE port, which every peer there comes through, or null when none are set. */
     protected volatile @Nullable IceProxyProtocol iceRelays;
+    /** See {@link NetherChannelOption#NETHER_SERVER_PREFER_PROXIED_ADDRESS}. */
+    protected volatile boolean preferProxiedAddress;
     /** The current attempt's remote candidates, which know the peer's TURN relays. */
     volatile RemoteCandidates remoteCandidates;
 
@@ -386,16 +389,21 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
      * keeps that as its remote address, and this says where the peer turned out to be.
      */
     public SourcedAddress reportedAddress() {
-        return reported(this.signaledAddress, this.mediaAddress);
+        return reported(this.signaledAddress, this.mediaAddress, this.preferProxiedAddress);
     }
 
     /** See {@link #remoteAddress()}. */
-    static SourcedAddress reported(SourcedAddress signaled, SourcedAddress media) {
-        if (media.source() == AddressSource.UNKNOWN) {
+    static SourcedAddress reported(SourcedAddress signaled, SourcedAddress media, boolean preferProxied) {
+        if (media.source() == AddressSource.UNKNOWN || (preferProxied && proxied(signaled))) {
             return signaled;
         }
         // A TURN server only stands in for the peer, but only the peer says it is one
         return media.source() == AddressSource.TURN && unforged(signaled) ? signaled : media;
+    }
+
+    private static boolean proxied(SourcedAddress signaled) {
+        return signaled.source() == AddressSource.SIGNALING_PROXY_PROTOCOL
+                || signaled.source() == AddressSource.SIGNALING_FORWARDED_FOR;
     }
 
     /** Whether the signaled address is known and came from somewhere a forged datagram cannot plant it. */
@@ -958,8 +966,10 @@ public abstract class NetherNetChannel extends AbstractChannel implements Transp
      * declare. A pair through one of the peer's TURN relays, behind those relays too, keeps the
      * signaled address instead when the signaling learned it from a connection, a trusted proxy or
      * the host. Which candidates are relays is the peer's own claim, so a peer can always choose that
-     * address, and a LAN datagram's source, which anyone can forge, is never kept. The pair is taken
-     * once, so a later renomination does not move it. {@link #reportedAddress()} says which this is.
+     * address, and a LAN datagram's source, which anyone can forge, is never kept. A server can keep the
+     * address a trusted signaling proxy declared over any pair, see
+     * {@link NetherChannelOption#NETHER_SERVER_PREFER_PROXIED_ADDRESS}. The pair is taken once, so a
+     * later renomination does not move it. {@link #reportedAddress()} says which this is.
      */
     @Override
     public SocketAddress remoteAddress() {
