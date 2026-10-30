@@ -43,6 +43,7 @@ import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpUtil;
@@ -756,6 +757,56 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         }
     }
 
+    /**
+     * The peer address, or the address a trusted proxy declared or forwarded on its behalf.
+     */
+    private SourcedAddress clientAddress(ChannelHandlerContext ctx, HttpRequest req) {
+        InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+        // Only ever set for a PROXY header proxy, and the more trustworthy of the two, so it wins
+        InetSocketAddress proxied = ctx.channel().attr(OptionalProxyProtocol.PROXIED_SOURCE).get();
+        if (proxied != null) {
+            return new SourcedAddress(proxied, AddressSource.SIGNALING_PROXY_PROTOCOL, remote);
+        }
+
+        SourcedAddress direct = new SourcedAddress(remote, AddressSource.SIGNALING, null);
+        if (!forwardedForProxies.contains(remote)) {
+            return direct;
+        }
+
+        String forwarded = req.headers().get(FORWARDED_FOR);
+        if (forwarded == null || forwarded.isBlank()) {
+            return direct;
+        }
+
+        // Each trusted proxy appends where it took the request from, and anything left of that is
+        // whatever the client sent, so the client is the rightmost entry no trusted proxy accounts for
+        String[] entries = forwarded.split(",");
+        InetAddress client = null;
+        for (int i = entries.length - 1; i >= 0; i--) {
+            client = literal(entries[i]);
+            if (client == null) {
+                return direct;
+            }
+            if (!forwardedForProxies.contains(client)) {
+                break;
+            }
+        }
+        return new SourcedAddress(new InetSocketAddress(client, remote.getPort()),
+                AddressSource.SIGNALING_FORWARDED_FOR, remote);
+    }
+
+    /**
+     * An address literal only. Resolving a name here would block this event loop on DNS and let
+     * the header stand for whatever the answer happened to be.
+     */
+    private static @Nullable InetAddress literal(String entry) {
+        String trimmed = entry.trim();
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            trimmed = trimmed.substring(1, trimmed.length() - 1);
+        }
+        return NetUtil.createInetAddressFromIpAddressString(trimmed);
+    }
+
     /** Builds the pipeline of every connection, accepted here or handed in by a host. */
     private class ConnectionInitializer extends ChannelInitializer<Channel> {
         @Override
@@ -785,7 +836,10 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
             p.addLast(new HttpServerCodec());
             p.addLast(new UnreadAnswersGuard());
             p.addLast(new HttpObjectAggregator(8 * 1024));
-            p.addLast(new HttpLoggingHandler(log));
+            p.addLast(new HttpLoggingHandler(log, (ctx, req) -> {
+                SourcedAddress client = clientAddress(ctx, req);
+                return client.via() == null ? client.address() : client.address() + " via " + client.via();
+            }));
             // A kept connection that goes quiet is one nobody will come back to
             p.addLast(new IdleStateHandler(IDLE_SECONDS, 0, 0));
             p.addLast(new SignalingHandler());
@@ -913,56 +967,6 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
                 }
                 respondEmptyWithStatus(ctx, status, keepAlive);
             });
-        }
-
-        /**
-         * The peer address, or the address a trusted proxy declared or forwarded on its behalf.
-         */
-        private SourcedAddress clientAddress(ChannelHandlerContext ctx, FullHttpRequest req) {
-            InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
-            // Only ever set for a PROXY header proxy, and the more trustworthy of the two, so it wins
-            InetSocketAddress proxied = ctx.channel().attr(OptionalProxyProtocol.PROXIED_SOURCE).get();
-            if (proxied != null) {
-                return new SourcedAddress(proxied, AddressSource.SIGNALING_PROXY_PROTOCOL, remote);
-            }
-
-            SourcedAddress direct = new SourcedAddress(remote, AddressSource.SIGNALING, null);
-            if (!forwardedForProxies.contains(remote)) {
-                return direct;
-            }
-
-            String forwarded = req.headers().get(FORWARDED_FOR);
-            if (forwarded == null || forwarded.isBlank()) {
-                return direct;
-            }
-
-            // Each trusted proxy appends where it took the request from, and anything left of that is
-            // whatever the client sent, so the client is the rightmost entry no trusted proxy accounts for
-            String[] entries = forwarded.split(",");
-            InetAddress client = null;
-            for (int i = entries.length - 1; i >= 0; i--) {
-                client = literal(entries[i]);
-                if (client == null) {
-                    return direct;
-                }
-                if (!forwardedForProxies.contains(client)) {
-                    break;
-                }
-            }
-            return new SourcedAddress(new InetSocketAddress(client, remote.getPort()),
-                    AddressSource.SIGNALING_FORWARDED_FOR, remote);
-        }
-
-        /**
-         * An address literal only. Resolving a name here would block this event loop on DNS and let
-         * the header stand for whatever the answer happened to be.
-         */
-        private static @Nullable InetAddress literal(String entry) {
-            String trimmed = entry.trim();
-            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-                trimmed = trimmed.substring(1, trimmed.length() - 1);
-            }
-            return NetUtil.createInetAddressFromIpAddressString(trimmed);
         }
 
         /**

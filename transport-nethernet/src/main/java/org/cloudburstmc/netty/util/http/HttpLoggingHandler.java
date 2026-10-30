@@ -19,36 +19,44 @@ package org.cloudburstmc.netty.util.http;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.util.internal.logging.InternalLogger;
 
+import java.util.function.BiFunction;
+
 /**
- * Log any web requests and their response codes and times to a given Netty log
+ * Logs each request with its response code and time, at debug level.
  */
 public class HttpLoggingHandler extends ChannelDuplexHandler {
     private final InternalLogger log;
+    private final BiFunction<ChannelHandlerContext, HttpRequest, Object> requester;
 
+    /** The latest request, which answers to earlier pipelined ones are logged against too. */
     private long startNanos;
     private String request;
 
-    public HttpLoggingHandler(InternalLogger log) {
+    /**
+     * @param requester Names who sent a request, such as the client a trusted proxy sent it for. Only asked
+     *                  while debug logging is on
+     */
+    public HttpLoggingHandler(InternalLogger log, BiFunction<ChannelHandlerContext, HttpRequest, Object> requester) {
         this.log = log;
+        this.requester = requester;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof HttpRequest req) {
+        if (msg instanceof HttpRequest req && log.isDebugEnabled()) {
             startNanos = System.nanoTime();
-            request = ctx.channel().remoteAddress() + " " + req.method() + " " + req.uri();
+            request = requester.apply(ctx, req) + " " + req.method() + " " + req.uri();
         }
         ctx.fireChannelRead(msg);
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-        if (msg instanceof HttpResponse res) {
+        if (msg instanceof HttpResponse res && request != null) {
             long ms = (System.nanoTime() - startNanos) / 1_000_000;
             log.debug("{} -> {} ({} ms)", request, res.status().code(), ms);
         }
