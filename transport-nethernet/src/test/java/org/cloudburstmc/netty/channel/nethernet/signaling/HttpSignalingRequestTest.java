@@ -51,6 +51,7 @@ import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -476,6 +477,28 @@ class HttpSignalingRequestTest {
         assertEquals(426, this.status("POST", "/v1/join/42", TestOffers.selfSigned()),
                 "an offer is refused the same way, no peer is allocated for it");
         assertEquals(200, this.secureStatus(), "TLS is served the status it asked for");
+    }
+
+    @Test
+    void sendsTheConfiguredHeadersWithEveryResponse() throws Exception {
+        this.start(this.builder().setResponseHeaders(Map.of("X-Host-Supports", "proxy-protocol")));
+
+        for (HttpResponse<String> response : List.of(this.send("GET", "/v1/join", null),
+                this.send("GET", "/", null), this.send("POST", "/v1/join/42", "not an sdp offer at all"))) {
+            assertEquals("proxy-protocol", response.headers().firstValue("x-host-supports").orElse(""),
+                    "status " + response.statusCode());
+        }
+    }
+
+    @Test
+    void sendsTheConfiguredHeadersWithThePlaintextRefusal() throws Exception {
+        // A proxy probing whether TLS is served sees the host's headers as well
+        this.start(this.tlsBuilder().setResponseHeaders(Map.of("X-Host-Supports", "proxy-protocol")));
+
+        HttpResponse<String> response = this.send("GET", "/v1/join", null);
+
+        assertEquals(426, response.statusCode());
+        assertEquals("proxy-protocol", response.headers().firstValue("x-host-supports").orElse(""));
     }
 
     @Test

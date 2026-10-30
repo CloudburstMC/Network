@@ -36,9 +36,11 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.DecoderException;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -104,8 +106,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -124,6 +128,9 @@ import java.util.function.Function;
  */
 public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private static final AsciiString FORWARDED_FOR = AsciiString.cached("X-Forwarded-For");
+    /** Set by signaling itself or framing the response, so no operator header may take their place. */
+    private static final Set<String> RESERVED_HEADERS = Set.of("content-length", "content-type",
+            "transfer-encoding", "connection", "keep-alive", "upgrade");
     /** How long a kept connection may sit unused before it is closed. */
     private static final int IDLE_SECONDS = 30;
 
@@ -151,6 +158,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
     private final boolean requiresTls;
     private final PlayerFilter playerFilter;
     private volatile MotdProvider motdProvider;
+    private final HttpHeaders responseHeaders;
 
     private final Random random = new SecureRandom();
     private final Map<String, PendingJoin> pendingAnswers = new ConcurrentHashMap<>();
@@ -201,6 +209,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         this.requiresTls = builder.requiresTls;
         this.playerFilter = builder.playerFilter;
         this.motdProvider = builder.motdProvider;
+        this.responseHeaders = builder.responseHeaders;
     }
 
     @Override
@@ -739,6 +748,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
      * never come. Either the connection is kept, or the response says it is not.
      */
     private void respond(ChannelHandlerContext ctx, FullHttpResponse response, boolean keepAlive) {
+        response.headers().add(responseHeaders);
         HttpUtil.setKeepAlive(response, keepAlive);
         ChannelFuture written = ctx.writeAndFlush(response);
         if (!keepAlive) {
@@ -1040,6 +1050,7 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         private boolean requiresTls = true;
         private PlayerFilter playerFilter = (host, player) -> null;
         private MotdProvider motdProvider = (host, remoteAddress, client) -> PongData.DEFAULT;
+        private HttpHeaders responseHeaders = new DefaultHttpHeaders();
 
         /**
          * Sets the identity used to sign SDP answers. Required.
@@ -1423,6 +1434,30 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
          */
         public Builder setMotd(PongData motd) {
             return setMotdProvider((host, remoteAddress, client) -> motd);
+        }
+
+        /**
+         * Adds these headers to every response signaling sends, refusals included, such as one that
+         * tells a proxy in front what this host supports. None by default. Headers signaling sets
+         * itself or that frame the response, such as {@code Content-Type} or {@code Connection},
+         * cannot be set.
+         *
+         * @param headers Header names and their values
+         * @return This builder
+         * @throws IllegalArgumentException If an entry is not a valid header, or names one signaling sets
+         */
+        public Builder setResponseHeaders(Map<String, String> headers) {
+            HttpHeaders validated = new DefaultHttpHeaders();
+            if (headers != null) {
+                headers.forEach((name, value) -> {
+                    if (RESERVED_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
+                        throw new IllegalArgumentException("Signaling sets the " + name + " header itself");
+                    }
+                    validated.add(name, value);
+                });
+            }
+            this.responseHeaders = validated;
+            return this;
         }
 
         /**

@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.cloudburstmc.netty.util.nethernet.SdpUtil;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -196,6 +197,19 @@ class NetherNetHTTPServerSignalingBuilderTest {
         NetherNetHTTPServerSignaling.Builder builder = new NetherNetHTTPServerSignaling.Builder();
         assertThrows(IllegalArgumentException.class, () -> builder.setStunServers(List.of("turn:turn.example")));
         assertThrows(IllegalArgumentException.class, () -> builder.setStunMaxAge(java.time.Duration.ZERO));
+    }
+
+    @Test
+    void reportsAResponseHeaderItCannotSendAtConfigurationTime() {
+        // A bad entry has to fail where it is written, not on every response
+        NetherNetHTTPServerSignaling.Builder builder = new NetherNetHTTPServerSignaling.Builder();
+        assertThrows(IllegalArgumentException.class, () -> builder.setResponseHeaders(Map.of("X Bad", "1")));
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.setResponseHeaders(Map.of("X-Good", "1\r\nX-Injected: 1")),
+                "a value cannot start a header of its own");
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.setResponseHeaders(Map.of("content-LENGTH", "0")), "nor replace one signaling sets");
+        assertDoesNotThrow(() -> builder.setResponseHeaders(null));
     }
 
     @Test
