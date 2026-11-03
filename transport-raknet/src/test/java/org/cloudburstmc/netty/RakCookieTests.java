@@ -30,6 +30,8 @@ import org.cloudburstmc.netty.channel.raknet.RakConstants;
 import org.cloudburstmc.netty.channel.raknet.RakServerChannel;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerThrottle;
 import org.cloudburstmc.netty.util.RakUtils;
 import org.cloudburstmc.netty.util.SipHash;
 import org.junit.jupiter.api.AfterEach;
@@ -473,7 +475,129 @@ public class RakCookieTests {
         }
     }
 
+    @Test
+    public void testIncompatibleVersionIsReported() throws InterruptedException {
+        BlockingQueue<String> events = new LinkedBlockingQueue<>();
+        bind(serverBootstrap(RakServerCookieMode.INVALID, null)
+                .option(RakChannelOption.RAK_SUPPORTED_PROTOCOLS, new int[]{PROTOCOL_VERSION})
+                .option(RakChannelOption.RAK_SERVER_METRICS, recordingMetrics(events))
+                .group(group));
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
+        Channel rawClient = rawClient();
+
+        rawClient.writeAndFlush(new DatagramPacket(createOCR1(PROTOCOL_VERSION - 1), serverAddress));
+
+        Assertions.assertTrue(awaitResponse(ID_INCOMPATIBLE_PROTOCOL_VERSION));
+        Assertions.assertEquals("incompatibleVersion " + rawClient.localAddress() + " " + (PROTOCOL_VERSION - 1),
+                events.poll(1, TimeUnit.SECONDS));
+        rawClient.close();
+    }
+
+    @Test
+    public void testInvalidMtuIsReported() throws InterruptedException {
+        BlockingQueue<String> events = new LinkedBlockingQueue<>();
+        bind(serverBootstrap(RakServerCookieMode.INVALID, null)
+                .option(RakChannelOption.RAK_SERVER_METRICS, recordingMetrics(events))
+                .group(group));
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
+        Channel rawClient = rawClient();
+
+        int mtu = RakConstants.MINIMUM_MTU_SIZE - 1;
+        rawClient.writeAndFlush(new DatagramPacket(createOCR2(serverAddress, 0, false, mtu), serverAddress));
+
+        Assertions.assertTrue(awaitResponse(ID_ALREADY_CONNECTED));
+        Assertions.assertEquals("invalidMtu " + rawClient.localAddress() + " " + mtu, events.poll(1, TimeUnit.SECONDS));
+        Assertions.assertNull(acceptedChannels.poll());
+        rawClient.close();
+    }
+
+    @Test
+    public void testAlreadyConnectedIsReported() throws InterruptedException {
+        BlockingQueue<String> events = new LinkedBlockingQueue<>();
+        bind(serverBootstrap(RakServerCookieMode.INVALID, null)
+                .option(RakChannelOption.RAK_SERVER_METRICS, recordingMetrics(events))
+                .group(group));
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
+        Channel rawClient = rawClient();
+
+        rawClient.writeAndFlush(new DatagramPacket(createOCR2(serverAddress, 0, false, MAXIMUM_MTU_SIZE),
+                serverAddress));
+        Assertions.assertTrue(awaitResponse(ID_OPEN_CONNECTION_REPLY_2));
+        // Without a cookie the second request could be spoofed, so the first connection stays
+        rawClient.writeAndFlush(new DatagramPacket(createOCR2(serverAddress, 0, false, MAXIMUM_MTU_SIZE),
+                serverAddress));
+
+        Assertions.assertTrue(awaitResponse(ID_ALREADY_CONNECTED));
+        Assertions.assertEquals("alreadyConnected " + rawClient.localAddress(), events.poll(1, TimeUnit.SECONDS));
+        rawClient.close();
+    }
+
+    @Test
+    public void testThrottledConnectionIsReported() throws InterruptedException {
+        BlockingQueue<String> events = new LinkedBlockingQueue<>();
+        bind(serverBootstrap(RakServerCookieMode.INVALID, null)
+                .option(RakChannelOption.RAK_SERVER_METRICS, recordingMetrics(events))
+                .option(RakChannelOption.RAK_THROTTLE, new RakServerThrottle() {
+                    @Override
+                    public boolean accept(InetSocketAddress address) {
+                        return false;
+                    }
+
+                    @Override
+                    public void closed(InetSocketAddress address) {
+                    }
+                })
+                .group(group));
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", PORT);
+        Channel rawClient = rawClient();
+
+        rawClient.writeAndFlush(new DatagramPacket(createOCR2(serverAddress, 0, false, MAXIMUM_MTU_SIZE),
+                serverAddress));
+
+        Assertions.assertTrue(awaitResponse(ID_ALREADY_CONNECTED));
+        Assertions.assertEquals("connectionThrottled " + rawClient.localAddress(), events.poll(1, TimeUnit.SECONDS));
+        Assertions.assertNull(events.poll(), "a throttled connection is not also reported as already connected");
+        rawClient.close();
+    }
+
+    private static RakServerMetrics recordingMetrics(BlockingQueue<String> events) {
+        return new RakServerMetrics() {
+            @Override
+            public void incompatibleVersion(InetSocketAddress address, int protocolVersion) {
+                events.add("incompatibleVersion " + address + " " + protocolVersion);
+            }
+
+            @Override
+            public void invalidMtu(InetSocketAddress address, int mtu) {
+                events.add("invalidMtu " + address + " " + mtu);
+            }
+
+            @Override
+            public void alreadyConnected(InetSocketAddress address) {
+                events.add("alreadyConnected " + address);
+            }
+
+            @Override
+            public void connectionThrottled(InetSocketAddress address) {
+                events.add("connectionThrottled " + address);
+            }
+        };
+    }
+
+    private ByteBuf createOCR1(int protocolVersion) {
+        ByteBuf buf = Unpooled.buffer();
+        buf.writeByte(ID_OPEN_CONNECTION_REQUEST_1);
+        buf.writeBytes(RakConstants.DEFAULT_UNCONNECTED_MAGIC);
+        buf.writeByte(protocolVersion);
+        buf.writeZero(64); // MTU padding
+        return buf;
+    }
+
     private ByteBuf createOCR2(java.net.SocketAddress clientAddr, InetSocketAddress serverAddr, int cookie, boolean hasCookie) {
+        return createOCR2(serverAddr, cookie, hasCookie, RakConstants.MAXIMUM_MTU_SIZE);
+    }
+
+    private ByteBuf createOCR2(InetSocketAddress serverAddr, int cookie, boolean hasCookie, int mtu) {
         ByteBuf buf = Unpooled.buffer();
         buf.writeByte(ID_OPEN_CONNECTION_REQUEST_2);
         buf.writeBytes(RakConstants.DEFAULT_UNCONNECTED_MAGIC);
@@ -482,7 +606,7 @@ public class RakCookieTests {
             buf.writeBoolean(false); // Challenge
         }
         RakUtils.writeAddress(buf, serverAddr);
-        buf.writeShort(RakConstants.MAXIMUM_MTU_SIZE);
+        buf.writeShort(mtu);
         buf.writeLong(12345L); // Client GUID
         return buf;
     }

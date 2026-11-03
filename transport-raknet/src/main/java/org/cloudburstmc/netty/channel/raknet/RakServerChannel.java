@@ -30,6 +30,7 @@ import org.cloudburstmc.netty.channel.raknet.config.DefaultRakServerConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
 import org.cloudburstmc.netty.handler.codec.raknet.common.UnconnectedPongEncoder;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakProxyServerHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOfflineHandler;
@@ -106,9 +107,11 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
      *
      * @param address         remote address of new connection.
      * @param protocolVersion RakNet protocol version from the handshake cookie, or 0 if not available.
-     * @return RakChildChannel instance of new channel, or {@code null} if a non-replaceable channel already exists.
+     * @return RakChildChannel instance of new channel, or {@code null} if a non-replaceable channel already exists
+     *         or the throttle turned the client away.
      */
     public RakChildChannel createChildChannel(InetSocketAddress address, InetSocketAddress localAddress, long clientGuid, int mtu, int protocolVersion) {
+        RakServerMetrics metrics = this.config().getMetrics();
         RakChildChannel existingChannel = this.childChannelMap.get(address);
         if (this.config().getCookieMode() != RakServerCookieMode.INVALID &&
                 this.config().getCookieMode() != RakServerCookieMode.OFF && existingChannel != null) {
@@ -116,11 +119,17 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
             existingChannel.close();
         } else if (existingChannel != null) {
             // Could be spoofed, so we don't close the existing channel.
+            if (metrics != null) {
+                metrics.alreadyConnected(address);
+            }
             return null;
         }
 
         InetSocketAddress clientAddress = this.getClientAddress(address);
         if (this.config().getThrottle() != null && !this.config().getThrottle().accept(clientAddress)) {
+            if (metrics != null) {
+                metrics.connectionThrottled(clientAddress);
+            }
             return null;
         }
 
@@ -135,8 +144,8 @@ public class RakServerChannel extends ProxyChannel<DatagramChannel> implements S
         // register to eventLoop, assign default options and attributes
         this.pipeline().fireChannelRead(channel).fireChannelReadComplete();
 
-        if (this.config().getMetrics() != null) {
-            this.config().getMetrics().channelOpen(clientAddress);
+        if (metrics != null) {
+            metrics.channelOpen(clientAddress);
         }
         return channel;
     }

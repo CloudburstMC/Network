@@ -148,6 +148,10 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
 
         int[] supportedProtocols = config.getSupportedProtocols();
         if (supportedProtocols != null && Arrays.binarySearch(supportedProtocols, protocolVersion) < 0) {
+            RakServerMetrics metrics = this.channel.config().getMetrics();
+            if (metrics != null) {
+                metrics.incompatibleVersion(sender, protocolVersion);
+            }
             int latestVersion = supportedProtocols[supportedProtocols.length - 1];
             this.sendIncompatibleVersion(ctx, packet, latestVersion, magicBuf, guid);
             return;
@@ -214,6 +218,10 @@ public class RakServerOfflineHandler extends AdvancedChannelInboundHandler<Datag
             if (log.isTraceEnabled()) {
                 log.trace("[{}] Received ID_OPEN_CONNECTION_REQUEST_2, but the MTU was {}. Expecting a value between {} - {}",
                         sender, mtu, minMtu, maxMtu);
+            }
+            RakServerMetrics metrics = this.channel.config().getMetrics();
+            if (metrics != null) {
+                metrics.invalidMtu(sender, mtu);
             }
             // The client should have already negotiated a valid MTU
             this.sendAlreadyConnected(ctx, packet, magicBuf, guid);
