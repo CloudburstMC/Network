@@ -40,6 +40,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 
 public class RakProxyTests {
 
@@ -137,6 +138,21 @@ public class RakProxyTests {
                 message.release();
             }
             buf.release();
+        }
+    }
+
+    @Test
+    public void testPlainDatagramIsNoHeader() {
+        // An unconnected ping: past the 13 bytes a header needs, but it does not start like one
+        ByteBuf ping = ByteBufAllocator.DEFAULT.buffer().writeByte(0x01).writeLong(0).writeZero(16).writeLong(0);
+        ByteBuf text = ByteBufAllocator.DEFAULT.buffer()
+                .writeBytes("PROXY UDP4 203.0.113.7 127.0.0.1 40123 19132\r\n".getBytes(StandardCharsets.US_ASCII));
+        try {
+            Assertions.assertEquals(-1, ProxyProtocolDecoder.findVersion(ping));
+            Assertions.assertEquals(1, ProxyProtocolDecoder.findVersion(text));
+        } finally {
+            ping.release();
+            text.release();
         }
     }
 

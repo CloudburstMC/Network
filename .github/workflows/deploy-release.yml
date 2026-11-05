@@ -6,6 +6,7 @@ on:
 
 jobs:
   deploy:
+    if: github.repository == 'CloudburstMC/Network'
     uses: CloudburstMC/Network/.github/workflows/deploy.yml@develop
     with:
       deploy-url: "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
