@@ -56,7 +56,7 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<E
         ByteBuf buffer = ctx.alloc().ioBuffer(18);
         buffer.writeByte(ID_CONNECTION_REQUEST);
         buffer.writeLong(guid);
-        buffer.writeLong(System.currentTimeMillis());
+        buffer.writeLong(RakUtils.timestamp());
         buffer.writeBoolean(false);
         ctx.writeAndFlush(new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE));
     }
@@ -121,7 +121,7 @@ public class RakClientOnlineInitialHandler extends SimpleChannelInboundHandler<E
             RakUtils.writeAddress(buffer, LOCAL_ADDRESS);
         }
         buffer.writeLong(pingTime);
-        buffer.writeLong(System.currentTimeMillis());
+        buffer.writeLong(RakUtils.timestamp());
         ctx.writeAndFlush(new RakMessage(buffer, RakReliability.RELIABLE_ORDERED, RakPriority.IMMEDIATE));
     }
 }

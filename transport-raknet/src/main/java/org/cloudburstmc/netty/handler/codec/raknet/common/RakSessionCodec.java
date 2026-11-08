@@ -65,7 +65,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private volatile RakState state;
 
-    private volatile long lastTouched = System.currentTimeMillis();
+    private volatile long lastTouched = RakUtils.timestamp();
     private volatile long lastFlush;
 
     // Reliability, Ordering, Sequencing and datagram indexes
@@ -492,7 +492,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void onTick() {
-        long curTime = System.currentTimeMillis();
+        long curTime = RakUtils.timestamp();
 
         int maxQueuedBytes = this.channel.config().getOption(RakChannelOption.RAK_MAX_QUEUED_BYTES);
 
@@ -1005,13 +1005,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     public void recalculatePongTime(long pingTime) {
         if (this.currentPingTime == pingTime) {
             this.lastPingTime = this.currentPingTime;
-            this.lastPongTime = System.currentTimeMillis();
+            this.lastPongTime = RakUtils.timestamp();
         }
     }
 
     private void touch() {
         this.checkForClosed();
-        this.lastTouched = System.currentTimeMillis();
+        this.lastTouched = RakUtils.timestamp();
     }
 
     public boolean isStale(long curTime) {
@@ -1019,7 +1019,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     public boolean isStale() {
-        return this.isStale(System.currentTimeMillis());
+        return this.isStale(RakUtils.timestamp());
     }
 
     public boolean isTimedOut(long curTime) {
@@ -1027,7 +1027,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     public boolean isTimedOut() {
-        return this.isTimedOut(System.currentTimeMillis());
+        return this.isTimedOut(RakUtils.timestamp());
     }
 
     public long getPing() {
