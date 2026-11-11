@@ -594,7 +594,15 @@ public class NetherNetHTTPServerSignaling implements NetherNetServerSignaling {
         List<InetSocketAddress> added = new ArrayList<>();
         DiscoveredEndpoints discovered = this.discovered;
         if (discovered != null) {
-            added.addAll(discovered.fresh());
+            if (typed != null) {
+                // If we have a typed address, only advertise addresses of the same family as the typed address
+                Class<? extends InetAddress> addressFamily = typed.getAddress().getClass();
+                discovered.fresh().stream()
+                        .filter(discoveredAddress -> discoveredAddress.getAddress().getClass() == addressFamily)
+                        .forEach(added::add);
+            } else {
+                added.addAll(discovered.fresh());
+            }
         }
         if (typed != null) {
             log.debug("Announcing {} from the Host header", typed);
