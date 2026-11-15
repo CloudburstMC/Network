@@ -10,6 +10,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import static org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.*;
 
 /** One caller-authorized diagnostic attempt; no workload authentication, retry scheduler or game protocol. */
@@ -78,6 +79,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     }
 
     /** Success requires the original ping to be echoed by the pinned host.
+     * transportEstablished requires a ready channel and a validated selected pair.
      * attemptedRemote is the verified answer destination, retained even without an established selected pair. */
     public record Result(
             Job job,
@@ -115,6 +117,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     private final boolean loopbackTest;
     private final BooleanSupplier authorized;
     private final Clock clock;
+    private final Function<PeerConnection, CandidatePair> candidatePairs;
     private final AtomicBoolean closeObserved = new AtomicBoolean();
     private final AtomicBoolean started = new AtomicBoolean(),
             cancelled = new AtomicBoolean(),
@@ -162,9 +165,23 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             Clock clock,
             boolean loopbackTest,
             InetSocketAddress stunServer) {
+        this(job, bind, authorized, clock, loopbackTest, stunServer,
+                PeerConnection::selectedCandidatePair);
+    }
+
+    /** Local native tests may replace only the selected-pair evidence reader. */
+    NativeDiagnosticProbeAttempt(
+            Job job,
+            InetSocketAddress bind,
+            BooleanSupplier authorized,
+            Clock clock,
+            boolean loopbackTest,
+            InetSocketAddress stunServer,
+            Function<PeerConnection, CandidatePair> candidatePairs) {
         this.job = Objects.requireNonNull(job);
         this.authorized = Objects.requireNonNull(authorized);
         this.clock = Objects.requireNonNull(clock);
+        this.candidatePairs = Objects.requireNonNull(candidatePairs);
         this.loopbackTest = loopbackTest;
         if (stunServer != null
                 && (!job.target.assisted()
@@ -375,7 +392,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
             nativePeer.setRemoteDescription(sdp, SessionDescriptionType.ANSWER);
             reason = Reason.TRANSPORT;
             await(channels::ready, true);
-            transportEstablished = true;
+            reason = Reason.SELECTED_PATH;
             CandidatePair establishedPair =
                     selectedPair(nativePeer); // No PING is sent to an invalid selected destination.
             selectedLocal =
@@ -386,6 +403,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
                     numeric(
                             establishedPair.remote().getHostString(),
                             establishedPair.remote().getPort());
+            transportEstablished = true;
             reason = Reason.PROTOCOL;
             checkHandshake();
             exchange =
@@ -497,7 +515,7 @@ public final class NativeDiagnosticProbeAttempt implements AutoCloseable {
     }
 
     private CandidatePair selectedPair(PeerConnection nativePeer) {
-        CandidatePair pair = nativePeer.selectedCandidatePair();
+        CandidatePair pair = candidatePairs.apply(nativePeer);
         InetSocketAddress selectedLocal =
                 numeric(pair.local().getHostString(), pair.local().getPort());
         InetSocketAddress selectedRemote =

@@ -7,6 +7,7 @@ import org.cloudburstmc.netty.signaling.admission.*;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec.Key;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import tel.schich.libdatachannel.CandidatePair;
 import java.net.*;
 import java.nio.file.Path;
 import java.security.*;
@@ -240,6 +241,129 @@ class NativeDiagnosticProbeAttemptTest {
                 assertEquals(0, fixture.players.get());
                 assertEquals(0, fixture.gate.stats().liveNativePeers());
                 assertEquals(1, fixture.signalingCalls.get());
+            }
+        }
+    }
+
+    private static CandidatePair pair(String local, String remote) throws Exception {
+        var constructor = CandidatePair.class.getDeclaredConstructor(String.class, String.class);
+        constructor.setAccessible(true);
+        return constructor.newInstance(local, remote);
+    }
+
+    @Test
+    @Timeout(60)
+    void readyChannelWithoutVerifiedPairDoesNotClaimTransportOrSendPing() throws Exception {
+        for (String address : List.of("127.0.0.1", "::1")) {
+            for (String mode : List.of(
+                    "unavailable", "missing", "malformed", "local", "destination", "family",
+                    "local-tcp", "remote-tcp")) {
+                try (Fixture fixture = new Fixture(address, 15000)) {
+                    var reads = new AtomicInteger();
+                    try (var attempt = new NativeDiagnosticProbeAttempt(
+                            fixture.job,
+                            new InetSocketAddress(fixture.bind, fixture.localPort),
+                            fixture.authorized::get,
+                            Clock.system(),
+                            true,
+                            null,
+                            nativePeer -> {
+                                reads.incrementAndGet();
+                                if (mode.equals("unavailable")) {
+                                    throw new IllegalStateException("Selected pair unavailable");
+                                }
+                                if (mode.equals("missing")) {
+                                    return null;
+                                }
+                                var selected = assertDoesNotThrow(nativePeer::selectedCandidatePair);
+                                assertNotNull(selected);
+                                String local = selected.localCandidate();
+                                String remote = selected.remoteCandidate();
+                                if (mode.equals("malformed")) {
+                                    local = "candidate:unreadable";
+                                }
+                                if (mode.equals("local")) {
+                                    local = local.replace(
+                                            " " + fixture.localPort + " typ ", " 1 typ ");
+                                }
+                                if (mode.equals("destination")) {
+                                    remote = remote.replace(
+                                            " " + fixture.port + " typ ", " 1 typ ");
+                                }
+                                if (mode.equals("family")) {
+                                    local = "candidate:1 1 UDP 1 "
+                                            + (address.equals("::1") ? "127.0.0.1" : "::1")
+                                            + " " + fixture.localPort + " typ host";
+                                }
+                                if (mode.equals("local-tcp")) {
+                                    local = local.replaceAll("(?i) UDP ", " TCP ");
+                                }
+                                if (mode.equals("remote-tcp")) {
+                                    remote = remote.replaceAll("(?i) UDP ", " TCP ");
+                                }
+                                try {
+                                    return pair(local, remote);
+                                } catch (Exception failure) {
+                                    throw new AssertionError(failure);
+                                }
+                            })) {
+                        var result = attempt.run(fixture::respond);
+                        String context = address + " " + mode;
+                        assertEquals(1, reads.get(), context);
+                        assertEquals(NativeDiagnosticProbeAttempt.Reason.SELECTED_PATH,
+                                result.reason(), context);
+                        assertTrue(result.answerVerified(), context);
+                        assertFalse(result.success(), context);
+                        assertFalse(result.transportEstablished(), context);
+                        assertFalse(result.pingVerified(), context);
+                        assertNull(result.selectedLocal(), context);
+                        assertNull(result.selectedRemote(), context);
+                        assertEquals(new InetSocketAddress(fixture.bind, fixture.port),
+                                result.attemptedRemote(), context);
+                        assertEquals(0, result.sentFrames(), context);
+                        assertEquals(0, result.sentBytes(), context);
+                        assertTrue(result.cleanupComplete(), context);
+                        attempt.termination().toCompletableFuture().get(1, TimeUnit.SECONDS);
+                        assertEquals(0, fixture.players.get(), context);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    @Timeout(20)
+    void finalPairReadFailureRetainsEarlierVerifiedTransportButDoesNotSucceed() throws Exception {
+        try (Fixture fixture = new Fixture("127.0.0.1", 15000)) {
+            var reads = new AtomicInteger();
+            try (var attempt = new NativeDiagnosticProbeAttempt(
+                    fixture.job,
+                    new InetSocketAddress(fixture.bind, fixture.localPort),
+                    fixture.authorized::get,
+                    Clock.system(),
+                    true,
+                    null,
+                    nativePeer -> {
+                        int read = reads.incrementAndGet();
+                        if (read == 2) {
+                            throw new IllegalStateException("Final selected pair unavailable");
+                        }
+                        return nativePeer.selectedCandidatePair();
+                    })) {
+                var result = attempt.run(fixture::respond);
+                assertEquals(2, reads.get());
+                assertFalse(result.success());
+                assertEquals(NativeDiagnosticProbeAttempt.Reason.SELECTED_PATH, result.reason());
+                assertTrue(result.answerVerified());
+                assertTrue(result.transportEstablished());
+                assertTrue(result.pingVerified());
+                assertEquals(new InetSocketAddress(fixture.bind, fixture.localPort),
+                        result.selectedLocal());
+                assertEquals(new InetSocketAddress(fixture.bind, fixture.port),
+                        result.selectedRemote());
+                assertEquals(1, result.sentFrames());
+                assertTrue(result.cleanupComplete());
+                assertEquals(0, fixture.players.get());
             }
         }
     }
