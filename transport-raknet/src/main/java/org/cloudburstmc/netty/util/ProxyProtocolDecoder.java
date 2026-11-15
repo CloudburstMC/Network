@@ -373,7 +373,11 @@ public final class ProxyProtocolDecoder {
         }
 
         int idx = buffer.readerIndex();
-        return match(BINARY_PREFIX, buffer, idx) ? buffer.getByte(idx + BINARY_PREFIX_LENGTH) : 1;
+        if (match(BINARY_PREFIX, buffer, idx)) {
+            return buffer.getByte(idx + BINARY_PREFIX_LENGTH);
+        }
+        // A plain datagram is no header at all, not a malformed one
+        return match(TEXT_PREFIX, buffer, idx) ? 1 : -1;
     }
 
     /**

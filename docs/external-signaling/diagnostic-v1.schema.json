@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nxs:diagnostic-v1",
+  "title": "NXS diagnostic admission claims",
+  "description": "Decoded diagnostic claims and fixture inputs, not JSON wire messages.",
+  "$ref": "#/$defs/claims",
+  "$defs": {
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerOrigin",
+        "hostId",
+        "incarnation",
+        "generation"
+      ],
+      "properties": {
+        "providerOrigin": {
+          "type": "string",
+          "maxLength": 267,
+          "pattern": "^(?:https://[^/?#@\\s]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]{1,5})?)$",
+          "description": "A canonical NXS provider origin."
+        },
+        "hostId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "incarnation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expiresAt",
+        "clientFingerprintHex",
+        "clientIcePwd",
+        "attemptIdHex",
+        "offerDigestHex",
+        "candidateRevision",
+        "family",
+        "targetAddressHex",
+        "targetPort",
+        "profile"
+      ],
+      "properties": {
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 4294967295000,
+          "multipleOf": 1000
+        },
+        "clientFingerprintHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "clientIcePwd": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{22,30}$"
+        },
+        "attemptIdHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "offerDigestHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "candidateRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "family": {
+          "enum": [
+            4,
+            6
+          ]
+        },
+        "targetAddressHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "targetPort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "profile": {
+          "enum": [
+            1,
+            2
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": 4
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "targetAddressHex": {
+                "type": "string",
+                "pattern": "^000000000000000000000000[0-9a-f]{8}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "targetAddressHex": {
+                "not": {
+                  "type": "string",
+                  "pattern": "^00000000000000000000ffff[0-9a-f]{8}$"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "profile": {
+                "const": 2
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "targetAddressHex": {
+                "const": "00000000000000000000000000000000"
+              },
+              "targetPort": {
+                "const": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "targetPort": {
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keyId",
+        "secret",
+        "notBefore",
+        "retireAfter"
+      ],
+      "properties": {
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "secret": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+          "description": "The NXS admission key secret; never log it or give it to the prober."
+        },
+        "notBefore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retireAfter": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "localUfrag",
+        "icePwd"
+      ],
+      "properties": {
+        "localUfrag": {
+          "type": "string",
+          "pattern": "^NXS1[A-Z0-9]{4}[A-Za-z0-9+/]+$",
+          "minLength": 243,
+          "maxLength": 254
+        },
+        "icePwd": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{32}$"
+        }
+      }
+    }
+  }
+}
