@@ -35,6 +35,10 @@ final class ProviderLog {
                 "Cannot read connection check results",
                 "Retrying automatically.",
                 "Connection check results are available again."),
+        DIAGNOSTIC_ADMISSION(
+                "Cannot update local connection check permission",
+                "Player signaling continues.",
+                "Local connection check permission is available again."),
         WEBSOCKET(
                 "Lost the live connection to the signaling service",
                 "Reconnecting automatically.",
