@@ -60,3 +60,42 @@ minutes, bounded by the check-in lease, key retirement and mapping expiry. Repor
 offers may remain diagnostic targets; assisted-only families need no published
 player candidate. Retries cannot extend authority; drain/close disable diagnostics.
 See [diagnostics](diagnostic-v1.md) for admission, signatures and the exchange.
+
+## Optional startup diagnostic window
+
+A host can advertise `startupDiagnostics:true` in the version 1 heartbeat data
+when local diagnostic admission is enabled. This field advertises support for a
+bounded startup window. The separate `diagnostics` flag still means diagnostic
+permission is already installed on the host.
+
+A participating provider echoes the request's `candidateRevision` and adds
+`startupDiagnostics:{"leaseMillis":<integer>}` to the heartbeat reply data.
+A positive duration, up to 300,000 milliseconds, is the remaining diagnostic
+window measured from when that heartbeat was sent. It is further limited by
+the ordinary check-in lease, key retirement, and endpoint expiry. The provider
+keeps a fixed deadline for an open window, including across retries.
+`leaseMillis:0` closes diagnostic permission and leaves the ordinary check-in
+schedule in force. A host advertises `diagnostics:true` in an immediate follow-up
+only after installing permission for the current profile. The provider can then
+dispatch diagnostics against that profile and may include an integer
+`feedbackAfterMillis` in its reply. This hint must be positive and less than
+`leaseMillis`. It is measured from the heartbeat that advertised installed
+permission and allows one follow-up to retrieve fresh probe results. The host
+keeps the earliest hint, sends at most one feedback-only heartbeat per window,
+and processes feedback on any earlier ordinary heartbeat. A heartbeat at the
+feedback deadline also satisfies the hint if a regular check-in is due then.
+Replies cannot re-arm an attempted feedback exchange. A failed feedback-only
+request uses one short attempt and does not back off liveness. Invalid feedback
+hints are ignored.
+
+The host expires permission locally and follows the regular heartbeat schedule
+without a diagnostic renewal. The optional feedback exchange cannot extend the
+window and is cancelled when the permission closes or expires. Player-driven
+updates and the separate assisted-join authority keep their own schedules.
+
+When the request omits support, the provider uses the existing behavior and omits
+the window. When the reply omits the window, a supporting host uses the existing
+diagnostic refresh behavior. This lets either side upgrade or roll back
+independently. Once the field is present, an invalid duration or mismatched
+candidate revision grants no diagnostic permission and the successful ordinary
+heartbeat still applies. See the [window fixtures](fixtures/startup-diagnostic-window.fixtures.json).

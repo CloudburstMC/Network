@@ -1,0 +1,85 @@
+{
+  "candidateRevision": 7,
+  "request": {
+    "version": 1,
+    "critical": false,
+    "data": {
+      "diagnostics": false,
+      "candidateRevision": 7,
+      "method": "defined",
+      "startupDiagnostics": true
+    }
+  },
+  "replies": [
+    {
+      "name": "legacy reply",
+      "data": {"candidateRevision": 7, "method": "defined", "checks": []},
+      "expectedLeaseMillis": null
+    },
+    {
+      "name": "window open",
+      "data": {"candidateRevision": 7, "startupDiagnostics": {"leaseMillis": 240000}},
+      "expectedLeaseMillis": 240000
+    },
+    {
+      "name": "window open with feedback",
+      "data": {
+        "candidateRevision": 7,
+        "startupDiagnostics": {"leaseMillis": 240000, "feedbackAfterMillis": 180000}
+      },
+      "expectedLeaseMillis": 240000,
+      "expectedFeedbackAfterMillis": 180000
+    },
+    {
+      "name": "feedback at expiry is ignored",
+      "data": {
+        "candidateRevision": 7,
+        "startupDiagnostics": {"leaseMillis": 240000, "feedbackAfterMillis": 240000}
+      },
+      "expectedLeaseMillis": 240000
+    },
+    {
+      "name": "malformed feedback is ignored",
+      "data": {
+        "candidateRevision": 7,
+        "startupDiagnostics": {"leaseMillis": 240000, "feedbackAfterMillis": {"value": 180000}}
+      },
+      "expectedLeaseMillis": 240000
+    },
+    {
+      "name": "window closed",
+      "data": {"candidateRevision": 7, "startupDiagnostics": {"leaseMillis": 0}},
+      "expectedLeaseMillis": 0
+    },
+    {
+      "name": "candidate replaced",
+      "data": {"candidateRevision": 6, "startupDiagnostics": {"leaseMillis": 240000}},
+      "expectedLeaseMillis": 0
+    },
+    {
+      "name": "lease too long",
+      "data": {"candidateRevision": 7, "startupDiagnostics": {"leaseMillis": 300001}},
+      "expectedLeaseMillis": 0
+    },
+    {
+      "name": "negative lease",
+      "data": {"candidateRevision": 7, "startupDiagnostics": {"leaseMillis": -1}},
+      "expectedLeaseMillis": 0
+    },
+    {
+      "name": "fractional lease",
+      "data": {"candidateRevision": 7, "startupDiagnostics": {"leaseMillis": 10.5}},
+      "expectedLeaseMillis": 0
+    },
+    {
+      "name": "lease must be a number",
+      "data": {"candidateRevision": 7, "startupDiagnostics": {"leaseMillis": "240000"}},
+      "expectedLeaseMillis": 0
+    },
+    {
+      "name": "malformed optional metadata",
+      "data": {"candidateRevision": 7, "startupDiagnostics": null},
+      "expectedLeaseMillis": 0
+    }
+  ]
+}
