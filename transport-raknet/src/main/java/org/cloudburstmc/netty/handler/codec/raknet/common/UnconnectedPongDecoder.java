@@ -51,6 +51,9 @@ public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<Datagr
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) throws Exception {
         ByteBuf buf = packet.content();
+        if (!buf.isReadable(17)) {
+            return;
+        }
         buf.readUnsignedByte(); // Packet ID
 
         long pingTime = buf.readLong();
@@ -64,7 +67,11 @@ public class UnconnectedPongDecoder extends AdvancedChannelInboundHandler<Datagr
 
         ByteBuf pongData = Unpooled.EMPTY_BUFFER;
         if (buf.isReadable(2)) { // Length
-            pongData = buf.readRetainedSlice(buf.readUnsignedShort());
+            int length = buf.readUnsignedShort();
+            if (!buf.isReadable(length)) {
+                return;
+            }
+            pongData = buf.readRetainedSlice(length);
         }
         ctx.fireChannelRead(new RakPong(pingTime, guid, pongData, packet.sender(), packet.recipient()));
     }
