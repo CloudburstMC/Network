@@ -574,6 +574,9 @@ public final class ProviderClient implements AutoCloseable {
             long deadlineNanos,
             long expiresAt) {}
 
+    private record StartupDiagnosticWindow(
+            String incarnation, long deadlineNanos, Long feedbackAtNanos, boolean feedbackAttempted) {}
+
     private volatile AssistedAuthority assistedAuthority;
     private volatile boolean assistedMode;
     /** Set with each acknowledged profile, cleared once the provider may no longer hand it out. */
@@ -583,6 +586,7 @@ public final class ProviderClient implements AutoCloseable {
     private List<AdmissionKey> installedAdmissionKeys = List.of();
     private ProviderTransport.HostProfileSnapshot diagnosticInstalledSnapshot;
     private long diagnosticInstalledDeadline, diagnosticInstalledExpiresAt;
+    private StartupDiagnosticWindow startupDiagnosticWindow;
     private JsonObject lastHeartbeat = new JsonObject();
     private ServerStatus lastReportedStatus;
     private Health lastReportedHealth;
@@ -771,6 +775,7 @@ public final class ProviderClient implements AutoCloseable {
 
     /** Each recovery or registration starts a new generation, whose operations count from zero. */
     private void beginGeneration() throws Exception {
+        startupDiagnosticWindow = null;
         state.addProperty("protocol", ProviderCrypto.PROTOCOL);
         state.addProperty("generation", state.getAsJsonObject("registration").get("leaseGeneration").getAsLong());
         state.addProperty("sequence", 0);
@@ -795,12 +800,26 @@ public final class ProviderClient implements AutoCloseable {
         if (closed || !started) {
             return;
         }
+        boolean feedbackOnly = false;
         try {
-            if (System.nanoTime() >= nextHeartbeat || candidatesChanged() || statusChanged()) {
-                heartbeat();
+            long now = System.nanoTime();
+            boolean checkInDue = now >= nextHeartbeat || candidatesChanged() || statusChanged();
+            boolean feedbackDue = startupDiagnosticFeedbackDue(now);
+            if (checkInDue || feedbackDue) {
+                feedbackOnly = feedbackDue && !checkInDue;
+                heartbeat(feedbackOnly);
             }
         } catch (Exception e) {
-            heartbeatFailed(e);
+            if (feedbackOnly) {
+                diagnostics.failed(ProviderLog.Operation.CONNECTIVITY, safeFailure(e));
+            } else {
+                heartbeatFailed(e);
+            }
+        }
+        if (startupDiagnosticWindow != null && diagnosticInstalledSnapshot != null
+                && (diagnosticInstalledDeadline - System.nanoTime() <= 0
+                || System.currentTimeMillis() >= diagnosticInstalledExpiresAt)) {
+            closeStartupDiagnosticAdmission();
         }
         // A heartbeat can stop the client, for example when its registration is gone
         if (started && System.nanoTime() >= nextOutcomes) {
@@ -1272,6 +1291,15 @@ public final class ProviderClient implements AutoCloseable {
     }
 
     private void heartbeat() throws Exception {
+        heartbeat(false);
+    }
+
+    private void heartbeat(boolean feedbackOnly) throws Exception {
+        if (startupDiagnosticFeedbackDue(System.nanoTime())) {
+            var window = startupDiagnosticWindow;
+            startupDiagnosticWindow = new StartupDiagnosticWindow(
+                    window.incarnation(), window.deadlineNanos(), null, true);
+        }
         if (state.has("pendingWebSocketOperation")) {
             assistedAuthority = null;
             // An ambiguous send may have outlived its native mapping. Recover the existing
@@ -1361,6 +1389,9 @@ public final class ProviderClient implements AutoCloseable {
                     profileSnapshot.requireCurrent();
                     var data = new JsonObject();
                     data.addProperty("diagnostics", diagnosticsAdvertised);
+                    if (config.diagnosticAdmission()) {
+                        data.addProperty("startupDiagnostics", true);
+                    }
                     data.addProperty("candidateRevision", profileSnapshot.candidateRevision());
                     JsonArray probes = profileSnapshot.probeCandidates();
                     if (!probes.equals(profile.getAsJsonArray("candidates"))) {
@@ -1418,7 +1449,8 @@ public final class ProviderClient implements AutoCloseable {
                                 "POST",
                                 body,
                                 UUID.randomUUID().toString(),
-                                captured == null ? () -> {} : captured::requireCurrent);
+                                captured == null ? () -> {} : captured::requireCurrent,
+                                feedbackOnly && exchange == 0);
                 heartbeatFailures = 0;
                 long diagnosticSuccessNanos = System.nanoTime(),
                         diagnosticSuccessMillis = System.currentTimeMillis();
@@ -1543,21 +1575,13 @@ public final class ProviderClient implements AutoCloseable {
                     connectivity.published(profileSnapshot);
                 }
                 if (diagnosticSnapshot != null) {
-                    configureDiagnosticAdmission(
+                    again |= updateDiagnosticAdmission(
                             diagnosticSnapshot,
                             response,
+                            diagnosticsAdvertised,
                             requestStarted,
                             diagnosticSuccessMillis,
                             diagnosticSuccessNanos);
-                    if (!diagnosticsAdvertised) {
-                        again = true;
-                    }
-                    long remaining = Math.max(0, diagnosticInstalledDeadline - System.nanoTime());
-                    long lead = Math.min(TimeUnit.SECONDS.toNanos(60), remaining / 5);
-                    nextHeartbeat =
-                            Math.min(
-                                    nextHeartbeat,
-                                    Math.max(nextStatusUpdate, diagnosticInstalledDeadline - lead));
                 }
                 var ownedAssistance = assistedAuthority;
                 if (ownedAssistance != null) {
@@ -1777,12 +1801,162 @@ public final class ProviderClient implements AutoCloseable {
         }
     }
 
+    /**
+     * Legacy providers renew on the existing timer. A negotiated startup window is independent
+     * of liveness and is confirmed immediately only when a new local installation succeeds.
+     */
+    private boolean updateDiagnosticAdmission(
+            ProviderTransport.HostProfileSnapshot snapshot,
+            JsonObject response,
+            boolean advertised,
+            long requestStartedNanos,
+            long successMillis,
+            long successNanos)
+            throws Exception {
+        StartupDiagnosticReply reply = startupDiagnosticReply(response, snapshot.candidateRevision());
+        OptionalLong lease = reply.leaseMillis();
+        if (lease.isEmpty()) {
+            startupDiagnosticWindow = null;
+            configureDiagnosticAdmission(
+                    snapshot, response, requestStartedNanos, successMillis, successNanos, null);
+            long remaining = Math.max(0, diagnosticInstalledDeadline - System.nanoTime());
+            long lead = Math.min(TimeUnit.SECONDS.toNanos(60), remaining / 5);
+            nextHeartbeat = Math.min(
+                    nextHeartbeat, Math.max(nextStatusUpdate, diagnosticInstalledDeadline - lead));
+            return !advertised;
+        }
+
+        if (lease.getAsLong() == 0) {
+            startupDiagnosticWindow = null;
+            closeStartupDiagnosticAdmission();
+            return false;
+        }
+        String incarnation = snapshot.profile().getAsJsonObject("statelessAdmission")
+                .get("incarnation").getAsString();
+        long deadline = requestStartedNanos + TimeUnit.MILLISECONDS.toNanos(lease.getAsLong());
+        Long feedbackAt = null;
+        boolean feedbackAttempted = false;
+        if (startupDiagnosticWindow != null && startupDiagnosticWindow.incarnation().equals(incarnation)) {
+            if (startupDiagnosticWindow.deadlineNanos() - deadline < 0) {
+                deadline = startupDiagnosticWindow.deadlineNanos();
+            }
+            feedbackAt = startupDiagnosticWindow.feedbackAtNanos();
+            feedbackAttempted = startupDiagnosticWindow.feedbackAttempted();
+        }
+        if (advertised && !feedbackAttempted && reply.feedbackAfterMillis().isPresent()) {
+            long hinted = requestStartedNanos + TimeUnit.MILLISECONDS.toNanos(reply.feedbackAfterMillis().getAsLong());
+            if (feedbackAt == null || hinted - feedbackAt < 0) {
+                feedbackAt = hinted;
+            }
+        }
+        if (feedbackAt != null && deadline - feedbackAt <= 0) {
+            feedbackAt = null;
+        }
+        startupDiagnosticWindow = new StartupDiagnosticWindow(incarnation, deadline, feedbackAt, feedbackAttempted);
+        if (deadline - System.nanoTime() <= 0) {
+            closeStartupDiagnosticAdmission();
+            return false;
+        }
+
+        try {
+            configureDiagnosticAdmission(
+                    snapshot, response, requestStartedNanos, successMillis, successNanos, deadline);
+            if (diagnosticInstalledDeadline - deadline < 0) {
+                if (feedbackAt != null && diagnosticInstalledDeadline - feedbackAt <= 0) {
+                    feedbackAt = null;
+                }
+                startupDiagnosticWindow = new StartupDiagnosticWindow(
+                        incarnation, diagnosticInstalledDeadline, feedbackAt, feedbackAttempted);
+            }
+            diagnostics.recovered(ProviderLog.Operation.DIAGNOSTIC_ADMISSION);
+            return !advertised;
+        } catch (Exception failure) {
+            // The heartbeat has already committed. A local diagnostic failure must not back off liveness.
+            diagnostics.failed(ProviderLog.Operation.DIAGNOSTIC_ADMISSION, safeFailure(failure));
+            return false;
+        }
+    }
+
+    record StartupDiagnosticReply(OptionalLong leaseMillis, OptionalLong feedbackAfterMillis) {}
+
+    /** An empty lease is legacy behavior. Malformed metadata grants no diagnostic authority. */
+    static StartupDiagnosticReply startupDiagnosticReply(JsonObject response, long candidateRevision) {
+        OptionalLong noFeedback = OptionalLong.empty();
+        var legacy = new StartupDiagnosticReply(OptionalLong.empty(), noFeedback);
+        JsonObject extensions = response.getAsJsonObject("extensions");
+        if (extensions == null || !extensions.has(CONNECTIVITY_EXTENSION)) {
+            return legacy;
+        }
+        JsonObject extension = extensions.getAsJsonObject(CONNECTIVITY_EXTENSION);
+        if (!"1".equals(extension.get("version").getAsString())) {
+            return legacy;
+        }
+        JsonObject data = extension.getAsJsonObject("data");
+        if (!data.has("startupDiagnostics")) {
+            return legacy;
+        }
+        var closed = new StartupDiagnosticReply(OptionalLong.of(0), noFeedback);
+        try {
+            JsonPrimitive revision = data.getAsJsonPrimitive("candidateRevision");
+            JsonObject startup = data.getAsJsonObject("startupDiagnostics");
+            JsonPrimitive lease = startup.getAsJsonPrimitive("leaseMillis");
+            if (revision == null || !revision.isNumber()
+                    || revision.getAsBigDecimal().longValueExact() != candidateRevision
+                    || lease == null || !lease.isNumber()) {
+                return closed;
+            }
+            long leaseMillis = lease.getAsBigDecimal().longValueExact();
+            if (leaseMillis <= 0 || leaseMillis > DIAGNOSTIC_VALIDITY_MILLIS) {
+                return closed;
+            }
+            return new StartupDiagnosticReply(
+                    OptionalLong.of(leaseMillis), startupDiagnosticFeedback(startup, leaseMillis));
+        } catch (RuntimeException malformed) {
+            return closed;
+        }
+    }
+
+    private static OptionalLong startupDiagnosticFeedback(JsonObject startup, long leaseMillis) {
+        try {
+            JsonPrimitive feedback = startup.getAsJsonPrimitive("feedbackAfterMillis");
+            if (feedback != null && feedback.isNumber()) {
+                long millis = feedback.getAsBigDecimal().longValueExact();
+                if (millis > 0 && millis < leaseMillis) {
+                    return OptionalLong.of(millis);
+                }
+            }
+        } catch (RuntimeException malformed) {
+            // The optional feedback hint does not affect the permitted window.
+        }
+        return OptionalLong.empty();
+    }
+
+    private boolean startupDiagnosticFeedbackDue(long now) {
+        var window = startupDiagnosticWindow;
+        return window != null && window.feedbackAtNanos() != null
+                && window.feedbackAtNanos() - now <= 0 && window.deadlineNanos() - now > 0
+                && diagnosticInstalledSnapshot != null && diagnosticInstalledDeadline - now > 0
+                && System.currentTimeMillis() < diagnosticInstalledExpiresAt
+                && nextStatusUpdate - now <= 0;
+    }
+
+    private void closeStartupDiagnosticAdmission() {
+        if (diagnosticInstalledSnapshot != null) {
+            try {
+                disableDiagnosticAdmission();
+            } catch (Exception failure) {
+                diagnostics.failed(ProviderLog.Operation.DIAGNOSTIC_ADMISSION, safeFailure(failure));
+            }
+        }
+    }
+
     private void configureDiagnosticAdmission(
             ProviderTransport.HostProfileSnapshot snapshot,
             JsonObject response,
             long requestStartedNanos,
             long successMillis,
-            long successNanos)
+            long successNanos,
+            Long startupDeadlineNanos)
             throws Exception {
         try {
             if (closing.get() || closed || !hostState.equals("serving")) {
@@ -1795,6 +1969,10 @@ public final class ProviderClient implements AutoCloseable {
                 // The lease counts from when the heartbeat was sent.
                 long sent = successMillis - TimeUnit.NANOSECONDS.toMillis(successNanos - requestStartedNanos);
                 expiresAt = Math.min(expiresAt, sent + CheckInSchedule.parse(response).leaseMillis());
+            }
+            if (startupDeadlineNanos != null) {
+                long remaining = startupDeadlineNanos - successNanos;
+                expiresAt = Math.min(expiresAt, successMillis + TimeUnit.NANOSECONDS.toMillis(remaining));
             }
             long lifetime = expiresAt - successMillis;
             if (lifetime <= 0) {
@@ -2301,6 +2479,13 @@ public final class ProviderClient implements AutoCloseable {
     private JsonObject signed(
             String op, String method, JsonObject body, String intent, Runnable requireCurrent)
             throws Exception {
+        return signed(op, method, body, intent, requireCurrent, op.equals("outcomes"));
+    }
+
+    private JsonObject signed(
+            String op, String method, JsonObject body, String intent, Runnable requireCurrent,
+            boolean singleAttempt)
+            throws Exception {
         requireResolvedOperation();
         long sequence = state.has("sequence") ? state.get("sequence").getAsLong() + 1 : 1;
         state.addProperty("sequence", sequence);
@@ -2313,8 +2498,8 @@ public final class ProviderClient implements AutoCloseable {
                 true,
                 intent,
                 null,
-                op.equals("outcomes") ? 3 : 15,
-                op.equals("outcomes") ? 1 : 3,
+                singleAttempt ? 3 : 15,
+                singleAttempt ? 1 : 3,
                 requireCurrent);
     }
 

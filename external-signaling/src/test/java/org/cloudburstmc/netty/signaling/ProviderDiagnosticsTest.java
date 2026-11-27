@@ -8,11 +8,15 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.net.ssl.*;
+import java.io.InputStreamReader;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.KeyStore;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Real ordinary HTTPS heartbeat; the transport seam only observes local policy application. */
@@ -39,6 +43,7 @@ class ProviderDiagnosticsTest {
                 new CopyOnWriteArrayList<>();
         volatile int disabled;
         volatile boolean srflx;
+        volatile boolean refuseDiagnostics;
         List<AdmissionKey> keys;
 
         public boolean supportsDiagnosticAdmission() {
@@ -115,6 +120,10 @@ class ProviderDiagnosticsTest {
 
         public CompletionStage<Void> configureDiagnostics(
                 DiagnosticHostPolicy policy, long deadlineNanos) {
+            if (refuseDiagnostics) {
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("fixture diagnostic installation unavailable"));
+            }
             if (policy.endpoints().stream()
                     .anyMatch(endpoint -> endpoint.candidateRevision() != revision)) {
                 return CompletableFuture.failedFuture(
@@ -158,6 +167,11 @@ class ProviderDiagnosticsTest {
 
         ProviderClient client(Path directory, Transport transport, boolean enabled, String method)
                 throws Exception {
+            return client(directory, transport, enabled, method, () -> 0);
+        }
+
+        ProviderClient client(Path directory, Transport transport, boolean enabled, String method,
+                IntSupplier players) throws Exception {
             var config =
                     ProviderClient.Configuration.builder(URI.create(provider.origin))
                             .label("Diagnostics")
@@ -170,7 +184,8 @@ class ProviderDiagnosticsTest {
                     new ProviderStateStore(directory),
                     transport,
                     () -> null,
-                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE, ProviderClientTest.connected(0)),
+                    () -> new ProviderClient.Health(true, 10, ProviderClientTest.SOFTWARE,
+                            ProviderClientTest.connected(players.getAsInt())),
                     ignored -> {});
         }
 
@@ -232,8 +247,9 @@ class ProviderDiagnosticsTest {
                 assertEquals(Set.of("version", "critical", "data"), extension.keySet());
                 var data = extension.getAsJsonObject("data");
                 assertEquals(
-                        Set.of("diagnostics", "candidateRevision", "method"),
+                        Set.of("diagnostics", "candidateRevision", "method", "startupDiagnostics"),
                         data.keySet());
+                assertTrue(data.get("startupDiagnostics").getAsBoolean());
                 assertEquals("defined", data.get("method").getAsString());
                 assertEquals(1, data.get("candidateRevision").getAsLong());
                 int applications = transport.policies.size();
@@ -667,6 +683,214 @@ class ProviderDiagnosticsTest {
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }
         }
+    }
+
+    @Test
+    void startupDiagnosticWindowFixtures() throws Exception {
+        try (var reader = new InputStreamReader(
+                Objects.requireNonNull(getClass().getResourceAsStream(
+                        "/nxs/startup-diagnostic-window.fixtures.json")),
+                StandardCharsets.UTF_8)) {
+            JsonObject fixture = JsonParser.parseReader(reader).getAsJsonObject();
+            long candidateRevision = fixture.get("candidateRevision").getAsLong();
+            JsonObject request = fixture.getAsJsonObject("request");
+            assertTrue(request.getAsJsonObject("data").get("startupDiagnostics").getAsBoolean());
+            for (JsonElement item : fixture.getAsJsonArray("replies")) {
+                JsonObject reply = item.getAsJsonObject();
+                JsonObject extension = new JsonObject();
+                extension.add("version", request.get("version"));
+                extension.add("critical", request.get("critical"));
+                extension.add("data", reply.get("data"));
+                JsonObject response = new JsonObject();
+                JsonObject extensions = new JsonObject();
+                extensions.add(NAMESPACE, extension);
+                response.add("extensions", extensions);
+                ProtocolExtensions.validate(response);
+                JsonElement expected = reply.get("expectedLeaseMillis");
+                OptionalLong lease = expected.isJsonNull()
+                        ? OptionalLong.empty() : OptionalLong.of(expected.getAsLong());
+                JsonElement expectedFeedback = reply.get("expectedFeedbackAfterMillis");
+                OptionalLong feedback = expectedFeedback == null
+                        ? OptionalLong.empty() : OptionalLong.of(expectedFeedback.getAsLong());
+                String name = reply.get("name").getAsString();
+                var parsed = ProviderClient.startupDiagnosticReply(response, candidateRevision);
+                assertEquals(lease, parsed.leaseMillis(), name);
+                assertEquals(feedback, parsed.feedbackAfterMillis(), name);
+            }
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void negotiatedWindowExpiresLocallyAndRepeatedRepliesCannotExtendIt() throws Exception {
+        try (var f = new Fixture()) {
+            f.provider.checkInMillis = 120000;
+            f.provider.extensionMetadata = startupDiagnosticResponse(4500);
+            var transport = new Transport();
+            var players = new AtomicInteger();
+            var client = f.client(directory, transport, true, "defined", players::get);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                long initialDeadline = transport.deadline;
+                assertTrue(initialDeadline - System.nanoTime() > 0);
+                var startupBodies = f.provider.heartbeatBodies.stream()
+                        .map(JsonParser::parseString)
+                        .map(JsonElement::getAsJsonObject)
+                        .filter(body -> body.has("extensions"))
+                        .map(ProviderDiagnosticsTest::connectivityData)
+                        .toList();
+                assertEquals(2, startupBodies.size());
+                assertTrue(startupBodies.get(0).get("startupDiagnostics").getAsBoolean());
+                assertFalse(startupBodies.get(0).get("diagnostics").getAsBoolean());
+                assertTrue(startupBodies.get(1).get("diagnostics").getAsBoolean());
+                f.provider.extensionMetadata = startupDiagnosticResponse(240000);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertTrue(transport.deadline - initialDeadline <= 0);
+                int accepted = f.provider.heartbeats;
+                int disabled = transport.disabled;
+                await(() -> transport.disabled > disabled);
+                assertEquals(accepted, f.provider.heartbeats,
+                        "Local diagnostic expiry must not send a heartbeat");
+                players.set(1);
+                await(() -> f.provider.heartbeats > accepted);
+                assertFalse(connectivityData(f.provider.lastHeartbeat).get("diagnostics").getAsBoolean());
+                assertEquals(1, f.provider.lastHeartbeat.getAsJsonObject("connectedPlayers").get("count").getAsInt());
+                assertEquals(accepted + 1, f.provider.heartbeats,
+                        "An expired window cannot reopen through another positive reply");
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void closedWindowLeavesLivenessInForceAndAnOmittedWindowRestoresLegacyBehavior()
+            throws Exception {
+        try (var f = new Fixture()) {
+            f.provider.checkInMillis = 120000;
+            f.provider.extensionMetadata = startupDiagnosticResponse(0);
+            var transport = new Transport();
+            var client = f.client(directory, transport, true, "defined");
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                assertTrue(transport.policies.isEmpty());
+                assertFalse(connectivityData(f.provider.lastHeartbeat).get("diagnostics").getAsBoolean());
+                JsonObject report = client.readiness().get(10, TimeUnit.SECONDS);
+                assertTrue(report.getAsJsonObject("readiness").get("routable").getAsBoolean());
+                assertEquals(120000, report.getAsJsonObject("checkIn").get("afterMillis").getAsLong());
+                f.provider.extensionMetadata = null;
+                int before = f.provider.heartbeats;
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertEquals(before + 2, f.provider.heartbeats);
+                assertTrue(connectivityData(f.provider.lastHeartbeat).get("diagnostics").getAsBoolean());
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void negotiatedDiagnosticInstallationFailureKeepsAcceptedLiveness() throws Exception {
+        try (var f = new Fixture()) {
+            f.provider.checkInMillis = 120000;
+            f.provider.extensionMetadata = startupDiagnosticResponse(60000);
+            var transport = new Transport();
+            transport.refuseDiagnostics = true;
+            var client = f.client(directory, transport, true, "defined");
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                int before = f.provider.heartbeats;
+                JsonObject reply = client.readiness().get(10, TimeUnit.SECONDS);
+                assertTrue(reply.getAsJsonObject("readiness").get("routable").getAsBoolean());
+                assertEquals(120000, reply.getAsJsonObject("checkIn").get("afterMillis").getAsLong());
+                assertEquals(before + 1, f.provider.heartbeats);
+                assertFalse(connectivityData(f.provider.lastHeartbeat).get("diagnostics").getAsBoolean());
+                assertTrue(transport.policies.isEmpty());
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void scheduledStartupFeedbackSendsOneFollowUpUntilTheWindowExpires() throws Exception {
+        try (var f = new Fixture()) {
+            f.provider.checkInMillis = 120000;
+            f.provider.extensionMetadata = startupDiagnosticResponse(7500, 2500L);
+            var transport = new Transport();
+            var client = f.client(directory, transport, true, "defined");
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                int accepted = f.provider.heartbeats;
+                f.provider.extensionMetadata = startupDiagnosticResponse(7500, 1200L);
+                await(() -> f.provider.heartbeats > accepted);
+                assertEquals(accepted + 1, f.provider.heartbeats);
+                assertTrue(connectivityData(f.provider.lastHeartbeat).get("diagnostics").getAsBoolean());
+                int disabled = transport.disabled;
+                await(() -> transport.disabled > disabled);
+                assertEquals(accepted + 1, f.provider.heartbeats,
+                        "Repeated feedback hints must not re-arm a completed exchange");
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void failedFeedbackDoesNotBackOffAFirstPlayerHeartbeat() throws Exception {
+        try (var f = new Fixture()) {
+            f.provider.checkInMillis = 120000;
+            f.provider.extensionMetadata = startupDiagnosticResponse(10000, 2500L);
+            var transport = new Transport();
+            var players = new AtomicInteger();
+            var client = f.client(directory, transport, true, "defined", players::get);
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                int accepted = f.provider.heartbeats;
+                var refusal = new IndependentProviderStub.Refusal(
+                        503, "{\"code\":\"fixture_feedback_refused\"}", null);
+                f.provider.heartbeatRefusal = refusal;
+                await(() -> refusal.answered.get() == 1);
+                assertEquals(accepted, f.provider.heartbeats);
+                f.provider.heartbeatRefusal = null;
+                players.set(1);
+                await(() -> f.provider.heartbeats > accepted);
+                assertEquals(accepted + 1, f.provider.heartbeats);
+                assertEquals(1, f.provider.lastHeartbeat.getAsJsonObject("connectedPlayers").get("count").getAsInt());
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static JsonObject startupDiagnosticResponse(long leaseMillis) {
+        return startupDiagnosticResponse(leaseMillis, null);
+    }
+
+    private static JsonObject startupDiagnosticResponse(long leaseMillis, Long feedbackAfterMillis) {
+        JsonObject window = new JsonObject();
+        window.addProperty("leaseMillis", leaseMillis);
+        if (feedbackAfterMillis != null) {
+            window.addProperty("feedbackAfterMillis", feedbackAfterMillis);
+        }
+        JsonObject data = new JsonObject();
+        data.addProperty("candidateRevision", 1);
+        data.add("startupDiagnostics", window);
+        JsonObject extension = new JsonObject();
+        extension.addProperty("version", 1);
+        extension.addProperty("critical", false);
+        extension.add("data", data);
+        JsonObject extensions = new JsonObject();
+        extensions.add(NAMESPACE, extension);
+        return extensions;
+    }
+
+    private static JsonObject connectivityData(JsonObject heartbeat) {
+        return heartbeat.getAsJsonObject("extensions").getAsJsonObject(NAMESPACE).getAsJsonObject("data");
     }
 
     @Test
