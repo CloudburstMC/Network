@@ -1,0 +1,109 @@
+description = "NetherNet External Signaling client and stateless admission"
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
+dependencies {
+    api(libs.gson)
+    api(project(":transport-nethernet"))
+    // Creating the host's DTLS identity, which the JDK offers no API for
+    implementation(libs.bouncycastle.pkix)
+    testImplementation(libs.bundles.junit)
+    testImplementation(project(":transport-raknet"))
+    testRuntimeOnly(libs.junit.platform.launcher)
+    testRuntimeOnly(libs.libdatachannel.java.arch.detect)
+}
+
+tasks.jar {
+    manifest.attributes["Automatic-Module-Name"] = "org.cloudburstmc.netty.signaling"
+}
+
+
+tasks.test {
+    useJUnitPlatform {
+        excludeTags("native")
+    }
+}
+
+tasks.register("nativeBenchClasspath") {
+    dependsOn(tasks.testClasses)
+    // Printing a classpath does not otherwise make Gradle build its project JARs.
+    dependsOn(sourceSets.test.get().runtimeClasspath)
+    doLast {
+        println(sourceSets.test.get().runtimeClasspath.asPath)
+    }
+}
+
+tasks.register<Test>("nativeAdmissionTest") {
+    description = "Real fixed-UDP stateless host integration against the pinned JNI library"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    })
+    useJUnitPlatform {
+        includeTags("native")
+    }
+    maxParallelForks = 1
+    testLogging {
+        showStandardStreams = true
+    }
+}
+
+tasks.register<JavaExec>("providerStub") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("org.cloudburstmc.netty.signaling.IndependentProviderStub")
+}
+
+tasks.register<JavaExec>("providerBench") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("org.cloudburstmc.netty.signaling.ProviderBench")
+    listOf(
+        "providerOrigin", "providerState", "providerMode", "providerToken",
+        "providerHoldSeconds", "providerStopFile",
+        "providerExtensionsFile", "providerControlTransport"
+    ).forEach { name ->
+        providers.gradleProperty(name).orNull?.let {
+            systemProperty(name, it)
+        }
+    }
+}
+
+// Avoid shell-specific dependency-cache paths in the cross-repository local workflow.
+tasks.register("providerBenchClasspath") {
+    dependsOn(tasks.testClasses)
+    dependsOn(sourceSets.test.get().runtimeClasspath)
+    doLast {
+        println(sourceSets.test.get().runtimeClasspath.asPath)
+    }
+}
+
+tasks.processResources {
+    from(rootProject.file("docs/external-signaling/nxs-v1.schema.json"))
+}
+
+tasks.processTestResources {
+    from(rootProject.file("docs/external-signaling/fixtures")) {
+        into("nxs")
+    }
+}
+
+// Test-only launch description; the same-machine Chromium harness explicitly supplies unpublished native overrides.
+tasks.register("writeDiagnosticBrowserLaunch") {
+    dependsOn(tasks.testClasses)
+    dependsOn(sourceSets.test.get().runtimeClasspath)
+    val launcher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
+    val output = layout.buildDirectory.file("diagnostic-browser-argv.txt")
+    outputs.file(output)
+    outputs.upToDateWhen { false }
+    doLast {
+        output.get().asFile.writeText(listOf(launcher.get().executablePath.asFile.absolutePath, "-cp",
+            sourceSets.test.get().runtimeClasspath.asPath,
+            "org.cloudburstmc.netty.signaling.admission.DiagnosticBrowserHost").joinToString("\n", postfix = "\n"))
+    }
+}

@@ -1,0 +1,36 @@
+{
+  "stun": {
+    "rfc5769": {
+      "messageIntegrityHex": "9aeaa70cbfd8cb56781ef2b5b2d3f249c1b571a2",
+      "name": "rfc5769-sample-request",
+      "packetHex": "000100582112a442b7e7a701bc34d686fa87dfae802200105354554e207465737420636c69656e74002400046e0001ff80290008932ff9b151263b36000600096576746a3a68367659202020000800149aeaa70cbfd8cb56781ef2b5b2d3f249c1b571a280280004e57a3bcf",
+      "passwordUtf8": "VOkJxbRl1RmTxUk/WvJxBt",
+      "transactionIdHex": "b7e7a701bc34d686fa87dfae",
+      "username": "evtj:h6vY"
+    }
+  },
+  "nethernetFrames": [
+    {
+      "decoded": {
+        "complete": true,
+        "payloadHex": "01020304",
+        "remainingFragments": 0
+      },
+      "frameHex": "0001020304",
+      "name": "complete-reliable-payload",
+      "payloadHex": "01020304",
+      "remainingFragments": 0
+    },
+    {
+      "decoded": {
+        "complete": false,
+        "payloadHex": "0a0b",
+        "remainingFragments": 2
+      },
+      "frameHex": "020a0b",
+      "name": "fragment-countdown-payload",
+      "payloadHex": "0a0b",
+      "remainingFragments": 2
+    }
+  ]
+}
